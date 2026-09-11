@@ -1,0 +1,22 @@
+{
+  "nda_body": "Mutual Non-Disclosure Agreement between Acme and Beta. Term: 2 years. Survival: 2 years. Carveouts: public, prior, independent, third-party, compelled disclosure with notice. No residuals clause. No fee-shifting. Backup carveout included. Governing law: California. No standstill, license, exclusivity, non-solicit, non-compete, IP assignment, ROFR, MFN, or broad arbitration.",
+  "counterparty": "Acme Corp",
+  "side": "sales",
+  "destination": "legal-only",
+  "hidden_clause_types": ["standstill","license","exclusivity","non-solicit","non-compete","IP-assign","ROFR","MFN","broad-arbitration"],
+  "playbook": {
+    "role": "non-lawyer",
+    "attorney_reviewed": true,
+    "closing_action": "Route final NDA through standard approval process.",
+    "positions": {
+      "mutuality": {"sales": {"mutual": "pass", "one_way_discloser": "fallback", "one_way_receiver": "never"}, "purchasing": {"mutual": "pass", "one_way_discloser": "never", "one_way_receiver": "fallback"}},
+      "term": {"max_pass_years": 2, "max_fallback_years": 4, "perpetual": "never"},
+      "survival": {"max_pass_years": 2, "max_fallback_years": 4, "perpetual": "never"},
+      "carveouts": {"min_count": 5, "require_compelled": true, "require_notice": true},
+      "residuals": {"broad": "fallback", "narrow": "pass"},
+      "fee_shifting": {"one_sided_counterparty": "never", "prevailing": "fallback", "mutual": "pass"},
+      "backup": {"has_carveout": "pass", "no_carveout": "fallback"},
+      "governing_law": {"foreign": "never", "other_US": "fallback", "home": "pass"}
+    }
+  }
+}

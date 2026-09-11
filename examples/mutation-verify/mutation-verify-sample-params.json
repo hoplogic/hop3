@@ -1,0 +1,20 @@
+{
+  "repo_dir": "/home/user/your-project",
+  "base_commit": "HEAD",
+  "points": [
+    {
+      "file": "src/ast-types.ts",
+      "old_text": "export const DEFAULT_EXPANSION_MAX = 20;",
+      "new_text": "export const DEFAULT_EXPANSION_MAX = 10;",
+      "test_file": "tests/engine.test.ts",
+      "expect_red": "缺省上限恰为 20——count=19 放行"
+    },
+    {
+      "file": "src/act-body-interpreter.ts",
+      "old_text": "const hint = code === 'ENOBUFS' ? '——输出超过 10MB 上限,用命令自带过滤收窄（如 git log --grep= 而非全量再筛）'",
+      "new_text": "const hint = code === 'ENOBUFS' ? ''",
+      "test_file": "tests/act-body-interpreter.test.ts",
+      "expect_red": "指路文案面——阅卷注记①称正则|执行失败兜底使其未被排他锁定,本点位实证"
+    }
+  ]
+}

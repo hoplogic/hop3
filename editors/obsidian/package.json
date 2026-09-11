@@ -1,0 +1,21 @@
+{
+  "name": "hopspec-obsidian",
+  "version": "0.6.0",
+  "private": true,
+  "description": "HopSpec visualization plugin for Obsidian",
+  "main": "main.js",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --external:obsidian --external:@codemirror/* --format=cjs --outfile=main.js",
+    "test": "node --test test/recognizer.test.mjs",
+    "install-vault": "npm run -s build && node install-vault.mjs",
+    "uninstall-vault": "node install-vault.mjs --uninstall"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "obsidian": "^1.7.2",
+    "@codemirror/state": "^6.4.0",
+    "@codemirror/view": "^6.26.0",
+    "@codemirror/language": "^6.10.0",
+    "typescript": "^5.6.0"
+  }
+}

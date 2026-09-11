@@ -1,0 +1,122 @@
+{
+  "name": "@hoplogic/hopjit",
+  "version": "0.15.1",
+  "description": "HopJIT execution engine for HopSpec v3 — structured execution runtime for LLM agents (CC / Codex reuse-mode drivers)",
+  "type": "module",
+  "license": "MPL-2.0",
+  "author": "Lenx Wei",
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "hopspec",
+    "hopjit",
+    "llm",
+    "agent",
+    "workflow",
+    "execution-engine",
+    "claude"
+  ],
+  "bin": {
+    "hopjit": "dist/cli.js",
+    "hopjit-mcp": "dist/mcp-server.js"
+  },
+  "files": [
+    "dist/",
+    "driver/",
+    "skills/hopbuild/",
+    "skills/hopbuild2/",
+    "scripts/deep-validate/",
+    "examples/coffee-week.md",
+    "examples/coffee-sales.json",
+    "examples/fact-check-demo.md",
+    "examples/fact-check-sample.md",
+    "examples/syntax/confirm-commit.md",
+    "examples/data-quality.md",
+    "examples/doc-review.md",
+    "examples/demo-data.json",
+    "examples/e2e-failure/e2e-adaptive.md",
+    "examples/GETTING-STARTED.md",
+    "README.md",
+    "USAGE.md",
+    "LICENSE",
+    "examples/hop-fact-check.md",
+    "examples/hop-deep-research/hop-deep-research.md",
+    "examples/hop-deep-research/hop-deep-research-sample.md",
+    "examples/hoptools-websearch.yaml",
+    "examples/hoptools-playwright.yaml"
+  ],
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc && chmod +x dist/cli.js",
+    "test": "npm run -s build && vitest run",
+    "precommit": "./scripts/precommit.sh",
+    "check:fast": "tsc --noEmit && node scripts/check-anchor-format.mjs && node scripts/check-text-integrity.mjs && node scripts/check-process-state.mjs && node scripts/check-driver-carriers.mjs && node scripts/check-layer-imports.mjs && node scripts/check-module-arch-audit.mjs && node scripts/check-threshold-sync.mjs && npm run -s check:scripts-syntax",
+    "check:audit": "node scripts/run-audit.mjs",
+    "check": "npm run -s check:fast && npm test && npm run -s check:audit && npm run -s check:version-lock && npm run -s check:spec-syntax && npm run -s check:e2e-assertions",
+    "check:spec-syntax": "node scripts/check-spec-syntax.mjs",
+    "check:health": "node scripts/chain-health.mjs",
+    "dev": "vitest --watch",
+    "prepack": "npm run clean && tsc",
+    "prepublishOnly": "npm run clean && tsc",
+    "check:coverage": "npm run -s build && vitest run --coverage --coverage.reporter=text --coverage.reporter=json-summary && node scripts/check-coverage-baseline.mjs",
+    "check:version-lock": "node scripts/check-version-lock.mjs",
+    "test:e2e:cc:delegated": "npm run -s build && node scripts/carrier-live-e2e.mjs cc:delegated",
+    "test:e2e:cc:delegated:ds": "npm run -s build && node scripts/carrier-live-e2e.mjs cc:delegated --launcher claude-ds --credential-env DEEPSEEK_API_KEY",
+    "test:e2e:codex:delegated": "npm run -s build && node scripts/carrier-live-e2e.mjs codex:delegated",
+    "test:e2e:codex:flash": "npm run -s build && node scripts/carrier-live-e2e.mjs codex:flash --profile deepseek-v4-flash",
+    "test:e2e:codex:demo": "npm run -s build && node scripts/carrier-live-e2e.mjs codex:demo",
+    "test:e2e:codex:standalone": "npm run -s build && node scripts/carrier-live-e2e.mjs codex:standalone",
+    "test:e2e:cc:parallel": "npm run -s build && node scripts/carrier-live-e2e.mjs cc:parallel --launcher claude-ds --credential-env DEEPSEEK_API_KEY",
+    "test:e2e:codex:parallel": "npm run -s build && node scripts/carrier-live-e2e.mjs codex:parallel",
+    "test:e2e:codex:standalone-parallel": "npm run -s build && node scripts/carrier-live-e2e.mjs codex:standalone-parallel",
+    "dev:install": "./scripts/dev-install.sh",
+    "release": "./scripts/release.sh",
+    "test:e2e:cc:call": "npm run -s build && node scripts/carrier-live-e2e.mjs cc:call --launcher claude-ds --credential-env DEEPSEEK_API_KEY",
+    "test:e2e:all": "./scripts/live-core.sh",
+    "test:e2e:cc:adaptive": "npm run -s build && node scripts/carrier-live-e2e.mjs cc:adaptive --launcher claude-ds --credential-env DEEPSEEK_API_KEY",
+    "test:e2e:audit": "npm run -s build && node scripts/carrier-live-e2e.mjs cc:anchor-audit --launcher claude-ds --credential-env DEEPSEEK_API_KEY",
+    "test:buildtest": "npm run -s build && node scripts/hopbuild-selftest.mjs",
+    "test:buildtest:mini": "npm run -s build && node scripts/hopbuild-selftest.mjs --fixture scripts/fixtures/mini-skill.md --timeout-min 30",
+    "check:scripts-syntax": "node scripts/check-scripts-syntax.mjs",
+    "test:e2e:cc:standalone": "npm run -s build && node scripts/carrier-live-e2e.mjs cc:standalone --launcher claude-ds --credential-env DEEPSEEK_API_KEY",
+    "test:smoke:tools": "npm run -s build && node scripts/tools-smoke.mjs",
+    "test:e2e:mcp-binding": "npm run -s build && node scripts/mcp-binding-smoke.mjs",
+    "test:e2e:standalone-tools": "npm run -s build && node scripts/standalone-tools-live-e2e.mjs",
+    "check:e2e-assertions": "node scripts/check-e2e-assertions.mjs",
+    "test:smoke:multi-run": "npm run -s build && node scripts/multi-run-smoke.mjs",
+    "test:e2e:standalone:biginput": "node scripts/standalone-biginput-live-e2e.mjs",
+    "test:live:smoke": "./scripts/live-smoke.sh",
+    "test:live:core": "./scripts/live-core.sh",
+    "test:live:deep": "./scripts/live-deep.sh",
+    "check:i18n": "node scripts/i18n-staleness.mjs",
+    "fuzz:parser": "npm run -s build && node scripts/parser-fuzz.mjs",
+    "fuzz:parser:cov": "npm run -s build && rm -rf .coverage-fuzz && NODE_V8_COVERAGE=.coverage-fuzz node scripts/parser-fuzz.mjs && node scripts/coverage-report.mjs .coverage-fuzz --face scripts/parser-fuzz-face.json",
+    "coverage:report": "node scripts/coverage-report.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.111.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "commander": "^13.0.0",
+    "js-yaml": "^5.2.1",
+    "openai": "^7.4.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hoplogic/hop3.git"
+  },
+  "homepage": "https://github.com/hoplogic/hop3#readme",
+  "bugs": {
+    "url": "https://github.com/hoplogic/hop3/issues"
+  }
+}

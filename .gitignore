@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+.hopstate*/
+.hoplog/
+.anchor-audit/
+.e2e-evidence/
+*.log

@@ -1,0 +1,9 @@
+{
+  "id": "hopspec",
+  "name": "HopSpec",
+  "version": "0.6.0",
+  "minAppVersion": "1.4.0",
+  "description": "HopSpec visualization: fold steps at any depth (beyond markdown's 6-heading limit), step outline, and discipline-mark highlighting.",
+  "author": "hoplogic",
+  "isDesktopOnly": false
+}

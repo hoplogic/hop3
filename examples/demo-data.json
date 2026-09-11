@@ -1,0 +1,14 @@
+[
+  {"id": "r01", "amount": 120,    "qty": 2,  "unit_price": 60,  "region": "east"},
+  {"id": "r02", "amount": null,   "qty": 1,  "unit_price": 80,  "region": "west"},
+  {"id": "r03", "amount": 99000,  "qty": 1,  "unit_price": 90,  "region": "east"},
+  {"id": "r04", "amount": 150,    "qty": 3,  "unit_price": 50,  "region": "north"},
+  {"id": "r05", "amount": 200,    "qty": 2,  "unit_price": 100, "region": null},
+  {"id": "r06", "amount": 75,     "qty": 1,  "unit_price": 75,  "region": "south"},
+  {"id": "r07", "amount": 480,    "qty": 4,  "unit_price": 120, "region": "east"},
+  {"id": "r08", "amount": 90,     "qty": null, "unit_price": 45, "region": "west"},
+  {"id": "r09", "amount": 310,    "qty": 2,  "unit_price": 90,  "region": "north"},
+  {"id": "r10", "amount": 60,     "qty": 1,  "unit_price": 60,  "region": "south"},
+  {"id": "r11", "amount": 870,    "qty": 3,  "unit_price": 70,  "region": "east"},
+  {"id": "r12", "amount": 240,    "qty": 2,  "unit_price": 120, "region": "west"}
+]

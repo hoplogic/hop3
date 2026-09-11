@@ -1,0 +1,16 @@
+{
+  "_note": "parser-fuzz 覆盖率报告的目标面清单（分母核验,design spec-parser ^anc-meta-parser-fuzz 覆盖率条款——2026-08-15 按 import 链逐文件定性）。target=fuzz 责任面;partial=只有 parse/validate 消费的入口在面（注明面外半边归属）;out=被动加载,fuzz 数字无语义（注明真实覆盖归属面）。新文件入 fuzz 加载链而不在此清单 → 报告器红,防分母静默漂移。",
+  "target": {
+    "parser.js": "parseSpec/serializeSpec 主体",
+    "validator.js": "validateSpec 47 条规则（双语面 validate 规则码等价核证）",
+    "ast-helpers.js": "结构助手（步骤类型表/树遍历,parse+validate 双消费）"
+  },
+  "partial": {
+    "act-body-parser.js": "在面=extractHopPythonFence+parseActBody+parseExpression（parse/validate 静态消费）;面外=解释器求值路径（归 act-body-interpreter 执行期,vitest 单测覆盖）",
+    "doc-ref.js": "在面=extractDocRefs（parse 消费）;面外=checkDocRefExists（吃文件系统,fuzz 无 workspace 天然不触达——vitest 单测+真机档覆盖）"
+  },
+  "out": {
+    "act-builtins.js": "validator 只查名单 ACT_BUILTIN_NAMES（模块顶层）;函数体属执行期——vitest 单测覆盖（act-builtins.test 逐函数正反例）+真机档执行面",
+    "tools.js": "经 doc-ref import 链被动载入;沙箱文件读写属执行期——vitest 单测覆盖+真机档"
+  }
+}

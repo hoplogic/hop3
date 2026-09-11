@@ -1,0 +1,61 @@
+/* 落点四色（CSS 变量暴露,用户主题可覆盖）——commit 用警示暖色:不可逆落点一眼可辨 */
+/* @a: anc-viz-mark-highlight */
+:root {
+  --hopspec-traverse: #4a9eda;
+  --hopspec-verify: #4caf50;
+  --hopspec-commit: #ff9800;
+  --hopspec-hitl: #ab47bc;
+}
+.hopspec-mark-traverse { color: var(--hopspec-traverse); font-weight: 600; }
+.hopspec-mark-verify { color: var(--hopspec-verify); font-weight: 600; }
+.hopspec-mark-commit { color: var(--hopspec-commit); font-weight: 600; }
+.hopspec-mark-hitl { color: var(--hopspec-hitl); font-weight: 600; }
+
+.hopspec-outline { font-size: var(--font-ui-small); line-height: 1.7; }
+.hopspec-outline-item { cursor: pointer; border-radius: 4px; padding: 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hopspec-outline-item:hover { background: var(--background-modifier-hover); }
+.hopspec-outline-id { color: var(--text-muted); }
+.hopspec-outline-type { color: var(--text-accent); }
+.hopspec-outline-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 4px; }
+.hopspec-outline-dot.hopspec-mark-traverse { background: var(--hopspec-traverse); }
+.hopspec-outline-dot.hopspec-mark-verify { background: var(--hopspec-verify); }
+.hopspec-outline-dot.hopspec-mark-commit { background: var(--hopspec-commit); }
+.hopspec-outline-dot.hopspec-mark-hitl { background: var(--hopspec-hitl); }
+.hopspec-outline-empty { color: var(--text-muted); padding: 8px; }
+
+/* 阅读视图步骤行重塑（7+ 级字面井号段落 → 分级步骤行） @a: anc-viz-reading-view */
+.hopspec-rv-step {
+  padding-left: calc((var(--hopspec-depth, 1) - 1) * 1.2em);
+  font-weight: 600;
+  line-height: 1.8;
+}
+.hopspec-rv-id { color: var(--text-muted); font-weight: 400; }
+.hopspec-rv-type { color: var(--text-accent); }
+
+/* 7+ 级步骤行缺省加粗（1-6 级标题渲染器给粗体,7+ 级补齐观感一致——编辑视图行级类+阅读视图已有 .hopspec-rv-step 同权重） */
+.hopspec-deep-step { font-weight: 600; }
+
+/* 语法元素分族上色（步骤类型词按语义族/数据流箭头/行内说明淡化——CSS 变量主题可覆盖） */
+:root {
+  --hopspec-t-reason: #7c6fdc;   /* 动脑:蓝紫 */
+  --hopspec-t-act: #2aa5a0;      /* 动手可逆:青 */
+  --hopspec-t-gate: #4caf50;     /* 把关族(check/confirm/ask):绿——与 verify 落点同系 */
+  --hopspec-t-commit: #ff9800;   /* 不可逆:警示橙——与 commit 落点同色 */
+  --hopspec-t-flow: #6c8ebf;     /* 结构与流控:灰蓝 */
+}
+.hopspec-type-reason { color: var(--hopspec-t-reason); font-weight: 600; }
+.hopspec-type-act { color: var(--hopspec-t-act); font-weight: 600; }
+.hopspec-type-gate { color: var(--hopspec-t-gate); font-weight: 600; }
+.hopspec-type-commit { color: var(--hopspec-t-commit); font-weight: 700; }
+.hopspec-type-flow { color: var(--hopspec-t-flow); font-weight: 600; }
+.hopspec-io-in { color: var(--hopspec-t-act); }
+.hopspec-io-out { color: var(--hopspec-t-reason); }
+.hopspec-comment { color: var(--hopspec-t-gate); filter: saturate(0.65); }
+
+/* 头部关键字（Goal:/Constraints:/Inputs:/Outputs:）与类型位（name: type 的 type 段） */
+:root {
+  --hopspec-header-kw: #c05a8e;   /* 头部关键字:洋红——契约区一眼可辨 */
+  --hopspec-type-pos: #b8860b;    /* 类型位:暗金——类型是接口承诺,与说明绿区分 */
+}
+.hopspec-header-kw { color: var(--hopspec-header-kw); font-weight: 700; }
+.hopspec-type-pos { color: var(--hopspec-type-pos); }

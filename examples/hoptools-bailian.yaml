@@ -1,0 +1,28 @@
+# 百炼 MCP 真机冒烟配置样例（文法权威 docs/design/tool-interface.md ^anc-config-tool-registry）
+# 前置：MCP 广场逐服务开通 WebSearch/amap-maps；export DASHSCOPE_API_KEY=<百炼通用 key>
+tool_servers:
+  - name: bailian_search
+    binding:
+      kind: mcp
+      transport: http
+      url: "https://dashscope.aliyuncs.com/api/v1/mcps/WebSearch/mcp"
+      auth_env: DASHSCOPE_API_KEY
+    tools:
+      - name: bailian_web_search
+        tool_id: web_search
+        requires_commit: false
+        output_schema:
+          pages: [yaml]
+        unwrap: json-in-text
+  - name: amap
+    binding:
+      kind: mcp
+      transport: http
+      url: "https://dashscope.aliyuncs.com/api/v1/mcps/amap-maps/mcp"
+      auth_env: DASHSCOPE_API_KEY
+    tools:
+      - name: maps_geo
+        requires_commit: false
+        output_schema:
+          results: [yaml]
+        unwrap: json-in-text

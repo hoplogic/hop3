@@ -1,0 +1,32 @@
+{
+  "agreement_body": "MASTER SERVICES AGREEMENT between Acme and Beta. Exhibit A — Data Processing Addendum. Services: cloud platform.",
+  "confirm_routing": true,
+  "reviewer_authority": "non-lawyer",
+  "specialist_inputs": {
+    "dpa-review": {
+      "direction": "processor",
+      "core_terms": [
+        {"id":"t1","term":"roles","position":"standard","blocking":false,"cite_subsection":"","policy_mismatch":false},
+        {"id":"t2","term":"subprocessors","position":"standard","blocking":false,"cite_subsection":"§3","policy_mismatch":false},
+        {"id":"t3","term":"security","position":"standard","blocking":false,"cite_subsection":"§4","policy_mismatch":false},
+        {"id":"t4","term":"breach","position":"standard","blocking":false,"cite_subsection":"§5","policy_mismatch":false},
+        {"id":"t5","term":"audit","position":"standard","blocking":false,"cite_subsection":"§6","policy_mismatch":false},
+        {"id":"t6","term":"transfers","position":"standard","blocking":false,"cite_subsection":"§7","policy_mismatch":false},
+        {"id":"t7","term":"deletion","position":"standard","blocking":false,"cite_subsection":"§8","policy_mismatch":false},
+        {"id":"t8","term":"liability","position":"standard","blocking":false,"cite_subsection":"§9","policy_mismatch":false},
+        {"id":"t9","term":"scope","position":"standard","blocking":false,"cite_subsection":"§2","policy_mismatch":false}
+      ],
+      "federal_overlays": [
+        {"id":"o1","overlay":"GLBA","applies":false,"dpa_has_overlay_provision":false},
+        {"id":"o2","overlay":"HIPAA","applies":false,"dpa_has_overlay_provision":false},
+        {"id":"o3","overlay":"FERPA","applies":false,"dpa_has_overlay_provision":false},
+        {"id":"o4","overlay":"COPPA","applies":false,"dpa_has_overlay_provision":false}
+      ],
+      "role": "non-lawyer",
+      "search_coverage": "ok",
+      "supplement_used": false,
+      "prior_severity": "none",
+      "gate_approved": true
+    }
+  }
+}

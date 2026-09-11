@@ -1,0 +1,56 @@
+# Playwright 浏览器工具注册样例（用户接入件——hopissues/hoplogic3/0040）
+# server=微软官方 @playwright/mcp（npx 免装直跑,零自建）;文法权威 docs/reference/配置参考 ^anc-ref-tool-servers。
+# 抄进系统级 ~/.hopjit/config.yaml 或项目级 hopjit.yaml 的 tool_servers: 节。
+#
+# 白名单三档（server 报 24 个工具,只放行声明的——按副作用分级,0040 卡"交互受 requires_commit 语境约束"）：
+# ① 只读观察（requires_commit: false,act 步随便用）：navigate/snapshot/screenshot/find/wait
+# ② 页面交互（requires_commit: true——点击/填表可能触发提交等不可逆动作,只许 commit 步或
+#    预授权语境;要翻页等确定可逆的交互,按需把单个工具改 false 自担语境判断）
+# ③ 不入白名单：evaluate/run_code_unsafe（任意 JS 执行,风险面大）/network 系（调试面）
+#
+# 冷启动注意：npx 首跑下载 server 包+chromium(~150MB)——先手动预热:
+#   npx -y @playwright/mcp@latest --version && npx playwright install chromium
+tool_servers:
+  - name: playwright
+    binding:
+      kind: mcp
+      transport: stdio
+      command: npx
+      args: [-y, "@playwright/mcp@latest", --headless]
+      env_passthrough: [HOME, PATH]   # npx/chromium 运行必需
+    call_timeout_ms: 120000            # 页面加载可能慢于缺省 60s
+    tools:
+      # ── ① 只读观察 ──
+      - name: browser_navigate
+        requires_commit: false
+        notes: 导航到 URL（触发页面加载与渲染;GET 语义只读）
+        params:
+          - name: url
+            type: line
+            description: 目标 URL（含协议）
+      - name: browser_snapshot
+        requires_commit: false
+        notes: 当前页可访问性快照（结构化文本——取渲染后内容的主通道,比截图适合 LLM 消费;含元素 ref 供交互工具定位）
+      - name: browser_take_screenshot
+        requires_commit: false
+        notes: 当前页截图落盘（视觉核验用;取文本内容用 browser_snapshot）
+      - name: browser_find
+        requires_commit: false
+        notes: 在当前页快照中检索文本（大页面定位,免拉全量 snapshot）
+        params:
+          - name: text
+            type: text
+            description: 要查找的文本
+      - name: browser_wait_for
+        requires_commit: false
+        notes: 等待文本出现/消失或定时（动态渲染页取内容前先等稳定）
+      # ── ② 页面交互（不可逆风险语境——commit 步或预授权）──
+      - name: browser_click
+        requires_commit: true
+        notes: 点击元素（ref 来自 snapshot）。可能触发提交/购买等不可逆动作——commit 语境;确定可逆的翻页类按需自改 false
+      - name: browser_type
+        requires_commit: true
+        notes: 向可编辑元素输入文本
+      - name: browser_fill_form
+        requires_commit: true
+        notes: 批量填表

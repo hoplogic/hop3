@@ -1,0 +1,59 @@
+# web search 工具注册样例（用户接入件——hopissues/hoplogic3/0042）
+# 文法权威 docs/reference/配置参考 ^anc-ref-tool-servers；抄进系统级 ~/.hopjit/config.yaml
+# 或项目级 hopjit.yaml 的 tool_servers: 节。
+#
+# ★ provider 中立（作者定 2026-08-26"百炼只是一个 provider"）：spec 侧恒用 `web_search`
+#   调用名（tool_id 解耦 wire 名）——换后端只改本配置,spec 零改。下面给两个 provider 形态,
+#   启用其一即可（同时启用会撞 tool_id 判重,fail-fast）。
+#
+# ★ 本注册只有 standalone（独立模式）需要。复用模式（CC/Codex 驱动）不用配这份文件——
+#   执行 agent 用它自己的网页搜索能力落实 web_search（作者定 2026-08-31"复用模式下应该用
+#   agent 自己的 web search"）,零凭证零注册;仅当 caller 没有检索能力时才需要本注册
+#   （经 hopjit tool-call 兜底调用）。
+#
+# ── provider A：阿里云百炼 WebSearch（云端 http,已真机验证——tools-smoke/mcp-binding-smoke）──
+# 前置：百炼 MCP 广场开通 WebSearch 服务；export DASHSCOPE_API_KEY=<百炼通用 key>
+tool_servers:
+  - name: bailian_search
+    binding:
+      kind: mcp
+      transport: http
+      url: "https://dashscope.aliyuncs.com/api/v1/mcps/WebSearch/mcp"
+      auth_env: DASHSCOPE_API_KEY
+    tools:
+      - name: bailian_web_search      # provider wire 名（server 实况的名字）
+        tool_id: web_search           # spec/body 侧统一调用名——provider 中立的关键
+        requires_commit: false        # 检索只读,act 步合法
+        unwrap: json-in-text
+        notes: 网页检索:查询词→结果页清单(标题/URL/摘要)。只读零副作用。
+        params:
+          - name: query
+            type: text
+            description: 检索查询词（自然语言或关键词）
+        output_schema:
+          pages: [yaml]               # 结果清单——每项含标题/URL/摘要等字段（provider 供给面为准）
+
+# ── provider B：其他 MCP 检索服务（形态模板——按所用服务填 wire 名/url/凭证）──
+# 任何暴露 MCP 的检索服务同构接入：wire 名填 server 实况工具名,tool_id 恒 web_search,
+# output_schema 按该服务真实返回声明（引擎按声明键裁剪——消费的键都要声明）。
+# 本地零凭证形态（如 SearxNG 套 MCP 壳）与其他云端服务（tavily/serper 的 MCP 网关）评估
+# 见 hopissues/hoplogic3/0042 处置记录——语义面（query→结果清单）恒定,接入全走本模板。
+#
+#  - name: my_search
+#    binding:
+#      kind: mcp
+#      transport: http            # 或 stdio（本地 server:command+args+env_passthrough）
+#      url: "<服务的 MCP 端点>"
+#      auth_env: MY_SEARCH_API_KEY
+#    tools:
+#      - name: <server实况工具名>
+#        tool_id: web_search
+#        requires_commit: false
+#        unwrap: json-in-text     # 服务返回 JSON-in-text 才需要;结构化直返则去掉
+#        notes: 网页检索:查询词→结果清单。只读零副作用。
+#        params:
+#          - name: query
+#            type: text
+#            description: 检索查询词
+#        output_schema:
+#          <按该服务真实返回声明——消费的键都要声明>
