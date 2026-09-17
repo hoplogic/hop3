@@ -9,14 +9,14 @@
 
 # 发版工程——快照制（release snapshot）
 
-**给谁**：改 `scripts/release.sh` 的人（agent 或维护者）。操作手册在 `RELEASING.md`（人每次发版照走）；本文是行为权威——脚本怎么改、为什么这么定，冲突以本文为准。
+**给谁**：改 `scripts/release.sh` 的人（agent 或维护者）。逐次操作归维护者操作手册（内部维护面,不随快照分发,人每次发版照走）；本文是行为权威——脚本怎么改、为什么这么定，冲突以本文为准。
 
 ## 文档结构与内容分级
 
 | 分级 | 节 |
 |---|---|
 | 【决策】 | 为什么要快照制（实撞史与作者对焦） |
-| 【契约】 | 快照制五条款（^anc-release-snapshot） |
+| 【契约】 | 快照制五条款（^anc-release-snapshot）/ 发布防线四断言（^anc-release-boundary-guards） |
 | 【说明】 | 守卫断言组 / 与既有闸的关系 |
 
 ## 为什么要快照制【决策】
@@ -69,3 +69,30 @@ tag 指向快照区那个提交（父=SNAP），主分支上是它的 cherry-pic
 ## 守卫断言组【说明】
 
 `tests/guard-scripts.test.ts` 对 `scripts/release.sh` 的静态断言（@v: anc-release-snapshot）：SNAP 冻结行在场；裸 `git rev-parse HEAD` 全文只出现一处（冻结点——防将来改动漏改、悄悄回到 HEAD 语义）；`git worktree add --detach` 行在场；publish 行带快照区上下文（`in_wt` 前缀）；`RELEASE_DRY_RUN` 分支在场。准入负向验证：删冻结行断言红、恢复绿（实录在 TRACEABILITY 卡）。
+
+## 发布防线四断言【契约】 ^anc-release-boundary-guards
+
+maintainers/ 目录（涉内部源的维护者文档，2026-09-13 建）的"不出公开面"承诺由四处独立声明共同兑现，任何一处静默漂移其余三处不报警——第九轮工程链 review 变异核证实锤三处全穿透（把 maintainers 偷加进快照白名单/删 verify 验证项/删发版黑名单项，全库零机检变红）。守卫形态沿用本文档"守卫断言组"同款静态文本断言（发布脚本不被 vitest 跑，钉脚本文本是既有成例），四断言：
+
+1. `scripts/github-publish.sh` 的 `INCLUDE_DIRS=(...)` 行**不含** maintainers（出闸白名单——误配即整目录进公开快照，且净度词表对 maintainers/ 现内容零命中，白名单是唯一有效防线）；
+2. `scripts/github-verify.sh` 的 `MISS_EXPECTED=(...)` 行**含** maintainers（验闸清单——删项后 verify 照报全过，验闸静默退化）；
+3. `scripts/release.sh` 的 `NONRELEASE_RE` 正则**含** `maintainers/`（发版凭证差集闸——删项后果是误拦方向，轻于前两条但同为防线声明点）；
+4. `package.json` 的 `files` 数组**不含** maintainers 与 RELEASING（npm tarball 出口负向断言——白名单天然挡，断言防将来误加）。
+
+变异重放判据（准入负向验证）：INCLUDE_DIRS 偷加 maintainers → 断言 1 红；MISS_EXPECTED 删 maintainers → 断言 2 红；NONRELEASE_RE 删 maintainers/ → 断言 3 红；恢复全绿。
+
+## 版本兼容性原则【契约】 ^anc-release-version-compat
+
+（todo/0093,作者定 2026-09-15"应该开始执行版本兼容性原则"——0092 修复后作者追问"spec 和引擎版本不一致怎么办"暴露两方向都无系统防线;方案三轮对焦撤 migrate CLI〔太重〕与 /hop 批量〔用户错位〕两案,终形=零新装置三小件）
+
+**兼容方向承诺**：新引擎必须能跑旧 spec（向后兼容优先）。破坏性收严（既有规则改档升严同算）三义务缺一不可：
+
+1. **决策交代**——实撞驱动的作者拍板或概念层决策,账面可溯（spec-parser 版本行条款 2026-09-15 已扩"改档升严须决策交代"）;
+2. **validate 报文带修法**——**报文质量即迁移承诺**:本产品用户形态是"人在 CC/Codex 会话里用",agent 读报文照改是第一迁移路径,报文必须让 agent 零背景照改（既有报文纪律的升格表述）;
+3. **迁移知识登记**——旧写法→新写法对照进 hopfix 知识供给面（`/hopfix` 以"新引擎 validate error 清单"为工单即批量迁移通道——三层把关/人批写回/快照回滚全复用,见 [[hopfix]]）+ release note 迁移段（人查半边）。
+
+**版本号语义（0.x 阶段）**：patch=纯修复零行为破坏（release.sh breaking 闸在执行）;minor=可含破坏性收严但必须带齐三义务;1.0 后转正式 semver 承诺。
+
+**spec 声明面**：Config 段 `engine_min_version` 键+引擎 init 闸,契约权威 [[exec-engine#^anc-exec-engine-min-version-gate]];pack 注入面归 [[hop-cli#^anc-cli-pack]]。**反方向不设闸**：不加"最高兼容版本"声明——每次发版都要维护所有存量 spec,成本失衡;该半边由三义务守。
+
+**义务③的机检提醒**：release.sh breaking 闸命中破坏性标记词时,提示文案加一行"若确为破坏性收严:hopfix 迁移知识与 release note 迁移段是发版义务（本节）"——不硬闸（义务完成与否机器判不了）,提醒挂在必经点。

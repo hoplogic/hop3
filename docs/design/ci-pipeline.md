@@ -31,6 +31,7 @@
 | 基线锁定策略 | 决策+契约 | `anc-meta-ci-baseline` |
 | 实施阶段 | 说明 | — |
 | 待补：发版流程收口 | 说明 | — |
+| Carrier Live E2E | 契约 | `anc-meta-ci-carrier-live` |
 
 ---
 
@@ -157,7 +158,7 @@ npm 包已是 `@hoplogic/hopjit`，scope 与组织名对齐。仓库位置顺理
 
 ## 6. 发版流程收口【说明·已销账】
 
-已固化为 `scripts/release.sh` 检查单（G5 守卫，断点续跑/幂等/远端核验）+ `RELEASING.md` 操作手册——0.1.2 四坑（version 脏区静默跳过/publish 认证中断静默不发/global prefix 漂移需 hash -r/~/.npm root 文件 EPERM）与 0.1.5 资产时点坑、0.1.6 登录态坑全部固化进脚本。2026-08-08 增 ④ E2E 终点凭证硬闸（见 §7）。
+已固化为 `scripts/release.sh` 检查单（G5 守卫，断点续跑/幂等/远端核验）+ 维护者操作手册（内部维护面,不随快照分发）——0.1.2 四坑（version 脏区静默跳过/publish 认证中断静默不发/global prefix 漂移需 hash -r/~/.npm root 文件 EPERM）与 0.1.5 资产时点坑、0.1.6 登录态坑全部固化进脚本。2026-08-08 增 ④ E2E 终点凭证硬闸（见 §7）。
 
 ## 7. Carrier Live E2E【契约】 ^anc-meta-ci-carrier-live
 

@@ -1520,3 +1520,24 @@ describe('recordRuminationSuspect 疑似反刍留档', () => {
     expect(content).not.toContain('[TRUNCATED]');
   });
 });
+
+// trace_id 继承（0088 批⑬钉A——hoplog 侧测试面,0086 半边一挂账:header 写入点
+// hoplog.ts `trace_id: options.traceId ?? runId` 无直钉,?? 兜底被改坏无测试拦）
+// @v: anc-obs-trace-inherit
+describe('trace_id 落轨（HopLog header）', () => {
+  it('正例：options.traceId 在场 → header trace_id=传入值（worker/call 子实例继承父 instance_id 的载体）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'trace-a-'));
+    const log = new HopLog({ specId: 't', logDir: dir, title: 'T', goal: 'G', traceId: 'parent-instance-uuid-42' });
+    const head = readFileSync(log.getFilePath(), 'utf-8');
+    expect(head).toMatch(/^trace_id: parent-instance-uuid-42$/m);
+  });
+
+  it('正例：不带 traceId → 回落本 run 的 run_id（防御性保证 header 恒有 trace_id;顶层直构 HopLog 场景）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'trace-b-'));
+    const log = new HopLog({ specId: 't', logDir: dir, title: 'T', goal: 'G' });
+    const head = readFileSync(log.getFilePath(), 'utf-8');
+    const runId = head.match(/^run_id: (.+)$/m)?.[1];
+    expect(runId).toBeTruthy();
+    expect(head).toContain(`trace_id: ${runId}`);
+  });
+});

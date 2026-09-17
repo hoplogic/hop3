@@ -504,6 +504,25 @@ describe('carrier live E2E deterministic guard', () => {
     expect(delegated.args).toContain('agents.enabled=true');
   });
 
+  // @v: anc-driver-live-e2e-scenarios —— 委派工具必须直接暴露；standalone 不启用
+  it.each(['codex:delegated', 'codex:flash', 'codex:demo', 'codex:parallel'])(
+    '%s exposes delegation outside functions.exec', (scenario) => {
+      const { args } = buildCarrierCommand(scenario, { workspace: '/w' });
+      expect(args).toContain('features.multi_agent_v2.non_code_mode_only=true');
+      expect(args).not.toContain('features.multi_agent_v2.non_code_mode_only=false');
+      expect(args).toContain('features.multi_agent_v2.tool_namespace="agents"');
+    },
+  );
+
+  it.each(['codex:standalone', 'codex:standalone-parallel'])(
+    '%s keeps delegation disabled', (scenario) => {
+      const { args } = buildCarrierCommand(scenario, { workspace: '/w' });
+      expect(args).toContain('agents.enabled=false');
+      expect(args).toContain('features.multi_agent_v2=false');
+      expect(args.some(arg => arg.includes('non_code_mode_only'))).toBe(false);
+    },
+  );
+
   it('invokes the claude-ds shell function without interpolating prompt arguments', () => {
     const invocation = buildCarrierCommand('cc:delegated', { launcher: 'claude-ds' });
     expect(invocation.command).toBe('zsh');

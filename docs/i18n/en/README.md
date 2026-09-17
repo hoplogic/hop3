@@ -23,7 +23,7 @@
 
 **Use it**: user tutorial series 01-07 (dual-carrier entry → learning to read → the three spec-writing essentials → hands-on → upgrading NL skills), start from the [tutorial start page](./tutorials/00-start-here.md). Quick reference: [USAGE.md](../../../USAGE.md).
 
-**Maintain it** (routine operations): [RELEASING.md](../../../RELEASING.md) (commit/release operations manual — triage, manual acceptance assertions, automated E2E, pitfall quick reference) · [STATUS.md](../../../STATUS.md) (current status) · [TODO.md](../../../TODO.md) (todos and technical debt).
+**Maintain it** (routine operations): maintainers/RELEASING.md (maintainer-internal, not distributed in the public snapshot) (commit/release operations manual — triage, manual acceptance assertions, automated E2E, pitfall quick reference) · [STATUS.md](../../../STATUS.md) (current status) · the todo/ directory (internal) (todos and technical debt).
 
 > 🧭 Ecosystem developers (those who will touch src/design/driver): the ten-station main line is in [D0 Ecosystem Developer Guide](./tutorials/D0-ecosystem-developer-guide.md).
 
@@ -117,7 +117,7 @@ npm run dev:install -- --demo    # also installs the demo skill: /coffee-week fo
 npm run release
 ```
 
-The complete operations manual for every commit/release (triage, manual acceptance assertions, pitfall quick reference) is in [RELEASING.md](../../../RELEASING.md).
+The complete operations manual for every commit/release (triage, manual acceptance assertions, pitfall quick reference) is in maintainers/RELEASING.md (maintainer-internal, not distributed in the public snapshot).
 
 ## Dependencies
 
@@ -131,9 +131,9 @@ The complete operations manual for every commit/release (triage, manual acceptan
 | [Doctree.md](../../../Doctree.md) | The root of the repo-wide document index — what documents exist, what derives from what | Enter here to find any document |
 | [USAGE.md](../../../USAGE.md) | Getting-started quick reference (install and run, on one page) | Users, for a quick lookup after installing |
 | [ARCHITECTURE.md](../../../ARCHITECTURE.md) | Architecture overview — layering / bridge points / component interactions / dual-state distribution | Required reading before understanding the system (station 4 of the main line) |
-| [RELEASING.md](../../../RELEASING.md) | **Maintainer operations manual** — pre-commit/pre-release triage, manual acceptance assertions, automated E2E timing, pitfall quick reference | Maintainers, **for every commit/release** (read the tutorial once, use this every time) |
+| maintainers/RELEASING.md (maintainer-internal, not distributed in the public snapshot) | **Maintainer operations manual** — pre-commit/pre-release triage, manual acceptance assertions, automated E2E timing, pitfall quick reference | Maintainers, **for every commit/release** (read the tutorial once, use this every time) |
 | [STATUS.md](../../../STATUS.md) | Current status snapshot — version / health / what's in progress / outstanding debt | To know what the project looks like right now (the only document allowed to be stale) |
-| [TODO.md](../../../TODO.md) | Live todos + technical debt register + pitfall list | Pick tasks and scan pitfalls before taking over work |
+| the todo/ directory (internal) | Live todo cards + technical debt register (one card per file; the filename carries the state) | Pick tasks and scan open cards before taking over work |
 | [TRACEABILITY.md](../../../TRACEABILITY.md) | Five-layer anchor traceability cards (concept → design → code → test) | Search anchors when tracing a feature's full-chain landing points |
 | [audits/](../../../audits/) + [scripts/audit/](../../../scripts/audit/) | **Audit toolchain** — anchor-audit (anchor-chain semantic audit spec, three blocks: scan machine check / semantic audit / repair) + test-coverage-audit + scan.py/cross_compare.py | Maintainers, run the semantic audit before milestones/releases (release gate ④a checks its artifacts) |
 | [CLAUDE.md](../../../CLAUDE.md) | Agent engineering conventions (implementation chain discipline, machine-check entry points) | The rules for agents before starting work |

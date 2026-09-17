@@ -781,6 +781,74 @@ Goal: probe cache blocks
     });
   });
 
+  // 实例级上下文水位观测与软阈值告警（^anc-exec-ctx-watermark,hopissues/0095——150K+ 单轮
+  // 延迟超线性恶化撞超时墙全程零观测;三项合计防缓存命中掩体量,双档告警各一次,阈值挂
+  // max_context_tokens 零新配置键,不配则静默）。 // @v: anc-exec-ctx-watermark
+  describe('上下文水位观测（0095）', () => {
+    function makeWatermarkDispatcher(ctxLimit?: number) {
+      const engine = new ExecutionEngine();
+      engine.initExecution(SIMPLE_SPEC, HOST);
+      const host = ctxLimit
+        ? { ...HOST, resource_limits: { max_tool_iterations: 20, max_context_tokens: ctxLimit, max_output_tokens: 4096, max_replan_attempts: 2 } }
+        : HOST;
+      const dispatcher = new StepDispatcher(engine, host);
+      (dispatcher as any).sleep = () => Promise.resolve();
+      const mockCreate = (dispatcher as any).defaultClient.messages.create;
+      const callRetry = (dispatcher as any).callLlmWithRetry.bind(dispatcher);
+      return { dispatcher, mockCreate, callRetry };
+    }
+    const respWithUsage = (inp: number, cacheRead = 0, cacheCreate = 0) => ({
+      content: [{ type: 'text', text: 'ok' }],
+      usage: { input_tokens: inp, output_tokens: 5, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheCreate },
+    });
+
+    it('正例：水位=三项合计取峰值（缓存命中不掩真实体量）,getCtxWatermark 透出', async () => {
+      const { dispatcher, mockCreate, callRetry } = makeWatermarkDispatcher();
+      mockCreate.mockResolvedValueOnce(respWithUsage(1000, 50_000, 2000));
+      await callRetry({ model: 'test', messages: [] });
+      expect(dispatcher.getCtxWatermark()).toBe(53_000);   // 单看 input_tokens 只有 1000——缓存掩体量的反面钉
+      mockCreate.mockResolvedValueOnce(respWithUsage(30_000, 0, 0));
+      await callRetry({ model: 'test', messages: [] });
+      expect(dispatcher.getCtxWatermark()).toBe(53_000);   // 峰值取 max,回落不降账
+    });
+
+    it('正例：越 75% 档落 warn 一次,再越 100% 档升级 warn 一次,重复调用不重复告警', async () => {
+      const { dispatcher, mockCreate, callRetry } = makeWatermarkDispatcher(100_000);
+      const warns = (dispatcher as any).pendingToolWarns as string[];
+      mockCreate.mockResolvedValue(respWithUsage(80_000));   // 越 75K 线
+      await callRetry({ model: 'test', messages: [] });
+      expect(warns.filter(w => w.includes('75%')).length).toBe(1);
+      await callRetry({ model: 'test', messages: [] });   // 同水位再调:不重复
+      expect(warns.filter(w => w.includes('75%')).length).toBe(1);
+      mockCreate.mockResolvedValue(respWithUsage(120_000));   // 越 100K 线
+      await callRetry({ model: 'test', messages: [] });
+      expect(warns.filter(w => w.includes('已越 max_context_tokens（')).length).toBe(1);
+      await callRetry({ model: 'test', messages: [] });
+      expect(warns.filter(w => w.includes('已越 max_context_tokens（')).length).toBe(1);
+    });
+
+    it('反例：max_context_tokens 未配置 → 水位照记但零告警（向后兼容,与预检档同一开关哲学）', async () => {
+      const { dispatcher, mockCreate, callRetry } = makeWatermarkDispatcher();
+      mockCreate.mockResolvedValue(respWithUsage(500_000));
+      await callRetry({ model: 'test', messages: [] });
+      expect(dispatcher.getCtxWatermark()).toBe(500_000);
+      expect(((dispatcher as any).pendingToolWarns as string[]).length).toBe(0);
+    });
+
+    it('正例：timeout 耗尽且水位越 75% → NETWORK_ERROR 文案带水位提示;网络类不带（瞬断无体量嫌疑）', async () => {
+      const { mockCreate, callRetry, dispatcher } = makeWatermarkDispatcher(100_000);
+      mockCreate.mockResolvedValueOnce(respWithUsage(90_000));
+      await callRetry({ model: 'test', messages: [] });   // 先把水位抬过 75K
+      const timeoutErr = Object.assign(new Error('Request timed out.'), { status: undefined });
+      (dispatcher as any).defaultClient.classifyError = () => 'timeout';
+      mockCreate.mockRejectedValue(timeoutErr);
+      await expect(callRetry({ model: 'test', messages: [] })).rejects.toThrow(/水位 90K 已近告警线.*重试大概率同因/);
+      // 网络类对照:同水位不带提示
+      (dispatcher as any).defaultClient.classifyError = () => 'network';
+      await expect(callRetry({ model: 'test', messages: [] })).rejects.toThrow(/NETWORK_ERROR: 网络中断（(?!.*水位)/);
+    });
+  });
+
   describe('checkBudget', () => {
     it('does not throw when under budget', () => {
       const engine = new ExecutionEngine();
@@ -2848,6 +2916,37 @@ g
       const uniq = Array.from({ length: 400 }, (_, i) => `完全不同的第${i}句内容形态${i * 31}。`).join('');
       expect(isHighlyRepetitive(uniq)).toBe(false);
       expect(isHighlyRepetitive('短文')).toBe(false);
+    });
+
+    // @v: anc-exec-thinking-exhausted — 变招重试三批（R4 实撞:同 run 13 次烧满 65535 正文全空,
+    // 免预算重试与首跑参数同源同型反复撞）:检出记名步号 → 该步后续装配 thinking 强制 disabled
+    it('正例（变招重试）：带步号检出 THINKING_EXHAUSTED → 记名,该步后续 buildApiRequest 强制 thinking disabled 且报文告知降档', () => {
+      const { d, parse } = mkDispatcherWithRealLog();
+      const resp = { stop_reason: 'max_tokens', content: [{ type: 'text', text: '' }], usage: { output_tokens: 65535 } };
+      expect(() => (parse as (r: unknown, s: unknown, id?: string) => unknown)(resp, SCHEMA, '5.1.3.1.5'))
+        .toThrow(/THINKING_EXHAUSTED.*重试轮将禁用推理通道/);
+      const ctx = { task_context: 't', instruction: 'x', progress_summary: '', inputs: {}, output_schema: [] };
+      const step = { step_id: '5.1.3.1.5', step_type: 'check', context: ctx };
+      const req = (d as never as { buildApiRequest: (c: unknown, t: string, s?: unknown) => { request: Record<string, unknown> } })
+        .buildApiRequest(ctx, 'check', step).request;
+      expect(req['thinking']).toEqual({ type: 'disabled' });
+    });
+
+    it('反例（变招不误伤）：未记名的步照旧无 thinking 键（route 未声明吃端点缺省——存量行为零变化）', () => {
+      const { d } = mkDispatcherWithRealLog();
+      const ctx = { task_context: 't', instruction: 'x', progress_summary: '', inputs: {}, output_schema: [] };
+      const step = { step_id: '2.2', step_type: 'check', context: ctx };
+      const req = (d as never as { buildApiRequest: (c: unknown, t: string, s?: unknown) => { request: Record<string, unknown> } })
+        .buildApiRequest(ctx, 'check', step).request;
+      expect(req['thinking']).toBeUndefined();
+    });
+
+    it('反例（replan 段无步号不记名）：不带步号检出 → 报文无降档句,记名册不增', () => {
+      const { d, parse } = mkDispatcherWithRealLog();
+      const resp = { stop_reason: 'max_tokens', content: [{ type: 'text', text: '' }], usage: { output_tokens: 65535 } };
+      expect(() => parse(resp, SCHEMA)).toThrow(/THINKING_EXHAUSTED/);
+      expect(() => parse(resp, SCHEMA)).not.toThrow(/重试轮将禁用推理通道/);
+      expect((d as never as { thinkingExhaustedSteps: Set<string> }).thinkingExhaustedSteps.size).toBe(0);
     });
   });
 
@@ -6775,11 +6874,37 @@ g
     expect(r3.outputs?.['out_a']).toBe(3);
   });
 
-  it('反例（U4b）：child_instance 不在队列 → 结构化拒,不推进', async () => {
+  it('反例（U4b/0094）：child_instance 不在队列 → 结构化 rejected 不 throw（原钉标题写"结构化拒"断言却钉 throw——标题与断言自相矛盾,钉死的正是 0094 病灶:throw 被 mcp catch 锤 failed 终态毁可恢复 run;修后按标题本义断言）', async () => {
     const engine = new ExecutionEngine();
     engine.initExecution(`# T\nId: t\n## Goal\ng\n## Outputs\n- r: text\n## Steps\n1. [reason] R\n  + → r: text\n  > t\n`, HOST);
     const dispatcher = new StepDispatcher(engine, HOST);
-    await expect(dispatcher.resume('1', { v: 1 }, undefined, 'ghost.1')).rejects.toThrow(/不在待答队列/);
+    const r = await dispatcher.resume('1', { v: 1 }, undefined, 'ghost.1');   // @v: anc-exec-parallel-hitl-queue
+    expect(r.rejected?.code).toBe('CHILD_NOT_IN_QUEUE');
+    expect(r.rejected?.message).toMatch(/串行 call 停点|去掉 child_instance/);   // 指引带串行停点修正路
+  });
+
+  it('反例（0094 实撞形态）：串行 call 内 confirm 停点被误带 child_instance 应答 → 结构化拒收 run 保持可恢复,去掉参数按 call_path 重答即续跑', async () => {
+    // 复现 probe 二轮实撞:串行 [call callee],callee 内停点——挂起帧走 call_path 路由不入
+    // pausedChildren 队列;caller 误带 child_instance(卡面 call_path/child_instance 均空无从判别)
+    // 原直接 throw 锤死 run。修后:结构化拒 → caller 去参重答 → 正常续跑到 completed。
+    const CALLEE_G = `# G\nId: g94\n\n## Goal\n带审批\n\n## Inputs\n- n: int  # 数\n\n## Outputs\n- out_n: int  # 出\n\n## Steps\n1. [confirm require_human=true] 审批\n  - ← n\n  + → ok: bool  # 槽\n2. [act] 透传\n  - ← n\n  + → out_n: int  # 出\n  > \`\`\`hop_python\n  > out_n = n\n  > \`\`\`\n`;
+    const spec94 = `# M94\nId: m94\n\n## Goal\n串行调\n\n## Inputs\n- base: int  # 底\n\n## Outputs\n- result: int  # 果\n\n## Steps\n1. [call g94(n: base)] 调审批\n  + → result: out_n  # 映射\n`;
+    const prov94 = { resolve: async (id: string) => (id === 'g94' ? { spec_id: id, source: CALLEE_G } : null) };
+    const host94: HostConfig = { ...HOST, spec_provider: prov94 };
+    const engine94 = new ExecutionEngine();
+    const init94 = engine94.initExecution(spec94, host94, { params: { base: 7 } });
+    expect(init94.status).toBe('ok');
+    const dispatcher = new StepDispatcher(engine94, host94);
+    const r1 = await dispatcher.runSpec();
+    expect(r1.status).toBe('paused');   // callee confirm 停点经 call_path 上浮
+    // 误带 child_instance(模拟 0094 调用错)——结构化拒不 throw,run 可恢复
+    const r2 = await dispatcher.resume(r1.pause!.step_id, { value: 'approve' }, r1.pause!.call_path, '1.1');
+    expect(r2.rejected?.code).toBe('CHILD_NOT_IN_QUEUE');   // @v: anc-exec-parallel-hitl-queue
+    expect(r2.rejected?.message).toMatch(/串行 call 停点|去掉 child_instance/);
+    // 去掉 child_instance 按 call_path 正路重答 → 续跑到底
+    const r3 = await dispatcher.resume(r1.pause!.step_id, { value: 'approve' }, r1.pause!.call_path);
+    expect(r3.status).toBe('completed');
+    expect(r3.outputs?.['result']).toBe(7);
   });
 
   it('正例（矩阵15）：嵌套——子实例内层标注退化串行（worker 门关），结果正确不串账', async () => {

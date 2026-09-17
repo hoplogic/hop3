@@ -106,7 +106,8 @@ NPMV=$(npm view "@hoplogic/hopjit@$PKGV" version 2>/dev/null || echo "")   # 精
 # 发版无关面黑名单（④E2E 凭证闸用——2026-08-26 作者定"走黑名单,安全点"：
 # 只枚举确认不影响发版产物的路径,名单外一切〔含未来新增未知路径〕缺省按影响发版拦。
 # scripts/release.sh 自身入名单：检查单不被 E2E 测,其验证=当次发版执行本身。契约 chain-enforcement §8）
-NONRELEASE_RE='^(todo/|docs/|hop_tasks/|audits/|tests/|scripts/audit/|\.playwright-mcp/|TRACEABILITY\.md|Doctree\.md|ARCHITECTURE\.md|AGENTS\.md|CLAUDE\.md|RELEASING\.md|\.gitignore|scripts/release\.sh|vitest\.config\.ts)'
+# @a: anc-release-boundary-guards —— 凭证差集闸:maintainers/ 恒在黑名单(被钉 tests/guard-scripts.test.ts)
+NONRELEASE_RE='^(todo/|docs/|hop_tasks/|audits/|maintainers/|tests/|scripts/audit/|\.playwright-mcp/|TRACEABILITY\.md|Doctree\.md|ARCHITECTURE\.md|AGENTS\.md|CLAUDE\.md|\.gitignore|scripts/release\.sh|vitest\.config\.ts)'
 
 echo "═══ 发版检查单（G5·快照制）═══"
 echo "快照 package.json: $PKGV / npm 上该版本: ${NPMV:-未发布} / 快照 $SNAP"
@@ -173,7 +174,7 @@ if [ "$RESUME" != "published" ]; then
   echo "④ E2E 双绿凭证（cc:delegated + codex:delegated 通过——无条件闸，续发模式也不跳过：publish 是不可逆点。凭证允许落后快照当且仅当差集全落发版无关黑名单内）..."
   for SCEN in cc-delegated codex-delegated; do
     EV=".e2e-evidence/$SCEN.json"
-    [ -f "$EV" ] || { echo "❌ 缺 $EV —— 先跑 npm run test:live:core（发版档,有模型费用,见 RELEASING §3）"; exit 1; }
+    [ -f "$EV" ] || { echo "❌ 缺 $EV —— 先跑 npm run test:live:core（发版档,有模型费用,见 maintainers/RELEASING.md §3）"; exit 1; }
     EVCOMMIT=$(node -e "console.log(require('./$EV').commit)")
     if [ "$EVCOMMIT" != "$SNAP" ]; then
       # 凭证落后快照：须为快照祖先,且差集 diff 路径全部落黑名单内（发版无关）才放行——2026-08-26 作者定

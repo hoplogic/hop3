@@ -622,6 +622,46 @@ g
     expect(tf['status']).toBe('failed');
     expect((tf['failure'] as { reason: string }).reason).toBe('boom');
 
+    // completed 标记与步骤态不一致的显式报告（hopissues/0093——病态快照:标记 completed 而顶层
+    // 收尾步仍 pending,引擎正常盖印路径产不出;读侧检测报告不擅改:status 仍 completed 但带
+    // inconsistency 字段,不清标记不翻 running。^anc-exec-completed-consistency）
+    // @v: anc-exec-completed-consistency
+    mkdirSync(join(sd, 'run-inc'), { recursive: true });
+    writeFileSync(join(sd, 'run-inc', 'state.json'), JSON.stringify({ format_version: 1, step_states: { '1': 'done', '2': 'pending' }, terminal_state: 'completed' }));
+    writeFileSync(join(sd, 'run-inc', 'spec.json'), JSON.stringify({ header: { outputs: [{ name: 'r' }] }, steps: [{ step_id: '1', step_type: 'act' }, { step_id: '2', step_type: 'exit' }] }));
+    writeFileSync(join(sd, 'run-inc', 'vars.json'), JSON.stringify({ format_version: 2, scopes: { root: { parent: null, variables: { r: 'v' } } } }));
+    const inc = core.runStatus('run-inc', sd);
+    expect(inc['status']).toBe('completed');                                    // 报告不擅改:status 不翻
+    expect(String(inc['inconsistency'])).toContain('不一致');                    // 显式信号在场
+    expect(String(inc['inconsistency'])).toContain('2');                        // 点名病态步
+
+    // 反例:正常 completed（全终态,含 skipped——worker 形态不误伤）零 inconsistency
+    mkdirSync(join(sd, 'run-inc-ok'), { recursive: true });
+    writeFileSync(join(sd, 'run-inc-ok', 'state.json'), JSON.stringify({ format_version: 1, step_states: { '1': 'done', '2': 'skipped' }, terminal_state: 'completed' }));
+    writeFileSync(join(sd, 'run-inc-ok', 'spec.json'), JSON.stringify({ header: { outputs: [{ name: 'r' }] }, steps: [{ step_id: '1', step_type: 'act' }, { step_id: '2', step_type: 'exit' }] }));
+    writeFileSync(join(sd, 'run-inc-ok', 'vars.json'), JSON.stringify({ format_version: 2, scopes: { root: { parent: null, variables: { r: 'v' } } } }));
+    const incOk = core.runStatus('run-inc-ok', sd);
+    expect(incOk['status']).toBe('completed');
+    expect(incOk['inconsistency']).toBeUndefined();
+
+    // 注册表命中面接线钉（阅卷变异实锤:liveInconsistency 改恒 null 全绿存活——接线两行零钉防护。
+    // 注入最小 RunEntry 直测 runStatus 装配线:entry.state=completed 且引擎检测器报不一致→字段透出）
+    const fakeEngine = { detectCompletedInconsistency: () => 'terminal_state=completed 但顶层步 9 仍未终态——完成标记与步骤态不一致(接线钉注入)', getCumulativeTokens: () => 0, getInflight: () => [] };
+    (core as unknown as { runs: Map<string, unknown> }).runs.set('run-live-inc', {
+      runId: 'run-live-inc', state: 'completed', specPath: 'x.md', startedAt: 'now',
+      dispatcher: { getEngine: () => fakeEngine },
+    });
+    const liveInc = core.runStatus('run-live-inc', sd);
+    expect(liveInc['status']).toBe('completed');
+    expect(String(liveInc['inconsistency'])).toContain('不一致');
+    // 对照:检测器返 null 时字段缺席
+    (core as unknown as { runs: Map<string, unknown> }).runs.set('run-live-ok', {
+      runId: 'run-live-ok', state: 'completed', specPath: 'x.md', startedAt: 'now',
+      dispatcher: { getEngine: () => ({ detectCompletedInconsistency: () => null, getCumulativeTokens: () => 0, getInflight: () => [] }) },
+    });
+    const liveOk = core.runStatus('run-live-ok', sd);
+    expect(liveOk['inconsistency']).toBeUndefined();
+
     // 终态优先于残卡（40轮review探针实抓分支序:completed快照+残留死卡并存,卡分支先行→
     // 陈卡对账NOT_FOUND挡住盘上terminal_state;权威序=墓碑>终态>等人卡）
     mkdirSync(join(sd, 'run-tc'), { recursive: true });

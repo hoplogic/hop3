@@ -8253,6 +8253,9 @@ G
     const SPEC = `# RA
 ## Goal
 G
+## Tools
+- probe_send(msg)  # 注册件不可逆发送（0089 批起 commit 步外部工具须 Tools 段声明——写时显式被人看见）
+  - msg: text  # 发送内容
 ## Steps
 1. [subtask] 组
   + → ok: bool
@@ -8553,6 +8556,9 @@ G
 Id: commit-gate-reuse
 ## Goal
 G
+## Tools
+- ext_publish(x)  # caller 会话发布工具（0089 批起 commit 步外部工具须 Tools 段声明）
+  - x: text  # 发布内容
 ## Outputs
 - out: text  # r
 ## Steps
@@ -12123,6 +12129,79 @@ g
   });
 });
 
+// join 前置不变量判据 3——单 child 读失败隔离（0088 批⑩;载体沿革后由 reap 逐 child 收割承载,
+// 见 exec-engine ^anc-exec-parallel-join-preconditions 载体沿革注:单 child 收割失败合成 failed
+// 不连累兄弟。修前:reapFromChildDir/reconcileInflight 读坏 state.json 直接上抛 CORRUPT_STATE_FILE,
+// 经 CLI reap_and_fetch_next/advance 炸整条命令,一个坏文件连累兄弟收割与主线推进）
+// @v: anc-exec-parallel-join-preconditions
+describe('reap 坏 state 单 child 隔离（join 前置不变量判据 3）', () => {
+  const PAR_SPEC = `# T
+Id: t-isolate
+## Goal
+g
+## Inputs
+- nums: [int]  # 列表
+## Outputs
+- outs: [int]  # 收集
+## Steps
+1. [loop for-each n in nums, collect o into outs] 逐项
+  + → outs: [int]  # 收集列表
+  1.1. [subtask parallel] 处理
+    + → o: int  # 单项
+    1.1.1. [reason] 算
+      - ← n
+      + → o: int  # 结果
+2. [exit] 交付
+`;
+  // 夹具：父实例派发两 child,其一盘面写坏（state.json 非法 JSON）,另一正常终态
+  function setupTwoChildren() {
+    const stateDir = mkdtempSync(join(tmpdir(), 'reap-iso-'));
+    const e = new ExecutionEngine();
+    const init = e.initExecution(PAR_SPEC, MINIMAL_HOST_CONFIG, { stateDir, params: { nums: [1, 2] } }) as any;
+    e.setUnifiedDispatch(true);
+    const d1 = e.nextStep() as any;
+    const d2 = e.nextStep() as any;
+    const instDir = join(stateDir, init.instance_id);
+    // 坏 child（d1）：state.json 写坏成非法 JSON
+    const badDir = join(instDir, 'parallel', d1.child_instance);
+    mkdirSync(badDir, { recursive: true });
+    writeFileSync(join(badDir, 'state.json'), '{{{not json');
+    // 好 child（d2）：正常终态盘面（步骤全 done + 声明输出 o 在 vars）
+    const goodDir = join(instDir, 'parallel', d2.child_instance);
+    mkdirSync(goodDir, { recursive: true });
+    writeFileSync(join(goodDir, 'state.json'), JSON.stringify({ format_version: 1, step_states: { '1.1.1': 'done' }, committed_steps: [] }));
+    writeFileSync(join(goodDir, 'vars.json'), JSON.stringify({ format_version: 2, scopes: { root: { parent: null, variables: { o: 22 } } } }));
+    return { e, bad: d1.child_instance as string, good: d2.child_instance as string };
+  }
+
+  it('正例：坏 child 合成 failed 收割(集合语义不贡献元素)、好 child 结果正常收割、父实例不炸——主线走到 completed', () => {
+    const { e, bad, good } = setupTwoChildren();
+    // 逐 child 收割：坏 child 不抛（读失败在函数内合成 FailRecord）
+    expect(() => e.reapFromChildDir(bad, 'completed')).not.toThrow();
+    expect(() => e.reapFromChildDir(good, 'completed')).not.toThrow();
+    // 两 child 均出账
+    expect(e.getInflight().filter(f => f.child_instance === bad || f.child_instance === good)).toHaveLength(0);
+    // 失败凭据留痕（reason 带 CORRUPT_STATE_FILE 定位,不静默）
+    expect(e.getExecEvents().some(ev => ev.event === 'parallel_reap' && ev.detail?.startsWith(bad) && ev.detail.includes('CORRUPT_STATE_FILE'))).toBe(true);
+    // 主线不被坏 child 拖死：收齐后 completed,collect 只含好 child 元素（列表变短语义）
+    const r = e.nextStep() as any;
+    expect(r.status).toBe('completed');
+    expect(r.outputs['outs']).toEqual([22]);
+  });
+
+  it('正例：crash-resume 对账路同律——reconcileInflight 撞坏 child 不炸,坏 child 按 failed 收割出账、好 child 照常收割', () => {
+    const { e, bad, good } = setupTwoChildren();
+    const { reaped, stale } = e.reconcileInflight({ dispatchLostPolicy: 'stale' });
+    expect(reaped).toContain(bad);
+    expect(reaped).toContain(good);
+    expect(stale).toEqual([]);
+    expect(e.getInflight()).toHaveLength(0);
+    const r = e.nextStep() as any;
+    expect(r.status).toBe('completed');
+    expect(r.outputs['outs']).toEqual([22]);
+  });
+});
+
 // hopissues/0047:call 子实例 re-init 净室（原 init 不清 calls/ 嵌套残留,串行 for-each 迭代互相污染）
 // @v: anc-exec-call-reinit-clean
 describe('call 子实例 re-init 净室（hopissues/0047）', () => {
@@ -13267,5 +13346,234 @@ g
     expect(rf.reaped).toContain('1.1.1');
     expect(rf.stale).toEqual([]);
     expect(eFail.getInflight().filter(f => f.child_instance === '1.1.1')).toHaveLength(0);
+  });
+});
+
+// engine_min_version 版本闸（todo/0093 版本兼容性原则——Config 键声明引擎最低版本,init 期 semver 比对:
+// 不足 INIT_FAILED 带两出路/非法格式 warn 按缺席/键缺席零比对存量零破坏）。 // @v: anc-exec-engine-min-version-gate
+describe('engine_min_version 版本闸（0093）', () => {
+  const SPEC = (cfg: string) => `# MG
+Id: mg
+## Goal
+g
+${cfg}## Outputs
+- r: text  # r
+## Steps
+1. [act free] 干
+  + → r: text  # r
+`;
+
+  it('反例：engine_min_version 高于引擎版本 → INIT_FAILED 报文带升级命令与删键两出路', () => {
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC('Config:\n  engine_min_version: 99.0.0\n'), MINIMAL_HOST_CONFIG);
+    expect(init.status).toBe('error');
+    const msg = (init as { errors: { message: string }[] }).errors[0].message;
+    expect(msg).toContain('engine_min_version: 99.0.0');
+    expect(msg).toContain('npm i -g @hoplogic/hopjit@latest');
+    expect(msg).toContain('删除 Config 段 engine_min_version 键');
+  });
+
+  it('正例：engine_min_version 低于引擎版本 → 照常起跑（semver 数值逐段比,0.1.0 < 当前）', () => {
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC('Config:\n  engine_min_version: 0.1.0\n'), MINIMAL_HOST_CONFIG);
+    expect(init.status).toBe('ok');
+  });
+
+  it('正例：数值段比非字符串比——engine_min_version 0.9.0 放行（字符串比 "0.9.0">"0.15.1" 会误拒）', () => {
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC('Config:\n  engine_min_version: 0.9.0\n'), MINIMAL_HOST_CONFIG);
+    expect(init.status).toBe('ok');
+  });
+
+  it('正例：非法格式按缺席处理 warn 留痕不拒（配置钝感写错不炸不静默）', () => {
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC('Config:\n  engine_min_version: banana\n'), MINIMAL_HOST_CONFIG);
+    expect(init.status).toBe('ok');
+    const warns = (init as { warnings?: { message: string }[] }).warnings ?? [];
+    expect(warns.some(w => w.message.includes('engine_min_version') && w.message.includes('semver'))).toBe(true);
+  });
+
+  it('正例：键缺席零比对零提示（存量 spec 零破坏）', () => {
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC(''), MINIMAL_HOST_CONFIG);
+    expect(init.status).toBe('ok');
+    const warns = (init as { warnings?: { message: string }[] }).warnings ?? [];
+    expect(warns.some(w => w.message.includes('engine_min_version'))).toBe(false);
+  });
+
+  it('正例：声明值恰等于当前引擎版本 → 放行（第十一轮 review 变异实锤:恰等是 pack 产物标准形态——pack 注入的就是当前版本,cmp<0 改 <=0 时全库曾无一红）', () => {
+    const pkgJson = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf-8')) as { version: string };
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC(`Config:\n  engine_min_version: ${pkgJson.version}\n`), MINIMAL_HOST_CONFIG);
+    expect(init.status).toBe('ok');
+  });
+
+});
+
+// completed 标记与步骤态不一致检测（hopissues/0093——病态快照〔盘外写入/回放重建〕:标记 completed
+// 而顶层步仍 pending,读侧显式报告不擅改。^anc-exec-completed-consistency） // @v: anc-exec-completed-consistency
+describe('completed 标记与步骤态不一致检测（0093）', () => {
+  const SPEC_2STEP = `# IC
+Id: ic
+## Goal
+g
+## Outputs
+- r: text  # r
+## Steps
+1. [act free] 干
+  + → r: text  # r
+2. [exit] 收尾
+  - ← r
+`;
+
+  function loadDoctored(states: Record<string, string>, terminal: string | null): ExecutionEngine {
+    const sd = mkdtempSync(join(tmpdir(), 'eng-0093-'));
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC_2STEP, MINIMAL_HOST_CONFIG, { stateDir: sd });
+    const dir = join(sd, (init as { instance_id: string }).instance_id);
+    // 盘外改写快照（病态来源的最小重现:正常盖印路径产不出这种组合）
+    const stPath = join(dir, 'state.json');
+    const st = JSON.parse(readFileSync(stPath, 'utf-8')) as Record<string, unknown>;
+    st['step_states'] = states;
+    if (terminal) st['terminal_state'] = terminal;
+    writeFileSync(stPath, JSON.stringify(st));
+    return ExecutionEngine.load(dir);
+  }
+
+  it('反例：completed 标记 + 顶层收尾步 pending → getStatus 带 inconsistency 显式信号,status 仍 completed 不擅改（报告不翻 running——重派已清账步骤=重复执行）', () => {
+    const eng = loadDoctored({ '1': 'done', '2': 'pending' }, 'completed');
+    const status = eng.getStatus();
+    expect(status.execution_status).toBe('completed');
+    const inc = (status as unknown as { inconsistency?: string }).inconsistency;
+    expect(String(inc)).toContain('不一致');
+    expect(String(inc)).toContain('2');   // 点名病态步
+  });
+
+  it('正例：completed 标记 + 全终态（含 skipped——worker 子实例子树外步骤形态,不误伤）→ 零 inconsistency', () => {
+    const eng = loadDoctored({ '1': 'done', '2': 'skipped' }, 'completed');
+    const status = eng.getStatus();
+    expect(status.execution_status).toBe('completed');
+    expect((status as unknown as { inconsistency?: string }).inconsistency).toBeUndefined();
+  });
+
+  it('正例：无 completed 标记时不检测（failed/running 快照零 inconsistency——检测面只罩 completed 标记）', () => {
+    const eng = loadDoctored({ '1': 'done', '2': 'pending' }, null);
+    const status = eng.getStatus();
+    expect((status as unknown as { inconsistency?: string }).inconsistency).toBeUndefined();
+  });
+
+  it('反例：getVars 面同罩——病态快照 getVars 带 inconsistency（阅卷抓此面静默报 completed,全读取面不留静默通道）', () => {
+    const eng = loadDoctored({ '1': 'done', '2': 'pending' }, 'completed');
+    const vars = eng.getVars();
+    expect(vars.execution_status).toBe('completed');
+    expect(String((vars as unknown as { inconsistency?: string }).inconsistency)).toContain('不一致');
+  });
+});
+
+// requires_commands 命令预检闸（hopissues/0090 P3 槽位半边——Config 键声明 body 依赖的本地命令,
+// init 期与宿主白名单对账:缺即 INIT_FAILED 点名缺哪些并带 hopjit.yaml 指路/键缺席零比对存量零破坏/
+// 非法格式 warn 按缺席/判序在 engine_min_version 后 Inputs 闸前）。 // @v: anc-exec-requires-commands-gate
+describe('requires_commands 命令预检闸（0090）', () => {
+  const SPEC = (cfg: string) => `# RC
+Id: rc
+## Goal
+g
+${cfg}## Outputs
+- r: text  # r
+## Steps
+1. [act free] 干
+  + → r: text  # r
+`;
+  const HOST_WITH = (cmds: string[]): HostConfig => ({
+    workspace_dir: '/tmp/test',
+    sandbox: { filesystem: { workspace_dir: '.', read_access: { allowed: ['.'], denied: [], confirm_required: [] } }, network: { trusted_hosts: [] }, runtime: { available: cmds } },
+    api_key: 'test-key',
+  });
+
+  it('反例：声明的命令宿主白名单缺 → INIT_FAILED 点名缺的命令并带 hopjit.yaml commands 指路,不进任何步骤', () => {
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC('Config:\n  requires_commands: [git, jq]\n'), HOST_WITH(['git']));
+    expect(init.status).toBe('error');
+    const msg = (init as { errors: { message: string }[] }).errors[0].message;
+    expect(msg).toContain('requires_commands');
+    expect(msg).toContain('缺少: jq');
+    expect(msg).toContain('hopjit.yaml 的 commands');
+  });
+
+  it('正例：声明的命令白名单全在 → 照常起跑', () => {
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC('Config:\n  requires_commands: [git]\n'), HOST_WITH(['git', 'npx']));
+    expect(init.status).toBe('ok');
+  });
+
+  it('反例：有声明但宿主白名单为空 → INIT_FAILED（能力关死时启动点就拦,不进 body 才死）', () => {
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC('Config:\n  requires_commands: [git]\n'), HOST_WITH([]));
+    expect(init.status).toBe('error');
+    const msg = (init as { errors: { message: string }[] }).errors[0].message;
+    expect(msg).toContain('缺少: git');
+  });
+
+  it('正例：非法格式（非列表）warn 按缺席不拒（配置钝感写错不炸不静默）', () => {
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC('Config:\n  requires_commands: git\n'), HOST_WITH([]));
+    expect(init.status).toBe('ok');
+    const warns = (init as { warnings?: { message: string }[] }).warnings ?? [];
+    expect(warns.some(w => w.message.includes('requires_commands') && w.message.includes('列表'))).toBe(true);
+  });
+
+  it('正例：列表含非字符串项 → warn 按缺席不拒（some 判半边——第十一轮 review 抓获原只测非列表标量）', () => {
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC('Config:\n  requires_commands: [git, 123]\n'), HOST_WITH([]));
+    expect(init.status).toBe('ok');
+    const warns = (init as { warnings?: { message: string }[] }).warnings ?? [];
+    expect(warns.some(w => w.message.includes('requires_commands') && w.message.includes('列表'))).toBe(true);
+  });
+
+  it('正例：键缺席零比对零提示（存量 spec 零破坏——未声明的仍靠运行期白名单拒兜底）', () => {
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC(''), HOST_WITH([]));
+    expect(init.status).toBe('ok');
+    const warns = (init as { warnings?: { message: string }[] }).warnings ?? [];
+    expect(warns.some(w => w.message.includes('requires_commands'))).toBe(false);
+  });
+
+  it('正例：空列表声明 → 零比对照常起跑（声明了但不依赖任何命令）', () => {
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC('Config:\n  requires_commands: []\n'), HOST_WITH([]));
+    expect(init.status).toBe('ok');
+  });
+
+  it('判序钉：同时缺命令又缺必填 Inputs → 先报命令缺失不报 Inputs（三闸环境层到参数层递进——命令都不齐时补参没意义）', () => {
+    const SPEC_WITH_INPUTS = `# RC2
+Id: rc2
+## Goal
+g
+Config:
+  requires_commands: [jq]
+## Inputs
+- src: text  # 输入
+## Outputs
+- r: text  # r
+## Steps
+1. [act free] 干
+  - ← src
+  + → r: text  # r
+`;
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC_WITH_INPUTS, HOST_WITH([]));
+    expect(init.status).toBe('error');
+    const msg = (init as { errors: { message: string }[] }).errors[0].message;
+    expect(msg).toContain('缺少: jq');
+    expect(msg).not.toContain('必填 Inputs 缺失');
+  });
+
+  it('判序钉：engine_min_version 不足与命令缺失并存 → 先报版本不报命令（版本不足时命令报文可能基于新语法）', () => {
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC('Config:\n  engine_min_version: 99.0.0\n  requires_commands: [jq]\n'), HOST_WITH([]));
+    expect(init.status).toBe('error');
+    const msg = (init as { errors: { message: string }[] }).errors[0].message;
+    expect(msg).toContain('engine_min_version: 99.0.0');
+    expect(msg).not.toContain('requires_commands');
   });
 });

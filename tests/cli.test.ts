@@ -1,5 +1,5 @@
 // @module: hop-cli ^anc-struct-hop-cli
-import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { execSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, mkdirSync, utimesSync, readFileSync, existsSync, readdirSync, symlinkSync, realpathSync, cpSync, rmSync } from 'node:fs';
 import { join, resolve, dirname, win32 as pathWin32 } from 'node:path';
@@ -16,6 +16,7 @@ import {
   isPathInWorkZone,
   buildHostConfig,
   extractHopEnvIntoHostConfig,
+  resolveContextMode,
   errorExit,
   program,
   setOutputJson, readProjectCommands,
@@ -2595,6 +2596,31 @@ Id: branch-desc
       expect(cxMd).toContain('npm i -g @hoplogic/hopjit@latest');
     });
 
+    // skill 版本注入（hopissues/0092——薄包装 frontmatter 原恒缺 version,消费方读空回退 unknown;
+    // --skill-version 显式注入两载体,未传不写行且 note 提示,不设缺省值）。 // @v: anc-cli-pack
+    it('正例：--skill-version 注入两载体 frontmatter version 行（0092）', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'cli-pack-sv-'));
+      const r = runCliJson(`pack "${join(REPO, 'examples/doc-review.md')}" --skill-version 2.6.5`, dir);
+      expect(r.status).toBe('ok');
+      const ccMd = readFileSync(join(dir, '.claude/skills/doc-review/SKILL.md'), 'utf-8');
+      expect(ccMd).toMatch(/^version: 2\.6\.5$/m);
+      const fm = ccMd.split('---')[1];                          // frontmatter 块内(非正文提及)
+      expect(fm).toContain('version: 2.6.5');
+      const dir2 = mkdtempSync(join(tmpdir(), 'cli-pack-sv2-'));
+      runCliJson(`pack "${join(REPO, 'examples/coffee-week.md')}" --carrier codex --assets coffee-sales.json --skill-version 1.0.0`, dir2);
+      const cxFm = readFileSync(join(dir2, '.agents/skills/coffee-week/SKILL.md'), 'utf-8').split('---')[1];
+      expect(cxFm).toContain('version: 1.0.0');
+    });
+
+    it('正例：未传 --skill-version → frontmatter 无 version 行且 note 提示（不静默不编造）', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'cli-pack-nosv-'));
+      const r = runCliJson(`pack "${join(REPO, 'examples/doc-review.md')}"`, dir);
+      expect(r.status).toBe('ok');
+      const fm = readFileSync(join(dir, '.claude/skills/doc-review/SKILL.md'), 'utf-8').split('---')[1];
+      expect(fm).not.toContain('version:');
+      expect(String(r.note ?? '')).toContain('--skill-version');
+    });
+
     it('doc-ref 知识文档随包拷入', () => {
       const dir = mkdtempSync(join(tmpdir(), 'cli-pack-k-'));
       const r = runCliJson(`pack "${join(REPO, 'scripts/audit/anchor-audit.md')}"`, dir);
@@ -4494,5 +4520,260 @@ describe('缺省模型同源常量（0086 续账修）', () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+// escalate 升层应答 CLI 消化路（0088 批⑫——引擎面六例已有,CLI submit --answer 半边缺钉:
+// cli.ts 升层分支〔getEscalatePending===stepId 且 --answer 在场 → resumeFromEscalation〕
+// 被删时无跨进程用例拦）。 // @v: anc-exec-check-escalate
+describe('escalate CLI 应答路（跨进程升层消化）', () => {
+  const ESC_SPEC = `# Esc
+Id: esc-cli
+
+## Goal
+g
+
+## Inputs
+- x: int  # 入
+
+## Outputs
+- r: text  # 出
+
+## Steps
+1. [subtask retry=2] 探索循环
+  + → r: text  # 出
+  1.1. [check escalatable] 收敛判定
+    - ← x
+    + → ok: bool  # 判定槽
+    + → gap: yaml  # 缺口槽
+    > 判收敛
+  1.2. [act] 出结果
+    + → r: text  # 出
+    > \`\`\`hop_python
+    > r = "done"
+    > \`\`\`
+`;
+
+  it('正例：check 升层进待答态后,submit_and_fetch_next --answer 走升层消化路——guidance 回注重试反馈,同一 check 重派', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-esc-'));
+    writeFileSync(join(dir, 'esc.md'), ESC_SPEC);
+    const r1 = runCliJson(`run esc.md --state-dir state --params '{"x":1}'`, dir);
+    expect(r1.status).toBe('step_ready');
+    expect(r1.step_id).toBe('1.1');
+    // check 判 false 且 gap 携 escalate:true → 引擎四条件命中,进入升层待答态（跨进程落盘）
+    const r2 = runCliJson(`submit_and_fetch_next 1.1 --output '{"ok":false,"gap":{"escalate":true,"need":"要口径:P0阈值多少算收敛"}}' --state-dir state`, dir);
+    expect(r2.status).toBe('paused');
+    expect(r2.pause_reason).toBe('escalate');
+    expect(r2.presented_data?.question).toContain('要口径');
+    // 待答态下 --answer → CLI 升层分支 resumeFromEscalation（非 completeAndAdvance 声明匹配路）
+    const r3 = runCliJson(`submit_and_fetch_next 1.1 --answer '{"guidance":"按均值阈值 0.8 判收敛"}' --state-dir state`, dir);
+    expect(r3.status).toBe('step_ready');
+    expect(r3.step_id).toBe('1.1');   // guidance 消化后同一 check 回 pending 重派
+    // guidance 进了重试反馈通道（state.json retry_history 带升层指引前缀——resumeFromEscalation 独有形态）
+    const state = JSON.parse(readFileSync(join(dir, 'state', r1.instance_id, 'state.json'), 'utf-8'));
+    const allReasons = JSON.stringify(state.retry_history ?? {});
+    expect(allReasons).toContain('升层指引');
+    expect(allReasons).toContain('0.8');
+  });
+
+  it('反例：非待答态时同命令 --answer 走常规 completeAndAdvance,不误入升层消化路', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-esc-n-'));
+    writeFileSync(join(dir, 'esc.md'), ESC_SPEC);
+    const r1 = runCliJson(`run esc.md --state-dir state --params '{"x":1}'`, dir);
+    expect(r1.step_id).toBe('1.1');
+    // 未经升层暂停,直接 --answer 递交合格 check 输出 → 常规声明匹配路完成 1.1、续跑 1.2 到 completed
+    const r2 = runCliJson(`submit_and_fetch_next 1.1 --answer '{"ok":true,"gap":{"escalate":false,"note":"已收敛"}}' --state-dir state`, dir);
+    expect(r2.status).toBe('completed');
+    expect(r2.outputs?.r).toBe('done');
+    // 升层消化路未被误入：retry_history 无升层指引痕迹（resumeFromEscalation 独有形态）
+    const state = JSON.parse(readFileSync(join(dir, 'state', r1.instance_id, 'state.json'), 'utf-8'));
+    expect(JSON.stringify(state.retry_history ?? {})).not.toContain('升层指引');
+  });
+});
+
+// trace_id 继承（0088 批⑬钉B——CLI worker 半边:run --parallel-parent 起 worker 时
+// cli.ts engineOpts traceId=parallelParent,worker hoplog header trace_id 须=父 instance_id。
+// 该赋值被删时引擎回落 traceId=自身 instance_id('1.1.1'),父子轨迹断链无钉拦）
+// @v: anc-obs-trace-inherit
+describe('trace_id 继承（run --parallel-parent worker 跨进程）', () => {
+  it('正例：worker 子实例 hoplog 的 trace_id = 父 instance_id（grep 一个 trace_id 串起整棵执行树）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-trace-'));
+    writeFileSync(join(dir, 'pipe.md'), `# TracePipe
+Id: trace-pipe
+
+## Goal
+g
+
+## Inputs
+- nums: [int]  # 列表
+
+## Outputs
+- outs: [int]  # 收集
+
+## Steps
+1. [loop for-each n in nums, collect o into outs] 逐项
+  + → outs: [int]  # 收集列表
+  1.1. [subtask parallel] 处理
+    + → o: int  # 单项
+    1.1.1. [reason] 判断
+      - ← n
+      + → o: int  # 结果
+2. [exit] 交付
+`);
+    const r1 = runCliJson(`run pipe.md --state-dir state --params '{"nums":[5]}'`, dir);
+    expect(r1.status).toBe('dispatch_ready');
+    const parentId = r1.instance_id;
+    // worker 起步（同 launch_command 形态——reason 步等 LLM 停在 step_ready,hoplog header 已写）
+    const r2 = runCliJson(`run pipe.md --parallel-parent ${parentId} --parallel-child 1.1.1 --params '{"n":5}' --state-dir state`, dir);
+    expect(r2.status).toBe('step_ready');
+    // hoplog 落盘路径规律：<state-dir>/../.hoplog/<specId>-<runId>/main.yaml——父与 worker 各一个 run 目录
+    const hoplogRoot = join(dir, '.hoplog');
+    const runDirs = readdirSync(hoplogRoot).filter(d => d.startsWith('trace-pipe-'));
+    expect(runDirs.length).toBe(2);
+    // 两个 run（父+worker）的 trace_id 全部=父 instance_id——worker 继承而非各自为政
+    for (const rd of runDirs) {
+      const head = readFileSync(join(hoplogRoot, rd, 'main.yaml'), 'utf-8');
+      expect(head).toMatch(new RegExp(`^trace_id: ${parentId}$`, 'm'));
+    }
+  });
+});
+
+// context 精简档三级优先级（0088 批⑭——CLI 侧 resolveContextMode 解析单测:引擎侧语义钉已有,
+// 缺的是 env HOPJIT_CONTEXT_MODE > --context-mode flag > 缺省 full 的解析面。export 直测最轻,
+// 落盘/响应面由既有引擎钉承载）。 // @v: anc-exec-context-mode
+describe('resolveContextMode 三级优先级（env > flag > 缺省 full）', () => {
+  const KEY = 'HOPJIT_CONTEXT_MODE';
+  let saved: string | undefined;
+  beforeAll(() => { saved = process.env[KEY]; });
+  afterAll(() => { if (saved === undefined) delete process.env[KEY]; else process.env[KEY] = saved; });
+
+  it('正例：env 设 minimal 且 flag 传 full → env 赢（每命令可覆盖的调试开关语义）', () => {
+    process.env[KEY] = 'minimal';
+    expect(resolveContextMode('full')).toBe('minimal');
+  });
+
+  it('正例：env 缺席仅 flag minimal → flag 生效', () => {
+    delete process.env[KEY];
+    expect(resolveContextMode('minimal')).toBe('minimal');
+  });
+
+  it('正例：env 与 flag 都不给 → 缺省 full', () => {
+    delete process.env[KEY];
+    expect(resolveContextMode(undefined)).toBe('full');
+  });
+
+  it('反例：env 设非法值 garbage → 落 full（枚举外不静默漂成 minimal）', () => {
+    process.env[KEY] = 'garbage';
+    expect(resolveContextMode(undefined)).toBe('full');
+  });
+});
+
+// for-each worker CLI --params 注入直钉（0088 批⑮——0086 挂账"最实一条":该通道被改回
+// "读父 vars 反解"禁用形态时无 CLI 侧用例拦。itemVar 供给权威=引擎 fan-out 落盘 params.json
+// + driver 透传 --params（显式键优先,params.json 只补缺失键）;worker 不翻父实例 vars 自播种）
+// @v: anc-exec-parallel-foreach-worker
+describe('for-each worker --params itemVar 注入（CLI 跨进程）', () => {
+  const FW_SPEC = `# FW
+Id: fw-pipe
+
+## Goal
+g
+
+## Inputs
+- nums: [int]  # 列表
+
+## Outputs
+- outs: [int]  # 收集
+
+## Steps
+1. [loop for-each n in nums, collect o into outs] 逐项
+  + → outs: [int]  # 收集列表
+  1.1. [subtask parallel] 处理
+    + → o: int  # 单项
+    1.1.1. [reason] 判断
+      - ← n
+      + → o: int  # 结果
+2. [exit] 交付
+`;
+  function setupParent(dir: string): string {
+    writeFileSync(join(dir, 'fw.md'), FW_SPEC);
+    const r = runCliJson(`run fw.md --state-dir state --params '{"nums":[5]}'`, dir);
+    expect(r.status).toBe('dispatch_ready');
+    return r.instance_id;
+  }
+
+  it('正例：run --parallel-child 带 --params → itemVar 落 worker vars,显式键优先于 fan-out 落盘的 params.json（--params 注入通道直钉）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-fw-'));
+    const inst = setupParent(dir);
+    // 父 fan-out 已落 params.json（n=5）;显式 --params 传不同值 99——注入通道生效则 99 赢
+    //（params.json 只补缺失键）。通道被删则 worker 只见落盘的 5,本断言红——直钉 --params 半边。
+    const r = runCliJson(`run fw.md --parallel-parent ${inst} --parallel-child 1.1.1 --params '{"n":99}' --state-dir state`, dir);
+    expect(r.status).toBe('step_ready');
+    const vars = JSON.parse(readFileSync(join(dir, 'state', inst, 'parallel', '1.1.1', 'vars.json'), 'utf-8'));
+    expect(vars.scopes.root.variables['n']).toBe(99);
+  });
+
+  it('反例：不带 --params 且备料 params.json 缺席 → engine init 硬校验 MISSING_INPUT 点名 itemVar,不静默翻父实例 vars 反解', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-fw-n-'));
+    const inst = setupParent(dir);
+    // 移除引擎 fan-out 落盘的备料——模拟"worker 被手工错启动/落盘缺失"现场
+    rmSync(join(dir, 'state', inst, 'parallel', '1.1.1', 'params.json'));
+    const r = runCli(`run fw.md --parallel-parent ${inst} --parallel-child 1.1.1 --state-dir state`, dir);
+    const out = r.stdout + r.stderr;
+    expect(out).toContain('MISSING_INPUT');
+    expect(out).toContain("itemVar 'n'");   // 报错点名缺参（父 vars 里 nums=[5] 在场——翻父反解则不会报）
+  });
+});
+
+// pack engine_min_version 注入（0093——产物 Config 声明打包时引擎版本;作者手写在场保留不覆盖）。 // @v: anc-cli-pack, anc-exec-engine-min-version-gate
+describe('pack engine_min_version 注入（0093）', () => {
+  const REPO2 = resolve(__dirname, '..');
+  it('正例：pack 产物 spec.md Config 段含 engine_min_version=打包引擎版本', () => {
+    const pkgV = JSON.parse(readFileSync(join(REPO2, 'package.json'), 'utf-8')).version as string;
+    const dir = mkdtempSync(join(tmpdir(), 'cli-pack-me-'));
+    const r = runCliJson(`pack "${join(REPO2, 'examples/syntax/confirm-commit.md')}" --dir ${dir} --force`, dir);
+    expect(r.status).toBe('ok');
+    const spec = readFileSync(join(dir, 'confirm-commit', 'spec.md'), 'utf-8');
+    expect(spec).toMatch(new RegExp(`engine_min_version: ${pkgV.replace(/\./g, '\\.')}`));
+  });
+
+  it('正例：spec 已手写 engine_min_version → pack 保留作者值不覆盖（放宽是知情行为）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-pack-me2-'));
+    const src = readFileSync(join(REPO2, 'examples/syntax/confirm-commit.md'), 'utf-8');
+    writeFileSync(join(dir, 'hand.md'), src.replace('## Outputs', 'Config:\n  engine_min_version: 0.1.0\n\n## Outputs'));
+    runCliJson(`pack hand.md --dir ${dir} --name handpack --force`, dir);
+    const spec = readFileSync(join(dir, 'handpack', 'spec.md'), 'utf-8');
+    expect(spec).toContain('engine_min_version: 0.1.0');
+    expect((spec.match(/engine_min_version/g) ?? []).length).toBe(1);
+  });
+  it('正例：spec 已有 Config: 段（无 engine_min_version 键）→ 键插进既有段下,不重复建段（第十一轮 review 抓获:原钉全走无 Config 段分支,/^Config:$/ 替换路径零测试）', () => {
+    const pkgV = JSON.parse(readFileSync(join(REPO2, 'package.json'), 'utf-8')).version as string;
+    const dir = mkdtempSync(join(tmpdir(), 'cli-pack-me3-'));
+    const src = readFileSync(join(REPO2, 'examples/syntax/confirm-commit.md'), 'utf-8');
+    writeFileSync(join(dir, 'withcfg.md'), src.replace('## Outputs', 'Config:\n  model: test/m\n\n## Outputs'));
+    runCliJson(`pack withcfg.md --dir ${dir} --name cfgpack --force`, dir);
+    const spec = readFileSync(join(dir, 'cfgpack', 'spec.md'), 'utf-8');
+    expect(spec).toMatch(new RegExp(`engine_min_version: ${pkgV.replace(/\./g, '\\.')}`));
+    expect((spec.match(/^Config:/gm) ?? []).length).toBe(1);   // 不重复建段
+    expect(spec).toContain('model: test/m');                     // 既有键保留
+  });
+});
+
+// hopfix 随装（todo/0093 件二——版本兼容三义务迁移通道进分发面:壳+流程件副本两载体对等）。 // @v: anc-cli-install-skill
+describe('install-skill 装载 hopfix（0093 件二）', () => {
+  it('正例：CC 载体装出 hopfix 壳+流程件,流程件含版本迁移对照节', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-inst-hf-'));
+    const r = runCliJson(`install-skill --dir ${dir}/sk`, dir);
+    expect(r.installed.some((i: string) => i.includes('hopfix/'))).toBe(true);
+    expect(existsSync(join(dir, 'sk', 'hopfix', 'SKILL.md'))).toBe(true);
+    const flow = readFileSync(join(dir, 'sk', 'hopfix', 'hopfix.md'), 'utf-8');
+    expect(flow).toContain('版本迁移对照');
+    expect(flow).toContain('B2 commit 步未知函数升 error');
+  });
+
+  it('正例：Codex 载体同装（两载体清单对等）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-inst-hf2-'));
+    runCliJson(`install-skill --carrier codex --dir ${dir}/sk`, dir);
+    expect(existsSync(join(dir, 'sk', 'hopfix', 'hopfix.md'))).toBe(true);
   });
 });

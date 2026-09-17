@@ -84,6 +84,17 @@ export interface EngineOptions {
   contextMode?: 'full' | 'minimal';
 }
 
+/** 引擎自身版本——dist/engine.js 上溯包根 package.json（cli readPackageVersion 同法,引擎层不 import cli 故本地持;
+ * 读失败返回 null=闸跳过比对（fail-open,与键缺席同路径）——版本读取问题是宿主装置故障,不该拒用户的 spec
+ *（第十一轮 review 修:原兜底 0.0.0 落进数值比恒小于一切声明值,读失败时带键 spec 全被误拒,与本句本意正相反）。
+ * engine_min_version 闸消费（^anc-exec-engine-min-version-gate）。 */
+function getEngineVersion(): string | null { // @a: anc-exec-engine-min-version-gate
+  try {
+    const pkgPath = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
+    return (JSON.parse(readFileSync(pkgPath, 'utf-8')) as { version?: string }).version ?? null;
+  } catch { return null; }
+}
+
 /** HopJIT 执行状态机——驱动 HopSpec 从初始化到终态，管理步骤状态机/树状变量作用域/retry-adaptive 配额/None 传播。见 [[exec-engine#^anc-struct-exec-engine]] */
 export class ExecutionEngine { // @a: anc-struct-exec-engine
   private instanceId: string = '';
@@ -315,6 +326,58 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     // 子实例闸同源,报文按受众分:逐参点名带类型说明（照抄 VarDecl,补参零翻查）,指向起 run
     // 的调用方。CLI init/MCP start_run/dispatcher runSpec 三入口同经本处,引擎单点实装。
     // parallel worker（subtreeRoot 在场）照旧不受闸——params_for_child 部分回填是常态。
+    // engine_min_version 版本闸（todo/0093 版本兼容性原则——判序在必填 Inputs 闸前:版本不足时 Inputs
+    // 报文可能基于新语法,先判版本。键缺席零比对零提示,非法格式按缺席并 warn 留痕。
+    // 见 exec-engine ^anc-exec-engine-min-version-gate）。// @a: anc-exec-engine-min-version-gate
+    {
+      const engineMinVersion = ast.header.config?.['engine_min_version'];
+      if (engineMinVersion !== undefined) {
+        const parseSemver = (v: unknown): number[] | null => {
+          if (typeof v !== 'string') return null;
+          const m = v.trim().match(/^(\d+)\.(\d+)\.(\d+)/);
+          return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+        };
+        const need = parseSemver(engineMinVersion);
+        if (!need) {
+          warnings.push({ kind: 'validate', rule: 'CONFIG', severity: 'warn',
+            message: `Config.engine_min_version 值 ${JSON.stringify(engineMinVersion)} 非 semver 形态（期望 主.次.补丁）——按缺席处理零比对` } as ValidationError);
+        } else {
+          // 引擎版本读失败 getEngineVersion()=null → parseSemver 落 null → 本分支跳过=fail-open（设计条款第十一轮修）
+          const self = parseSemver(getEngineVersion());
+          if (self) {
+            const cmp = self[0] !== need[0] ? self[0] - need[0] : self[1] !== need[1] ? self[1] - need[1] : self[2] - need[2];
+            if (cmp < 0) {
+              return { status: 'error', errors: [{
+                kind: 'validate', rule: 'INIT_FAILED', severity: 'error',
+                message: `INIT_FAILED: 本 spec 声明 engine_min_version: ${String(engineMinVersion).trim()},当前引擎 ${getEngineVersion()} 版本不足。两条出路:①升级引擎 npm i -g @hoplogic/hopjit@latest;②确认 spec 未用新版语法后删除 Config 段 engine_min_version 键（键缺席零比对）`,
+              }] };
+            }
+          }
+        }
+      }
+    }
+    // requires_commands 命令预检闸（hopissues/0090 P3 槽位半边——spec 自声明依赖的本地命令,
+    // init 期与宿主白名单对账,缺即拦在进 body 之前。键缺席零比对（未声明的仍靠运行期拒兜底,
+    // 声明是下界不是上界）;非法格式 warn 按缺席。判序:engine_min_version 后、Inputs 闸前——环境层到
+    // 参数层递进。见 exec-engine ^anc-exec-requires-commands-gate）。// @a: anc-exec-requires-commands-gate
+    {
+      const reqCmds = ast.header.config?.['requires_commands'];
+      if (reqCmds !== undefined) {
+        if (!Array.isArray(reqCmds) || reqCmds.some(c => typeof c !== 'string')) {
+          warnings.push({ kind: 'validate', rule: 'CONFIG', severity: 'warn',
+            message: `Config.requires_commands 值非字符串列表形态（期望 [命令名, ...]）——按缺席处理零比对` } as ValidationError);
+        } else if (reqCmds.length > 0) {
+          const available = hostConfig?.sandbox?.runtime?.available ?? [];
+          const missing = (reqCmds as string[]).filter(c => !available.includes(c));
+          if (missing.length > 0) {
+            return { status: 'error', errors: [{
+              kind: 'validate', rule: 'INIT_FAILED', severity: 'error',
+              message: `INIT_FAILED: 本 spec 声明 requires_commands 依赖命令 [${(reqCmds as string[]).join(', ')}],宿主命令白名单缺少: ${missing.join(', ')}。修法:把缺少的命令加进项目根 hopjit.yaml 的 commands: 列表（如 commands:\n  - ${missing[0]}）后重跑（hopissues/0090 指路条款）`,
+            }] };
+          }
+        }
+      }
+    }
     // 见 exec-engine ^anc-exec-init-required-inputs。// @a: anc-exec-init-required-inputs
     if (!options?.parentInstanceId && !options?.subtreeRoot && ast.header.inputs) {
       const missingDecls = ast.header.inputs.filter(d => inputs[d.name] === undefined);
@@ -349,7 +412,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
         title: ast.header.title,
         goal: ast.header.goal ?? '',
         inputs: inputs,
-        traceId: options.traceId ?? this.instanceId,  // 顶层用 instanceId,worker 继承父的 instanceId → 父子 trace_id 一致
+        traceId: options.traceId ?? this.instanceId,  // 顶层用 instanceId,worker 继承父的 instanceId → 父子 trace_id 一致 // @a: anc-obs-trace-inherit
       });
     }
 
@@ -2243,7 +2306,19 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
         reaped.push(entry.child_instance);
         continue;
       }
-      const childState = readState(childDir);
+      // 单 child 读失败隔离（判据 3 对账半边——与 reapFromChildDir 同律,2026-09-12 0088 批）：
+      // 子实例 state.json 损坏时 readState 抛 CORRUPT_STATE_FILE——原先炸整个对账,一个坏
+      // child 连累全部在飞的收割与主线推进。改按 failed 收割（reapFromChildDir 失败路对读
+      // 失败有合成 FailRecord 兜底）,坏 child 出账不贡献元素,兄弟照常。
+      // @a: anc-exec-parallel-join-preconditions
+      let childState: StateFile;
+      try {
+        childState = readState(childDir);
+      } catch {
+        this.reapFromChildDir(entry.child_instance, 'failed');
+        reaped.push(entry.child_instance);
+        continue;
+      }
       const states = Object.values(childState.step_states ?? {});
       const anyActive = states.some(st => st === 'running' || st === 'pending');
       const anyFailed = states.some(st => st === 'failed') || !!childState.terminal_failure;
@@ -2280,34 +2355,53 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     const instDir = this.instanceDir;
     if (!instDir) return;
     const childDir = join(instDir, isCall ? 'calls' : 'parallel', childInstance);
-    // 退火凭据（复用模式）：子 state.json 的 committed_steps 非空即传播（三形态全传播）。
-    // // @a: anc-exec-commit-anneal
-    const childCommitted = stateExists(childDir) && (readState(childDir).committed_steps ?? []).length > 0;
-    if (status === 'completed') {
-      const vars = flattenVars(readVars(childDir));
-      if (isCall) this.reapParallelCall(childInstance, { vars, committed: childCommitted });
-      else this.reapParallelSubtask(childInstance, { vars, committed: childCommitted });
-    } else {
-      // 失败：读子实例 state 组装 FailRecord 内核（对称 --failure-child 通道）。
-      // 目录不存在（worker 从未启动而 driver 显式报败）→ 显式报告对"失败"是权威——
-      // 合成 FailRecord 收割，不因缺盘面崩溃（与"completed 报告须盘面为证"不对称是有意的：
-      // 谎报成功会捏造产出,谎报失败只是放弃产出——集合语义可容）。
-      let failure;
-      if (!stateExists(childDir)) {
-        failure = { specId: this.spec?.header.id ?? 'child', childInstanceId: childInstance,
-          stepFailReasons: { report: { reason: 'driver 报告失败且子实例未建立（worker 未启动/启动即崩溃）', fail_kind: 'error' as FailKind } },
-          stepStates: { report: 'failed' } };
+    // 单 child 读失败隔离（join 前置不变量判据 3——设计 exec-engine ^anc-exec-parallel-join-preconditions,
+    // 载体沿革后由 reap 逐 child 收割承载;2026-09-12 0088 批补实装）：子实例 state.json/vars.json
+    // 损坏时 readState/readVars 抛 CORRUPT_STATE_FILE——原先直接上抛,经 CLI reap_and_fetch_next
+    // 炸整条命令,一个坏文件连累兄弟收割与主线推进。此处把"读子实例盘面"整段包起来：读失败 →
+    // 该 child 合成 failed 收割（集合语义不贡献元素/兄弟位走边界失败链）,不上抛不连累其余 child。
+    // 只包读取组装段,收割入账（reapParallelCall/Subtask）在 try 外——收割自身的异常不该被洗成
+    // "child 盘面损坏"。 // @a: anc-exec-parallel-join-preconditions
+    let outcome: { vars?: Record<string, unknown>; failure?: ReturnType<ExecutionEngine['exportFailState']>; committed?: boolean };
+    try {
+      // 退火凭据（复用模式）：子 state.json 的 committed_steps 非空即传播（三形态全传播）。
+      // // @a: anc-exec-commit-anneal
+      const childCommitted = stateExists(childDir) && (readState(childDir).committed_steps ?? []).length > 0;
+      if (status === 'completed') {
+        outcome = { vars: flattenVars(readVars(childDir)), committed: childCommitted };
       } else {
-        const childState = readState(childDir);
-        const stepFailReasons: Record<string, StepFailRecord> = {};
-        for (const [k, v] of Object.entries(childState.step_fail_reasons ?? {})) {
-          stepFailReasons[k] = typeof v === 'string' ? { reason: v, fail_kind: 'error' } : v as StepFailRecord;
+        // 失败：读子实例 state 组装 FailRecord 内核（对称 --failure-child 通道）。
+        // 目录不存在（worker 从未启动而 driver 显式报败）→ 显式报告对"失败"是权威——
+        // 合成 FailRecord 收割，不因缺盘面崩溃（与"completed 报告须盘面为证"不对称是有意的：
+        // 谎报成功会捏造产出,谎报失败只是放弃产出——集合语义可容）。
+        let failure;
+        if (!stateExists(childDir)) {
+          failure = { specId: this.spec?.header.id ?? 'child', childInstanceId: childInstance,
+            stepFailReasons: { report: { reason: 'driver 报告失败且子实例未建立（worker 未启动/启动即崩溃）', fail_kind: 'error' as FailKind } },
+            stepStates: { report: 'failed' } };
+        } else {
+          const childState = readState(childDir);
+          const stepFailReasons: Record<string, StepFailRecord> = {};
+          for (const [k, v] of Object.entries(childState.step_fail_reasons ?? {})) {
+            stepFailReasons[k] = typeof v === 'string' ? { reason: v, fail_kind: 'error' } : v as StepFailRecord;
+          }
+          failure = { specId: this.spec?.header.id ?? 'child', childInstanceId: childInstance, stepFailReasons, stepStates: childState.step_states };
         }
-        failure = { specId: this.spec?.header.id ?? 'child', childInstanceId: childInstance, stepFailReasons, stepStates: childState.step_states };
+        outcome = { failure, committed: childCommitted };
       }
-      if (isCall) this.reapParallelCall(childInstance, { failure, committed: childCommitted });
-      else this.reapParallelSubtask(childInstance, { failure, committed: childCommitted });
+    } catch (err: unknown) {
+      // U2 不对称条款让位（谎报成功须盘面为证——worker 从未启动而 driver 报 completed,
+      // 病是"驱动方谎报/误用"不是"盘面损坏",必须响亮拒不得洗成 failed 收割;既有 CLI 反例钉）：
+      // completed 报告且子实例 state.json 根本不存在 → 原样上抛。判据 3 的隔离面=盘面在场但损坏。
+      if (status === 'completed' && !stateExists(childDir)) throw err;
+      // 读失败合成 failed（判据 3）：reason 带底层错误原文（CORRUPT_STATE_FILE 含文件路径,定位不丢）
+      const reason = err instanceof Error ? err.message : String(err);
+      outcome = { failure: { specId: this.spec?.header.id ?? 'child', childInstanceId: childInstance,
+        stepFailReasons: { read: { reason: `子实例状态读取失败（单 child 隔离收割,不连累兄弟——join 前置不变量判据 3）: ${reason}`, fail_kind: 'error' as FailKind } },
+        stepStates: { read: 'failed' } } };
     }
+    if (isCall) this.reapParallelCall(childInstance, outcome);
+    else this.reapParallelSubtask(childInstance, outcome);
   }
 
   // 派发入账：原子落盘防重（同 dispatched 哲学）。返回子实例 id（<step>.<iter>）。
@@ -3120,6 +3214,12 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
       if (d) pauseSummary = { pause_reason: d.reason, paused_step_id: d.stepId };
     }
 
+    // completed 标记与步骤态一致性核（hopissues/0093——病态快照〔盘外写入/回放重建〕形态:
+    // 标记 completed 而顶层步仍 pending/running,正常盖印路径产不出;报告不擅改:不清标记不翻
+    // running——重派 journal 已清的步骤=重复执行,来源不明时交调用方决策。见 exec-engine
+    // ^anc-exec-completed-consistency）。// @a: anc-exec-completed-consistency
+    const inconsistency = this.detectCompletedInconsistency();
+
     return {
       status: 'ok',
       instance_id: this.instanceId,
@@ -3130,7 +3230,20 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
       pending,
       current_step: currentStep,
       ...pauseSummary,
+      ...(inconsistency ? { inconsistency } : {}),
     };
+  }
+
+  /** completed 标记与顶层步骤态不一致检测（hopissues/0093）——标记在场而顶层存在非终态步即病态。
+   * worker 子实例不误伤：executeSubtreeOnly 已把子树外步骤标 skipped（终态）。
+   * // @a: anc-exec-completed-consistency */
+  detectCompletedInconsistency(): string | null {
+    if (this.terminalState !== 'completed') return null;
+    const nonTerminal = (this.spec?.steps ?? [])
+      .filter(st => !isTerminalStatus(this.stepStates.get(st.step_id)))
+      .map(st => st.step_id);
+    if (nonTerminal.length === 0) return null;
+    return `terminal_state=completed 但顶层步 ${nonTerminal.join(', ')} 仍未终态（pending/running）——完成标记与步骤态不一致：引擎正常盖印路径产不出这种快照,疑被盘外改写或回放重建。产出可能不完整,建议人工核对步骤集与交付物后处置（引擎不擅自清标记——自动翻 running 会重派已清账的步骤）`;
   }
 
   getVars(): VarsResponse {
@@ -3138,11 +3251,15 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     const allVars = this.variables.getAllVariables();
     const declaredOutputs = this.spec?.header.outputs ?? [];
     const pendingOutputs = this.variables.getPendingOutputs(declaredOutputs);
+    // completed 一致性核同罩本面（0093 阅卷抓 getVars 静默报 completed——全读取面不留静默通道）
+    // @a: anc-exec-completed-consistency
+    const inconsistency = this.detectCompletedInconsistency();
 
     return {
       status: 'ok',
       instance_id: this.instanceId,
       execution_status: executionStatus,
+      ...(inconsistency ? { inconsistency } : {}),
       variables: allVars,
       pending_outputs: pendingOutputs,
     };

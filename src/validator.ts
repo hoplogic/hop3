@@ -82,8 +82,9 @@ export function validateSpec(ast: SpecAST, docRefCtx?: DocRefCheckCtx, fragmentO
   }
   structuralRules(effectiveAst, errors);
   controlFlowRules(effectiveAst, errors);
-  variableRules(effectiveAst, errors);
+  variableRules(effectiveAst, errors, !!fragmentOpts);
   specialStepRules(effectiveAst, errors);
+  if (!fragmentOpts) toolDeclConsumptionV14(effectiveAst, errors);   // 片段无 header 声明面,V14 不适用 // @a: anc-rule-v14
   if (docRefCtx) docRefRuleP15(effectiveAst, errors, docRefCtx); // 仅当有 workspace 访问能力时校验
 
   if (fragmentOpts) {
@@ -107,6 +108,62 @@ export function validateSpec(ast: SpecAST, docRefCtx?: DocRefCheckCtx, fragmentO
       && !(e.rule === 'C7' && e.message.includes('must be inside a subtask')));
   }
   return errors;
+}
+
+// V14: Tools 段声明-授权行消费对账（D94 批,作者拍"validate 应该加验证"——声明零消费=工具对
+// 所有步骤静默不可见,LLM 只能空转不报错,split-patterns 教的"最难发现的失效形态"。三消费形态
+// 全认:节点授权行(tool_grants,含 * 通配)/body 内 CallExpr 直调/授权通配。warn 不 error:复用
+// 模式 caller 可按 Tools 段自行注册消费,清单对 caller 有信息价值。反向(授权未声明名)不查——
+// 授权开的是环境注册面,Tools 段只是需求声明子集。// @a: anc-rule-v14
+function toolDeclConsumptionV14(ast: SpecAST, errors: ValidationError[]): void {
+  const declared = (ast.header.tools ?? []).map(t => t.name).filter(Boolean);
+  if (declared.length === 0) return;
+  const granted = new Set<string>();
+  let wildcard = false;
+  const bodyCalled = new Set<string>();
+  const collectExpr = (e: ActExpr | undefined): void => {
+    if (!e) return;
+    if (e.type === 'call') {
+      const c = e as CallExpr;
+      bodyCalled.add(c.callee);
+      for (const a of c.args) collectExpr(a.value);
+      return;
+    }
+    if (e.type === 'binary') { collectExpr((e as BinaryExpr).left); collectExpr((e as BinaryExpr).right); return; }
+    // 其余复合形态(三元/推导/字典)的工具调用嵌深罕见,V14 是 warn 档宽容规则——漏认最多多一条
+    // 可澄清的 warn,不做全形态递归(与 B2 的严格递归不同权重)。
+  };
+  const walk = (nodes: StepNode[] | undefined): void => {
+    for (const n of nodes ?? []) {
+      const grants = (n as ActStep).tool_grants ?? [];
+      for (const g of grants) {
+        if (g.name === '*') wildcard = true;
+        else granted.add(g.name);
+      }
+      const body = (n as ActStep).body;
+      if (body) for (const stmt of body.statements ?? []) {
+        if (stmt.type === 'assign') collectExpr((stmt as AssignStmt).value);
+        else if (stmt.type === 'call') collectExpr((stmt as CallStmt).call);
+        else if (stmt.type === 'if') {
+          const ifs = stmt as IfStmt;
+          collectExpr(ifs.condition);
+          for (const s of [...(ifs.then_body ?? []), ...(ifs.else_body ?? [])]) {
+            if (s.type === 'assign') collectExpr((s as AssignStmt).value);
+            else if (s.type === 'call') collectExpr((s as CallStmt).call);
+          }
+        }
+      }
+      walk((n as SubtaskStep).children);
+    }
+  };
+  walk(ast.steps);
+  if (wildcard) return;   // 通配授权在场=全部声明视为已消费
+  for (const name of declared) {
+    if (!granted.has(name) && !bodyCalled.has(name)) {
+      errors.push({ kind: 'validate', rule: 'V14', severity: 'warn',
+        message: `V14: Tools 段声明的工具 "${name}" 未被任何步骤授权或调用——standalone 下它对所有步骤不可见,声明即空转;要用它给消费步加 "- 工具: ${name}" 授权行,不用它删声明` });
+    }
+  }
 }
 
 // P15: doc-ref [[doc#章节]] 静态存在性校验 // @a: anc-rule-p15
@@ -745,7 +802,7 @@ function enumMemberCollisionError(ledger: Map<string, string>, name: string, whe
     stepId, line);
 }
 
-function variableRules(ast: SpecAST, errors: ValidationError[]) {
+function variableRules(ast: SpecAST, errors: ValidationError[], isFragment?: boolean) {
   const enumLedger = collectEnumMembers(ast);   // @a: anc-rule-v2
   // S14: Id 函数签名按名对应 Inputs/Outputs（写了就必须对——签名错误比没有更误导,
   // 同 P4 半写即错原则）。签名只列名字,类型归 Inputs/Outputs 展开块。// @a: anc-rule-s14
@@ -858,7 +915,7 @@ function variableRules(ast: SpecAST, errors: ValidationError[]) {
       declaredTypes.add(t.name); typeDecls.set(t.name, t);
     }
   }
-  walkVariableScope(ast.steps, rootScope, errors, declaredTypes, typeDecls, enumLedger);
+  walkVariableScope(ast.steps, rootScope, errors, declaredTypes, typeDecls, enumLedger, undefined, new Set((ast.header.tools ?? []).map(t => t.name)), isFragment);
 }
 
 // 扁平命名空间遍历（2026-08-09 概念层裁决:块级作用域废除,对标 Python 函数级作用域）。
@@ -867,7 +924,7 @@ function variableRules(ast: SpecAST, errors: ValidationError[]) {
 // Python for 的循环变量虽外泄,但 HopSpec itemVar 由引擎逐轮绑定,块外无定义时点,保持子树限定）。
 // V3 废除（无嵌套作用域即无遮蔽）;V2 重定义:同名同型=同一变量多次赋值(合法)/异型=error;
 // 接口填充两端（for-each 收集 T/[T]、case 填充 branch 同名）不属重名。见 design ^anc-rule-v2。
-function walkVariableScope(steps: StepNode[], parentScope: Scope, errors: ValidationError[], declaredTypes: Set<string>, typeDecls: Map<string, TypeDecl>, enumLedger: Map<string, string>, containerCtx?: { branchOut?: Map<string, string> }) {
+function walkVariableScope(steps: StepNode[], parentScope: Scope, errors: ValidationError[], declaredTypes: Set<string>, typeDecls: Map<string, TypeDecl>, enumLedger: Map<string, string>, containerCtx?: { branchOut?: Map<string, string> }, declaredTools?: Set<string>, isFragment?: boolean) {
   const scope = parentScope;   // 扁平:全部读写同一张表(保留 Scope 形参名减少调用面改动)
 
   for (const step of steps) {
@@ -1102,7 +1159,8 @@ function walkVariableScope(steps: StepNode[], parentScope: Scope, errors: Valida
     if ((step.step_type === 'act' || step.step_type === 'commit' || step.step_type === 'check') && (step as ActStep).body) {
       const visible = new Set<string>();
       for (const b of step.inputs ?? []) visible.add(b.name);
-      checkActBodyScope((step as ActStep).body!, visible, step, errors);
+      // declaredTools 经 walkVariableScope 走链自顶层 ast.header.tools 传入（0089——commit 步未知函数按声明与否分档）// @a: anc-rule-b2
+      checkActBodyScope((step as ActStep).body!, visible, step, errors, declaredTools, isFragment);
     }
 
     // B7 act/commit 形态完备（概念 ^anc-step-act free 档条款 + ^anc-step-commit body 条款）：
@@ -1190,7 +1248,7 @@ function walkVariableScope(steps: StepNode[], parentScope: Scope, errors: Valida
           ctx.branchOut = new Map();
           for (const out of step.outputs ?? []) ctx.branchOut.set(out.name, out.type ?? '');
         }
-        walkVariableScope(children, scope, errors, declaredTypes, typeDecls, enumLedger, ctx);
+        walkVariableScope(children, scope, errors, declaredTypes, typeDecls, enumLedger, ctx, declaredTools, isFragment);
         if (fe) {
           if (hadItemVar) scope.declared.set(fe.itemVar, itemVarShadowed ?? '');
           else scope.declared.delete(fe.itemVar);
@@ -1413,10 +1471,10 @@ function structuralOutputTypes(step: StepNode): Map<string, string> {
   return m;
 }
 
-function checkActBodyScope(body: ActBody, visible: Set<string>, step: StepNode, errors: ValidationError[]): void {
+function checkActBodyScope(body: ActBody, visible: Set<string>, step: StepNode, errors: ValidationError[], declaredTools?: Set<string>, isFragment?: boolean): void {
   const loc = step.source_location?.line_start;
   const writtenOutputs = new Set<string>();
-  walkActStatements(body.statements, visible, step, errors, writtenOutputs);
+  walkActStatements(body.statements, visible, step, errors, writtenOutputs, declaredTools, isFragment);
 
   // B5：声明的 +→ 输出，body 应有对应赋值；缺则 warn // @a: anc-rule-b5
   for (const out of step.outputs ?? []) {
@@ -1438,10 +1496,38 @@ export const B9_WRITE_TOOLS = new Set(['write', 'append', 'create', 'edit_file',
 // B2 判据面:内置文件/编辑工具名单——引擎恒注册零声明,B2 认得不报"视为工具"warn
 // (文件件此前漏列,body 调 write/read 误报——2026-09-06 R3 抽测两路独立撞)。
 // 名单与 tools.ts 文件工具组同源(B9 同款先例:validator 属核心层不得 import 适配层 tools)。// @a: anc-rule-b2
+// 内建通知件名单（与 tools-notify.ts 注册面同源——0089 批 commit 档新档需认它们:恒注册零声明,
+// requires_commit 恒真,commit body 直执合法）。// @a: anc-rule-b2
+export const B2_BUILTIN_NOTIFY_TOOLS = new Set(['dingtalk_notify', 'notify']);
+/** B2 内置文件/编辑工具名单——引擎恒注册零声明,静态已知认得不报（与 tools.ts 文件工具组同源,B9 同款先例:validator 核心层不 import 适配层）。// @a: anc-rule-b2 */
 export const B2_BUILTIN_FILE_TOOLS = new Set([
   'read', 'write', 'append', 'edit_file', 'search_file', 'exists', 'listdir',
   'create', 'makedirs', 'move', 'remove',
   'validate_spec', 'insert_node', 'replace_node', 'replace_children', 'renumber_steps', 'read_spec_tree',
+]);
+/** B2 内置工具签名表:合法参数名集+必填集——与 tools.ts 各 ToolDef input_schema 的 properties/
+ * required 同源（对账钉参数名级机检,tools.test.ts——名单同源三姊妹的纵深半边）。2026-09-16 作者拍
+ * 升档（决策页 todo/decision/20260916-内置工具参数名写时校验.md——move(src:/dst:) 笔误五层防线
+ * 全漏烧真机一轮:原"参数错留运行期报"实况是运行期同样零校验,undefined 穿透 Node fs 报误导错,
+ * 且毒行躲在条件分支后 selftest 零通电）。// @a: anc-rule-b2 */
+export const B2_BUILTIN_TOOL_SIGS: ReadonlyMap<string, { props: readonly string[]; required: readonly string[] }> = new Map([
+  ['read', { props: ['path', 'start_line', 'end_line'], required: ['path'] }],
+  ['write', { props: ['path', 'content'], required: ['path', 'content'] }],
+  ['listdir', { props: ['path'], required: ['path'] }],
+  ['exists', { props: ['path'], required: ['path'] }],
+  ['create', { props: ['path', 'content'], required: ['path', 'content'] }],
+  ['append', { props: ['path', 'content'], required: ['path', 'content'] }],
+  ['edit_file', { props: ['path', 'old_text', 'new_text'], required: ['path', 'old_text', 'new_text'] }],
+  ['search_file', { props: ['path', 'pattern', 'context_lines'], required: ['path', 'pattern'] }],
+  ['makedirs', { props: ['path'], required: ['path'] }],
+  ['move', { props: ['from', 'to'], required: ['from', 'to'] }],
+  ['remove', { props: ['path'], required: ['path'] }],
+  ['validate_spec', { props: ['text', 'fragment', 'known_vars'], required: ['text'] }],
+  ['insert_node', { props: ['spec_text', 'spec_is_fragment', 'work_items', 'node_path', 'fragment'], required: ['spec_text', 'node_path', 'fragment'] }],
+  ['replace_node', { props: ['spec_text', 'spec_is_fragment', 'work_items', 'node_path', 'fragment', 'replacements'], required: ['spec_text'] }],
+  ['replace_children', { props: ['spec_text', 'spec_is_fragment', 'work_items', 'node_path', 'fragment'], required: ['spec_text', 'node_path', 'fragment'] }],
+  ['renumber_steps', { props: ['spec_text', 'spec_is_fragment', 'work_items'], required: ['spec_text'] }],
+  ['read_spec_tree', { props: ['spec_text', 'mode', 'node_path', 'spec_is_fragment'], required: ['spec_text', 'mode'] }],
 ]);
 function b9LeftmostLiteral(e: ActExpr): boolean {
   if (e.type === 'literal') return (e as { literal_kind?: string }).literal_kind === 'string';   // LiteralExpr 系 spec-ast 表外内部符号,经 ActExpr 联合暴露不单独 import——内联收窄
@@ -1492,14 +1578,14 @@ function checkB10ReadAbsolutePath(call: CallExpr, step: StepNode, errors: Valida
 
 function walkActStatements(
   stmts: ActStatement[], visible: Set<string>, step: StepNode,
-  errors: ValidationError[], writtenOutputs: Set<string>,
+  errors: ValidationError[], writtenOutputs: Set<string>, declaredTools?: Set<string>, isFragment?: boolean,
 ): void {
   const loc = step.source_location?.line_start;
   const declaredOutputs = new Set((step.outputs ?? []).map(o => o.name));
   const structTypes = structuralOutputTypes(step);
   for (const stmt of stmts) {
     if (stmt.type === 'assign') {
-      checkActExpr((stmt as AssignStmt).value, visible, step, errors);
+      checkActExpr((stmt as AssignStmt).value, visible, step, errors, declaredTools, isFragment);
       if ((stmt as AssignStmt).value.type === 'call') {
         checkB9WriteScope((stmt as AssignStmt).value as CallExpr, step, errors);   // @a: anc-rule-b9
         checkB10ReadAbsolutePath((stmt as AssignStmt).value as CallExpr, step, errors);   // @a: anc-rule-b10
@@ -1526,20 +1612,20 @@ function walkActStatements(
       visible.add(target);                          // 赋值后该名可见
       if (declaredOutputs.has(target)) writtenOutputs.add(target);
     } else if (stmt.type === 'call') {
-      checkActExpr((stmt as CallStmt).call, visible, step, errors);
+      checkActExpr((stmt as CallStmt).call, visible, step, errors, declaredTools, isFragment);
       checkB9WriteScope((stmt as CallStmt).call, step, errors);   // @a: anc-rule-b9
       checkB10ReadAbsolutePath((stmt as CallStmt).call, step, errors);   // @a: anc-rule-b10
     } else if (stmt.type === 'if') {
       const ifs = stmt as IfStmt;
-      checkActExpr(ifs.condition, visible, step, errors);
+      checkActExpr(ifs.condition, visible, step, errors, declaredTools, isFragment);
       // 分支各拷贝可见集校验；分支内新赋值的变量默认不泄漏到分支外。
       // 例外——汇合赋值：若某变量在 then 与 else 两分支都被赋值，分支后必然有值，提升到外层可见
       // （Python/TS 同样行为；否则 if/else 双分支赋值同名变量、分支后引用会被误判未定义）。
       const thenVis = new Set(visible);
-      walkActStatements(ifs.then_body, thenVis, step, errors, writtenOutputs);
+      walkActStatements(ifs.then_body, thenVis, step, errors, writtenOutputs, declaredTools, isFragment);
       if (ifs.else_body) {
         const elseVis = new Set(visible);
-        walkActStatements(ifs.else_body, elseVis, step, errors, writtenOutputs);
+        walkActStatements(ifs.else_body, elseVis, step, errors, writtenOutputs, declaredTools, isFragment);
         for (const v of thenVis) {
           if (!visible.has(v) && elseVis.has(v)) visible.add(v);   // then ∩ else 新增 → 提升
         }
@@ -1551,7 +1637,7 @@ function walkActStatements(
   }
 }
 
-function checkActExpr(expr: ActExpr, visible: Set<string>, step: StepNode, errors: ValidationError[]): void {
+function checkActExpr(expr: ActExpr, visible: Set<string>, step: StepNode, errors: ValidationError[], declaredTools?: Set<string>, isFragment?: boolean): void {
   const loc = step.source_location?.line_start;
   switch (expr.type) {
     case 'literal': return;
@@ -1597,14 +1683,56 @@ function checkActExpr(expr: ActExpr, visible: Set<string>, step: StepNode, error
           }
         }
       } else if (B2_BUILTIN_FILE_TOOLS.has(call.callee)) {
-        // 内置文件/编辑工具：引擎恒注册零声明,静态已知——认得不报。arity 不查（文件件走
-        // 具名参数,ToolDef 无 arity 元数据,参数错留运行期报）。// @a: anc-rule-b2
+        // 内置文件/编辑工具：引擎恒注册零声明,静态已知——具名参数名按签名表核对
+        //（2026-09-16 作者拍升档,原"认得不报,参数错留运行期报"废止——move(src:/dst:) 笔误
+        // 五层防线全漏烧真机一轮。三判:未知参数名/缺必填/位置参数,报文带合法参数名集指路）。
+        // @a: anc-rule-b2
+        const sig = B2_BUILTIN_TOOL_SIGS.get(call.callee);
+        if (sig) {
+          const givenNames = call.args.filter(a => a.name).map(a => a.name!);
+          const unknownArgs = givenNames.filter(n => !sig.props.includes(n));
+          if (unknownArgs.length > 0) {
+            errors.push(ve('B2', 'error',
+              `内置工具 "${call.callee}" 没有参数 ${unknownArgs.map(n => `"${n}"`).join('/')}——它的参数是 ${sig.props.join('/')}（step "${step.step_id}"）`,
+              step.step_id, loc));
+          }
+          const missingReq = sig.required.filter(n => !givenNames.includes(n));
+          const positional = call.args.filter(a => !a.name).length;
+          if (positional > 0) {
+            errors.push(ve('B2', 'error',
+              `内置工具 "${call.callee}" 须用具名参数（如 ${call.callee}(${sig.required.map(n => `${n}: ...`).join(', ')})）——收到 ${positional} 个位置参数（step "${step.step_id}"）`,
+              step.step_id, loc));
+          } else if (missingReq.length > 0) {
+            errors.push(ve('B2', 'error',
+              `内置工具 "${call.callee}" 缺必填参数 ${missingReq.map(n => `"${n}"`).join('/')}（参数全集 ${sig.props.join('/')}）（step "${step.step_id}"）`,
+              step.step_id, loc));
+          }
+        }
+      } else if (B2_BUILTIN_NOTIFY_TOOLS.has(call.callee)) {
+        // 引擎恒注册的内建通知件（builtin-notify provider:dingtalk_notify/notify——requires_commit
+        // 恒真,commit body 直执是既定形态）:认得不报,与文件件同律。名单本地维护注明与
+        // tools-notify.ts 同源（B9 同款先例——validator 核心层不 import 适配层）。// @a: anc-rule-b2
+      } else if (step.step_type === 'commit' && !(declaredTools?.has(call.callee)) && isFragment) {
+        // fragment 模式 commit 档降 warn（R10——parseFragment 合成 header 恒无 tools,片段看不见
+        // 整文声明面,error 判据材料缺失;非 free 容器 replan 合法含 commit 且全走 fragment 校验,
+        // error 会误杀合法 replan。^anc-rule-fragment-mode 豁免面已登记）。// @a: anc-rule-b2, anc-rule-fragment-mode
+        errors.push(ve('B2', 'warn',
+          `commit 步 body 调用 "${call.callee}"——片段模式无 header 声明面,无法核对 Tools 段;整文 validate 为准（未声明的未知函数在整文验会 error）（step "${step.step_id}"）`,
+          step.step_id, loc));
+      } else if (step.step_type === 'commit' && !(declaredTools?.has(call.callee))) {
+        // commit 步未声明的未知函数=error 拒载（0089 三批连撞:野函数名〔run_shell 之类〕静默走
+        // tool_request 外包,driver 回执未真执行,引擎 completed 谎报——不可逆步动作真实性写时拦）。
+        // Tools 段声明过的走下方 warn 档（standalone 有 init 对账;复用模式=作者显式声明知情——放行论据分模式见设计）。
+        // @a: anc-rule-b2
+        errors.push(ve('B2', 'error',
+          `commit 步 body 调用 "${call.callee}"——既非内置函数也未在 Tools 段声明。不可逆步骤不接受未知函数名（静默外包给驱动方=动作真实性无闸）。要跑命令用 subprocess.run(argv列表, cwd:...);要用外部工具先在 Tools 段声明（step "${step.step_id}"）`,
+          step.step_id, loc));
       } else {
         errors.push(ve('B2', 'warn',
           `act body 调用 "${call.callee}" 非内置函数——视为工具，运行期对照 ToolProvider 清单确认（step "${step.step_id}"）`,
           step.step_id, loc));
       }
-      for (const arg of call.args) checkActExpr(arg.value, visible, step, errors);
+      for (const arg of call.args) checkActExpr(arg.value, visible, step, errors, declaredTools, isFragment);
       return;
     }
     // B6 判空 lint（0015,info 非阻断——口径最窄:仅 `!= ""`/`== ""` 空串字面量比较两形态,
@@ -1618,7 +1746,7 @@ function checkActExpr(expr: ActExpr, visible: Set<string>, step: StepNode, error
           `act body 用 ${b.op} "" 判空——字段为 null 时 None ${b.op} "" 求值 ${b.op === '!=' ? 'True(误入非空分支)' : 'False(漏判空)'}，判空建议裸真值 if x: 或 len(x)==0（step "${step.step_id}"）`,
           step.step_id, loc));
       }
-      for (const c of exprChildren(expr)) checkActExpr(c, visible, step, errors);
+      for (const c of exprChildren(expr)) checkActExpr(c, visible, step, errors, declaredTools, isFragment);   // R10:补透传(0089 批漏)// @a: anc-rule-b2
       return;
     }
     // dict 键位（Python 对齐 2026-08-20——裸名键=变量引用,未定义时 JS 心智的意图多半是字面量键,
@@ -1630,24 +1758,24 @@ function checkActExpr(expr: ActExpr, visible: Set<string>, step: StepNode, error
             `act body 对象字面量键 "${en.key.name}" 未定义——键写字符串加引号（{"${en.key.name}": …}）,或先给该变量赋值（变量键求值作键名,Python 同义）（step "${step.step_id}"）`,
             step.step_id, loc));
         } else {
-          checkActExpr(en.key, visible, step, errors);
+          checkActExpr(en.key, visible, step, errors, declaredTools, isFragment);
         }
-        checkActExpr(en.value, visible, step, errors);
+        checkActExpr(en.value, visible, step, errors, declaredTools, isFragment);   // R10:补透传 // @a: anc-rule-b2
       }
       return;
     }
     // 推导：itemVar 是绑定变量——element/filter 在扩展可见集下核,source 用原集
     // @a: anc-step-act-body-comprehension
     case 'comprehension': {
-      checkActExpr(expr.source, visible, step, errors);
+      checkActExpr(expr.source, visible, step, errors, declaredTools, isFragment);
       const inner = new Set(visible); inner.add(expr.itemVar);
-      checkActExpr(expr.element, inner, step, errors);
-      if (expr.filter) checkActExpr(expr.filter, inner, step, errors);
+      checkActExpr(expr.element, inner, step, errors, declaredTools, isFragment);   // R10:补透传 // @a: anc-rule-b2
+      if (expr.filter) checkActExpr(expr.filter, inner, step, errors, declaredTools, isFragment);
       return;
     }
     // 其余节点无位置语义——扫描类下钻经 exprChildren（^anc-struct-expr-walk,新节点自动覆盖）
     default:
-      for (const c of exprChildren(expr)) checkActExpr(c, visible, step, errors);
+      for (const c of exprChildren(expr)) checkActExpr(c, visible, step, errors, declaredTools, isFragment);   // R10:补透传 // @a: anc-rule-b2
       return;
   }
 }

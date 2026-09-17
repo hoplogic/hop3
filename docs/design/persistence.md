@@ -33,7 +33,7 @@ shared-providers 的 `PersistenceProvider` 契约（见 [[shared-providers#^anc-
 | `readSpec` | 函数 | persistence.ts | 读实例目录 spec.json 重建 AST（cli 跨进程恢复面——load 之外的轻量读取口） | stable |
 | `readChildParams` | 函数 | persistence.ts | worker init 按 cid 回读自己那份 params（engine 调，同上通道的读侧） | stable |
 
-> **内部（表外即内部）**：`writeAtomic`（原子写，被 FilePersistence 内部调）、`ensureStateDir` / `writeState` / `writeVars` / `writeSpec` / `readSpec`（快照读写细节，仅 FilePersistence 内部调用）。
+> **内部（表外即内部）**：`writeAtomic`（原子写，被 FilePersistence 内部调）、`ensureStateDir` / `writeState` / `writeVars` / `writeSpec`（快照读写细节，仅 FilePersistence 内部调用。readSpec 不在此列——它在上表公开面,cli 跨进程恢复消费;2026-09-12 0088 批清双登矛盾,原文两处同时把它记成公开与内部）。**测试可达面口径**：内部件带 export 供 tests/ 直测（writeAtomic/writeState 被 persistence.test.ts import 属正当测试消费,不算越出内部边界——与 hop-cli 出口清单"测试可达面"同款口径,2026-09-12 补记）。
 >
 > **2026-08-01 清单补登**：`flattenVars` / `writeChildParams` / `readChildParams` 三者早已被 cli/engine 跨模块使用（各有完整注释与用途），但清单未登记 → anchor-audit 报 `symbol_not_public` 边界违规。核实为**清单滞后于实现**（清单增量引入时只列了主要符号），非代码越界，故补登记为公开接口。
 

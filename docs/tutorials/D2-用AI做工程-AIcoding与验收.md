@@ -130,7 +130,7 @@ AI 交付后，你的验收动作按性价比排序：
 | 语义审计 | `/hopspec run scripts/audit/anchor-audit.md`（支持按模块跑） |
 | 跑前体检 | `scripts/deep-validate/deep-validate.md`（spec 形态手工跑,validate 深化档——LLM 查"说明教的动作×执行模式能力面"的运行期错配,分钟级） |
 | 定向修正 | `scripts/hopfix/hopfix.md`（spec 形态手工跑,或 /hopfix 一句话触发——按工单节点级定向修既有 spec:只改点名处/呈人确认/快照可回滚;结构性变更如实拒,分钟级） |
-| 例行提交/发版清单 | `RELEASING.md`（手册层，每次照走） |
+| 例行提交/发版清单 | 维护者操作手册（内部维护面,不随快照分发；手册层，每次照走） |
 | 新建模块 | 八件单一次交齐（`chain-enforcement.md` §1c-2） |
 
 ## 下一步

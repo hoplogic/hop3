@@ -31,6 +31,7 @@ Constraints:
 - 路径一律 workspace 相对（禁绝对路径、禁 ..）——**唯一豁免:work_zone 绝对路径放行**（isWorkZonePath 判定命中的实例涂鸦区路径——work_zone_path() 产物就是绝对形态,拒之即内置函数产物喂不回工具面;2026-08-31 review 抓重铸面漏记此豁免,契约与代码 tools.ts 实况矛盾半日）
 - OS 原子语义透传不降级：create 用排他标志（检查+创建一步完成,无 TOCTOU 窗口）,move 用 rename（同文件系统内原子替换）
 - 失败显式：remove 目标不存在、create 目标已存在、move 源不存在——均报错不静默
+- **实参名进闸核对**（2026-09-16 作者拍,决策页 todo/decision/20260916-内置工具参数名写时校验.md——`move(src:, dst:)` 笔误 undefined 穿透到 Node fs 报"path argument must be of type string"而 move 无 path 参,误导排查）：DefaultToolProvider.execute 分派前按该工具 ToolDef input_schema 核对实参名——未知参数名报错点名该工具全部合法参数名（"move 没有 src 参数,它的参数是 from/to"）,必填参数缺席报错点名缺谁;两判都走既有 ToolResult 失败通道（success=false）不抛异常。这是"响亮失败"守卫原则（^anc-meta-guard-trust）在工具入参面的落实——静态闸（spec-parser B2 参数名核对,写时拦）与本闸（运行期兜底,对动态拼参与宿主注入调用同样生效）两层防线不互替 ^anc-exec-tool-arg-gate
 ```
 
 **工具类型约定（本组十一件）**：

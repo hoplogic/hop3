@@ -21,7 +21,7 @@
 | 汇聚点     | —（README 自身就薄）                                                                                                                                                                | `CLAUDE.md`——会话自动加载的**摘要+指针**，非权威源：内容全部指回三根，冲突时以三根为准                                                                                  |
 | 想理解     | 导读十站（[[D0-生态开发者导读]]）逐站读                                                                                                                                                       | 不通读——从 Doctree 定位模块/锚点，按任务**收链**（锚点反查 + TRACEABILITY 卡片，按需取用）                                                                         |
 | 想使用     | tutorials 01-03 + `USAGE.md` 速查                                                                                                                                               | driver skill（hopspec/hopbuild——agent 的"使用文档"就是它的系统提示）                                                                                 |
-| 例行操作    | `RELEASING.md`（提交/发版检查单，每次照走）                                                                                                                                                 | chain-enforcement §1c-2 模块八件单、§6 准入四步、§4 时机表                                                                                          |
+| 例行操作    | `maintainers/RELEASING.md`（提交/发版检查单，每次照走）                                                                                                                                     | chain-enforcement §1c-2 模块八件单、§6 准入四步、§4 时机表                                                                                          |
 
 分工原则：**人的文档管"读了能懂/照着能做"，agent 的文档管"收链能定位/边界能机检"**——内容重叠时权威只有一处，另一处是摘要或投影（例：模块八件单权威在 chain-enforcement §1c-2，CLAUDE.md 仅汇聚摘要；RELEASING 分诊表仅人侧核查项）。README 属人侧呈现；ARCHITECTURE 是唯一的共同根（见上表——架构事实两类读者共享，另有设计层 @trace 派生链源的角色，服务一致性审查）。给人的文档别堆锚点行话，给 agent 的文档别写叙事铺垫——受众判定先于落点选择（2026-08-06 两次实撞教训：八件单先后错放 RELEASING（人的手册装 agent 纪律）与 CLAUDE.md（汇聚点当权威源））。
 
@@ -41,10 +41,11 @@ hoplogic3/
 ├── README.md           ← 对外门面：是什么、装什么、怎么跑
 ├── USAGE.md            ← 中文上手指南（装引擎→装 skill→跑 spec）
 ├── STATUS.md           ← 当前状态快照（版本/健康度/在做什么/欠账）
+├── todo/               ← 内部事项卡与主题计划，目录即索引；格式见 todo/README.md，已完成事项见 todo/archive/
 ├── CLAUDE.md           ← Agent 工程约定（实现链纪律、机检入口、目录说明）
 ├── ARCHITECTURE.md           ← 架构总览（引擎核心 + 双模式驱动适配层）
 ├── TRACEABILITY.md     ← 锚点五层追溯卡片（概念→设计→代码→测试）
-├── RELEASING.md        ← 维护者操作手册（提交/发版例行检查 + 手工验收清单）〔内部开发面——GitHub 快照暂不含,后继开放〕
+├── maintainers/        ← 涉内部源的维护者文档（RELEASING.md 操作手册 + git-repo-topology.md 四仓规范;目录恒不入公开快照与 npm tarball——顶层白名单默认拒绝,verify 验证不在场）
 ├── docs/
 │   ├── WORKAROUNDS.md  ← 外部载体缺陷登记（症状→根因→绕行→撤销条件；换机/升级载体先读）
 │   ├── concepts/       ← 概念层（维护者快照，库内只读）
@@ -137,7 +138,7 @@ hoplogic3/
 | carrier-live-e2e | CC/Codex 真实载体 E2E：隔离工作区、事件归一、执行体归属、凭证防泄露、显式失败与 opt-in CI |
 | i18n | 国际化设计——文档镜像树 docs/i18n/<lang>/ 三纪律 + spec 关键词双语直通（方案 B）+ 关键词保留字族（术语表五轮定稿 2026-08-15） |
 | hopbuild | 构建器设计（2026-08-15 自举批立卷）——自举形态决策（spec 权威散文退役）+ 分发布局（pack 产物形态+双源同步守卫）+ 知识源三层 + 五关落位如实边界 + 参数原则分两层（spec 层 I/O 判归属↔壳层 ^anc-cli-pack-shell） |
-| hopbuild2 | 构建器新设计（2026-08-21 作者立卷,五件套成稿于 skills/hopbuild2/——SKILL 壳+主流程+分拆器两分体+范式库,真机淬炼 D 系列机械防线持续演进〔现行版本见文内版本行〕）——类 LLVM pass 递归等价分拆:NL node 逐遍消解为 hop node,判定序 顺序>分支>循环>原子（判完一个返回一个）,载体=call 递归+独立 check 三检+拼装终核;终态两档（全 hop 化/含未尽原子——复用模式可跑档,整验不过诚实降档）;范式库知识供给;v1 保留在场对照 |
+| hopbuild2 | 构建器新设计（2026-08-21 作者立卷,五件套成稿于 skills/hopbuild2/——SKILL 壳+主流程+分拆器两分体+范式库,真机淬炼 D 系列机械防线持续演进〔现行版本见文内版本行〕）——类 LLVM pass 递归等价分拆:NL node 逐遍消解为 hop node,判定序 顺序>分支>循环>原子（判完一个返回一个）,载体=call 递归+独立 check 三检+拼装终核;终态两档（全 hop 化/含未尽原子——工具面依赖档 D94,整验不过诚实降档）;范式库知识供给;v1 保留在场对照 |
 | deep-validate | 跑前深检设计（2026-09-01 作者两拍立卷,缘起 anchor-audit standalone 化十跑九坑）——validate 的深化档:validate 管静态文法/deep-validate 管运行期假设快检（说明语义×执行环境能力面对照,LLM 推理判）/anchor-audit 管逐锚点全量审计,三层分工;fast 三硬约束（LLM 调用 O(1)/输入控量三件零源码翻查/分钟级）;不阻断建议性报告;载体=scripts/deep-validate/ hopskill spec+判据台账知识文档（五面活资产） |
 | hopfix | 定向修正工具设计（2026-09-02 作者点破"应该有一个工具做定向修正,不动辄从头重构"立项,缘起 0036 轮产物 run 外成孤儿只剩重烧 5.6 小时或人肉裸改两条路）——四层分工 造(hopbuild)/查静态(validate)/查运行期(deep-validate)/修(hopfix);三拍板:原地覆盖+快照回滚/三层把关(改动外零变化机械闸+局部合理关+deep-validate 复验指引)/工单双收(自然语言+结构化报告——查-修管道机器对机器);载体=scripts/hopfix/hopfix.md hopskill spec |
 | obsidian-plugin | HopSpec 可视化 Obsidian 插件（2026-08-16 方案 C 立卷,Obsidian 优先）——markdown 6 级标题上限之上的步骤折叠/大纲/落点高亮;步骤行识别器与引擎零依赖按语法参考独立实现,层级=编号段数与表面形态解耦 |
@@ -170,7 +171,8 @@ hoplogic3/
 | STATUS | 当前状态快照——版本、健康度、进行中、欠账（**唯一允许过期的文档**，见其头部说明） | 汇总视图（源=机检输出+TODO） |
 | ARCHITECTURE | 架构总览——分层/桥接点/组件交互/双态分布（原名 DESIGN.md，2026-08-04 更名消除与 docs/design/ 歧义；模块清单归本文件「模块索引」） | 源（TODO/TRACEABILITY 的上游） |
 | TRACEABILITY | 锚点五层追溯卡片 ×203 | extend（源=concept-anchor-rules） |
-| RELEASING | 维护者操作手册——提交/发版前例行检查与手工验收清单（手册层：每次都用、零叙事、自包含；原理归 chain-enforcement/carrier-live-e2e。手册数 ≥3 时迁 docs/manuals/，现仅一份不开目录） | compact（源=chain-enforcement + carrier-live-e2e） |
+| maintainers/RELEASING | 维护者操作手册——提交/发版前例行检查与手工验收清单（手册层：每次都用、零叙事、自包含；原理归 chain-enforcement/carrier-live-e2e。2026-09-13 迁入 maintainers/——"手册数 ≥3 迁 docs/manuals/"旧注废止:涉内部源的维护者文档按目录隔离,不按数量） | compact（源=chain-enforcement + carrier-live-e2e） |
+| maintainers/git-repo-topology | 四仓路径规范权威——内网真源/GitHub 快照/两 hopissues 通道的方向与纪律、push 分级、恒不公开清单、远期路标（CLAUDE.md Git 节留摘要指针） | intent（2026-09-13 作者定稿） |
 | CLAUDE | Agent 工程约定（本库自足版） | — |
 
 ## audits/ — 全链审计存档〔内部开发面——GitHub 快照暂不含此目录,链接在公开仓不可达;后继开放〕

@@ -7,9 +7,10 @@ import { deleteNodeAt, replaceNodeAt as coreReplaceNodeAt, renumberSteps as core
 import type { StepNode } from '../src/ast-types.js';
 import { parseFragment as parseFragForCore } from '../src/parser.js';
 import type { HostConfig } from '../src/provider-types.js';
-import { B2_BUILTIN_FILE_TOOLS, B9_WRITE_TOOLS, B10_READ_TOOLS } from '../src/validator.js';
-import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { B2_BUILTIN_FILE_TOOLS, B2_BUILTIN_NOTIFY_TOOLS, B2_BUILTIN_TOOL_SIGS, B9_WRITE_TOOLS, B10_READ_TOOLS } from '../src/validator.js';
+import { fileURLToPath } from 'node:url';
+import { readFileSync, mkdtempSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 function makeProvider(workDir?: string): DefaultToolProvider {
@@ -72,9 +73,64 @@ describe('DefaultToolProvider', () => {
       expect([...B10_READ_TOOLS].sort()).toEqual([...READ_SIDE].sort());
       for (const n of READ_SIDE) expect(FILE_TOOL_NAMES).toContain(n);
     });
+
+    it('B2 签名表 = 注册面 input_schema 逐键核（参数名级对账——20260916 升档批:B2 三判的判据面与 ToolDef properties/required 同源,引擎参数改名/扩参漏刷签名表当场红）', () => {
+      const provider = makeProvider();
+      for (const def of provider.list()) {
+        const sig = B2_BUILTIN_TOOL_SIGS.get(def.name);
+        expect(sig, `签名表缺工具 ${def.name}`).toBeDefined();
+        const schema = def.input_schema as { properties?: Record<string, unknown>; required?: string[] };
+        expect([...sig!.props].sort(), `${def.name} 参数名集不同源`).toEqual(Object.keys(schema.properties ?? {}).sort());
+        expect([...sig!.required].sort(), `${def.name} 必填集不同源`).toEqual([...(schema.required ?? [])].sort());
+      }
+      // 反向:签名表无幽灵成员(注册面删工具漏刷签名表同样红)
+      const names = new Set(provider.list().map(t => t.name));
+      for (const k of B2_BUILTIN_TOOL_SIGS.keys()) expect(names.has(k), `签名表幽灵成员 ${k}`).toBe(true);
+    });
+
+    it('B2 通知件名单 = 两员来源各验（R10 补第四份对账——dingtalk_notify 对 tools-notify 注册面,notify 对 tools-composite specs 表 tool_id 映射;此前零钉,注册面扩员/改映射静默漂移）', () => {
+      const notifyNames = new NotifyToolProvider().list().map(t => t.name);
+      expect(notifyNames).toContain('dingtalk_notify');
+      expect(B2_BUILTIN_NOTIFY_TOOLS.has('dingtalk_notify')).toBe(true);
+      // notify 真身=composite 内建成员表的 tool_id 映射(源码常量,静态可核)
+      const compositeSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'tools-composite.ts'), 'utf-8');
+      expect(compositeSrc).toContain("tool_id: 'notify'");
+      expect(B2_BUILTIN_NOTIFY_TOOLS.has('notify')).toBe(true);
+      // 名单恰两员——注册面加第三员时此断言红,提醒同步扩名单
+      expect(B2_BUILTIN_NOTIFY_TOOLS.size).toBe(2);
+    });
   });
 
   // @v: anc-exec-sandbox-principle, anc-config-sandbox-model
+  // 实参名进闸核对（file-tools 实参名进闸条款,2026-09-16 决策——move(src:/dst:) 笔误 undefined
+  // 穿透 Node fs 报"path argument must be of type string"而 move 无 path 参,误导排查半轮;
+  // 运行期兜底半边,静态半边=B2 三判〔act-body-validator.test〕,两层防线不互替）。
+  // @v: anc-exec-tool-arg-gate
+  describe('execute 实参名进闸', () => {
+    it('反例：move 收 src/dst 臆造名 → 拒收点名合法参数,不再穿透 Node fs（实撞原样重放）', async () => {
+      const provider = makeProvider();
+      const result = await provider.execute('move', { src: 'a.txt', dst: 'b.txt' });
+      expect(result.success).toBe(false);
+      expect(String(result.result)).toContain('没有参数 "src"/"dst"');
+      expect(String(result.result)).toContain('from/to');
+    });
+
+    it('反例：write 缺必填 content → 拒收点名缺谁', async () => {
+      const provider = makeProvider();
+      const result = await provider.execute('write', { path: 'x.txt' });
+      expect(result.success).toBe(false);
+      expect(String(result.result)).toContain('缺必填参数 "content"');
+    });
+
+    it('正例：合法参数名照常执行（可选参数缺席不误拒）', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'hoptools-'));
+      writeFileSync(join(dir, 't.txt'), 'ok');
+      const provider = makeProvider(dir);
+      const result = await provider.execute('read', { path: 't.txt' });
+      expect(result.success).toBe(true);
+    });
+  });
+
   describe('execute bash (removed)', () => {
     it('rejects bash tool calls (bash not available in DefaultToolProvider)', async () => {
       const provider = makeProvider();

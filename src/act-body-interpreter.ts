@@ -358,9 +358,7 @@ export class BodyInterpreter {
   // journal 重放/spawnSync 执行。HopSop 五步全在此,设计 design/act-body.md）。
   // @a: anc-exec-subprocess-run
   private async evalSubprocessRun(call: CallExpr, scope: Map<string, unknown>): Promise<unknown> {
-    if (!this.ctx.commandWhitelist || this.ctx.commandWhitelist.length === 0) {
-      throw new Error('TOOL_EXEC_ERROR: subprocess.run 不可用——本执行环境未配置命令白名单（sandbox.runtime.available 为空=能力关死,缺省安全）');
-    }
+    // 空名单拒移至 argv 解析后（0090——报文要点名命令;判空提前拒省一次解析不值一个哑报文）// @a: anc-exec-subprocess-run
     // 参数解析:位置参数恰一个(argv 列表);具名只认 input/timeout/cwd,其余点名拒
     //（B2 专项静态拦为先〔validator subprocess.run 块〕,此处运行期兜底双闸——名字带来
     // subprocess 的期望,期望逐条明确接或拒,不静默吞）
@@ -399,8 +397,11 @@ export class BodyInterpreter {
     if (cmd === 'hopjit' || cmd.split('/').pop() === 'hopjit') {
       throw new Error('TOOL_EXEC_ERROR: act/commit 步骤不得调用 hopjit——执行中的步骤不驱动引擎（自嵌套执行会破坏状态账）。跑别的 spec 用 [call <Id>] 步骤;通知等不可逆动作走注册工具的 commit 步骤;执行状态是引擎的账,步骤不查');
     }
+    if (!this.ctx.commandWhitelist || this.ctx.commandWhitelist.length === 0) {
+      throw new Error(`TOOL_EXEC_ERROR: 命令 "${cmd}" 无法执行——本执行环境未配置命令白名单（sandbox.runtime.available 为空=能力关死,缺省安全）。修法:把 ${cmd} 加进项目根 hopjit.yaml 的 commands: 列表（如 commands:\n  - ${cmd}）后重跑（hopissues/0090 指路条款）`);
+    }
     if (!this.ctx.commandWhitelist.includes(cmd)) {
-      throw new Error(`TOOL_EXEC_ERROR: 命令 "${cmd}" 不在白名单（sandbox.runtime.available: ${this.ctx.commandWhitelist.join(', ')}）`);
+      throw new Error(`TOOL_EXEC_ERROR: 命令 "${cmd}" 不在白名单（sandbox.runtime.available: ${this.ctx.commandWhitelist.join(', ')}）。修法:把 ${cmd} 加进项目根 hopjit.yaml 的 commands: 列表（如 commands:\n  - ${cmd}）后重跑（hopissues/0090 指路条款）`);
     }
     // journal 重放:撞第 n 次取记录值不重执行（命令不幂等——git worktree add 二跑必败;
     // body 中断续跑从头重放,与 timeJournal 同款）

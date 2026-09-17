@@ -1003,3 +1003,41 @@ describe('check-spec-syntax skills 面判据回归', () => {
     expect(r.code).toBe(0);
   });
 });
+
+
+// ── 发布防线四断言（design [[release-engineering#^anc-release-boundary-guards]],2026-09-13）──
+// maintainers/ "不出公开面"由四处独立声明兑现,任一静默漂移其余不报警——第九轮工程链 review
+// 变异核证实锤三处全穿透（INCLUDE_DIRS 偷加/MISS_EXPECTED 删项/NONRELEASE_RE 删项,全库零机检红）。
+// 发布脚本不被 vitest 跑,守卫形态=静态文本断言（与上方 release.sh 快照制断言组同款成例）。
+// @v: anc-release-boundary-guards
+describe('发布防线四断言（maintainers/ 不出公开面）', () => {
+  it('github-publish.sh 出闸白名单 INCLUDE_DIRS 不含 maintainers（误配即整目录进公开快照,词表对其现内容零命中,白名单是唯一有效防线——变异:偷加 maintainers 本例红）', () => {
+    const sh = readFileSync(join(REPO, 'scripts', 'github-publish.sh'), 'utf-8');
+    const line = sh.split('\n').find(l => l.trimStart().startsWith('INCLUDE_DIRS=('));
+    expect(line).toBeDefined();
+    expect(line).not.toContain('maintainers');
+  });
+
+  it('github-verify.sh 验闸清单 MISS_EXPECTED 含 maintainers（删项后 verify 照报全过,验闸静默退化——变异:删 maintainers 项本例红;断言取括号内数组体,防行尾注释里的 maintainers 字样假绿〔首拍实撞〕）', () => {
+    const sh = readFileSync(join(REPO, 'scripts', 'github-verify.sh'), 'utf-8');
+    const line = sh.split('\n').find(l => l.trimStart().startsWith('MISS_EXPECTED=('));
+    expect(line).toBeDefined();
+    const arrayBody = line!.slice(line!.indexOf('(') + 1, line!.indexOf(')'));
+    expect(arrayBody.split(/\s+/)).toContain('maintainers');
+  });
+
+  it('release.sh 凭证差集闸 NONRELEASE_RE 含 maintainers/（删项后果是误拦方向,同为防线声明点——变异:删 maintainers/ 本例红）', () => {
+    const sh = readFileSync(join(REPO, 'scripts', 'release.sh'), 'utf-8');
+    const line = sh.split('\n').find(l => l.trimStart().startsWith('NONRELEASE_RE='));
+    expect(line).toBeDefined();
+    expect(line).toContain('maintainers/');
+  });
+
+  it('package.json files 白名单不含 maintainers 与 RELEASING（npm tarball 出口负向断言,防将来误加）', () => {
+    const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf-8'));
+    const files: string[] = pkg.files ?? [];
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.some(f => f.includes('maintainers'))).toBe(false);
+    expect(files.some(f => f.includes('RELEASING'))).toBe(false);
+  });
+});

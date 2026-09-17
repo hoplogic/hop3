@@ -291,19 +291,21 @@ Constraints:
 
 ```
 subprocess.run 求值(解释器 evalCall 专路):
-1. [check] 上下文在场——ctx.commandWhitelist 缺席 → TOOL_EXEC_ERROR"本执行环境未提供命令白名单"
-2. [act] 解析参数:位置参数恰一个且求值为字符串列表(argv);具名只认 input/timeout/cwd,
+1. [act] 解析参数:位置参数恰一个且求值为字符串列表(argv);具名只认 input/timeout/cwd,
    其余具名 → TOOL_EXEC_ERROR 点名(运行期兜底,validate 期已静态拦字面形态)
-3. [check] argv 非空且 argv[0] ∈ whitelist——否则 TOOL_EXEC_ERROR"命令 'X' 不在白名单(sandbox.runtime.available)"
+2. [check] hopjit 恒拒(argv[0] 是 hopjit 或路径尾段 hopjit 一律拒,优先级高于白名单——见 ^anc-exec-subprocess-deny-hopjit)
+3. [check] 白名单核(argv 解析后才判,报文能点名命令——移位理由见步 5):ctx.commandWhitelist 缺席或空
+   → TOOL_EXEC_ERROR"命令 'X' 无法执行:未配置命令白名单";argv[0] ∉ whitelist
+   → TOOL_EXEC_ERROR"命令 'X' 不在白名单(sandbox.runtime.available)"——两拒报文均带修法指路（步 5 条款）
 4. [branch] journal 重放判定
    4.1 [条件(cmdJournal 第 n 项在)] 直接返回记录值(不重执行——命令不幂等)
    4.2 [条件(缺席)] spawnSync(argv[0], argv.slice(1), {input, timeout, cwd: cwd ?? workZone,
         maxBuffer: 10MB, shell: false 恒定}) → {stdout, stderr, returncode} 追加 journal 后返回
-5. spawn 失败三类(ENOBUFS 撞顶/ETIMEDOUT 超时/ENOENT 命令不存在)各带指路 → TOOL_EXEC_ERROR → 本步 fail 走既有升级链
+5. spawn 失败三类(ENOBUFS 撞顶/ETIMEDOUT 超时/ENOENT 命令不存在)各带指路 → TOOL_EXEC_ERROR → 本步 fail 走既有升级链。**白名单两拒报文带配置指路（hopissues/0090 P3 报文半边,2026-09-15——实撞:空名单报"不可用"不点名命令、缺命令报"X 不在白名单"不提配置载体,用户 1.5h 废跑后才摸到 hopjit.yaml）**:空名单拒与缺命令拒的报文都写明修法="把 <命令名> 加进项目根 hopjit.yaml 的 commands: 列表"（与 mcp-server 配置示范措辞对齐）;空名单分支在 argv 解析后再拒——为了报文能点名要跑的命令（判空提前拒省一次解析不值一个哑报文）
 6. 步骤 done 时 engine.completeStep 清本步 cmdJournal（两模式同一清账点——review F3:原完成清只在复用消化循环,standalone 零清账,for-each 二轮命中重放返回上一轮 stdout=静默错数据）
 ```
 
-**工程偏差（v1,如实标注）**：①外向命令拦截（git push 类 requires_commit 同款语义）未做——白名单是纯名单无元数据位,操作者把外向命令放进白名单=自担 act 位可重跑后果,升级形态（名单条目结构化带 requires_commit 标）随真需求;②命令写域 sandbox 管不到 spawn 级（命令进程写哪里引擎无从拦,cwd 缺省 work_zone 只是引导不是墙）——这是 spawn 通道的物理边界,如实记;③静态白名单预检（validate 期查 argv[0] 字面量∈白名单）未做——validate 时点 sandbox 配置未必是运行期那份,静态查易误报,运行期拒是权威。
+**工程偏差（v1,如实标注）**：①外向命令拦截（git push 类 requires_commit 同款语义）未做——白名单是纯名单无元数据位,操作者把外向命令放进白名单=自担 act 位可重跑后果,升级形态（名单条目结构化带 requires_commit 标）随真需求;②命令写域 sandbox 管不到 spawn 级（命令进程写哪里引擎无从拦,cwd 缺省 work_zone 只是引导不是墙）——这是 spawn 通道的物理边界,如实记;③静态白名单预检（validate 期查 argv[0] 字面量∈白名单）未做——validate 时点 sandbox 配置未必是运行期那份,静态查易误报,运行期拒是权威。**补注（2026-09-15,hopissues/0090）**：INIT 期 requires_commands 声明对账闸已另立（[[exec-engine#^anc-exec-requires-commands-gate]]——INIT 读的 hostConfig 与运行期同一份,无本条担心的时差错位;对账对象是 spec 自声明不是 argv 扫描）,本条"validate 期不做静态预检"的裁定不变。
 
 **与相邻契约分工**：白名单声明与四维度模型归 [[sandbox#^anc-config-sandbox-runtime]];工具调用/内置函数白名单 B2 归 [[spec-parser]];Tools 注册面（服务型工具,有 schema 有会话）与本件（本地进程一次性调用）不合流——各自注册各自管控;使用面正反示例权威=概念层语法参考 §5 subprocess.run 小节。
 

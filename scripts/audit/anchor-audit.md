@@ -150,6 +150,7 @@ Outputs:
         > mod = strip(replace(mod_line, "module:", ""))
         > out_path = project_root + "/.anchor-audit/batch_" + mod + "_results.yaml"
         > r = subprocess.run(["uv", "run", "--with", "pyyaml", "python3", scripts_dir + "/write_batch.py", out_path], input: batch_result_item, timeout: 60)
+        > guard_w = int("write_batch 写盘失败(rc=" + str(r.returncode) + "):" + r.stderr) if r.returncode != 0 else 0
         > batch_digest = mod + " " + strip(r.stdout)
         > ```
 
@@ -208,34 +209,20 @@ Outputs:
       > snapshot_done = "snapshot-created" if probe.exists else "not-a-git-repo"
       > ```
 
-      8.1.2. [act] 提取可修复项清单
+      8.1.2. [act free] 提取可修复项并产出全部补丁
         - ← project_root, snapshot_done
-        + → fixable_items: yaml  # 可自动修复的结构项清单（加缺失 @a:/@v:、修正死引用文件名），按文件末尾→开头排序
-        > 无推理纯计算：读 `{project_root}/.anchor-audit/cross_compare_results.yaml`，筛出可自动修复的结构项（设计→代码缺失需补 `@a:`、无效引用需修正文件名），**按"文件内位置从末尾向前"排序**（避免前序插入行导致后续目标位置偏移，见引擎注入的 [[anchor-audit-knowledge#自动修复安全流程]]）。语义 ❌ 项不入清单（需人工）。
+        + → patches: yaml  # 全部补丁清单，每项 {file, line, edit_kind, old_str, new_str}，按文件末尾→开头排序
+        > 读 `{project_root}/.anchor-audit/cross_compare_results.yaml`，筛出可自动修复的结构项（设计→代码缺失需补 `@a:`、无效引用需修正文件名）；语义 ❌ 项不入清单（需人工）。**对每个可修项当场产出完整补丁**：按该项的 location（文件:行号）用 `read(path, start_line, end_line)` 取目标行及上下文若干行，就地确定 old_str（含足够上下文保证在文件内唯一匹配）与 new_str（edit_kind=add_anchor 时 new_str=原行+锚标注；fix_ref_path 时替换坏文件名为正确名）。全部补丁按**"文件内位置从末尾向前"排序**（避免前序插入行导致后续目标位置偏移，见引擎注入的 [[anchor-audit-knowledge#自动修复安全流程]]）。补丁在本步一次产齐——供给面备足，应用步零翻找（改造前的逐项模式里，应用环节的规划步只拿到 id+行号、要自己翻文件找 old_str，翻找不收敛撞过工具迭代上限；批量模式把"找 old_str"收敛到本步的定向行号段读取）。
 
-      8.1.3. [loop max=200] 逐项修复
-        - ← fixable_items
-        + → fix_log: yaml  # 延续变量：跨迭代累积的已修复项记录（更新模式）
-        8.1.3.1. [reason] 取下一未修复项并定修复方案
-          - ← fixable_items, fix_log
-          + → fix_plan: yaml  # 当轮变量：{done: bool, file, line, edit_kind, old_str, new_str} 或 done=true
-          > 对照 fixable_items 与已记录的 fix_log，取下一个未修复项：全部修完 → fix_plan.done=true（触发退出）；否则产出该项的精确修复方案（目标文件、行号、edit_kind=add_anchor|fix_ref_path、old_str→new_str 的精确替换内容）。只规划一项，不动手改（动手交下一步 act）。
-
-        8.1.3.2. [branch] 按是否还有待修项分流
-          - ← fix_plan
-          8.1.3.2.1. [case] 全部修完 (fix_plan.done == true)
-            8.1.3.2.1.1. [break]
-
-          8.1.3.2.2. [case] default
-            8.1.3.2.2.1. [act] 应用单项修复
-              - ← fix_plan, fix_log
-              + → fix_log: yaml  # 更新延续变量：追加本项修复记录
-              > 无推理纯执行（方案已由上一步 reason 定）：用 Edit 按 fix_plan 的 file/old_str/new_str 应用单项修复，把本项 {file, line, edit_kind, 结果} 追加进 fix_log。
+      8.1.3. [act free] 批量应用补丁
+        - ← patches
+        + → fix_log: yaml  # 逐项应用记录：{file, line, edit_kind, 结果: applied|skipped, skip原因?}
+        > 无推理纯执行（补丁已由上一步产齐，本步禁读 patches 外的任何来源、禁探索翻找）：逐补丁用 edit_file 按 old_str→new_str 应用；单项零匹配或多匹配时记 `skipped` 带 edit_file 报错原文，**继续下一项不中断**（单项失败不再蒸发全部——改造前逐项模式一步失败整 run 判 failed，第 1 轮的成功修复也没能走到应用）。全部处理完把逐项记录写入 fix_log。
 
       8.1.4. [act] 汇总修复结果
         - ← project_root, fix_log
         + → fix_outcome: text  # 变更摘要
-        > 无推理纯计算：执行 `git -C {project_root} diff --stat` 取变更概览，结合 fix_log 组装变更摘要写入 fix_outcome（含已修复项数、涉及文件；并注明语义 ❌ 项未自动改、需人工修复）。
+        > 无推理纯计算：执行 `git -C {project_root} diff --stat` 取变更概览，结合 fix_log 组装变更摘要写入 fix_outcome（applied 项数、skipped 项数带原因、涉及文件；并注明语义 ❌ 项未自动改、需人工修复——skipped 项同样留给人工，其 old_str 与报错原文在 fix_log 里可直接复用）。
 
   8.2. [case] 仅查看报告 (fix_choice == "report_only")
     + → fix_outcome: text

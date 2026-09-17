@@ -1,5 +1,5 @@
 #!/bin/bash
-# 提交前一键检查（RELEASING §1 的傻瓜化收拢，2026-08-09 作者要求）
+# 提交前一键检查（maintainers/RELEASING.md §1 的傻瓜化收拢，2026-08-09 作者要求）
 #   ① 暂存区异常规模机判（大批 D = .git/index 出事,红线) ② check:fast ③ 设计先行机检
 set -u
 cd "$(dirname "$0")/.."

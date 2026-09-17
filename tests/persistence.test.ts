@@ -1,5 +1,14 @@
 // @module: persistence ^anc-provider-persistence
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as fsMod from 'node:fs';
+
+// fsync 调用序钉的观测口（0088 批⑨）：ESM 命名导出不可 spyOn（namespace 不可配置）,
+// 用 vi.mock 对 node:fs 做透传包装——只把 fsyncSync/renameSync 换成"调真实现的 vi.fn",
+// 其余导出原样透传,本文件其它用例的真实 fs 行为不受影响。
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, fsyncSync: vi.fn(actual.fsyncSync), renameSync: vi.fn(actual.renameSync) };
+});
 import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, statSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -84,6 +93,21 @@ describe('persistence', () => {
       writeAtomic(path, '{"v":2}');
       expect(readFileSync(path, 'utf-8')).toBe('{"v":2}');
       expect(existsSync(path + '.tmp')).toBe(false);
+    });
+
+    // @v: anc-exec-crash-recovery —— fsync 调用序钉（0088 批⑨:设计伪代码 write→fsync→rename,
+    // 缺 fsync 则掉电时 rename 可能先于数据持久化,读到空/半截新文件。此前只测结果文件内容,
+    // fsync 被删测试照绿——本钉直接断言 fsyncSync 被调且时序在 renameSync 之前）
+    it('fsyncSync 在 renameSync 之前被调用（要么旧要么新承诺的第二步）', () => {
+      const fsyncSpy = vi.mocked(fsMod.fsyncSync);
+      const renameSpy = vi.mocked(fsMod.renameSync);
+      fsyncSpy.mockClear();
+      renameSpy.mockClear();
+      writeAtomic(join(tmpDir, 'order.json'), '{"a":1}');
+      expect(fsyncSpy).toHaveBeenCalled();
+      expect(renameSpy).toHaveBeenCalled();
+      // invocationCallOrder 是 vitest 全局单调序号——fsync 的首次调用序必须先于 rename 的首次调用序
+      expect(fsyncSpy.mock.invocationCallOrder[0]).toBeLessThan(renameSpy.mock.invocationCallOrder[0]);
     });
   });
 
@@ -329,6 +353,7 @@ describe('persistence', () => {
       expect(() => fp.getWorkZone()).toThrow();
     });
 
+    // @v: anc-exec-state-persistence —— 往返一致性直标（0088 批⑪:行为原有测,直标缺位补齐）
     it('save then load round-trips snapshot', () => {
       const fp = new FilePersistence(dir);
       fp.init('inst-1', SNAPSHOT.spec as any);

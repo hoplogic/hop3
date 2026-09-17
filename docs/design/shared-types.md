@@ -70,7 +70,7 @@
 - `tool_request.args`：**agent** 通道（caller 执行工具时看），DEFLATE_THRESHOLD + `$file` 指针格式,namespace 按 tool_<step_id>_<seq> 隔离（2026-09-04 0040 批入清单——此前实现越出清单,面一 review 实抓契约冲突后补行）
 - `paused.presented_data.context`（confirm/ask）：**人** 通道（user 看），用 HUMAN_PREVIEW_THRESHOLD + `preview+$file` 格式
 
-**work_zone 工作区**（见 [[exec-engine#^anc-exec-work-zone]]）：**vars/ 与 work_zone 同生命周期**（deflate 写点在 vars/ 下,分离创建=ENOENT 窗口,BUG-F 实撞）——FilePersistence 在 `init` 时于实例目录下创建 `work_zone/` 和 `work_zone/vars/`；MemoryPersistence（独立模式,含 call parallel 子实例）无实例目录,`getWorkZone` 首调 tmpdir 惰性自建时**同建 vars/**（两实现对称,persistence v0.2.2）。所有 `NextResponse` 携带 `work_zone`（绝对路径），driver/worker 写临时文件统一用此目录（不污染项目目录、不依赖 cwd）。
+**work_zone 工作区**（见 [[exec-engine#^anc-exec-work-zone]]）：**vars/ 与 work_zone 同生命周期**（deflate 写点在 vars/ 下,分离创建=ENOENT 窗口,BUG-F 实撞）——FilePersistence 在 `init` 时于实例目录下创建 `work_zone/` 和 `work_zone/vars/`；MemoryPersistence（仅存于宿主自身无 instanceDir 的场景——测试/程序内嵌入;原括注"独立模式,含 call parallel 子实例"系 2026-08-29 翻案前旧口径,standalone call/parallel 子实例已改落盘随父,现行权威见 [[persistence]] 存在场景条款——2026-09-12 0088 批清两文矛盾）无实例目录,`getWorkZone` 首调 tmpdir 惰性自建时**同建 vars/**（两实现对称,persistence v0.2.2）。所有 `NextResponse` 携带 `work_zone`（绝对路径），driver/worker 写临时文件统一用此目录（不污染项目目录、不依赖 cwd）。
 
 **变更记录（已修正）**：早期 PromptAssembler 对 step inputs 一刀截断到 2000 字符加 `[TRUNCATED]` 标记，违反受众分流（user 看截断版无法决策、agent 看含损值无法基于真值推理）。已替换为本节"按受众阈值卸载到 work_zone"。此为历史沿革（非待办债）。
 

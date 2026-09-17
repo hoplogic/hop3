@@ -26,7 +26,7 @@ shared-providers 的 `ToolProvider` 契约（见 [[shared-providers#^anc-provide
 
 ## tools 模块定位【契约】 ^anc-struct-tools
 
-> **模块版本**：tools `v0.17.1`（2026-09-07）。本版 listdir/exists 条目类型字段正名 type、kind 留作同值兼容别名（作者拍乙案——R9 实撞 e.type 缺键恒假,行业主流用词 type;契约 file-tools.md）。上版（v0.17.0）出口表补登 makeEngineToolProviderFactory 与 loadProjectToolRegistry（0076 批漏登+真收敛挪入,review 机检实拦补）。上版（v0.16.0）读侧两工具批（todo/0070——作者拍'rg 类工具两件立todo'）：文件工具组扩员 search_file（单文件子串搜索带行号,契约 file-tools.md ^anc-exec-builtin-search-file）+read 扩 start_line/end_line 行号段参数（存量零回归）,十件→十一件——D81 定向读盘正路的读侧兑现。上版（v0.15.0）文件工具组扩员 edit_file（局部精确替换,契约归 file-tools.md ^anc-exec-builtin-edit-file-tool）,九件→十件。0.x 未承诺稳定。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
+> **模块版本**：tools `v0.18.0`（2026-09-16）。本版 DefaultToolProvider.execute 实参名进闸核对（作者拍,决策页 todo/decision/20260916-内置工具参数名写时校验.md——move(src:/dst:) 笔误 undefined 穿透 Node fs 报误导错;分派前按 input_schema 核未知参数名/缺必填,报文点名合法参数名集,走 ToolResult 失败通道;契约 file-tools.md 实参名进闸条款）。上版（v0.17.1）listdir/exists 条目类型字段正名 type、kind 留作同值兼容别名（作者拍乙案——R9 实撞 e.type 缺键恒假,行业主流用词 type;契约 file-tools.md）。上版（v0.17.0）出口表补登 makeEngineToolProviderFactory 与 loadProjectToolRegistry（0076 批漏登+真收敛挪入,review 机检实拦补）。上版（v0.16.0）读侧两工具批（todo/0070——作者拍'rg 类工具两件立todo'）：文件工具组扩员 search_file（单文件子串搜索带行号,契约 file-tools.md ^anc-exec-builtin-search-file）+read 扩 start_line/end_line 行号段参数（存量零回归）,十件→十一件——D81 定向读盘正路的读侧兑现。上版（v0.15.0）文件工具组扩员 edit_file（局部精确替换,契约归 file-tools.md ^anc-exec-builtin-edit-file-tool）,九件→十件。0.x 未承诺稳定。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
 
 **① 自身定位**：tools 模块是 shared-providers 契约的实现与装配层。负责实现与装配，不碰调度/状态。沙箱拦截规则见 [[sandbox]]。
 

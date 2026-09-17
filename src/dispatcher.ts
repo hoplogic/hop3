@@ -149,6 +149,10 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
   private defaultClient: ProtocolClient;
   private toolProvider: ToolProvider;
   private cumulativeTokens = 0;
+  // 实例级上下文峰值水位（^anc-exec-ctx-watermark,0095——input+cache 读写三项合计取历史 max;
+  // 观测态非执行态,不入快照,resume 从零重累）。// @a: anc-exec-ctx-watermark
+  private ctxWatermark = 0;
+  private ctxWarnedTier = 0;   // 已告警档位（1=越 75%,2=越 100%）——每档只告警一次,水位单调重复告警是噪声
   private replanAttempts = new Map<string, number>();
   private maxToolIterations: number;
   private tokenBudget: number | undefined;
@@ -338,7 +342,12 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
             ? { ...rr, rejected: { code: 'CHILD_NOT_IN_QUEUE', message: `子实例 '${childInstance}' 重派发后未回到同名卡——用 run_status 重看 paused_queue 按新卡应答` } }
             : rr;
         } else {
-          throw new Error(`resume: 子实例 '${childInstance}' 不在待答队列（已答过/已终态/杀活清场——run_status 的 paused_queue 是现存卡权威）`);
+          // 结构化拒不 throw（0016 哲学,hopissues/0094——原 throw 被 mcp catch 锤成 failed 终态:
+          // 串行 call 停点被误带 child_instance〔其挂起帧走 call_path 路由本就不入本队列,且卡面
+          // call_path/child_instance 字段对此形态均空,caller 无从判别〕,一次可修正参数错毁掉
+          // 可恢复 run。三 miss 形态同拒同指引:已答过/已终态清场/串行停点误带参。）
+          // @a: anc-exec-parallel-hitl-queue
+          return { status: 'paused', rejected: { code: 'CHILD_NOT_IN_QUEUE', message: `子实例 '${childInstance}' 不在待答队列（已答过/已终态/杀活清场;或这是串行 call 停点——其应答走 call_path 路由,去掉 child_instance 参数重答。run_status 的 paused_queue 是现存卡权威）` } } as RunResult;
         }
       }
       this.pausedChildren.delete(childInstance);
@@ -1543,6 +1552,8 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
           // 缓存观测（C）:命中率=cache_read/(input+cache_read);openai 协议恒 null 如实记 // @a: anc-exec-cache-control
           cache_read_input_tokens: response.usage?.cache_read_input_tokens ?? null,
           cache_creation_input_tokens: response.usage?.cache_creation_input_tokens ?? null,
+          // 当次请求实际输入体量三项合计（^anc-exec-ctx-watermark——单看 input_tokens 被缓存命中掩住真实体量）// @a: anc-exec-ctx-watermark
+          ctx_input_total: (response.usage?.input_tokens ?? 0) + (response.usage?.cache_read_input_tokens ?? 0) + (response.usage?.cache_creation_input_tokens ?? 0),
           // 发送边界成对落账（^anc-obs-record-at-boundary）：prompt 从实际 request 对象序列化
           // （旧形态只在 engine recordStepStart 记 formatPromptText 渲染件——意图层记录与实发
           // 内容分叉,假 prompt 骗过十几轮走查）;response 从实际返回抄录（DEBT-09,每轮尝试
@@ -1572,7 +1583,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
       const tfValue = this.extractSelfReportKey(this.extractTextContent(response), 'tool_failure', '（未说明故障）');
       if (tfValue !== undefined) return { tool_failure: tfValue };
     }
-    return this.parseStepOutput(response, step.context.output_schema);
+    return this.parseStepOutput(response, step.context.output_schema, step.step_id);
   }
 
   /** lack_of_info 前置探测（^anc-exec-lack-of-info-chain 第2/3站——仅 reason 消费）:
@@ -1725,6 +1736,8 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
           input_tokens: response.usage?.input_tokens, output_tokens: response.usage?.output_tokens,
           cache_read_input_tokens: response.usage?.cache_read_input_tokens ?? null,
           cache_creation_input_tokens: response.usage?.cache_creation_input_tokens ?? null,
+          // 当次请求实际输入体量三项合计（^anc-exec-ctx-watermark——单看 input_tokens 被缓存命中掩住真实体量）// @a: anc-exec-ctx-watermark
+          ctx_input_total: (response.usage?.input_tokens ?? 0) + (response.usage?.cache_read_input_tokens ?? 0) + (response.usage?.cache_creation_input_tokens ?? 0),
           ...(iteration === 0 ? { prompt: this.serializeRequestPrompt(loopRequest) } : {}),
           response: response.content.map(b => b.type === 'text' ? b.text : (b.type === 'tool_use' ? `[tool_use ${b.name}] ${JSON.stringify(b.input)}` : `[${b.type}]`)).join('\n'),
         },
@@ -1762,7 +1775,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
         // 无 body act 与 reason 经本循环;commit 同经但 B7 error 后不可达）。// @a: anc-exec-tool-failure-report
         const tfValue = this.extractSelfReportKey(this.extractTextContent(response), 'tool_failure', '（未说明故障）');
         if (tfValue !== undefined) return { tool_failure: tfValue };
-        return this.parseStepOutput(response, step.context.output_schema);
+        return this.parseStepOutput(response, step.context.output_schema, step.step_id);
       }
 
       const assistantContent = response.content;
@@ -2007,8 +2020,11 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
         temperature: this.selectTemperature(stepType),
         // thinking 路由（形态 B——route 声明才发参,undefined 不发吃端点缺省;anthropic 协议
         // {type:'enabled'} 须带 budget_tokens,取输出预算一半;deepseek 端点两值实测认）。
-        // @a: anc-exec-thinking-routing
-        ...(resolved.thinking === 'disabled' ? { thinking: { type: 'disabled' as const } }
+        // THINKING_EXHAUSTED 记名步强制 disabled 压在最前——该步已实证带 thinking 烧穿写不出
+        // 正文,变招降档保底拿产出（^anc-exec-thinking-exhausted 三批）。
+        // @a: anc-exec-thinking-routing, anc-exec-thinking-exhausted
+        ...(step && this.thinkingExhaustedSteps.has(step.step_id) ? { thinking: { type: 'disabled' as const } }
+          : resolved.thinking === 'disabled' ? { thinking: { type: 'disabled' as const } }
           // budget=预算半,下限夹 1024（anthropic 协议 budget_tokens 最低值——小预算+enabled 组合
           // 原发 750 违约 400;四十六审探针抓）。budget≥maxOutput 时端点自拒,夹上限 maxOutput-1 防倒挂
           : resolved.thinking === 'enabled' ? { thinking: { type: 'enabled' as const, budget_tokens: Math.min(Math.max(Math.floor(maxOutput / 2), 1024), Math.max(maxOutput - 1, 1024)) } } : {}),
@@ -2104,6 +2120,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
         const resp = await c.create(request);
         this.cumulativeTokens += resp.usage.input_tokens + resp.usage.output_tokens;
         this.engine.setCumulativeTokens(this.cumulativeTokens);  // 引擎随快照落盘,resume 回填 // @a: anc-exec-cost-guardrails
+        this.trackCtxWatermark(resp);   // 水位观测在发送口事实边界（成功侧）// @a: anc-exec-ctx-watermark
         this.checkBudget();
         return resp;
       } catch (err: unknown) {
@@ -2131,7 +2148,13 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
           if (kind === 'network' || kind === 'timeout') {
             // message 优先取字段——SDK 错误对象可能非 Error 子类,String() 得 [object Object]
             const raw = (err as { message?: unknown })?.message != null ? String((err as { message?: unknown }).message) : String(err);
-            throw new Error(`NETWORK_ERROR: 网络中断（非内容问题——与产出质量无关,原文: ${raw}）`);
+            // 超时且水位已越 75% 线:文案追加体量提示（^anc-exec-ctx-watermark ③——超时与
+            // 体量相关时重试大概率同因;网络瞬断无水位嫌疑照旧安静文案）。// @a: anc-exec-ctx-watermark
+            const ctxLimit = this.hostConfig.resource_limits?.max_context_tokens;
+            const ctxHint = (kind === 'timeout' && typeof ctxLimit === 'number' && ctxLimit > 0 && this.ctxWatermark > ctxLimit * 0.75)
+              ? `;实例上下文水位 ${Math.round(this.ctxWatermark / 1000)}K 已近告警线——超时与体量相关的概率高,重试大概率同因,考虑拆步骤（0095）`
+              : '';
+            throw new Error(`NETWORK_ERROR: 网络中断（非内容问题——与产出质量无关,原文: ${raw}${ctxHint}）`);
           }
           throw err;
         }
@@ -2162,12 +2185,12 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     }
   }
 
-  private parseStepOutput(response: Anthropic.Message, schema: OutputDecl[]): Record<string, unknown> {
+  private parseStepOutput(response: Anthropic.Message, schema: OutputDecl[], stepId?: string): Record<string, unknown> {
     // 截断响亮失败——max_tokens 掐断的输出是残值（thinking 型可把预算全烧推理,text 空）,
     // 收下=毒值下游+重试反馈错误归因"你没产出"（buildtest 实撞:16384 全 thinking,node_result=""
     // 同因必死）。见 design ^anc-exec-output-truncation-loud。// @a: anc-exec-output-truncation-loud
     if (response.stop_reason === 'max_tokens') {
-      const rum = this.checkThinkingExhausted(response, 'parseStepOutput');   // @a: anc-exec-thinking-exhausted
+      const rum = this.checkThinkingExhausted(response, 'parseStepOutput', stepId);   // @a: anc-exec-thinking-exhausted
       if (rum) throw new Error(rum);
       const used = response.usage?.output_tokens ?? '?';
       throw new Error(`OUTPUT_TRUNCATED: 输出被 max_tokens 上限掐断（output_tokens=${used}）——产出不完整不可用。调大 HOPJIT_MAX_OUTPUT_TOKENS 或 resource_limits.max_output_tokens`);
@@ -2405,7 +2428,12 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
    * 各自计——子实例写各自 hoplog,按文件计;超出只记一行计数 warn 不存全文）。 */
   // @a: anc-exec-thinking-exhausted
   private ruminationArchived = 0;
-  private checkThinkingExhausted(response: Anthropic.Message, where: string): string | null {
+  /** THINKING_EXHAUSTED 记名册（变招重试——检出即记名,该步后续重试轮 thinking 强制 disabled:
+   * 反刍绑定该步的输入形态,重试请求与首跑参数同源则同型反复撞〔R4 实撞:同 run 13 次烧满
+   * 65535 正文全空〕;sticky 到实例生命周期,check 判官步重跑逐字节同输入尤其必须变招。
+   * 见 design ^anc-exec-thinking-exhausted 三批。） */ // @a: anc-exec-thinking-exhausted
+  private thinkingExhaustedSteps = new Set<string>();
+  private checkThinkingExhausted(response: Anthropic.Message, where: string, stepId?: string): string | null {
     // 有 tool_use 块=模型在产工具参数被掐,不是反刍——照旧 OUTPUT_TRUNCATED
     if (response.content.some(b => b.type === 'tool_use')) return null;
     const text = this.extractTextContent(response);
@@ -2429,9 +2457,16 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     } else {
       archiveNote = '本次运行未开启 hoplog,全文未留档';
     }
+    // 变招记名（^anc-exec-thinking-exhausted 三批）:命中且有步号即记名,该步后续重试轮
+    // buildApiRequest 强制 thinking disabled——降档保底拿正文;replan 段无步号不记名。
+    let retuneNote = '';
+    if (stepId) {
+      this.thinkingExhaustedSteps.add(stepId);
+      retuneNote = ';本步已记名,重试轮将禁用推理通道（thinking disabled）降档保底';
+    }
     return emptyBody
-      ? `THINKING_EXHAUSTED: 推理通道烧满输出上限且正文为空（output_tokens=${used}）——可能是思维反刍循环（常见诱因:本步判据/约束互相矛盾制造两难）,${archiveNote};调大输出上限对反刍无效只会烧更多`
-      : `THINKING_EXHAUSTED: 输出烧满上限且正文被高度重复的循环文本填满（output_tokens=${used}）——可能是思维反刍循环写进了正文（in-band 形态,常见诱因:本步判据/约束互相矛盾制造两难）,${archiveNote};调大输出上限对反刍无效只会烧更多`;
+      ? `THINKING_EXHAUSTED: 推理通道烧满输出上限且正文为空（output_tokens=${used}）——可能是思维反刍循环（常见诱因:本步判据/约束互相矛盾制造两难）,${archiveNote};调大输出上限对反刍无效只会烧更多${retuneNote}`
+      : `THINKING_EXHAUSTED: 输出烧满上限且正文被高度重复的循环文本填满（output_tokens=${used}）——可能是思维反刍循环写进了正文（in-band 形态,常见诱因:本步判据/约束互相矛盾制造两难）,${archiveNote};调大输出上限对反刍无效只会烧更多${retuneNote}`;
   }
 
   private findStepNode(steps: any[], stepId: string): any {
@@ -2594,6 +2629,29 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     if (hopLog) for (const w of this.pendingToolWarns.splice(0)) hopLog.recordWarn(stepId, w);
     else this.pendingToolWarns.length = 0;
   }
+
+  // 实例级上下文水位观测（^anc-exec-ctx-watermark,0095——150K+ 单轮延迟超线性恶化撞超时墙
+  // 全程零观测。三项合计=模型真实吃进的上下文:单看 input_tokens 会被缓存命中掩住真实体量。
+  // 双档告警各一次,阈值挂 max_context_tokens 既有键零新配置——不配则静默同预检档哲学）。
+  // @a: anc-exec-ctx-watermark
+  private trackCtxWatermark(resp: Anthropic.Message): void {
+    const u = resp.usage as { input_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
+    const total = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+    if (total > this.ctxWatermark) this.ctxWatermark = total;
+    const ctxLimit = this.hostConfig.resource_limits?.max_context_tokens;
+    if (typeof ctxLimit !== 'number' || ctxLimit <= 0) return;
+    const kb = Math.round(this.ctxWatermark / 1000);
+    if (this.ctxWarnedTier < 2 && this.ctxWatermark > ctxLimit) {
+      this.ctxWarnedTier = 2;
+      this.pendingToolWarns.push(`实例上下文水位 ${kb}K 已越 max_context_tokens（${Math.round(ctxLimit / 1000)}K）——单轮延迟超线性恶化区,服务端超时风险高（0095 实测曲线）,拆步骤或收敛材料`);
+    } else if (this.ctxWarnedTier < 1 && this.ctxWatermark > ctxLimit * 0.75) {
+      this.ctxWarnedTier = 1;
+      this.pendingToolWarns.push(`实例上下文水位 ${kb}K 已越 max_context_tokens 的 75%（阈值 ${Math.round(ctxLimit / 1000)}K）——长转录延迟将超线性恶化,考虑拆步或收敛材料（0095 实测曲线）`);
+    }
+  }
+
+  /** 实例峰值上下文水位（run_status/终态透出——观测态,resume 从零重累,峰值账 hoplog 恒可溯）。// @a: anc-exec-ctx-watermark */
+  getCtxWatermark(): number { return this.ctxWatermark; }
 
   // 未知 service fail-fast（design v0.2.1，mcp-server v0.4.0 联动）：非 default 且无凭证的
   // service_id 抛错而非静默回退默认 client——spec 的 service/model 引用拼错曾请求默认后端烧错钱。

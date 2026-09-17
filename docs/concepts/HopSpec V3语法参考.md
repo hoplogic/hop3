@@ -3,7 +3,7 @@
 	source: [[HopSpec V3核心规范]]
 	source_id: hopspec-v3-core
 	type: compact
-	last_sync: 2026-09-03T10:23+0800
+	last_sync: 2026-09-15T22:14+0800
 	note: HopSpec v3 完整语法参考手册。§0 立设计理念（人机协同生成、关键逻辑可控可靠、探索逻辑可成长、语言层封装降复杂度、自洽上下文防望文生义），贯穿全篇；主体以标准语法写全部构造，末节单列变种语法（大纲语法）。语义权威以源文档为准，本文只做重组不新增语义
 %%
 
@@ -82,6 +82,11 @@ Outputs:                                # 可选多项，Spec 级输出声明
 - <var>: <type>  # 说明
 Config:                                 # 可选，Spec 级运行时配置
   model: <service/model>                # Spec 默认模型（覆盖全局配置）
+  models:                               # 按步骤类别分档路由（reason/act/check/commit 各可指一档;比 model 更细,两者可并存——类别命中优先）
+    reason: <service/model>
+  expansion_max: 20                     # subtask free 展开总数上限（缺省 20;耗尽不硬断,拒收报文携问人续批协议）
+  engine_min_version: 0.15.1                    # 本 spec 需要的引擎最低版本（pack 打包时自动注入;引擎版本不足则启动即拒,报文带升级/删键两出路;键缺席零比对）
+  requires_commands: [git, jq]          # body 经 subprocess.run 依赖的本地命令（启动时与宿主命令白名单对账,缺即拦在进任何步骤之前并指路 hopjit.yaml commands;键缺席零比对,未声明的仍靠运行期白名单拒兜底）
 ## Steps                                # 有 Steps → 具体实现；无 Steps → HopTrait（Hop契约）
 N. [type] <一句话任务描述>
 ```
@@ -96,7 +101,7 @@ N. [type] <一句话任务描述>
 | `Types:` | 否 | 复用类型定义，首字母大写（PascalCase 词组），步骤中直接引用 |
 | `Inputs:` | 否 | Spec 级输入变量声明，供 `[call]` 传参映射 |
 | `Outputs:` | 否 | Spec 级输出变量声明（交付物=完备性契约）。初始 `None`，执行中赋值；结束仍 `None`=完备性违约，run 判 failed（缺哪个输出入 failure_reason） |
-| `Config:` | 否 | Spec 级运行时配置。`model: service/model` 设默认模型 |
+| `Config:` | 否 | Spec 级运行时配置。五个引擎消费键：`model`（默认模型）/`models`（按步骤类别分档路由）/`expansion_max`（subtask free 展开总数上限,缺省 20）/`engine_min_version`（引擎最低版本,不足启动即拒）/`requires_commands`（body 依赖的本地命令,启动时与宿主白名单对账缺即拦） | ^anc-spec-config-keys
 | `## Steps` | 条件 | 有 Steps：具体实现，至少一个步骤。无 Steps：**HopTrait（Hop契约）**——仅由 Goal/Constraints/Inputs/Outputs 定义接口契约 |
 
 **Spec 的两种形态**：
@@ -575,7 +580,7 @@ N. [act] 执行数据修复
 
 ### subprocess.run：白名单命令行调用 ^anc-step-subprocess-run
 
-body 里可以执行外部命令行程序，写法**完全对齐 Python 的 `subprocess.run`**（2026-08-29 作者定——"写是按 python 写"，名字是写法的一部分；这是 hop_python 唯一的 `x.y(...)` 形态，引擎认此字面为内置，不开模块系统）。前提：命令名必须在宿主 sandbox 配置的命令白名单里（`runtime.available`）——**名单空 = 此能力关死**，引擎不内置任何命令。
+body 里可以执行外部命令行程序，写法**完全对齐 Python 的 `subprocess.run`**（2026-08-29 作者定——"写是按 python 写"，名字是写法的一部分；这是 hop_python 唯一的 `x.y(...)` 形态，引擎认此字面为内置，不开模块系统）。前提：命令名必须在宿主 sandbox 配置的命令白名单里（`runtime.available`）——**名单空 = 此能力关死**，引擎不内置任何命令。依赖的命令名同时写进 Config 段的 `requires_commands:` 键（spec 自声明命令依赖）——引擎启动时拿声明与宿主白名单对账，缺配置在进任何步骤之前就拦下并指明加进 hopjit.yaml 的 commands: 列表；键缺席零比对（存量 spec 零破坏），未声明的命令仍由运行期白名单核兜底拒。
 
 ```python
 # ✅ 正确:命令与参数在一个列表里,命令是第一个元素,一个参数一个元素

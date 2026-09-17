@@ -96,7 +96,7 @@ export interface StepMeta {
   // formatPromptText 渲染件,意图层记录与实发内容分叉,假 prompt 骗过十几轮走查）。
   // response = LLM 原始回复全文（解析前 text content,DEBT-09:每轮尝试独立落账丢弃轮保痕）。
   // @a: anc-obs-llm-response, anc-obs-record-at-boundary
-  llm?: { model?: string; max_tokens?: number; input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null; prompt?: string; response?: string };   // cache 两字段:缓存观测（openai 协议 null 如实记）;max_tokens=当次请求实发上限（发送口抄实际参数,^anc-exec-output-budget 观测条）// @a: anc-exec-cache-control, anc-exec-output-budget
+  llm?: { model?: string; max_tokens?: number; input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null; ctx_input_total?: number; prompt?: string; response?: string };   // cache 两字段:缓存观测（openai 协议 null 如实记）;max_tokens=当次请求实发上限（发送口抄实际参数,^anc-exec-output-budget 观测条）;ctx_input_total=当次输入体量三项合计（^anc-exec-ctx-watermark,0095——缓存命中会掩住真实体量）// @a: anc-exec-cache-control, anc-exec-output-budget, anc-exec-ctx-watermark
   tokens_used?: number;
   // adaptive 三段流水线中间产物（生成侧留痕——离线审核候选文件时对照"当时怎么想的"）。
   // 见 step-dispatcher ^anc-exec-adaptive-pipeline。// @a: anc-exec-adaptive-pipeline

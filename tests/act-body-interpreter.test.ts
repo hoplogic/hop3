@@ -1161,6 +1161,16 @@ describe('subprocess.run 命令行白名单', () => {
     await expect(interp.run(b, OUT())).rejects.toThrow(/不得调用 hopjit/);
   });
 
+  it('判序钉：空白名单+argv[0]=hopjit → 报恒拒不报"未配置白名单"（恒拒优先于空名单判——e6c8addb 移位交付项,第十一轮 review 变异A实锤原零测试锁）', async () => {
+    const { interp, b } = mk('r = subprocess.run(["hopjit", "status"])', { commandWhitelist: [] });
+    await expect(interp.run(b, OUT())).rejects.toThrow(/不得调用 hopjit/);
+  });
+
+  it('判序钉：空白名单+argv 非列表 → 报 argv 形态错不报名单缺席（参数解析先于白名单核——空名单拒移位后的新顺序,spec 写错先修 spec）', async () => {
+    const { interp, b } = mk('r = subprocess.run("echo hello")', { commandWhitelist: [] });
+    await expect(interp.run(b, OUT())).rejects.toThrow(/字符串列表|列表/);
+  });
+
   it('正例：白名单命令真执行——echo 输出进 stdout,returncode=0,结果是结构体三字段', async () => {
     const { interp, b } = mk('r = subprocess.run(["echo", "hello"])\nout = r.stdout\ncode = r.returncode');
     const o = await interp.run(b, OUT('out', 'code'));
@@ -1188,16 +1198,16 @@ describe('subprocess.run 命令行白名单', () => {
     expect(o2['out']).toBe('REPLAYED');
   });
 
-  it('反例：白名单外命令拒——TOOL_EXEC_ERROR 点名命令与名单', async () => {
+  it('反例：白名单外命令拒——TOOL_EXEC_ERROR 点名命令与名单,报文带 hopjit.yaml commands 指路（0090 指路条款）', async () => {
     const { interp, b } = mk('r = subprocess.run(["rm", "-rf", "x"])');
-    await expect(interp.run(b, [])).rejects.toThrow(/命令 "rm" 不在白名单/);
+    await expect(interp.run(b, [])).rejects.toThrow(/命令 "rm" 不在白名单.*hopjit\.yaml 的 commands/s);
   });
 
-  it('反例：白名单缺席=能力关死（缺省安全）', async () => {
+  it('反例：白名单缺席=能力关死（缺省安全）,报文点名要跑的命令并带配置指路（0090——原空名单分支提前拒连命令名都不点）', async () => {
     const errors: ParseError[] = [];
     const b = parseActBody(['r = subprocess.run(["echo", "x"])'], 1, errors)!;
     const interp = new BodyInterpreter({ inputs: {}, toolProvider: mockProvider(), allowCommit: false, toolCallLog: [] });
-    await expect(interp.run(b, [])).rejects.toThrow(/未配置命令白名单/);
+    await expect(interp.run(b, [])).rejects.toThrow(/命令 "echo" 无法执行.*未配置命令白名单.*hopjit\.yaml 的 commands/s);
   });
 
   it('反例：整串命令行（argv 非列表）拒并指路列表形态', async () => {

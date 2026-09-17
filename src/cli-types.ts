@@ -77,7 +77,9 @@ export interface DrainWait { // @a: anc-exec-parallel-reap-drain, anc-exec-paral
   loop_step_id: string;   // 收齐点=宿主 loop 容器
   inflight: string[];     // 在飞子实例 id（<step-id>.<iter>）
   // crash-resume 对账后仍未终态的在飞（P1 §U2）：复用模式 driver 应对这些项重起 worker
-  //（子实例目录已有状态，run 子实例入口撞已有目录即续跑）。缺省缺席=无需重建。
+  //（子实例目录已有状态——run 子实例入口撞已有目录是重新 init 从头跑、非断点续跑,act 可安全
+  // 重做语义下结果等价;设计如实注见 parallel-execution ^anc-exec-parallel-inflight-reconcile,
+  // 2026-09-12 0088 批本注释随设计归一——原"即续跑"措辞与设计如实注相反）。缺省缺席=无需重建。
   stale?: string[];
   stale_launch?: Record<string, string>;   // 同 DispatchReady.stale_launch
 }
@@ -226,6 +228,7 @@ export interface VarsResponse { // @a: anc-cli-vars-response
   status: 'ok';
   instance_id: string;
   execution_status: 'running' | 'paused' | 'completed' | 'failed' | 'aborted';
+  inconsistency?: string;   // completed 标记与步骤态不一致的显式信号（hopissues/0093,^anc-exec-completed-consistency）
   variables: Record<string, unknown>;
   pending_outputs: string[];
 }
@@ -236,6 +239,7 @@ export interface VarsResponse { // @a: anc-cli-vars-response
 export interface StatusResponse { // @a: anc-cli-status-response
   status: 'ok';
   instance_id: string;
+  inconsistency?: string;   // completed 标记与步骤态不一致（hopissues/0093,^anc-exec-completed-consistency）
   execution_status: 'running' | 'paused' | 'completed' | 'failed' | 'aborted';
   total_steps: number;
   completed: number;

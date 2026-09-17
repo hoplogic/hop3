@@ -1212,6 +1212,16 @@ program.command('install-skill')
           const hb2 = join(target, 'hopbuild2', 'SKILL.md');
           if (existsSync(hb2)) writeFileSync(hb2, stampSkill(readFileSync(hb2, 'utf-8'), hb2), 'utf-8');
         }
+        // hopfix 定向修正器（todo/0093 件二——版本兼容三义务的迁移通道:validate error 清单为工单即批量迁移;
+        // 壳+流程件同装:壳在 skills/hopfix,流程真源 scripts/hopfix/hopfix.md 拷入壳目录成自足件）。// @a: anc-cli-install-skill
+        if (copyDir(join(driverDir, '..', 'skills', 'hopfix'), join(target, 'hopfix'))) {
+          installed.push(join(target, 'hopfix/'));
+          const hf = join(target, 'hopfix', 'SKILL.md');
+          if (existsSync(hf)) writeFileSync(hf, stampSkill(readFileSync(hf, 'utf-8'), hf), 'utf-8');
+          if (copyFile(join(driverDir, '..', 'scripts', 'hopfix', 'hopfix.md'), join(target, 'hopfix', 'hopfix.md'))) {
+            installed.push(join(target, 'hopfix/hopfix.md'));
+          }
+        }
       } else {
         // CC 载体（默认）：hopspec-skill.md → hopspec/SKILL.md + references + skills/hopbuild/
         // 双名双壳（2026-08-27 四改）：恒装两壳——/hopspec（复用）与 /hopspec-mcp（MCP 薄壳）
@@ -1240,6 +1250,15 @@ program.command('install-skill')
         if (copyFile(join(driverDir, 'hop-skill.md'), join(target, 'hop', 'SKILL.md'))) {
           installed.push(join(target, 'hop/SKILL.md'));
           // 版本戳 copyFile 已注入——此前手工再戳一次造成双重戳（装出的 SKILL.md 两行 driver 注释,实证已修）
+        }
+        // hopfix 定向修正器（todo/0093 件二——同 codex 分支,两载体清单对等）。// @a: anc-cli-install-skill
+        if (copyDir(join(driverDir, '..', 'skills', 'hopfix'), join(target, 'hopfix'))) {
+          installed.push(join(target, 'hopfix/'));
+          const hf = join(target, 'hopfix', 'SKILL.md');
+          if (existsSync(hf)) writeFileSync(hf, stampSkill(readFileSync(hf, 'utf-8'), hf), 'utf-8');
+          if (copyFile(join(driverDir, '..', 'scripts', 'hopfix', 'hopfix.md'), join(target, 'hopfix', 'hopfix.md'))) {
+            installed.push(join(target, 'hopfix/hopfix.md'));
+          }
         }
         // 旧名目录清理（hopskill-build→hopbuild 改名,残留旧 skill 会双触发——install-skill 残留清理先例）
         const legacy = join(target, 'hopskill-build');
@@ -1425,7 +1444,7 @@ type PackResult =
   | { status: 'ok'; carrier: Carrier; skill_name: string; target: string; installed: string[]; knowledge_docs: string[]; assets: string[]; note?: string }
   | { status: 'error'; message: string; errors?: string[] };
 
-function packSpec(specPath: string, opts: { dir: string; carrier: Carrier; name?: string; assets?: string; force?: boolean }): PackResult {
+function packSpec(specPath: string, opts: { dir: string; carrier: Carrier; name?: string; assets?: string; force?: boolean; skillVersion?: string }): PackResult {
   if (!existsSync(specPath)) return { status: 'error', message: `PACK_ERROR: spec 文件不存在（${specPath}）` };
   const raw = readFileSync(specPath, 'utf-8');
 
@@ -1514,9 +1533,13 @@ function packSpec(specPath: string, opts: { dir: string; carrier: Carrier; name?
     ? '~/.codefuse/engine/codex/skills/hopspec/SKILL.md'
     : '~/.codex/skills/hopspec/SKILL.md';
 
+  // skill 版本注入（0092——frontmatter 原恒缺 version:HopSpec 头无 version 槽翻译期即丢,pack 无源可继承,
+  // 消费方读空回退 unknown;--skill-version 显式注入,未传不写行且 note 提示——不设缺省值,编造比缺席更误导）。
+  // @a: anc-cli-pack
+  const versionLine = opts.skillVersion ? `version: ${opts.skillVersion}\n` : '';
   const ccSkillMd = `---
 name: ${skillName}
-description: ${goalLine} 用户提出相关任务时触发本 skill，按其中说明驱动执行。
+${versionLine}description: ${goalLine} 用户提出相关任务时触发本 skill，按其中说明驱动执行。
 ---
 
 # /${skillName}
@@ -1554,7 +1577,7 @@ ${paramLines}
 `;
   const codexSkillMd = `---
 name: ${skillName}
-description: ${goalLine} 用户提出相关任务或显式使用 $${skillName} 时触发，按 HopSpec 驱动执行。
+${versionLine}description: ${goalLine} 用户提出相关任务或显式使用 $${skillName} 时触发，按 HopSpec 驱动执行。
 ---
 
 # $${skillName}
@@ -1605,14 +1628,29 @@ ${paramLines}
   // 元数据/call 寻址),skill 名与 Id 不一致会让 demo 运行痕迹干扰目标环境(demo-rename 跑出
   // confirm-commit-* 日志)。源文件不动;无 name 零改写。见 [[hop-cli#^anc-cli-pack]] Id 随名条。
   const specDst = join(skillDir, 'spec.md');
+  // engine_min_version 注入（todo/0093 版本兼容性原则——pack 产物声明打包时引擎版本,消费端 init 闸比对
+  // ^anc-exec-engine-min-version-gate;spec 已有该键=作者手写值保留不覆盖〔放宽是知情行为〕;无 Config 段则
+  // 建段。与 --skill-version 正交:那是消费方业务版本,这是引擎兼容闸）。// @a: anc-cli-pack, anc-exec-engine-min-version-gate
+  const injectEngineMinVersion = (text: string): string => {
+    if (/^\s*-?\s*engine_min_version\s*:/m.test(text)) return text;   // 作者手写在场,保留
+    const line = `  engine_min_version: ${packVersion}`;   // 缩进键值形态(概念例同款;parser -? 键: 值 两形态都收)
+    if (/^Config:\s*$/m.test(text)) return text.replace(/^Config:\s*$/m, `Config:\n${line}`);
+    // 无 Config 段:插在 Inputs/Outputs/Steps 首个段头前（Config 属头部段,Steps 前合法位）
+    const m = text.match(/^## (Inputs|Outputs|Steps)/m);
+    return m ? text.replace(m[0], `Config:\n${line}\n\n${m[0]}`) : text;
+  };
   if (opts.name && ast.header.id && opts.name !== ast.header.id) {
     if (!existsSync(specDst) || opts.force === true) {
       mkdirSync(dirname(specDst), { recursive: true });
-      const rewritten = raw.replace(/^Id:\s*\S+.*$/m, `Id: ${opts.name}`);
+      const rewritten = injectEngineMinVersion(raw.replace(/^Id:\s*\S+.*$/m, `Id: ${opts.name}`));
       writeFileSync(specDst, rewritten, 'utf-8');
       installed.push(specDst);
     }
-  } else if (copyIfAllowed(specPath, specDst)) installed.push(specDst);
+  } else if (!existsSync(specDst) || opts.force === true) {
+    mkdirSync(dirname(specDst), { recursive: true });
+    writeFileSync(specDst, injectEngineMinVersion(raw), 'utf-8');
+    installed.push(specDst);
+  }
   for (const doc of knowledgeDocs) {
     if (copyIfAllowed(join(specDir, doc), join(skillDir, doc))) installed.push(join(skillDir, doc));
   }
@@ -1637,7 +1675,9 @@ ${paramLines}
     installed,
     knowledge_docs: knowledgeDocs,
     assets,
-    ...(installed.length === 0 ? { note: '无文件写入（目标已存在，用 --force 覆盖）' } : {}),
+    ...(installed.length === 0
+      ? { note: '无文件写入（目标已存在，用 --force 覆盖）' }
+      : (!opts.skillVersion ? { note: '产物 SKILL.md 无版本号——消费方读 frontmatter version 的场景请传 --skill-version <v>（0092）' } : {})),
   };
 }
 
@@ -1647,6 +1687,7 @@ program.command('pack <spec>')
   .option('--dir <target>', 'Target skills directory (default: .claude/skills for cc/cfuse-cc, .agents/skills for codex/cfuse-codex — project-level per carrierFamily; cfuse home needs --dir)')
   .option('--name <name>', 'Skill name (default: spec Id)')
   .option('--assets <files>', 'Comma-separated data files (in spec dir) to bundle into the skill')
+  .option('--skill-version <v>', 'Inject version into packed SKILL.md frontmatter (0092: consumers reading version get unknown otherwise)')
   .option('--force', 'Overwrite existing files')
   .action((specArg, opts) => {
     try {
@@ -1658,6 +1699,7 @@ program.command('pack <spec>')
         dir: target,
         carrier: carrier,
         name: opts.name,
+        skillVersion: opts.skillVersion,
         assets: opts.assets,
         force: opts.force === true,
       });

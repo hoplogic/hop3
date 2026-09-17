@@ -344,15 +344,28 @@ for (const file of targets) {
     console.error('❌ hopbuild2 专项: spec.md ref_assets 前缀补全行缺失或形态漂移——参考性清单路径不归一,交付随包按它取件必空');
     failed++;
   }
-  // ③f-3 三词表 18 词正典（5.1.3.1.1 action_ledger 抽取——删词即动作句台账静默变薄,漏抽的动作蒸发无人查）
+  // ③f-3 三词表正典（中英双语,D95③ 英文扩员;5.1.3.1.1 action_ledger 抽取——删词即动作句台账静默变薄,漏抽的动作蒸发无人查）
   const wordCanon = (line, canon, label) => {
     if (!line) { console.error(`❌ hopbuild2 专项: spec.md 找不到 ${label} 词表行——D84① 抽取词表被移除,须先改设计再同步`); failed++; return; }
     const ws = [...line.matchAll(/"([^"]+)"/g)].map(m => m[1]).sort().join(',');
     if (ws !== canon.sort().join(',')) { console.error(`❌ hopbuild2 专项: ${label} 词表与正典不一致（实际: ${ws}）——删词/改词须先改设计 D84① 再同步`); failed++; }
   };
-  wordCanon(hb2f.split('\n').find(l => l.includes('deliver_words = [')), ['写入', '保存', '落盘', '发送', '提交', '部署', '删除', '发布', '输出到'], 'deliver_words');
-  wordCanon(hb2f.split('\n').find(l => l.includes('gate_words = [')), ['必须', '不得', '才能', '方可', '禁止', '之前不'], 'gate_words');
-  wordCanon(hb2f.split('\n').find(l => l.includes('notify_words = [')), ['通知', '告知', '上报'], 'notify_words');
+  wordCanon(hb2f.split('\n').find(l => l.includes('deliver_words = [')), ['写入', '保存', '落盘', '发送', '提交', '部署', '删除', '发布', '输出到', 'write', 'save', 'send', 'submit', 'deploy', 'delete', 'publish', 'commit', 'create the file', 'output to'], 'deliver_words');
+  wordCanon(hb2f.split('\n').find(l => l.includes('gate_words = [')), ['必须', '不得', '才能', '方可', '禁止', '之前不', 'must', 'never', 'only after', 'do not', "don't", 'required before', 'cannot', 'forbidden'], 'gate_words');
+  wordCanon(hb2f.split('\n').find(l => l.includes('notify_words = [')), ['通知', '告知', '上报', 'notify', 'alert', 'report to', 'escalate'], 'notify_words');
+  // ③f-3b 匹配式 lower 归一（D95③——英文句首大写逃逸子串匹配,删 lower 即英文词表半失效）
+  const hitLine = hb2f.split('\n').find(l => l.includes('hit_rows = ['));
+  if (!hitLine || !hitLine.includes('w in lower(l)')) {
+    console.error('❌ hopbuild2 专项: spec.md 5.1.3.1.1 匹配行缺 lower 归一（须为 w in lower(l)——英文句首大写行将逃逸词表匹配,英文语料 action_ledger 变薄）——先改设计 D95③ 再同步');
+    failed++;
+  }
+  // ③f-5 合理关判料时点（D96③——判官必须吃修错后的 recheck_result 与销项底册 issue_history;
+  // ← 行回退成 health_report(修错前旧单)即幻影工单复发,丢 issue_history 即判官失忆挤牙膏复发）
+  const srLine = hb2f.split('\n').find(l => l.startsWith('- ←') && l.includes('log_text') && l.includes('action_ledger'));
+  if (!srLine || !srLine.includes('recheck_result') || !srLine.includes('issue_history') || srLine.includes('health_report')) {
+    console.error('❌ hopbuild2 专项: spec.md 5.1.3.1.5 合理关 ← 行形态漂移（须含 recheck_result 与 issue_history、不含 health_report——判官吃修错前旧单=幻影工单,丢销项底册=判官失忆,两病 R3 验尸实锤）——先改设计 D96②③ 再同步');
+    failed++;
+  }
   // ③f-4 呈审面双变量（4.4 present_inputs 少写 aux_ledger=呈审面缺半边静默失效,P14 只拦写错名不拦少写）
   const piLine = hb2f.split('\n').find(l => l.includes('present_inputs=header_final'));
   if (!piLine || !piLine.includes('present_inputs=header_final,aux_ledger')) {

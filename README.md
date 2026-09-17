@@ -144,6 +144,11 @@ Codex 载体见 `driver/codex/SKILL.md`。安装后可由描述隐式触发，�
 
 人需要敲的命令只有安装那一次（`npm install` + `hopjit install-skill`，见上）。其余子命令——`validate` / `lang` / `list` / `init` / `run` / `submit_and_fetch_next` / `reap_and_fetch_next` / `advance` / `debug_step` / `abort` / `status` / `tool-call` / `vars` / `resume` / `pack`——都由 agent（skill / dispatcher）调用：校验由 `/hopbuild` 在生成时自动过闸，打包由它在交付时代跑，执行状态由 `/hopspec` 驱动。机器消费统一带 `--json`（缺省输出面向人的 YAML，供 agent 转述或人排查时读）。全表见 [USAGE.md](./USAGE.md) §5「CLI 命令速查」。
 
+## 问题反馈（两条通道，按你是谁分流）
+
+- **人类用户**：直接在 [GitHub Issues](https://github.com/hoplogic/hop3/issues) 报——正常的 bug 报告/提问入口；
+- **AI agent**：走 [hoplogic/hopissues](https://github.com/hoplogic/hopissues) 协议仓（PR 即开卡）——那是为 agent 之间协作设计的强纪律通道：议题卡必须带可执行的闭环判据（probe），修复方标 fixed 不算完，报告方在自己环境实跑 probe 转绿才 closed。协议全文见该仓 README。
+
 ## 开发与发版（维护者）
 
 ```bash
@@ -159,7 +164,7 @@ npm run dev:install -- --demo    # 同步附装演示 skill：CC 用 /coffee-wee
 npm run release
 ```
 
-每次提交/发版的完整操作手册（分诊、手工验收断言、坑速查）见 RELEASING.md〔内部开发面，GitHub 快照暂不含〕。
+每次提交/发版的完整操作手册（分诊、手工验收断言、坑速查）见 maintainers/RELEASING.md〔维护者内部面〕。
 
 ## 依赖说明
 
@@ -173,7 +178,7 @@ npm run release
 | [Doctree.md](./Doctree.md) | 全库文档索引的根——有什么文档、谁派生自谁 | 找任何文档从这里进 |
 | [USAGE.md](./USAGE.md) | 上手速查（一页看完装和跑） | 使用者，装完想快速回查时 |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | 架构总览——分层/桥接点/组件交互/双态分布 | 读懂系统前必读（主线第 4 站） |
-| RELEASING.md〔内部开发面，快照暂不含〕 | **维护者操作手册**——提交/发版前的分诊、手工验收断言、自动 E2E 时机、坑速查 | 维护者，**每次提交/发版都走**（教程读一次，这份每次用） |
+| maintainers/RELEASING.md〔维护者内部面〕 | **维护者操作手册**——提交/发版前的分诊、手工验收断言、自动 E2E 时机、坑速查 | 维护者，**每次提交/发版都走**（教程读一次，这份每次用） |
 | [STATUS.md](./STATUS.md) | 当前状态快照——版本/健康度/在做什么/欠账 | 想知道项目现在什么样（唯一允许过期的文档） |
 | todo/〔内部开发面，快照暂不含〕 | 活待办与技术债卡目录（文件名即状态机） | 接手干活前 `ls todo/` 挑 open 卡 |
 | [TRACEABILITY.md](./TRACEABILITY.md) | 锚点五层追溯卡片（概念→设计→代码→测试） | 查某特性全链落点时搜锚点 |

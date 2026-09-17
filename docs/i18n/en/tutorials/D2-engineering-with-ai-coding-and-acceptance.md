@@ -114,7 +114,7 @@ After the AI delivers, your acceptance actions in descending cost-effectiveness 
 | Locate a contract's full-chain footprint | `grep -n "<anchor>" TRACEABILITY.md` |
 | Try a change locally | `npm run dev:install` (rebuilds dist + refreshes skill; run at repo root) |
 | Semantic audit | `/hopspec run scripts/audit/anchor-audit.md` (supports per-module runs) |
-| Routine commit/release checklist | `RELEASING.md` (manual layer; follow it every time) |
+| Routine commit/release checklist | the maintainer operations manual (internal, not distributed in the public snapshot; manual layer, follow it every time) |
 | New module | eight-item checklist delivered in one change (`chain-enforcement.md` §1c-2) |
 
 ## Next step

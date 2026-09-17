@@ -12,7 +12,7 @@ user_invocable: true
 %% @trace
 	id: hopfix-skill
 	type: intent
-	last_sync: 2026-09-02T17:40+0800
+	last_sync: 2026-09-15T17:03+0800
 	note: hopfix 薄包装壳（design docs/design/hopfix.md ^anc-meta-hopfix-contract）——本 skill 是 hopspec skill:流程权威在 scripts/hopfix/hopfix.md,经 /hopspec 驱动引擎强制执行。壳自身零流程知识,只做参数收集与移交。缘起作者抓"你这个用法是想把人都劝退么"——裸驱动命令不是给人用的形态,壳补齐 2026-09-02。
 %%
 
@@ -35,13 +35,14 @@ user_invocable: true
 
 ## 执行
 
-**本 skill 是 hopspec skill**：流程权威在 `scripts/hopfix/hopfix.md`，按 `/hopspec` 驱动协议执行它——
+**本 skill 是 hopspec skill**：流程权威是 `hopfix.md`（**安装形态=本 skill 目录内**，随 install-skill 分发；库内开发真源在 `scripts/hopfix/hopfix.md`——装出的是其副本），按 `/hopspec` 驱动协议执行它——
 
 ```
-/hopspec run scripts/hopfix/hopfix.md --params '{"spec_path": "<收集值>", "fix_order": "<收集值>"}'
+/hopspec run <本 skill 目录>/hopfix.md --params '{"spec_path": "<收集值>", "fix_order": "<收集值>"}'
+# <本 skill 目录>=本文件所在目录（CC 会话里 skill 头部标注的 Base directory）；库内开发场景用 scripts/hopfix/hopfix.md
 ```
 
-MCP 注册时（工具面可见 `mcp__hopjit__*`）走 standalone 薄协议：`start_run(spec_path=scripts/hopfix/hopfix.md, params={...}, workspace_dir=<待修 spec 所在的作业目录>)`——**workspace_dir 必须指向待修 spec 所在处**（spec_path 按它相对解析，写回也落它）。
+MCP 注册时（工具面可见 `mcp__hopjit__*`）走 standalone 薄协议：`start_run(spec_path=<本 skill 目录>/hopfix.md, params={...}, workspace_dir=<待修 spec 所在的作业目录>)`——**workspace_dir 必须指向待修 spec 所在处**（spec_path 按它相对解析，写回也落它）。
 
 执行中的介入点（引擎强制，原样呈给用户）：
 

@@ -1,6 +1,6 @@
 // @module: act-body ^anc-struct-act-body
 import { describe, it, expect } from 'vitest';
-import { parseSpec } from '../src/parser.js';
+import { parseSpec, parseFragment } from '../src/parser.js';
 import { validateSpec } from '../src/validator.js';
 import { ACT_BUILTINS, ACT_BUILTIN_NAMES } from '../src/act-builtins.js';
 
@@ -355,5 +355,216 @@ describe('subprocess.run case 条件拒调', () => {
   it('反例：case 条件里调 subprocess.run → 占位 fn throw 折计算异常,条件按不命中（now/today 同款模式）', () => {
     const { fn } = ACT_BUILTINS.get('subprocess.run')!;
     expect(() => fn([['echo', 'x']])).toThrow(/需要实例上下文/);
+  });
+});
+
+// B2 commit 步未知函数分档（hopissues/0089——hopkb 侧 [commit] body 写不存在的 run_shell,
+// warn 放行后运行期走 tool_request 外包,driver 回执未真执行,引擎 completed 谎报,三批连撞;
+// 修=commit 步且 Tools 段未声明 → error 拒载,act 步与声明过的保持 warn 开放性）。 // @v: anc-rule-b2
+describe('B2 commit 步未知函数分档（0089）', () => {
+  const SPEC = (stepType: string, toolsSection: string) => `# T
+Id: t
+## Goal
+g
+${toolsSection}## Outputs
+- out: text  # o
+## Steps
+1. [act free] 备
+  + → note: text  # n
+2. [subtask retry=1]
+  - ← note
+  + → out: text  # o
+  2.1. [act free] 干
+    - ← note
+    + → out: text  # o
+  2.2. [check final] 核
+    - ← out
+    + → ok: bool  # 判定
+    + → note2: text  # 说明
+3. [${stepType}] 交
+  - ← out
+  + → done: text  # d
+  > 交付
+  > ${'```'}hop_python
+  > r = run_shell(command: "echo hi")
+  > done = r
+  > ${'```'}
+`;
+
+  it('反例：commit 步调用未声明的未知函数 → B2 error 拒载,报文指路 subprocess.run 与 Tools 段', () => {
+    const { ast } = parseSpec(SPEC('commit', ''));
+    const errs = validateSpec(ast).filter(e => e.rule === 'B2' && e.severity === 'error');
+    expect(errs.some(e => e.message.includes('run_shell') && e.message.includes('subprocess.run') && e.message.includes('Tools 段'))).toBe(true);   // R10 补强:双指路词全断(报文砍半照绿的缝隙)
+  });
+
+  it('正例：act 步同款未知函数 → 保持 warn 不拦（caller 会话工具合法场景,开放性保留）', () => {
+    const { ast } = parseSpec(SPEC('act', ''));
+    expect(validateSpec(ast).filter(e => e.rule === 'B2' && e.severity === 'error').length).toBe(0);
+    expect(validateSpec(ast).filter(e => e.rule === 'B2' && e.severity === 'warn' && e.message.includes('run_shell')).length).toBe(1);
+  });
+
+  it('正例：commit 步但 Tools 段声明过该名 → warn 档不拦（声明过=作者显式知情;standalone 另有 init 对账）', () => {
+    const tools = '## Tools\n- run_shell(command: line) -> r: text  # 声明过的外部工具\n';
+    const { ast } = parseSpec(SPEC('commit', tools));
+    const es = validateSpec(ast);
+    expect(es.filter(e => e.rule === 'B2' && e.severity === 'error').length).toBe(0);
+    expect(es.filter(e => e.rule === 'B2' && e.severity === 'warn' && e.message.includes('run_shell')).length).toBe(1);   // R10 补强:warn 在场对称断言(:400 同款——回归成完全静默照绿的缝隙)
+  });
+
+  // R10 修复批四钉(面二 A⑥ 递归漏传/面三 M3 容器断链/check 档条款补载/fragment 降档)。 // @v: anc-rule-b2, anc-rule-fragment-mode
+  it('正例：嵌套 subtask 内 commit 调已声明工具 → 零 error（容器递归透传——M3 变异存活点位的重放钉）', () => {
+    const md = `# NT
+Id: nt
+## Goal
+g
+## Tools
+- ext_send(x)  # 声明过
+  - x: text  # 内容
+## Outputs
+- out: text  # o
+## Steps
+1. [subtask retry=2]
+  + → out: text  # o
+  1.1. [act free] 干
+    + → out: text  # o
+  1.2. [check final] 核
+    - ← out
+    + → ok: bool  # 判定
+    + → note: text  # 说明
+  1.3. [commit] 发
+    - ← out
+    + → done: text  # d
+    > 发出去
+    > ${'```'}hop_python
+    > r = ext_send(x: out)
+    > done = "sent"
+    > ${'```'}
+`;
+    const { ast } = parseSpec(md);
+    expect(validateSpec(ast).filter(e => e.rule === 'B2' && e.severity === 'error').length).toBe(0);
+  });
+
+  it('正例：commit body 表达式嵌套位（dict 值位）调已声明工具 → 零 error（checkActExpr 递归透传——A⑥ 漏传点位钉）', () => {
+    const md = `# DP
+Id: dp
+## Goal
+g
+## Tools
+- ext_fetch(k)  # 声明过
+  - k: line  # 键
+## Outputs
+- out: text  # o
+## Steps
+1. [subtask retry=1]
+  + → out: text  # o
+  1.1. [act free] 干
+    + → out: text  # o
+  1.2. [check final] 核
+    - ← out
+    + → ok: bool  # 判定
+    + → note2: text  # 说明
+2. [commit] 交
+  - ← out
+  + → done: text  # d
+  > 交付
+  > ${'```'}hop_python
+  > r = {"k": ext_fetch(k: "a")}
+  > done = "ok"
+  > ${'```'}
+`;
+    const { ast, errors: pe } = parseSpec(md);
+    expect(pe.length).toBe(0);
+    expect(validateSpec(ast).filter(e => e.rule === 'B2' && e.severity === 'error').length).toBe(0);
+  });
+
+  it('正例：check 步 body 未知函数 → warn 非 error（三档枚举 act/check 条款补载后的直测）', () => {
+    const { ast } = parseSpec(SPEC('commit', '').replace('3. [commit] 交', '3. [check] 交').replace('+ → done: text  # d', '+ → cok: bool  # 判定\n  + → cnote: text  # 说明').replace('> done = r', '> cok = true\n  > cnote = "x"'));
+    const es = validateSpec(ast);
+    expect(es.filter(e => e.rule === 'B2' && e.severity === 'error').length).toBe(0);
+    expect(es.filter(e => e.rule === 'B2' && e.severity === 'warn' && e.message.includes('run_shell')).length).toBe(1);
+  });
+
+  it('正例：fragment 模式 commit 步未知函数 → warn 非 error 带整文验为准报文（片段无 header 声明面）', () => {
+    const frag = `1. [commit] 发
+  + → done: text  # d
+  > 发
+  > ${'```'}hop_python
+  > r = wild_tool(x: "a")
+  > done = "ok"
+  > ${'```'}
+`;
+    const { ast, errors: pe } = parseFragment(frag);
+    expect(pe.length).toBe(0);
+    const es = validateSpec(ast, undefined, { fragment: true, knownVars: [] });
+    expect(es.filter(e => e.rule === 'B2' && e.severity === 'error').length).toBe(0);
+    const w = es.filter(e => e.rule === 'B2' && e.severity === 'warn' && e.message.includes('wild_tool'));
+    expect(w.length).toBe(1);
+    expect(w[0].message).toContain('整文 validate 为准');
+  });
+});
+
+// B2 内置工具具名参数名核对（2026-09-16 作者拍升档,决策页 todo/decision/20260916-内置工具参数名写时校验.md——
+// hopbuild2 交付步 move(src:, dst:) 凭 shutil 肌肉记忆臆造参数名,注册面真名 from/to;原"参数错留运行期报"
+// 实况运行期同样零校验,undefined 穿透 Node fs 报误导错,毒行躲 if 条件后 selftest 零通电真机烧一轮才爆。
+// 签名表与 tools.ts input_schema 同源,对账钉参数名级见 tools.test.ts）。 // @v: anc-rule-b2
+describe('B2 内置工具参数名核对（20260916 升档）', () => {
+  function v(body: string) {
+    const md = `# T
+Id: t
+## Goal
+g
+## Outputs
+- out: text  # o
+## Inputs
+- p: line  # in
+## Steps
+1. [act] 干
+  - ← p
+  + → out: text  # o
+> \`\`\`hop_python
+> ${body}
+> out = "x"
+> \`\`\`
+`;
+    const { ast, errors: pe } = parseSpec(md);
+    if (pe.length) return pe.map(e => ({ rule: 'parse', severity: 'error' as const, message: e.message }));
+    return validateSpec(ast!);
+  }
+
+  it('反例：move(src:, dst:) 臆造参数名 → error 点名合法参数（实撞原样重放——修前 validate 全绿潜伏到真机）', () => {
+    const errs = v('r = move(src: p, dst: p)');
+    const es = errs.filter(e => e.rule === 'B2' && e.severity === 'error');
+    expect(es.some(e => e.message.includes('没有参数 "src"/"dst"') && e.message.includes('from/to'))).toBe(true);
+  });
+
+  it('正例：move(from:, to:) 注册面真名 → 零 B2 error', () => {
+    const errs = v('r = move(from: p, to: p)');
+    expect(errs.filter(e => e.rule === 'B2' && e.severity === 'error')).toHaveLength(0);
+  });
+
+  it('反例：write 只给 path 缺必填 content → error 点名缺谁', () => {
+    const errs = v('r = write(path: p)');
+    expect(errs.some(e => e.rule === 'B2' && e.severity === 'error' && e.message.includes('缺必填参数 "content"'))).toBe(true);
+  });
+
+  it('反例：内置工具位置参数形态 move(a, b) → error 教具名形态（位置参数运行期装 Record 全丢）', () => {
+    const errs = v('r = move(p, p)');
+    expect(errs.some(e => e.rule === 'B2' && e.severity === 'error' && e.message.includes('须用具名参数'))).toBe(true);
+  });
+
+  it('正例：read 可选参数 start_line/end_line 带与不带都合法', () => {
+    expect(v('r = read(path: p)').filter(e => e.rule === 'B2' && e.severity === 'error')).toHaveLength(0);
+    expect(v('r = read(path: p, start_line: 1, end_line: 9)').filter(e => e.rule === 'B2' && e.severity === 'error')).toHaveLength(0);
+  });
+
+  it('反例：read 臆造 filename 参数 → error（path/content 族以外的第二形态）', () => {
+    const errs = v('r = read(filename: p)');
+    expect(errs.some(e => e.rule === 'B2' && e.severity === 'error' && e.message.includes('没有参数 "filename"'))).toBe(true);
+  });
+
+  it('正例：签名表外调用（外部工具名）不受三判影响——既有 warn 档不变', () => {
+    const errs = v('r = some_external_tool(x: p)');
+    expect(errs.filter(e => e.rule === 'B2' && e.severity === 'error')).toHaveLength(0);
+    expect(errs.some(e => e.rule === 'B2' && e.severity === 'warn')).toBe(true);
   });
 });

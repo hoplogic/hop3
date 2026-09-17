@@ -32,7 +32,7 @@ Outputs:
 + → path_ok: bool  # 判定
 + → path_note: text  # 拒因（重问轮呈给调用方照改）
 
-机械三判零 LLM（D72② 同款形态）。exists 返回 JSON 文本须 parse_json 取 .exists；形态坏不碰 exists（绝对路径进读侧工具被沙箱拒成工具失败，先判形态再探在场）：
+机械三判零 LLM。exists 返回 JSON 文本须 parse_json 取 .exists；形态坏不碰 exists（绝对路径进读侧工具被沙箱拒成工具失败，先判形态再探在场）：
 > ```hop_python
 > bad_abs = startswith(spec_path, "/")
 > bad_dots = ".." in spec_path
@@ -64,7 +64,7 @@ Outputs:
 + → fixable_count: int  # 可修项数（action ∈ edit_text/edit_body/add_step/remove_step）
 + → triage_note: text  # 分诊摘要（可修 N 项/拒 M 项各一句话）
 
-把工单（自然语言或结构化报告均按同法拆）拆解为逐项修正清单。每项四字段：node_id=受影响节点步号（对照 spec_text 定位，定位不到即拒，拒因写明"工单指涉位置找不到"）；action 六档——edit_text（改说明文字）/edit_body（改 hop_python body）/add_step（补步骤）/remove_step（删步骤）前四档可修，restructure（整段拆法要变）=结构性拒，out_of_scope（动 Goal/Inputs/Outputs 契约面）=契约面拒；order_quote=工单原话切片（本项依据）；reject_reason=拒项必填、可修项空串。分档判据（D70 四档同源）：用定向编辑落实得了的是局部；产物文本上修不动、须重新分拆的是结构性；拿不准倾向可修档——试修修不动会经把关失败如实上浮，误判拒则把可修的推去重烧小时级。列表型产出没有内容时交付空列表不交付 null。**YAML 交付纪律**：order_quote/reject_reason 是自由文本值位（工单原话天然含方括号/冒号/引号这类 YAML 定界符）——每项按块风格逐字段成行交付，自由文本字段一律 `字段: |` 块标量，禁 flow 行内映射（`{...}` 单行形态裸值含定界符会把整份列表炸成解析失败），原话里的引号是语法必需件照抄保留。
+把工单（自然语言或结构化报告均按同法拆）拆解为逐项修正清单。每项四字段：node_id=受影响节点步号（对照 spec_text 定位，定位不到即拒，拒因写明"工单指涉位置找不到"）；action 六档——edit_text（改说明文字）/edit_body（改 hop_python body）/add_step（补步骤）/remove_step（删步骤）前四档可修，restructure（整段拆法要变）=结构性拒，out_of_scope（动 Goal/Inputs/Outputs 契约面）=契约面拒；order_quote=工单原话切片（本项依据）；reject_reason=拒项必填、可修项空串。分档判据：用定向编辑落实得了的是局部；产物文本上修不动、须重新分拆的是结构性；拿不准倾向可修档——试修修不动会经把关失败如实上浮，误判拒则把可修的推去重烧小时级。列表型产出没有内容时交付空列表不交付 null。**YAML 交付纪律**：order_quote/reject_reason 是自由文本值位（工单原话天然含方括号/冒号/引号这类 YAML 定界符）——每项按块风格逐字段成行交付，自由文本字段一律 `字段: |` 块标量，禁 flow 行内映射（`{...}` 单行形态裸值含定界符会把整份列表炸成解析失败），原话里的引号是语法必需件照抄保留。
 
 ### 3. [branch] 按可修项数分流
 + → fix_report: markdown  # 两路同名赋值
@@ -207,3 +207,13 @@ body 引擎直执拼变量零转写：
 
 ### 4. [exit] 交付
 - ← fix_report
+
+## 版本迁移对照（引擎破坏性收严的旧写法→新写法知识——本节随每次收严发版更新,todo/0093 义务③落点）
+
+工单是"新引擎 validate 报的 error 清单"时（版本迁移场景——旧 spec 撞新引擎的批量修复），除报文自带的修法指路外，本节对照供分诊与修正参考。逐条格式：引擎版本 / 规则码 / 旧写法（曾合法）→ 新写法 / 为什么收严。
+
+### 0.15.1 后（B2 commit 步未知函数升 error，hopissues/0089）
+
+- **规则**：B2。**旧写法**：`[commit]` 步 hop_python body 里调用任意未知函数名（如 `run_shell(command: ...)`）——曾只 warn 放行。**新写法两选一**：①要跑命令的，改用内置 `subprocess.run(argv列表, cwd: ...)`（argv=命令与参数一个列表；命令名须在项目 hopjit.yaml commands 白名单）；②真是外部工具的，在 spec 头部 Tools 段声明该工具（签名+逐参数条目），声明过即回 warn 档放行。**为什么收严**：未知函数名在运行期被当"驱动方会话工具"外包出去，驱动方回执不执行命令，引擎报 completed 而盘面什么都没发生——不可逆步骤的动作真实性谎报（三批实撞）。**修正注意**：生成 Tools 段声明存根时，参数名从调用处的具名实参抽取，参数类型按值形态推断并在说明里注明"推断值请核对"。
+
+（下一条收严随发版追加于此——release.sh breaking 闸命中时的提示文案指向本节，^anc-release-version-compat 义务③。）

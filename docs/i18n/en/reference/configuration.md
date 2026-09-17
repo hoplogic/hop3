@@ -145,7 +145,7 @@ From specific to general; the first hit wins:
 # system-level ~/.hopjit/config.yaml or project-level <project root>/hopjit.yaml (merged key by key, project level wins)
 env:
   hop_env_kb_root: ~/vaults/判据库        # full name goes in the config — what you write is what gets referenced
-  hop_env_brand_root: ~/vaults/办公生产力
+  hop_env_brand_root: ~/vaults/brand-assets
 ```
 
 **Override chain** (later overrides earlier, key by key, not whole-block — same mental model as Config.models inheritance):

@@ -701,6 +701,23 @@ export class DefaultToolProvider implements ToolProvider { // @a: anc-exec-tool-
   // write_scope 缺省 'work_zone'——信号缺席按窄域拒,不静默放宽（分域条款 ^anc-exec-write-scope）
   async execute(tool_name: string, tool_args: Record<string, unknown>, write_scope: WriteScope = 'work_zone'): Promise<ToolResult> {
     try {
+      // 实参名进闸核对（file-tools 实参名进闸条款,2026-09-16 决策——move(src:/dst:) 笔误
+      // undefined 穿透 Node fs 报"path argument must be of type string"而 move 无 path 参,
+      // 误导排查。未知参数名/缺必填按 input_schema 核,报文点名合法参数名集,走 ToolResult
+      // 失败通道不抛。// @a: anc-exec-tool-arg-gate
+      const def = this.list().find(t => t.name === tool_name);
+      if (def?.input_schema) {
+        const schema = def.input_schema as { properties?: Record<string, unknown>; required?: string[] };
+        const legal = Object.keys(schema.properties ?? {});
+        const unknown = Object.keys(tool_args).filter(k => !legal.includes(k));
+        if (unknown.length > 0) {
+          return { result: `工具 "${tool_name}" 没有参数 ${unknown.map(k => `"${k}"`).join('/')}——它的参数是 ${legal.join('/')}`, success: false, content_type: 'text' };
+        }
+        const missing = (schema.required ?? []).filter(k => tool_args[k] === undefined);
+        if (missing.length > 0) {
+          return { result: `工具 "${tool_name}" 缺必填参数 ${missing.map(k => `"${k}"`).join('/')}（参数全集 ${legal.join('/')}）`, success: false, content_type: 'text' };
+        }
+      }
       switch (tool_name) {
         case 'read': return this.executeRead(tool_args.path as string, tool_args.start_line as number | undefined, tool_args.end_line as number | undefined);
         case 'write': return this.executeWrite(tool_args.path as string, contentToText(tool_args.content), write_scope);

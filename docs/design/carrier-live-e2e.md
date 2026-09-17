@@ -3,7 +3,7 @@
 	source: [[codex-driver-carrier]], [[reuse-mode-prompt-flow]], [[chain-enforcement]]
 	source_id: hopjit-codex-driver-carrier, hopjit-reuse-mode-prompt-flow, hopjit-chain-enforcement
 	type: extend
-	last_sync: 2026-08-18T12:39+0800
+	last_sync: 2026-09-17T15:34+0800
 	note: CC/Codex 真实载体 E2E 契约——隔离工作区、事件归一、执行体归属断言、凭证不落盘、显式失败与 opt-in CI 边界。2026-08-09 扩失败路径场景组（作者定 12345）：repair/uncaught/parallel-partial/paused/call-fail 五场景,确定性失败触发,单列入口不进硬闸。同日作者指正补 G11 过程核验：失败场景必须读 main.yaml 轨迹（轮次键/warn+failed 块/join 清单/confirm 无 hitl/CalleeFailure 入轨）,只看 state 终态=假绿。
 %%
 
@@ -95,6 +95,26 @@ carrier_stop
 仅有最终业务输出不足以证明 delegated。直接证据和上述 Codex 闭合证据均不成立时，测试失败并报告“观测协议不足”。
 
 ## 4. 场景矩阵与退出语义【契约】 ^anc-driver-live-e2e-scenarios
+
+**Codex 委派工具的暴露位置**：复用场景使用 `features.multi_agent_v2.non_code_mode_only=true`，让委派工具直接出现在模型工具面；`tool_namespace="agents"` 保持不变。`codex:flash` 与 delegated 共用这项装配，是否成功派生仍由真实能力决定；standalone 两场景继续禁用多 agent，不注入这项复用配置。
+
+此要求来自载体调用契约：Codex 的多 agent 指令要求直接调用委派工具，禁止把调用放进 `functions.exec`。在 Codex 0.154.0 的本地请求对照中，旧值 `false` 将委派工具只放进 `functions.exec` 的 `tools.agents__*` 声明，直接工具面没有 `agents`，形成互相冲突的调用要求；改为 `true` 后直接出现 `agents` 命名空间的六个委派工具，且不再嵌入 `functions.exec`。配置开关启用不等于工具暴露位置正确，真实 delegated 验收仍是最终判据。
+
+```text
+HopType CodexDelegationExposure:
+  non_code_mode_only: bool  # true=委派工具直接暴露给模型，不作为 exec 内嵌工具
+  tool_namespace: text     # 直接工具的命名空间，复用场景固定为 agents
+
+HopTrait BuildCodexCarrierCommand:
+  requires: 场景已通过前置检查
+  ensures: 复用场景的委派工具直接可调用；standalone 不启用委派
+  preserves: delegated 的 main 写命令禁令与真实委派证据判据
+
+HopSop:
+  1. standalone 场景写入多 agent 禁用配置。
+  2. 其余 Codex 场景启用多 agent，并指定 non_code_mode_only=true。
+  3. 启动真实载体，按原有事件与实例证据验收，不用配置声明代替通过证据。
+```
 
 | 场景 | 必须成立 |
 |---|---|

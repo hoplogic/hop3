@@ -808,16 +808,28 @@ export class HopjitMcpCore {
             const snapTokens = typeof st.cumulative_tokens === 'number' && st.cumulative_tokens > 0 ? { cumulative_tokens: st.cumulative_tokens } : {};
             if (st.terminal_state === 'completed') {
               let outputs: Record<string, unknown> | undefined;
+              // completed 标记与步骤态一致性核（hopissues/0093 快照兜底半边——probe 实走通路:
+              // 注册表 miss 纯读盘时同样不留静默通道;判据与 engine.detectCompletedInconsistency
+              // 同构:顶层步存在 pending/running 非终态即病态,报告不擅改。exec-engine
+              // ^anc-exec-completed-consistency）。// @a: anc-exec-completed-consistency
+              let inconsistency: string | undefined;
               try {
-                const specData = JSON.parse(readFileSync(join(instDir, 'spec.json'), 'utf-8')) as { header?: { outputs?: Array<{ name: string }> } };
+                const specData = JSON.parse(readFileSync(join(instDir, 'spec.json'), 'utf-8')) as { header?: { outputs?: Array<{ name: string }> }; steps?: Array<{ step_id: string }> };
                 const varsData = JSON.parse(readFileSync(join(instDir, 'vars.json'), 'utf-8')) as { scopes?: Record<string, { variables?: Record<string, unknown> }>; variables?: Record<string, unknown> };
                 const rootVars = varsData.scopes?.['root']?.variables ?? varsData.variables ?? {};   // v2 scopes=对象键即 scope id;v1 扁平 variables
                 outputs = {};
                 for (const o of specData.header?.outputs ?? []) {
                   if (o.name in rootVars) outputs[o.name] = rootVars[o.name];
                 }
-              } catch { /* outputs 收集失败不遮终态——status 仍如实 */ }
-              return { run_id: runId, status: 'completed', ...snapTokens, ...(outputs ? { outputs } : {}), restored_from_snapshot: true };
+                const states = (JSON.parse(readFileSync(join(instDir, 'state.json'), 'utf-8')) as { step_states?: Record<string, string> }).step_states ?? {};
+                const nonTerminal = (specData.steps ?? [])
+                  .filter(t => !['done', 'failed', 'skipped'].includes(states[t.step_id] ?? 'pending'))
+                  .map(t => t.step_id);
+                if (nonTerminal.length > 0) {
+                  inconsistency = `terminal_state=completed 但顶层步 ${nonTerminal.join(', ')} 仍未终态——完成标记与步骤态不一致：疑快照被盘外改写或回放重建,产出可能不完整,建议人工核对步骤集与交付物后处置（引擎不擅自清标记——自动翻 running 会重派已清账的步骤）`;
+                }
+              } catch { /* outputs/一致性核失败不遮终态——status 仍如实 */ }
+              return { run_id: runId, status: 'completed', ...snapTokens, ...(outputs ? { outputs } : {}), ...(inconsistency ? { inconsistency } : {}), restored_from_snapshot: true };
             }
             if (st.terminal_state === 'failed') {
               return { run_id: runId, status: 'failed', ...snapTokens, ...(st.terminal_failure ? { failure: { step_id: st.terminal_failure.stepId, reason: st.terminal_failure.reason } } : {}), restored_from_snapshot: true };
@@ -894,16 +906,25 @@ export class HopjitMcpCore {
     // 有在飞 call 时附全链——递归子树烧到哪层哪步实时可见;无在飞 call 缺席（向后兼容）。
     // @a: anc-mcp-run-status-inflight
     const callChain = entry.state === 'running' && typeof entry.dispatcher?.getCallChain === 'function' ? entry.dispatcher.getCallChain() : [];
+    // completed 一致性核（hopissues/0093 注册表命中半边——与快照兜底路径同判据同字段;
+    // engine 在场直调检测器）。// @a: anc-exec-completed-consistency
+    const liveInconsistency = entry.state === 'completed' && typeof entry.dispatcher?.getEngine === 'function'
+      ? entry.dispatcher.getEngine().detectCompletedInconsistency?.() ?? null : null;
+    // 实例峰值上下文水位透出（^anc-exec-ctx-watermark——0095 看护与人一眼可见"往墙上走"）
+    // @a: anc-exec-ctx-watermark
+    const ctxWatermark = typeof entry.dispatcher?.getCtxWatermark === 'function' ? entry.dispatcher.getCtxWatermark() : 0;
     return {
       run_id: entry.runId,
       status: entry.state,
       ...(tokens > 0 ? { cumulative_tokens: tokens } : {}),
+      ...(ctxWatermark > 0 ? { ctx_watermark: ctxWatermark } : {}),
       ...(callChain.length > 0 ? { call_chain: callChain } : {}),
       ...inflightView,
       ...queueView,
       ...(entry.paused ? { paused: entry.paused } : {}),
       ...(entry.outputs ? { outputs: entry.outputs } : {}),
       ...(entry.failure ? { failure: entry.failure } : {}),
+      ...(liveInconsistency ? { inconsistency: liveInconsistency } : {}),
     };
   }
 

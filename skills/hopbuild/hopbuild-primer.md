@@ -547,13 +547,13 @@ Tools:
   > ```
 ```
 
-❌ **反例：body 里现场发明宿主语言形态**——把 Python 的 `try/except`、`with open(...)`、方法调用链 `s.strip().split()` 这类写法照搬进 body（hop_python 没有异常捕获、没有上下文管理器；字段链上的**方法调用**被禁——字段取 `obj.field` 是合法的，禁的是 `obj.method()`）。注意两个曾被本反例误伤的合法形态：`subprocess.run(命令列表, cwd: 目录)` 是引擎认字面的内置特例（带具名参数专项拦，见 subprocess 节），`result.returncode` 是合法字段取（本文 returncode 检查纪律节正教它）——本反例拦的是这两者之外的宿主形态发明。危险在于部分未知名字 validate 可能只 warn 不拦（B2 对两份内置名单外的名字视为外部工具），真跑执行期才炸。写不出合法签名=这个外部服务还没进 Tools 段，回对齐门补声明，不要在 body 里编。
+❌ **反例：body 里现场发明宿主语言形态**——把 Python 的 `try/except`、`with open(...)`、方法调用链 `s.strip().split()` 这类写法照搬进 body（hop_python 没有异常捕获、没有上下文管理器；字段链上的**方法调用**被禁——字段取 `obj.field` 是合法的，禁的是 `obj.method()`）。注意两个曾被本反例误伤的合法形态：`subprocess.run(命令列表, cwd: 目录)` 是引擎认字面的内置特例（带具名参数专项拦，见 subprocess 节），`result.returncode` 是合法字段取（本文 returncode 检查纪律节正教它）——本反例拦的是这两者之外的宿主形态发明。危险在于部分未知名字 validate 在 act/check 步只 warn 不拦（B2 视为外部工具;commit 步未声明的会 error 拒载——0089 批升档），真跑执行期才炸。写不出合法签名=这个外部服务还没进 Tools 段，回对齐门补声明，不要在 body 里编。
 
 **生成模板 D（宿主命令类不可逆动作：subprocess.run + commit + 命令白名单）**——提交动作是"SSH 到目标机执行脚本/擦盘重装/跑部署命令"这类**本质是一串 bash 命令**的现场操作时。这类动作不进 Tools 段（它不是外部服务是命令行），正门是引擎内置的 `subprocess.run`——签名恒定（命令与参数装进 argv 列表），命令名须在项目配置 hopjit.yaml 的 `commands:` 白名单里（研发阶段可在白名单放宽口先跑起来,生产收敛为具名清单——配置项就是开关）。三拍：
 
 1. 现场裁量的部分（探测目标机、按现场选参数）**前置 act 步备成变量**——commit body 不做判断只做执行；
 2. commit body 用 `subprocess.run` 写下完整的命令序列（写规约时就确定,执行时照跑）,**每跑完一条命令就检查它的 returncode,非零就停下**——不检查的话前面的命令失败了后面的照跑,产出会谎报成功;失败要写进产出值,不许静默；
-3. **部署前提随交付写明**：产物用到的命令名逐个列出+指引用户加进 hopjit.yaml `commands:` 白名单——研发阶段可宽口（直接放行 `bash`/`ssh`，一切现场命令经它跑，先跑起来）；生产收敛为逐个具名命令（把 bash/ssh 从名单撤下），管控从"全开"收到"点名"，spec 一字不改只动配置。
+3. **部署前提随交付写明，命令依赖双落点**：产物用到的命令名逐个列出——写进产物 Config 段的 `requires_commands:` 键（引擎启动时自动对账宿主白名单，缺配置在进步骤之前就拦下带指路，比运行期撞墙早得多也好修得多）+散文指引用户加进 hopjit.yaml `commands:` 白名单——研发阶段可宽口（直接放行 `bash`/`ssh`，一切现场命令经它跑，先跑起来）；生产收敛为逐个具名命令（把 bash/ssh 从名单撤下），管控从"全开"收到"点名"，spec 里的 requires_commands 声明与步骤一字不改只动宿主配置。
 
 ```markdown
 7. [commit] 在目标机执行铲除脚本
@@ -568,9 +568,15 @@ Tools:
 
 **环境变量注入的写法**（原文常见 `export VAR=... && node ...` 形态,而 subprocess.run 签名无 env 形参）：用 `env` 命令前缀 `subprocess.run(["env", "VAR=value", "node", "script.js"], ...)`——此时 argv[0] 是 `env`,白名单要把 `env` 和真命令（node）都加上,部署前提清单里两个都列并注明为什么。这是当前的绕行正形;若语料频繁撞此形态,引擎补 env 形参是候选(记台账呈引擎侧)。
 
+**文件态环境注入必须显化**（hopissues/0090 P4 实撞:一整条发布链因此挂掉）：原文是 bash 流程时常见 `source env.sh` 把一批阶段变量灌给后续命令（`source env.sh && designer-ctl gate ...`——被调脚本从环境变量里读这些值）。hop 的 subprocess.run 不传环境变量（设计纪律:外部状态以文件为载体传子进程,保重放确定性）,直接照搬调用就是断桥——子进程读到的全是空值,而且失败发生在下游脚本深处,离病根很远（实撞:gate 命令读不到阶段变量→不写发布凭证→计时收口报"凭证缺失"→发布链整条挂,宿主顺着报错查了一整条链才回溯到 `source` 在翻译时蒸发了）。翻译时两件必做：①识别"`source <文件>` 注变量供后续命令消费"套路,在产物的部署前提清单里显化一条"某某命令运行期依赖 <文件> 的文件态注入",把它注入的变量名列出来;②给出桥接约定——与用户对齐"被调命令自读该文件"（改命令入口自举读取,最彻底）,做不到就在步骤说明里写明该文件是命令的运行期配置、宿主部署时必须保证命令进程能读到这些值。静默照搬 = 把断桥留给宿主真跑撞。
+
+**中间产物落点恒用 work_zone_path()**（hopissues/0090 P5 实撞）：原文 bash 套路"子进程把中间产物写到某个目录,后续步骤再读回"搬进 hop 时,落点必须对齐涂鸦区——`out_path = work_zone_path("名字")` 生成路径,子进程经参数（如 `--output <out_path>`）写它,后续 `read(path: out_path)` 读回。照抄原文的绝对路径落点（如 `env.checklist_dir + "/..."`）,子进程写得进去（命令通道不受文件沙箱管）,但内置 read 读不回来——绝对路径禁令只豁免涂鸦区,读回那步必死且反复 retry（写成功读失败,现象离病根隔一步,很难一眼看出是落点问题）。判据一句话：凡是"这一步写、后面步骤读"的中间文件,路径一律 work_zone_path() 生成;只有要交付给用户的最终产物才落 workspace 相对路径。
+
 **外部脚本的退出码语义先核后用**（实撞:通知脚本是 best-effort 设计——凭据缺失/HTTP 失败/网络异常一切路径都 exit(0),spec 按"退出码非零记失败"判定,结果一切失败都被记成已发送,唯一产出必失真）：body 依赖 subprocess.run 的 returncode 判成败时,先读一眼被调脚本的退出码语义（grep sys.exit / exit 即可）——恒退 0 的 best-effort 脚本,改从 stdout 的成功标志判（如"推送成功"字样）,或在台账记"脚本退出码不可判成败"呈裁;语料脚本的行为不擅自改,判定通道选对即可。
 
 **写死还是留活的判据**：问"写这份规约的时候,命令序列能不能完整确定"——命令/参数/顺序都不依赖执行现场才知道的信息 → **写死进 body**（写死是白赚的确定性）;要先探测现场状态才知道跑什么、或按上一拍输出决定下一拍 → **留活落 `[act free]`**（act free 本来就是给尝试性执行的合法形态,不是降档）,但留活的不可逆动作前面必须有闸门（confirm 人审或 check）看住,并记台账说明为什么定不死。**高频场景直接给指导**:同类留活场景在语料里反复出现时（如"SSH 到目标机按现场排障"）,把该场景的作业要点写进步骤说明或抽知识文档 doc-ref——留活不等于零指导,说明写得越具体执行期漂移越小。
+
+**原文的祈使命令句是步骤,不是可略过的散文**（hopissues/0091 实撞:同模板一对 stage 只译了一边）：原文 prompt 里"阶段开始前先执行 `xxx timer init`""写完执行 `xxx timer finalize`"这类祈使句,必须译成 act/commit 步里的 subprocess.run 调用,不许当成叮嘱性散文略过——尤其当下游脚本硬消费它的副作用时（实撞形态:发布脚本读 timer init 写的凭证字段,缺了直接报错退出;收口脚本不被调,任务状态永远停在进行中、通知不发）。两个判据：①句式是"执行某命令"且 argv 完整写得出来 → 它就是一个步骤,漏译=功能蒸发;②拿不准某句祈使是不是硬依赖,查下游有没有谁消费它的产物（grep 它写的文件/字段被谁读）——有消费者的祈使句漏译,失败会发生在离病根很远的下游,宿主排障代价极高。
 
 试错/中间产物用 act：
 ```markdown
@@ -637,7 +643,7 @@ hop_python 是 HopSpec 内嵌的确定性小语言——**Python 语法的一个
 
 **② 内置文件十一件**（恒可用零声明,有副作用故只在 body 不在 case 条件）：`read(path:, start_line?:, end_line?:)/write(path:, content:)/append(path:, content:)/edit_file(path:, old_text:, new_text:)/search_file(path:, pattern:)/exists(path:)/listdir(path:)/create/makedirs(path:)/move/remove`。read 带行号参数只取那一段（1 起,end 越界截尾）;search_file 单文件子串搜索返回命中行清单 JSON 文本（行号 1 起,零命中空列表——同 exists 须 parse_json 再用）。**exists/listdir 返回 JSON 文本不是结构值**——`parse_json(exists(path: p)).exists` 包裹后取字段,裸取下标是在字符串上取下标运行期炸（工具速查表逐件标注了哪些返回 JSON 文本）。**解开后的字段名**:listdir 条目是 `{name, type}`（type 取值 file/dir——判文件用 `e.type == "file"`）;exists 返回 `{exists, type}`。字段名不要凭感觉猜——实撞:凭直觉写了不存在的字段名,缺键取 None 恒假,过滤结果恒空,真机产出必坏而 validate 全绿;路径按 workspace 相对解析,绝对路径被沙箱拒（唯一豁免:work_zone_path() 取的涂鸦区路径）。**要读 workspace 外的绝对路径时**（如用户给的输出目录/系统位置文件）：内置 read 没有这个能力,正门是 `subprocess.run(["cat", 绝对路径])`（cat 进 commands 白名单,列入部署前提清单）——这不是绕行是设计边界:内置文件件的沙箱语义就是"workspace 内+涂鸦区",越界读写显性走命令通道让白名单管控;写侧同理（workspace 外写盘走命令通道且必须在 commit 步）。
 
-**③ 外部命令与声明工具**：跑命令行的唯一正门是 **`subprocess.run(argv, input?, timeout?, cwd?)`**——写法同 Python（argv=命令与参数一个列表,不经 shell 零注入面）,返回 `{stdout, stderr, returncode}` 结构值,**命令名必须在项目 sandbox.runtime.available 白名单内**（名单外运行期拒;这是显性化管控的设计本意——不要教产物用宿主 Bash 绕）;命令失败不炸步,`returncode` 是返回结构里的一个值——每跑完一条命令就检查它,非零按失败处置并写进产出。Tools 段声明过的外部工具按签名调用（`db_import(package_dir: d)`）。这三类之外的名字一律不可调——validate 的 B2 对未知名字只 warn"运行期对照清单"不拦,写不出合法调用=该能力没进 Tools 段,回对齐门补声明,不在 body 里编。
+**③ 外部命令与声明工具**：跑命令行的唯一正门是 **`subprocess.run(argv, input?, timeout?, cwd?)`**——写法同 Python（argv=命令与参数一个列表,不经 shell 零注入面）,返回 `{stdout, stderr, returncode}` 结构值,**命令名必须在项目 sandbox.runtime.available 白名单内**（名单外运行期拒;这是显性化管控的设计本意——不要教产物用宿主 Bash 绕）;命令失败不炸步,`returncode` 是返回结构里的一个值——每跑完一条命令就检查它,非零按失败处置并写进产出。Tools 段声明过的外部工具按签名调用（`db_import(package_dir: d)`）。这三类之外的名字一律不可调——validate 的 B2 对未知名字分步骤类型处置:act/check 步 warn"运行期对照清单"不拦;**commit 步且 Tools 段未声明的直接 error 拒载**（不可逆步不接受野函数名,0089 实撞升档）,写不出合法调用=该能力没进 Tools 段,回对齐门补声明,不在 body 里编。
 
 ### 样例（三类调用各一瞥）
 

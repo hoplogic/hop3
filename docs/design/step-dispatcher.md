@@ -35,6 +35,7 @@
 | 独立模式真并行 | 契约 | `anc-exec-standalone-parallel` |
 | impl execute_step | 说明 | — |
 | lack_of_info 知识补充路径 | 说明 | — |
+| 节点级工具授权分档下发 | 契约 | `anc-step-tool-grant` |
 | reason 步工具面（standalone） | 契约 | `anc-exec-reason-tools` |
 | 工具故障自报通道（reason+无 body act 的 tool_failure） | 契约 | `anc-exec-tool-failure-report` |
 | ~~doc-ref 文档引用解析~~（已抽出 [[doc-ref]]） | — | `anc-exec-doc-ref-resolve` 迁 doc-ref.md |
@@ -53,13 +54,14 @@
 | 多模型路由 | 契约 | `anc-exec-model-routing` |
 | 路由解析 | 契约 | `anc-exec-model-resolve` |
 | 成本护栏 | 契约 | `anc-exec-cost-guardrails` |
+| 上下文水位观测告警 | 契约 | `anc-exec-ctx-watermark` |
 | 输出预算解析 | 契约 | `anc-exec-output-budget` |
 
 > 跨文档引用 `^anc-exec-mode-invariants`（[[../concepts/HopSpec V3配套HopJIT运行时能力]]）是 link 不是本文定义锚点。
 
 ## 定位【契约】 ^anc-struct-step-dispatcher
 
-> **模块版本**：step-dispatcher `v0.23.0`（2026-09-05）。本版新增 call callee 位插值解引用契约（^anc-step-call-dynamic-callee,todo/0066——resolveCalleeId 公共件/三消费点/非空字符串收紧/寻址政策零开口/executor 教学落 L0）。上版（v0.22.0）节点级工具禁用下发过滤契约（^anc-step-tool-deny,与 edit_file 同批）。前版（v0.21.0）工具循环上下文压缩降级（0070:撞墙预检+补救两档任务相关摘要压缩/二次撞墙 CONTEXT_OVERFLOW 前缀入确定性口袋）。0.x 未承诺稳定。独立模式驱动适配层；复用模式不经本模块）。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
+> **模块版本**：step-dispatcher `v0.25.0`（2026-09-17）。本版 THINKING_EXHAUSTED 变招重试（^anc-exec-thinking-exhausted 三批——检出记名步号,该步后续重试轮 thinking 强制 disabled;R4 实撞同 run 13 次烧满 65535 正文全空 ≈85 万纯废,免预算重试无变招同型反复撞）。上版 v0.24.0 新增成本护栏第 5 机制——实例级上下文体量观测与软阈值告警（^anc-exec-ctx-watermark,hopissues/0095——长转录 150K+ 延迟超线性恶化撞超时墙全程零观测;峰值水位入账 hoplog/run_status+双档 warn+超时重试水位提示,纯观测加法零语义变更）。上版（v0.23.1）补 ^anc-step-tool-grant 设计侧锚定义节（0088 批清 0054 批挂账——内容收拢自 spec-parser 版本行文法半边与本文档消费面,TRACEABILITY ⚠ 注记随清）。上版（v0.23.0）新增 call callee 位插值解引用契约（^anc-step-call-dynamic-callee,todo/0066——resolveCalleeId 公共件/三消费点/非空字符串收紧/寻址政策零开口/executor 教学落 L0）。上版（v0.22.0）节点级工具禁用下发过滤契约（^anc-step-tool-deny,与 edit_file 同批）。前版（v0.21.0）工具循环上下文压缩降级（0070:撞墙预检+补救两档任务相关摘要压缩/二次撞墙 CONTEXT_OVERFLOW 前缀入确定性口袋）。0.x 未承诺稳定。独立模式驱动适配层；复用模式不经本模块）。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
 
 **① 自身定位**：StepDispatcher 是独立模式的驱动适配层（TypeScript 模块，文件 `src/dispatcher.ts` + `protocol-openai.ts`）——负责**调度循环**（init → next → execute → done → repeat）和**单步执行**（按步骤类型分派，经协议适配层调 LLM API——anthropic/openai 双协议，见 ^anc-exec-protocol-adapter；工具循环当下仅 anthropic）。它是 HopJIT"自带执行能力"的承载者：复用模式把执行能力交给 caller（CC），独立模式则由本组件自己调模型执行。
 
@@ -757,6 +759,14 @@ handle_lack_of_info(step_id, lack_of_info, context, knowledge_provider?):
 
 **与 subtask retry 的区别**：lack_of_info 补充检索是步骤级的"微重试"——以 lack_of_info 描述为针对性 query 检索，注入后重试同一步骤。subtask retry 是容器级的——重跑所有 children，不感知 lack_of_info 的具体原因。
 
+## 节点级工具授权的分档下发【契约】 ^anc-step-tool-grant
+
+概念权威 [[../concepts/HopSpec V3核心规范#^anc-step-tool-grant]]。设计层此前无本锚定义（内容散在 spec-parser 版本行〔`- 工具:` 行收取文法〕与本文档 ^anc-exec-reason-tools 节〔消费面〕,TRACEABILITY 卡自 0054 批起挂 ⚠ "设锚补齐归 0054 批主"——2026-09-12 0088 批补齐,本节为设计侧锚定位点）：
+
+- **分档判据**：basic 族（文件读写十一件+spec 内容族六件）恒下发零声明;special 族（tools_available 注册的外部件）按节点 `- 工具: 名  # 意图` 声明行下发——无声明即不在该步工具面（合规空转是最难发现的失效形态,声明行是防线）;
+- **文法收取归 [[spec-parser]]**（`- 工具:`/`- tools:` 同义、每行恰一名、`*` 全量、仅 act/reason 步收——版本行沿革有账）;**下发过滤归本文档**（消费点两处:无 body act 的工具循环与 reason 步工具面 ^anc-exec-reason-tools,禁用半边见 ^anc-step-tool-deny——授权/禁用两行对称,同名冲突写时拒）;
+- requires_commit=true 件恒不下发（"不能 commit 写"——list 期过滤,^anc-exec-reason-tools 承载）。
+
 ## reason 步工具面（standalone）【契约】 ^anc-exec-reason-tools
 
 概念权威 [[../concepts/HopSpec V3核心规范#^anc-step-tool-grant]]（2026-09-01 作者拍"所以应该给 reason 提供文件工具""等同于 act 的能力，不能 commit 写"）。缘起：anchor-audit spec standalone 化六跑，第六跑死在 4.2——reason 步要读盘上 cross_compare_results.yaml，standalone reason LLM 零工具面判不了（no knowledge provider）；5.2.1.1（逐锚点读源文件判定）/6.1（逐批读盘统计）同形态。复用模式执行者（CC/Codex）天然带工具面，reason 用文件/检索是常态——standalone 的 reason 与它能力不对等，同一份 spec 两模式一活一死。
@@ -1148,7 +1158,7 @@ LLM 第三种高频形态："[thinking] 思考散文＋**裸 YAML 键值块**（
 **烧穿疑似反刍,报文分流+留档线下（hopissues/hoplogic3/0060,2026-09-01 作者定轻量案"thinking 爆了直接报 thinking 异常,可能是反刍,留档线下分析即可"——弃流式检测〔动非流式既有架构不值〕;2026-09-02 二批重修:reopen 主诉 in-band 形态+留档静默失效+确定性口袋漏配+死站点删除+封顶口径写实,五面一批）**：两个截断站点（parseStepOutput 主闸、replan 流水线段）在抛错前做零成本判定,命中两形态之一即报文换 `THINKING_EXHAUSTED` 前缀并留档：
 - **形态①正文全空**（thinking 通道烧穿——预算全烧推理块,零可见产出）：`stop_reason=max_tokens` 且可见正文 text 为空/全空白;
 - **形态②正文高重复（in-band 反刍,二批扩——reopen 主诉）**：正文非空,但尾窗重复度越阈——非思考模式模型把反刍循环写在可见正文里（hopkb r21 实录:deepseek-v4-flash "让我重新审视" 1330 次灌满 65536,首批只判①把它放走照旧教"调大上限"）。判据=零成本纯字符串统计（`isHighlyRepetitive`）:尾窗 4000 字符按 32 字符切片,统计切片在其之前文本已出现的比率,>50% 判高重复;阈值保守（实录形态数量级越阈）,长排版正文不误触（反例钉）;常数权威=代码,本条款记语义。
-两形态报文各自写实（①"正文为空"/②"正文被高度重复的循环文本填满〔in-band 形态〕"）,共同尾句:可能是思维反刍循环（常见诱因:判据/约束互相矛盾制造两难）,全文已留档 hoplog,调大上限对反刍无效。**有 tool_use 块恒不碰**（产工具参数被掐非反刍）;**工具循环轮不设分流站**（二批删——该站前提 hasToolUse=true 而分流对 tool_use 恒不碰,调用结构性空转;终轮无 tool_use 响应归 parseStepOutput 闸接住,覆盖面无洞）。正文非空且不重复的截断照旧 OUTPUT_TRUNCATED（真超限,指路调参对症）。**留档**：命中时响应全部内容块可见序列化全文经 `HopLog.recordRuminationSuspect` 落**文档级顶层块**（不过孤儿守卫——命中时点在截断抛错前,步级归属不可靠;二批修:首批经 recordStepMeta 传空步骤号被孤儿守卫拒收,留档静默失效而报文谎称已留档,mock 测试无守卫假绿未抓,review 探针实证）;**每 dispatcher 实例留档上限 5 份**（二批口径写实——父与 parallel 各子实例各自计,子实例写各自 hoplog 按文件计;超出只记一行计数 warn 不存全文;防连环反刍灌爆）。**报文尾句如实跟随留档实况**（三分支:已留档/封顶未存〔指路前 5 份〕/hoplog 未开启未留档——报文不许在未留档路径上谎称已留档,首批同病阅卷实抓）。**失败语义 deterministic**：THINKING_EXHAUSTED 前缀入 engine 确定性判据（二批补——首批只写承诺未配判据,实走满阶梯重试,反刍场景每轮烧满上限,review TE-2 实抓）,同输入重发大概率原样反刍,不烧重试预算。**不做引擎侧自动反刍终判**——报文只说"可能",是不是反刍归线下人对着留档判;重复度判据是分流触发器不是终判。 ^anc-exec-thinking-exhausted
+两形态报文各自写实（①"正文为空"/②"正文被高度重复的循环文本填满〔in-band 形态〕"）,共同尾句:可能是思维反刍循环（常见诱因:判据/约束互相矛盾制造两难）,全文已留档 hoplog,调大上限对反刍无效。**有 tool_use 块恒不碰**（产工具参数被掐非反刍）;**工具循环轮不设分流站**（二批删——该站前提 hasToolUse=true 而分流对 tool_use 恒不碰,调用结构性空转;终轮无 tool_use 响应归 parseStepOutput 闸接住,覆盖面无洞）。正文非空且不重复的截断照旧 OUTPUT_TRUNCATED（真超限,指路调参对症）。**留档**：命中时响应全部内容块可见序列化全文经 `HopLog.recordRuminationSuspect` 落**文档级顶层块**（不过孤儿守卫——命中时点在截断抛错前,步级归属不可靠;二批修:首批经 recordStepMeta 传空步骤号被孤儿守卫拒收,留档静默失效而报文谎称已留档,mock 测试无守卫假绿未抓,review 探针实证）;**每 dispatcher 实例留档上限 5 份**（二批口径写实——父与 parallel 各子实例各自计,子实例写各自 hoplog 按文件计;超出只记一行计数 warn 不存全文;防连环反刍灌爆）。**报文尾句如实跟随留档实况**（三分支:已留档/封顶未存〔指路前 5 份〕/hoplog 未开启未留档——报文不许在未留档路径上谎称已留档,首批同病阅卷实抓）。**失败语义 deterministic**：THINKING_EXHAUSTED 前缀入 engine 确定性判据（二批补——首批只写承诺未配判据,实走满阶梯重试,反刍场景每轮烧满上限,review TE-2 实抓）,同输入重发大概率原样反刍,不烧重试预算。**不做引擎侧自动反刍终判**——报文只说"可能",是不是反刍归线下人对着留档判;重复度判据是分流触发器不是终判。**变招重试:检出即记名,该步后续重试轮 thinking 强制 disabled（三批,2026-09-17 R4 实撞——同一构建 run 内 THINKING_EXHAUSTED 13 次×烧满 65535 正文全空 ≈85 万纯废 token:免预算重试保住了预算账,但重试请求与首跑参数完全同源〔resolveModel 无 per-retry 覆盖〕,反刍绑定输入形态,同型请求反复撞;check 判官步恒不吃 L5 重试反馈〔A 案〕,其重跑是逐字节同输入,不变招=保证再反刍）**：dispatcher 持步号集合,checkThinkingExhausted 命中且有步号即记名;buildApiRequest 装配时步号在册 → thinking 强制 `{type:'disabled'}`（覆盖 route 声明与端点缺省——正文都写不出来时先降档保底拿产出,推理质量其次;deepseek anthropic 协议端点两值实测认,openai 协议 thinking 参数本就静默丢弃零影响）。记名 sticky 到 dispatcher 实例生命周期(该步此后恒降档——反刍绑定的是该步的输入形态,形态不随轮次变);replan 流水线段无步号不记名(自有 ADAPTIVE_PIPELINE 通道)。act 工具循环 thinking:disabled 打转的 2026-08-20 反证不与本条冲突——那是"全程禁"的路由配置面,本条是"烧穿后的止损降档",前提已是该步带 thinking 跑不出正文。 ^anc-exec-thinking-exhausted
 
 **单输出自标注剥壳** ^anc-exec-output-parse-self-labeled
 
@@ -1712,3 +1722,15 @@ execute_step_with_timeout(next_resp, timeout_seconds?):
 5. **tool_use loop 中超时**：已执行的工具调用结果保留（已写入 messages），未执行的丢弃。超时后不回滚已完成的工具副作用
 
 **与暂停等待的区别**：per-step timeout 只作用于**步骤执行期**（LLM 调用/工具循环），统一走 fail_step；暂停等待（confirm/ask paused）**无超时概念**（见 `^anc-exec-pause-timeout`），永久有效。
+
+### 5. 实例级上下文体量观测与软阈值告警 ^anc-exec-ctx-watermark
+
+**为什么（hopissues/0095 实测定论,2026-09-16 作者拍"再等着卡死?"）**：长转录任务的输入上下文与单轮延迟超线性恶化——实测 140K 时单轮 3-4 分钟,150-165K 升到 8-16 分钟,170K+ 飙到 25 分钟直至 62 分钟服务端超时零产出死亡。恶化全程引擎零观测：hoplog 只记 per-step 的 input_tokens,没有"这个实例正在往墙上走"的累计视图与告警,只能事后尸检。机制 2（全局预算）管的是费用总量不管单实例体量;工具循环压缩降级（v0.21.0 两档）管的是单步内 messages 撞模型窗,不管跨步的转录膨胀——本机制补的是**实例级水位线**这一层。
+
+**做什么（三件,全部纯观测加法,零执行语义变更）**：
+
+- **① 实例级峰值输入水位入账**：每次 LLM 调用后,以该次请求的完整输入体量（`usage.input_tokens + cache_read_input_tokens + cache_creation_input_tokens`——三项合计=模型真实吃进的上下文,单看 input_tokens 会被缓存命中掩住真实体量）更新本实例的**峰值水位** `ctx_watermark`（Dispatcher 实例字段,取历史最大值——转录式任务水位单调升,取 max 对非单调形态也稳健）。落账两处：hoplog 每步 llm 块加 `ctx_input_total` 字段（当次请求实际值,与既有 input_tokens/cache_* 并排）;实例终态/暂停响应加 `ctx_watermark`（与 cumulative_tokens 并排透出,run_status 可见）。
+- **② 软阈值告警**：`resource_limits.max_context_tokens` 有配置时,水位首次越过其 0.75 倍 → 经既有 pendingWarns 通道随当步落一条 warn（形态:"实例上下文水位 <水位>K 已越 max_context_tokens 的 75%（<阈值>K）——长转录延迟将超线性恶化,考虑拆步或收敛材料",0095 曲线为据）;首次越过 1.0 倍 → 再落一条升级措辞的 warn。**每档只告警一次**（水位单调,重复告警是噪声）。不配置 max_context_tokens 则本告警静默（与预检档同一开关哲学——向后兼容,零新配置键）。
+- **③ 超时重试耗尽时的水位提示**：callLlmWithRetry 对 `timeout` 类错误重试耗尽（各档退避走完仍败）抛 NETWORK_ERROR 时,若实例水位已越 ②的 75% 线,错误文案追加水位提示（"输入 <N>K 已近上下文告警线,超时与体量相关的概率高——重试大概率同因,考虑拆步"）——逐次重试期间照旧安静退避不出声,网络瞬断（network 类）耗尽也不带提示,只有 timeout×体量双嫌疑时提示。**不做自动截断/自动放弃**（语义决策,不属观测批;0095 卡期望行为③的激进半边另议）。
+
+**边界**：观测点在 callLlmWithRetry 成功/失败两侧（发送口事实边界,^anc-obs-record-at-boundary 同律——记实际请求的 usage,不在意图层估算）;复用模式不经本模块,caller 侧转录观测归 caller 生态（^anc-obs-mode-boundary 同界）;水位不入 state.json 快照（观测态非执行态,resume 后从零重累,峰值账在 hoplog 恒可溯）。

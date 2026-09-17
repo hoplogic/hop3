@@ -192,11 +192,21 @@ struct: VarDecl
 struct: SpecConfig
   Id: spec-config
   Fields:
-    - max_depth: number              # 可选。call 深度限制，默认 10
-    - max_retries: number            # 可选。全局 retry 上限，默认 3
+    - max_depth: number              # 可选。call 深度限制，默认 10（声明在场,运行时零消费——随将来需求再接,教学面勿列）
+    - max_retries: number            # 可选。全局 retry 上限，默认 3（同上,零消费）
     - model: line                    # 可选。Spec 级默认模型（格式: service/model，覆盖全局 ModelEngine.default）
+    - models: yaml                   # 可选。按步骤类别分档路由（reason/act/check/commit 各可指一档;权威 [[step-dispatcher#^anc-exec-model-routing]]）
+    - expansion_max: number          # 可选。subtask free 展开总数上限（缺省 20;权威 [[exec-engine]] ^anc-exec-subtask-free-expand 契约7）
+    - engine_min_version: line       # 可选。引擎最低版本闸（权威 [[exec-engine#^anc-exec-engine-min-version-gate]]）
+    - requires_commands: [line]      # 可选。body 依赖的本地命令声明（权威 [[exec-engine#^anc-exec-requires-commands-gate]]）
     - ...: yaml                      # 扩展配置项（任意键，值型 unknown）
 ```
+
+**引擎消费键清单同源【契约】**（2026-09-15 作者抓工程链脱节后立——expansion_max/engine_min_version/requires_commands 三个键先后落到设计+代码+测试三层而概念层零条款,半个多月无人发现;病根:Config 扩展键经索引签名消费,加键零编译约束,概念层是否记载纯靠人自觉）：
+
+- **单一事实源**：`src/ast-types.ts` 导出常量 `ENGINE_CONFIG_KEYS`——引擎真消费的 Config 键全清单（新增引擎消费键必须入列;声明在场但零消费的键〔max_depth/max_retries〕不入列不入教学面）;
+- **守卫双向核**（tests/config-keys-doc-sync.test.ts,npm test 内常驻）：①清单→文档:清单每键在概念层语法参考的记载面在场——判据是**名字边界正则**（键名前后都不是标识符字符才算在场,防 model 被 models 的记载子串吞并假绿——立守卫批阅卷实锤裸子串判在 model 键上实质失效后改定;从宽面保留:不限定出现位置与包裹形态,记载质量归语义审计）,缺即红点名键与文件;②代码→清单:扫 src/*.ts 的 `config?.['键']`/`specConfig?.['键']` 索引消费形态（键名限 ASCII 标识符——注释里的中文示例字样不是真键）,提取键不在清单即红——经索引通道加新消费键,不登清单+不写概念层就过不了机检。**扫描面边界如实记**:具名字段属性访问（如 `specConfig?.model`）不在扫描面——具名字段有 tsc 管类型,概念层记载靠"入清单三件同批"纪律与本条①兜（新键若加成 SpecConfig 具名字段走属性访问,②的机检承诺不覆盖它）;上方 struct 把五消费键都列成具名字段是**文档视图**,TS 接口实况是 model/max_depth/max_retries/expansion_max 四个具名+其余走索引签名——struct 按语义完整列,TS 按消费通道选形态,两者不同步是设计使然;
+- **为什么钉概念层不钉设计层**：设计先行有 check-design-first 机检守,历次批次设计层从未漏;脱节恒发生在概念层（受控快照,误解为"只有 vault 演进才动"）——守卫对准实际出血点。 ^anc-ast-config-keys-doc-sync
 
 TypeDecl 的 v1 output_schema 校验策略（见关键决策四）：基础类型（text/bool/line/number/[line]）做值类型检查；enum(...) 做值属于枚举成员检查；自定义 TypeDecl 仅验证字段名存在性（fields 键子集检查），不做递归类型匹配。v1 不支持嵌套 TypeDecl 引用校验：fields 值为自定义类型名时（如 "AddressType"），v1 不递归解析，视同 any。v2+ 可引入完整的递归类型校验。
 

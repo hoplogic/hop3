@@ -1287,7 +1287,8 @@ export function buildCarrierCommand(scenario, options = {}) {
     args.push(
       '--enable', 'multi_agent_v2',
       '-c', 'agents.enabled=true',
-      '-c', 'features.multi_agent_v2.non_code_mode_only=false',
+      // 委派指令要求直接调用，不能藏进 functions.exec（Codex 0.154.0 请求对照，todo/0094）。
+      '-c', 'features.multi_agent_v2.non_code_mode_only=true',
       '-c', 'features.multi_agent_v2.tool_namespace="agents"',
     );
   }

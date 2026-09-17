@@ -61,7 +61,7 @@ export interface VarDecl {
   description?: string;
 }
 
-/** SpecConfig：Config 段配置项——models 类别分档/model 单默认（引擎真消费的两键）;max_depth/max_retries 已声明但运行时零消费（call 盘点判"随将来需求再接",教学面勿列——2026-08-13 配置参考实撞）。允许扩展键。见 [[spec-ast#^anc-ast-spec-header]] */
+/** SpecConfig：Config 段配置项——引擎真消费键的全清单=ENGINE_CONFIG_KEYS（同文件下方,单一事实源）;max_depth/max_retries 已声明但运行时零消费（call 盘点判"随将来需求再接",教学面勿列——2026-08-13 配置参考实撞）。允许扩展键。见 [[spec-ast#^anc-ast-spec-header]] */
 export interface SpecConfig {
   max_depth?: number;
   max_retries?: number;
@@ -69,6 +69,12 @@ export interface SpecConfig {
   expansion_max?: number; // subtask free 展开总数熔断上限（实例级,缺省 DEFAULT_EXPANSION_MAX;^anc-exec-subtask-free-expand 契约7） // @a: anc-exec-subtask-free-expand
   [key: string]: unknown;
 }
+
+/** 引擎真消费的 Config 键全清单（单一事实源——概念层记载面守卫据此比对,设计权威
+ * [[spec-ast]] ^anc-ast-config-keys-doc-sync）。新增引擎消费键三件同批：入本清单、
+ * 概念层语法参考 Config 区记载、消费点用 config?.['键'] 索引形态（守卫的代码扫描面）。
+ * 声明在场但零消费的键（max_depth/max_retries）不入列。 */ // @a: anc-ast-config-keys-doc-sync
+export const ENGINE_CONFIG_KEYS = ['model', 'models', 'expansion_max', 'engine_min_version', 'requires_commands'] as const;
 
 /** subtask free 展开总数熔断缺省（Config expansion_max 可调——缺省 20:作者定 2026-08-29
  * "实例级 10 可能少了",渐进细化多洞多轮要给跑道）。与类型同居本文件:engine 消费、validator

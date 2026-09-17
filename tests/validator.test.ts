@@ -2500,6 +2500,77 @@ ${steps}`);
 // 如实分层:body=B4 error/present_inputs=P14 error/散文=warn+语义审计终审——文本命中≠消费）=====
 
 // @v: anc-rule-v11
+// V14: Tools 段声明-授权对账（D94 批,作者拍"validate 应该加验证"——声明零消费=工具静默不可见
+// 空转,最难发现的失效形态写时点名。三消费形态全认:授权行/body 直调/通配。） // @v: anc-rule-v14
+describe('V14 Tools 段声明-授权消费对账（warn 档）', () => {
+  const mkT = (toolsSection: string, steps: string) => parseSpec(`# T
+Id: t
+Goal: g
+${toolsSection}
+## Inputs
+- x: line  # in
+## Steps
+${steps}`);
+  const TOOLS = `## Tools
+- ssh_exec(host: line, command: line) -> r: text  # 远程执行`;
+
+  it('反例：声明 ssh_exec 零授权零调用 → V14 warn 点名（实撞形态——声明即空转）', () => {
+    const r = mkT(TOOLS, `1. [act free] 干活
+  - ← x
+  + → out: text  # o
+  > 用 ssh_exec 跑命令`);
+    const hits = validateSpec(r.ast!).filter(e => e.rule === 'V14');
+    expect(hits.length).toBe(1);
+    expect(hits[0].severity).toBe('warn');
+    expect(hits[0].message).toContain('ssh_exec');
+    expect(hits[0].message).toContain('- 工具: ssh_exec');
+  });
+
+  it('正例：声明+步骤授权行 → 零 V14', () => {
+    const r = mkT(TOOLS, `1. [act free] 干活
+  - ← x
+  - 工具: ssh_exec  # 远程跑
+  + → out: text  # o
+  > 用 ssh_exec 跑命令`);
+    expect(validateSpec(r.ast!).filter(e => e.rule === 'V14')).toHaveLength(0);
+  });
+
+  it('正例：声明+body 直调（无授权行）→ 零 V14（body 消费合法形态）', () => {
+    const fence = '```';
+    const steps = [
+      '1. [act] 干活',
+      '  - ← x',
+      '  + → out: text  # o',
+      `  > ${fence}hop_python`,
+      '  > out = ssh_exec(host: x, command: x)',
+      `  > ${fence}`,
+      '2. [check final] 验',
+      '  - ← out',
+      '  + → ok: bool  # 判',
+      '  + → note: text  # 说',
+    ].join('\n');
+    const r = mkT(TOOLS, steps);
+    expect(validateSpec(r.ast!).filter(e => e.rule === 'V14')).toHaveLength(0);
+  });
+
+  it('正例：通配授权 - 工具: * 在场 → 全部声明视为已消费零 V14', () => {
+    const r = mkT(TOOLS, `1. [act free] 干活
+  - ← x
+  - 工具: *  # 全量
+  + → out: text  # o
+  > 干`);
+    expect(validateSpec(r.ast!).filter(e => e.rule === 'V14')).toHaveLength(0);
+  });
+
+  it('正例：无 Tools 段 → 规则静默零 V14', () => {
+    const r = mkT('', `1. [act free] 干活
+  - ← x
+  + → out: text  # o
+  > 干`);
+    expect(validateSpec(r.ast!).filter(e => e.rule === 'V14')).toHaveLength(0);
+  });
+});
+
 describe('V11 叶子输入声明完备性（散文引用 warn 档）', () => {
   const mk = (steps: string) => parseSpec(`# T
 Id: t
