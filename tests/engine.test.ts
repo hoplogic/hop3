@@ -9764,6 +9764,26 @@ describe('hop_env 覆盖链末级（ask 回填）与跨进程持久化', () => {
     expect(r2.status).toBe('ok');
   });
 
+  // @v: anc-step-ask —— ask 应答标量类型归一（2026-09-18:人工/MCP 应答经 JSON 数字常成字符串,
+  // 声明 int 存 "26000" 下游渲染按实际类型走字符串通道,int 字段渲染成多行块自相矛盾）
+  it('正例：ask 声明 int 收 "26000" 字符串应答 → 归一为数字 26000 入库；反例：非数字形字符串保原值不拦（下游 SCHEMA 闸既有通道判）', () => {
+    const { host, dir } = mkHostDir();
+    const spec = `# T\nId: t\n## Goal\ng\n## Outputs\n- r: text  # r\n## Steps\n1. [ask] 确认目标\n  + → target: int  # 周目标\n2. [reason] 用\n  - ← target\n  + → r: text  # r\n`;
+    const engine = new ExecutionEngine();
+    engine.initExecution(spec, host, { stateDir: join(dir, '.hopstate') });
+    engine.nextStep();
+    const r = engine.completeStep('1', { value: '26000' });   // MCP/人工通道典型形态:数字进来是字符串
+    expect(r.status).toBe('ok');
+    expect(engine.getVars().variables['target']).toBe(26000);      // 真数字,非 "26000"
+    // 反例:非数字形保原值(不新增拒收面)
+    const engine2 = new ExecutionEngine();
+    engine2.initExecution(spec, host, { stateDir: join(dir, '.hopstate2') });
+    engine2.nextStep();
+    const rb = engine2.completeStep('1', { value: '两万六' });
+    expect(rb.status).toBe('ok');
+    expect(engine2.getVars().variables['target']).toBe('两万六');
+  });
+
   it('正例：confirm 守界——零业务值 approve 照常通过,不被 ask 零映射闸误伤（P2-6:闸只管 ask 是结构事实,本例钉住防重构漂移）', () => {
     const { host, dir } = mkHostDir();
     const spec = `# T\nId: t\n## Goal\ng\n## Outputs\n- r: text  # r\n## Steps\n1. [confirm] 批准吗\n  + → ok: bool  # 审批槽\n2. [reason] 干\n  - ← ok\n  + → r: text  # r\n`;

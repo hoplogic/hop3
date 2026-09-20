@@ -1,0 +1,3 @@
+shop_name: "莱西咖啡"  
+weekly_target: 26000  
+is_chain: false

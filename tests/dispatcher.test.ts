@@ -1885,6 +1885,63 @@ Test adaptive
 
   describe('executeActWithTools', () => {
 
+    // @v: anc-exec-toolloop-repeat-break —— 同签名断路器（连续 3 次同名同参即断,复读是形态病:
+    // Qwen 实撞 14 连扫同一空目录,总量闸第 20 轮才拦;同名不同参=合法遍历不触发）
+    it('断路器正例：同名同参连续 3 次 → TOOL_LOOP_REPEAT 抛断（第 3 次不执行到 20 轮）', async () => {
+      const actSpec = `# T\nId: t-repeat\n## Goal\ng\n## Outputs\n- result: text  # o\n## Steps\n1. [act] do\n  + → result: text  # o\n  > use tools\n`;
+      const engine = new ExecutionEngine();
+      engine.initExecution(actSpec, HOST);
+      const dispatcher = new StepDispatcher(engine, HOST);
+      (dispatcher as any).sleep = () => Promise.resolve();
+      (dispatcher as any).toolProvider = {
+        list: () => [{ name: 'listdir', description: 'l', input_schema: { type: 'object', properties: {} }, requires_commit: false, category: 'basic' }],
+        execute: async () => ({ result: '[]', success: true }),
+      };
+      const mockCreate = (dispatcher as any).defaultClient.messages.create;
+      for (let i = 0; i < 3; i++) {
+        mockCreate.mockResolvedValueOnce({
+          content: [{ type: 'tool_use', id: `t${i}`, name: 'listdir', input: { path: 'vars' } }],
+          usage: { input_tokens: 50, output_tokens: 20 },
+        });
+      }
+      const step = engine.nextStep();
+      expect(step.status).toBe('step_ready');
+      if (step.status === 'step_ready') {
+        const executeAct = (dispatcher as any).executeActWithTools.bind(dispatcher);
+        await expect(executeAct(step)).rejects.toThrow(/TOOL_LOOP_REPEAT.*连续重复 3 次/);
+      }
+    });
+
+    it('断路器反例：同名不同参连续调用 → 不触发（合法逐文件遍历形态）', async () => {
+      const actSpec = `# T\nId: t-iter\n## Goal\ng\n## Outputs\n- result: text  # o\n## Steps\n1. [act] do\n  + → result: text  # o\n  > use tools\n`;
+      const engine = new ExecutionEngine();
+      engine.initExecution(actSpec, HOST);
+      const dispatcher = new StepDispatcher(engine, HOST);
+      (dispatcher as any).sleep = () => Promise.resolve();
+      (dispatcher as any).toolProvider = {
+        list: () => [{ name: 'read', description: 'r', input_schema: { type: 'object', properties: {} }, requires_commit: false, category: 'basic' }],
+        execute: async () => ({ result: 'content', success: true }),
+      };
+      const mockCreate = (dispatcher as any).defaultClient.messages.create;
+      for (let i = 0; i < 4; i++) {
+        mockCreate.mockResolvedValueOnce({
+          content: [{ type: 'tool_use', id: `t${i}`, name: 'read', input: { path: `file${i}.md` } }],
+          usage: { input_tokens: 50, output_tokens: 20 },
+        });
+      }
+      mockCreate.mockResolvedValueOnce({
+        content: [{ type: 'text', text: 'result: done' }],
+        usage: { input_tokens: 80, output_tokens: 10 },
+      });
+      const step = engine.nextStep();
+      expect(step.status).toBe('step_ready');
+      if (step.status === 'step_ready') {
+        const executeAct = (dispatcher as any).executeActWithTools.bind(dispatcher);
+        const result = await executeAct(step);
+        expect(result.result).toBe('done');   // 四次不同参遍历顺利走完
+      }
+    });
+
     // @v: anc-exec-tool-failure-report —— C 案机械兜底（本步工具全 failure 却交正常产出→warn
     // 留痕不拦截——"检索故障伪装成搜不到"的静默退化形态给审计面抓手;有任一 success 或零工具
     // 调用不触发。变异实证:warn 判定块删除,下方全败正例红）
@@ -2140,9 +2197,10 @@ Test prompt logging
       }
       const llmMetas = metas.filter(m => m.llm) as Array<{ llm: { prompt?: string } }>;
       expect(llmMetas.length).toBe(2);
-      // 正例:首轮 prompt 在场且含 L4 清单头（实发请求含工具语境的对证点）
+      // 正例:首轮 prompt 在场且含工具清单头（实发请求含工具语境的对证点——
+      // 清单已挪 L4 前作环境背景,题改"当前可用工具"）
       expect(llmMetas[0].llm.prompt).toBeDefined();
-      expect(llmMetas[0].llm.prompt).toContain('本步可用工具');
+      expect(llmMetas[0].llm.prompt).toContain('当前可用工具');
       // 反例:后续轮不重复记 prompt
       expect(llmMetas[1].llm.prompt).toBeUndefined();
     });
@@ -2932,13 +2990,13 @@ g
       expect(req['thinking']).toEqual({ type: 'disabled' });
     });
 
-    it('反例（变招不误伤）：未记名的步照旧无 thinking 键（route 未声明吃端点缺省——存量行为零变化）', () => {
+    it('反例（变招不误伤）：未记名的 check 步落五级链第 5 级——enabled（0100 批行为变化:思考恒显式,端点私有缺省退场;判错代价不对称 check 缺省开）', () => {
       const { d } = mkDispatcherWithRealLog();
       const ctx = { task_context: 't', instruction: 'x', progress_summary: '', inputs: {}, output_schema: [] };
       const step = { step_id: '2.2', step_type: 'check', context: ctx };
       const req = (d as never as { buildApiRequest: (c: unknown, t: string, s?: unknown) => { request: Record<string, unknown> } })
         .buildApiRequest(ctx, 'check', step).request;
-      expect(req['thinking']).toBeUndefined();
+      expect((req['thinking'] as { type: string }).type).toBe('enabled');
     });
 
     it('反例（replan 段无步号不记名）：不带步号检出 → 报文无降档句,记名册不增', () => {
@@ -2947,6 +3005,218 @@ g
       expect(() => parse(resp, SCHEMA)).toThrow(/THINKING_EXHAUSTED/);
       expect(() => parse(resp, SCHEMA)).not.toThrow(/重试轮将禁用推理通道/);
       expect((d as never as { thinkingExhaustedSteps: Set<string> }).thinkingExhaustedSteps.size).toBe(0);
+    });
+  });
+
+  // @v: anc-exec-thinking-step-annotation, anc-exec-thinking-provider-default —— 五级优先链
+  // （0100 批,作者拍分类表 2026-09-20:记名册>@thinking>routing_rules>provider 缺省>步骤类型缺省
+  // 〔act 无 body 未标 free/commit 关;act free/reason/check/replan 开〕——思考行为恒显式）
+  describe('thinking 五级优先链', () => {
+    const mk = () => {
+      const engine = new ExecutionEngine();
+      engine.initExecution(SIMPLE_SPEC, HOST);
+      return new StepDispatcher(engine, HOST);
+    };
+    const build = (d: StepDispatcher, stepType: string, stepId = '1') => {
+      const ctx = { task_context: 't', instruction: 'x', progress_summary: '', inputs: {}, output_schema: [] };
+      return (d as never as { buildApiRequest: (c: unknown, t: string, s?: unknown) => { request: Record<string, unknown> } })
+        .buildApiRequest(ctx, stepType, { step_id: stepId, step_type: stepType, context: ctx }).request;
+    };
+
+    it('级5 步骤类型缺省：reason/check → enabled;act(无 body 未标 free)/commit → disabled', () => {
+      const d = mk();
+      expect((build(d, 'reason')['thinking'] as { type: string }).type).toBe('enabled');
+      expect((build(d, 'check')['thinking'] as { type: string }).type).toBe('enabled');
+      expect((build(d, 'act')['thinking'] as { type: string }).type).toBe('disabled');
+      expect((build(d, 'commit')['thinking'] as { type: string }).type).toBe('disabled');
+    });
+
+    it('级2 @thinking off 压过级5 的 reason 开（步骤标注单点关——机械提取省 8-9 倍的落点）', () => {
+      const spec = `# T
+Id: t
+## Task
+Goal: 测试
+## Outputs
+- r: text  # 结果
+## Steps
+1. [reason] 提取
+  + → r: text  # 结果
+  > @thinking off
+  > 逐条提
+`;
+      const engine = new ExecutionEngine();
+      engine.initExecution(spec, HOST);
+      const d = new StepDispatcher(engine, HOST);
+      expect((build(d, 'reason', '1')['thinking'] as { type: string }).type).toBe('disabled');
+    });
+
+    it('级1 记名册压过级2 @thinking on（止血恒最高——标 on 的烧穿步重试轮照样 disabled）', () => {
+      const spec = `# T
+Id: t
+## Task
+Goal: 测试
+## Outputs
+- r: text  # 结果
+## Steps
+1. [reason] 推理
+  + → r: text  # 结果
+  > @thinking on
+  > 想
+`;
+      const engine = new ExecutionEngine();
+      engine.initExecution(spec, HOST);
+      const d = new StepDispatcher(engine, HOST);
+      (d as never as { thinkingExhaustedSteps: Set<string> }).thinkingExhaustedSteps.add('1');
+      expect((build(d, 'reason', '1')['thinking'] as { type: string }).type).toBe('disabled');
+    });
+
+    it('级4 provider 缺省 disabled 压过级5 reason 开（antchat 类矫正档形态——env {SID}_THINKING）', () => {
+      const d = mk();
+      const envBackup = process.env['DEFAULT_THINKING'];
+      process.env['DEFAULT_THINKING'] = 'disabled';
+      try {
+        expect((build(d, 'reason')['thinking'] as { type: string }).type).toBe('disabled');
+      } finally {
+        if (envBackup === undefined) delete process.env['DEFAULT_THINKING'];
+        else process.env['DEFAULT_THINKING'] = envBackup;
+      }
+    });
+
+    // ── review 批补钉(面三缺口 1-5:变异 B/E/F/G 全库逃逸+replan 零断言;重放各变异须红) ──
+
+    it('级4 provider 缺省 enabled 压过级5 act 关（enabled 方向半边——变异 E 重放锁）', () => {
+      const d = mk();
+      const envBackup = process.env['DEFAULT_THINKING'];
+      process.env['DEFAULT_THINKING'] = 'enabled';
+      try {
+        expect((build(d, 'act')['thinking'] as { type: string }).type).toBe('enabled');
+      } finally {
+        if (envBackup === undefined) delete process.env['DEFAULT_THINKING'];
+        else process.env['DEFAULT_THINKING'] = envBackup;
+      }
+    });
+
+    it('级2 @thinking on 单独生效——压过级4 provider disabled（设计正推荐的 antchat 组合形态;变异 F 重放锁）', () => {
+      const spec = `# T
+Id: t
+## Task
+Goal: 测试
+## Outputs
+- r: text  # 结果
+## Steps
+1. [reason] 重推理
+  + → r: text  # 结果
+  > @thinking on
+  > 想
+`;
+      const engine = new ExecutionEngine();
+      engine.initExecution(spec, HOST);
+      const d = new StepDispatcher(engine, HOST);
+      const envBackup = process.env['DEFAULT_THINKING'];
+      process.env['DEFAULT_THINKING'] = 'disabled';
+      try {
+        expect((build(d, 'reason', '1')['thinking'] as { type: string }).type).toBe('enabled');
+      } finally {
+        if (envBackup === undefined) delete process.env['DEFAULT_THINKING'];
+        else process.env['DEFAULT_THINKING'] = envBackup;
+      }
+    });
+
+    it('级3 route disabled 压过级5 reason 开（异答格——变异 G 重放锁;原正例在级3/级5 同答的 act 格无锁）', () => {
+      const HOSTR2: HostConfig = { ...HOST, model_engine: { default_model: 'm', default_service_id: 'default', routing_rules: [
+        { match: { step_type: 'reason' as const }, service_id: 'default', model: 'm', thinking: 'disabled' as const },
+      ] } };
+      const engine = new ExecutionEngine();
+      engine.initExecution(SIMPLE_SPEC, HOSTR2);
+      const d = new StepDispatcher(engine, HOSTR2);
+      const ctx = { task_context: 't', instruction: 'x', progress_summary: '', inputs: {}, output_schema: [] };
+      const req = (d as never as { buildApiRequest: (c: unknown, t: string, s?: unknown) => { request: Record<string, unknown> } })
+        .buildApiRequest(ctx, 'reason', { step_id: '1', step_type: 'reason', context: ctx }).request;
+      expect((req['thinking'] as { type: string }).type).toBe('disabled');
+    });
+
+    it('级5 replan → enabled（subtask free 展开/失败重规划共用类别——无 step 参数,级1/级2 短路后落级5）', () => {
+      const d = mk();
+      const ctx = { task_context: 't', instruction: 'x', progress_summary: '', inputs: {}, output_schema: [] };
+      const req = (d as never as { buildApiRequest: (c: unknown, t: string) => { request: Record<string, unknown> } })
+        .buildApiRequest(ctx, 'replan').request;
+      expect((req['thinking'] as { type: string }).type).toBe('enabled');
+    });
+
+    it('级5 act free → enabled（真 [act free] 步——作者拍板"关了实锤会死"的格子;变异 B 重放锁）', () => {
+      const spec = `# T
+Id: t
+## Task
+Goal: 测试
+## Outputs
+- r: text  # 结果
+## Steps
+1. [act free] 探索
+  + → r: text  # 结果
+  > 查资料
+`;
+      const engine = new ExecutionEngine();
+      engine.initExecution(spec, HOST);
+      const d = new StepDispatcher(engine, HOST);
+      expect((build(d, 'act', '1')['thinking'] as { type: string }).type).toBe('enabled');
+    });
+
+    it('级5 真 act 步（无 body 未标 free）→ disabled（治原测试 act 格形态错位——原用 reason 步冒充 act 走巧合路径）', () => {
+      const spec = `# T
+Id: t
+## Task
+Goal: 测试
+## Outputs
+- r: text  # 结果
+## Steps
+1. [act] 机械转写
+  + → r: text  # 结果
+  > 照单填
+`;
+      const engine = new ExecutionEngine();
+      engine.initExecution(spec, HOST);
+      const d = new StepDispatcher(engine, HOST);
+      expect((build(d, 'act', '1')['thinking'] as { type: string }).type).toBe('disabled');
+    });
+
+    // @v: anc-exec-thinking-routing —— F1 修重放锁:工具循环真实请求对象带 thinking
+    // （消费面钉——直测 resolveThinkingParam 杀不了"loopRequest 撤装配"变异,mock client 捕获实发请求才杀）
+    it('工具循环 loopRequest 实发请求带 thinking 键——act free 步 enabled、记名步 disabled（F1 修:原工具循环零 thinking 整级旁路）', async () => {
+      const freeSpec = `# T\nId: t-think\n## Goal\ng\n## Outputs\n- r: text  # o\n## Steps\n1. [act free] 探索\n  + → r: text  # o\n  > 查资料\n`;
+      const engine = new ExecutionEngine();
+      engine.initExecution(freeSpec, HOST);
+      const d = new StepDispatcher(engine, HOST);
+      (d as any).sleep = () => Promise.resolve();
+      const mockCreate = (d as any).defaultClient.messages.create;
+      mockCreate.mockResolvedValueOnce({
+        content: [{ type: 'text', text: 'r: done' }],
+        usage: { input_tokens: 50, output_tokens: 10 },
+      });
+      const step = engine.nextStep();
+      expect(step.status).toBe('step_ready');
+      if (step.status === 'step_ready') {
+        const executeAct = (d as any).executeActWithTools.bind(d);
+        await executeAct(step);
+        const req = mockCreate.mock.calls[mockCreate.mock.calls.length - 1][0];
+        expect(req.thinking).toBeDefined();
+        expect(req.thinking.type).toBe('enabled');   // act free → 级5 enabled
+      }
+      // 记名册半边:同步骤记名后重发,请求须转 disabled（工具循环步烧穿降档真实生效）
+      (d as never as { thinkingExhaustedSteps: Set<string> }).thinkingExhaustedSteps.add('1');
+      mockCreate.mockResolvedValueOnce({
+        content: [{ type: 'text', text: 'r: done' }],
+        usage: { input_tokens: 50, output_tokens: 10 },
+      });
+      const engine2 = new ExecutionEngine();
+      engine2.initExecution(freeSpec, HOST);
+      const step2 = engine2.nextStep();
+      if (step2.status === 'step_ready') {
+        const executeAct2 = (d as any).executeActWithTools.bind(d);
+        await executeAct2(step2);
+        const req2 = mockCreate.mock.calls[mockCreate.mock.calls.length - 1][0];
+        expect(req2.thinking).toBeDefined();
+        expect(req2.thinking.type).toBe('disabled');
+      }
     });
   });
 
@@ -4541,8 +4811,9 @@ describe('thinking 路由（形态 B）', () => {
     expect(reqFor('commit').thinking).toEqual({ type: 'disabled' });   // commit 无专条吃 act 条
   });
 
-  it('反例：route 未声明 thinking → 请求零 thinking 键（吃端点缺省,存量零变化）', () => {
-    expect('thinking' in reqFor('reason')).toBe(false);
+  it('反例翻写（0100 五级链）：route 未声明 thinking → 落级5 步骤类型缺省——reason 得 enabled（思考恒显式,"吃端点缺省"形态退场）', () => {
+    const req = reqFor('reason') as { thinking?: { type: string } };
+    expect(req.thinking?.type).toBe('enabled');
   });
 
   it('正例：enabled 小预算 budget 下限夹 1024（anthropic 协议最低值——原发 750 违约 400）', () => {
@@ -7180,6 +7451,25 @@ describe('SDK 隐式 authToken 切断', () => {
       else delete process.env['ANTHROPIC_AUTH_TOKEN'];
     }
   });
+
+  // @v: anc-config-standalone-schema —— defaultClient bearer 双臂（2026-09-18 review 面二抓缺省
+  // provider 路径漏装:唯一 provider 配 bearer 不写显式路由时 resolveModel 落 'default' 直取
+  // defaultClient,原硬编码 x-api-key 恰撞回该档要治的 InvalidApiKey;修后按 HostConfig.auth 分臂）
+  it('正例:HostConfig.auth=bearer → defaultClient 走 authToken 通道且 apiKey 置 null 防双头;反例:auth 缺省 → x-api-key 通道', () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(SIMPLE_SPEC, HOST);
+    void new StepDispatcher(engine, { ...HOST, api_key: 'bearer-key', base_url: 'https://dashscope.aliyuncs.com/api/v2/apps/claude-code-proxy', auth: 'bearer' });
+    const AnthropicMock = (Anthropic as unknown) as ReturnType<typeof vi.fn>;
+    const bearerCall = AnthropicMock.mock.calls.at(-1)![0];
+    expect(bearerCall.authToken).toBe('bearer-key');       // bearer 档走 SDK authToken 通道
+    expect(bearerCall.apiKey).toBeNull();                  // apiKey 置 null 防双头
+    const engine2 = new ExecutionEngine();
+    engine2.initExecution(SIMPLE_SPEC, HOST);
+    void new StepDispatcher(engine2, { ...HOST, api_key: 'plain-key', base_url: 'https://api.deepseek.com/anthropic' });
+    const plainCall = AnthropicMock.mock.calls.at(-1)![0];
+    expect(plainCall.apiKey).toBe('plain-key');            // 缺省档 x-api-key 通道
+    expect(plainCall.authToken).toBeNull();
+  });
 });
 
 // ===== 统一模型 call parallel（渐进派发+收齐）——正反例矩阵行 1/2/4/5/10/11/12/16 =====
@@ -8972,13 +9262,14 @@ Test role tail block
     expect(manifest).toMatch(/- exists：[\s\S]*?返回:.*exists/);
     // 面2:路径纪律恒有行+act 步 work_zone 写盘行
     expect(manifest).toContain('路径一律相对 workspace');
-    expect(manifest).toContain('本步写盘唯一合法位置');
+    expect(manifest).toContain('写盘唯一合法位置');
     expect(manifest).toContain('.hopstate/x/work_zone');
     // 面3:词表教学句+调用方式行(作者补抓:列了工具没说怎么调/返回行不得用 HopSchema 词)
     expect(manifest).toContain('工具调用协议的词表');
     expect(manifest).toContain('不互译');
     expect(manifest).toContain('按 tool_use 协议发起调用');
-    expect(manifest).toContain('不必为了用而用');
+    // @v: anc-exec-l5-task-first —— 工具段前置+禁令措辞半边
+    expect(manifest).toContain('任务不需要工具时严格禁止调用');
     expect(manifest).not.toContain('5000');   // 写盘体量约定已挪 L4 输出段（作者抓"在工具那写太远了"）
     expect(manifest).not.toContain('（text）');
   });
@@ -8990,10 +9281,10 @@ Test role tail block
     const defs = engine.getToolDefs()!;
     const { buildToolManifest } = await import('../src/prompt.js');
     const commitM = buildToolManifest({ tool_grants: [] }, defs, { stepType: 'commit', workZoneRel: '.hopstate/x/work_zone' });
-    expect(commitM).toContain('本步为交付写盘');
-    expect(commitM).not.toContain('本步写盘唯一合法位置');
+    expect(commitM).toContain('交付写盘步骤');
+    expect(commitM).not.toContain('写盘唯一合法位置');
     const emptyWz = buildToolManifest({ tool_grants: [] }, defs, { stepType: 'act', workZoneRel: '' });
-    expect(emptyWz).not.toContain('本步写盘唯一合法位置');
+    expect(emptyWz).not.toContain('写盘唯一合法位置');
     expect(emptyWz).toContain('路径一律相对 workspace');   // 恒有行不随省
   });
 
@@ -9079,19 +9370,17 @@ ${grantLine}  + → verdict: text  # v
     return mockCreate.mock.calls.at(-1)![0] as Record<string, unknown>;
   }
 
-  it('钉①正例：reason 声明 special 工具 → 请求 tools 含之（basic 同列）', async () => {
+  it('钉①正例：reason 声明 special 工具 → 请求 tools 仅含声明件（2026-09-18 修订:basic 不再陪绑——reason 全按声明,弱模型闲置工具面实撞后收窄）', async () => {
     const req = await runReasonAndGrabRequest(mkReasonSpec('  - 工具: special_probe  # 读料\n'));
     const names = (req.tools as Array<{ name: string }>).map(t => t.name);
     expect(names).toContain('special_probe');
-    expect(names).toContain('read');   // basic 恒下发
+    expect(names).not.toContain('read');   // @v: anc-exec-reason-tools —— basic 恒下发已废除,未声明即不在场
   });
 
-  it('钉②反例：未声明 → 仅 basic（special 件不下发）', async () => {
+  it('钉②反例：零声明 → 单发零工具路（请求无 tools 键——纯推理步弱模型物理无可着魔按钮,2026-09-18 修订）', async () => {
     const req = await runReasonAndGrabRequest(mkReasonSpec(''));
-    const names = (req.tools as Array<{ name: string }>).map(t => t.name);
-    expect(names).toContain('read');
-    expect(names).not.toContain('special_probe');
-    expect(names).not.toContain('other_special');
+    // @v: anc-exec-reason-tools —— 零声明 reason 走 executeReasonOrCheck 单发,tools 键不存在
+    expect(req.tools).toBeUndefined();
   });
 
   it('钉③反例：requires_commit 件恒缺席（list 期过滤——即使它标 basic、即使 * 全量授权）', async () => {
@@ -9202,7 +9491,7 @@ ${entryLines}  + → result: text  # r
     expect(names).toContain('append');
   });
 
-  it('钉③正例：reason 步禁用同样生效（executeReason 复用 executeActWithTools 循环体天然生效）', async () => {
+  it('钉③正例：reason 步禁用同样生效（2026-09-18 修订:reason 全按声明后,验证面=声明与禁用并存时禁用优先剔除）', async () => {
     const spec = `# R
 Id: r-deny
 ## Goal
@@ -9211,7 +9500,8 @@ g
 - verdict: text  # v
 ## Steps
 1. [reason] 判断
-  - 禁工具: write  # 推理步禁写盘
+  - 工具: *  # 全量授权
+  - 禁工具: write  # 推理步禁写盘——* 授权下禁用照样剔除
   + → verdict: text  # v
   > 推理
 `;

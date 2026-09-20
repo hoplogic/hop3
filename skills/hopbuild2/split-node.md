@@ -20,6 +20,7 @@ Inputs:
 - depth: int  # 本节点绝对层深（根节点=1;值=本节点片段顶层步骤在最终产物里的嵌套层数,按步骤号段数计——'3'=1层/'3.2'=2层/'3.2.1'=3层）
 - iteration: int  # 分拆迭代序数（根拆=1,子节点拆=2;迭代闸:≥3 时三结构判恒不命中直接落叶——渐进的粗粒度上界,与 depth 深度闸各拦各的:深度管产物嵌套形态,迭代管构建轮数）
 - max_depth: int  # 产物嵌套深度上限（缺省 3——split-structure 1.3 深度闸按它机械拦,本 spec 原样透传）
+- target_profile: line  # 目标执行档（空串=通用形态;qwen3.8-27b=产物给该档模型跑——步骤 7/8 按「目标执行档规则」选把关形态与步骤尺寸,递归原样透传）
 - header_final: yaml  # 已对齐的头部契约（goal/inputs/outputs/constraints/tools_available——工具引用只许在其面内）
 - judgement_log: line  # 研判点台账路径（workspace 相对路径,或引擎涂鸦区绝对路径〔work_zone 是绝对路径禁令唯一豁免〕;其余绝对路径工具面拒;全树共写一份,append 契约文件不存在则创建）
 
@@ -87,7 +88,7 @@ Outputs:
 + → tier: enum(hop, mixed)  # 同上
 
 #### 2.1. [case(seq_hit and iteration <= 2)] 委托结构执行机,产出即返回（迭代闸真身在条件位——第 3 迭代结构判恒不命中直接落叶）
-##### 2.1.1. [call split-structure(split_kind: "seq", split_plan: seq_plan, node_task, node_source, parent_context, parent_vars, depth, max_depth, iteration, header_final, judgement_log)] 顺序骨架→三检→递归→拼装
+##### 2.1.1. [call split-structure(split_kind: "seq", split_plan: seq_plan, node_task, node_source, parent_context, parent_vars, depth, max_depth, iteration, target_profile, header_final, judgement_log)] 顺序骨架→三检→递归→拼装
 + → fragment_path: fragment_path  # 收取子树片段的文件路径（值是路径不是内容）
 + → tier: tier  # 收取档位
 ##### 2.1.2. [exit] 判完即返回
@@ -135,7 +136,7 @@ Outputs:
 + → tier: enum(hop, mixed)  # 同 2
 
 #### 4.1. [case(branch_hit and iteration <= 2)] 委托结构执行机,产出即返回（迭代闸真身在条件位——第 3 迭代结构判恒不命中直接落叶）
-##### 4.1.1. [call split-structure(split_kind: "branch", split_plan: branch_plan, node_task, node_source, parent_context, parent_vars, depth, max_depth, iteration, header_final, judgement_log)] 分支骨架→三检→递归→拼装
+##### 4.1.1. [call split-structure(split_kind: "branch", split_plan: branch_plan, node_task, node_source, parent_context, parent_vars, depth, max_depth, iteration, target_profile, header_final, judgement_log)] 分支骨架→三检→递归→拼装
 + → fragment_path: fragment_path  # 收取（值是路径）
 + → tier: tier  # 收取
 ##### 4.1.2. [exit] 判完即返回
@@ -182,18 +183,18 @@ Outputs:
 + → tier: enum(hop, mixed)  # 同 2
 
 #### 6.1. [case(loop_hit and iteration <= 2)] 委托结构执行机,产出即返回（迭代闸真身在条件位——第 3 迭代结构判恒不命中直接落叶）
-##### 6.1.1. [call split-structure(split_kind: "loop", split_plan: loop_plan, node_task, node_source, parent_context, parent_vars, depth, max_depth, iteration, header_final, judgement_log)] 循环骨架→三检→递归→拼装
+##### 6.1.1. [call split-structure(split_kind: "loop", split_plan: loop_plan, node_task, node_source, parent_context, parent_vars, depth, max_depth, iteration, target_profile, header_final, judgement_log)] 循环骨架→三检→递归→拼装
 + → fragment_path: fragment_path  # 收取（值是路径）
 + → tier: tier  # 收取
 ##### 6.1.2. [exit] 判完即返回
 
 ### 7. [reason] 叶子分型：按内容定三档成文方案（三结构判全不中即叶子,一律三件套落定——不做单步认领判定 ^anc-build-shallow-split）
-- ← node_task, node_source, parent_context, header_final
-+ → leaf_plan: text  # 叶子分型方案（首行"档位:1|2|3";档1/档2 必须列出要剥出单独成步的动作原句——"剥出commit: <原文那句>"/"剥出ask: <原文那句>";再一行说明其余部分落什么形态——探索半边落 act free 还是纯推理 reason、核验 check 的判据要点）
+- ← node_task, node_source, parent_context, target_profile, header_final
++ → leaf_plan: text  # 叶子分型方案（首行"档位:1|2|3";档1/档2 必须列出要剥出单独成步的动作原句——"剥出commit: <原文那句>"/"剥出ask: <原文那句>";再一行说明其余部分落什么形态——探索半边落 act free 还是纯推理 reason、核验 check 的判据要点;target_profile 非空时按「目标执行档规则」节加写该节要求的方案行）
 
 三结构判全不中的节点就是**叶子**——本步不再问"是不是自足单步"（不做单步认领判定:那种形态四问过了就产裸 [reason]/[act] 单步零核验,门禁 check 数低的结构性病根在此）,只做一件事:按内容出三档分型方案。每个叶子一律走步骤 8 的三件套成文（探索-核验-提交/闸门形态——每个叶子天然带把关）。**分型与成文分两步,但判断只在本步做一次**:档位与要剥出的动作句本步定死,步骤 8 照方案渲染不重判（实撞:旧形态判定与分型分两步各自独立分析,前步明写"含不可逆写盘须剥 commit",后步重新判断时却交了无 commit 的单步 [act free]——同一实例前后自相矛盾;解剖只做一次,矛盾在结构上就不会发生）。
 
-**leaf_plan 三档分型判据**（按内容定档,自上而下第一个命中即是——档位判据的细节与成文模板见步骤 8,本步只出方案）：档1=含不可逆动作或交付写盘（header 约束点名"不可撤销",或原文点名发送/支付/写生产/删除,**或原文承诺把交付物保存为文件**）→ 剥 commit;**判"本节点无需 commit"之前必须先回 node_source 扫交付动词**（正典词表=主流程机械体检的交付动词表,举例:写入/保存/落盘/发送/提交/部署/删除/发布/输出到）——不回原文扫,"无"是猜的不是查的（实撞两轮:原文明写"保存为 presentation.html",判定器两次判"原文无写盘动作"放行,交付语义蒸发到终检才现形）;扫到动词而交付确实由兄弟/父层节点承接的,记研判点台账点名承接处,不许静默判无;**剥出的 commit 命令生成期定不死时**（哪台机器/跑什么要看现场）,方案写备料/提交分离形态——备料段产精确执行清单文件（交付路径变量）,剥出行写「剥出commit: 按人批清单执行 <原文那句>」并加一行「剥出confirm: 呈清单人批」（confirm 前置机械读步把清单文件读入文本变量作 confirm 输入——present_inputs 是 ask 专属属性 confirm 不收,confirm 呈人的就是它声明的输入值）（形态样板见 split-patterns「备料/提交分离」节——commit body 仍静态定死为读清单逐条执行,不许因定不死就把提交语义留在 free 的描述里）;**范围含门禁句时**（「必须 X 才能 Y」形态,动作句台账的门禁语汇行为底册）,方案加写证据契约：原子交付物加结构化门禁证据（检查名/PASS-FAIL/证据路径,体量大走 work_zone 文件交付路径变量）,并写明「骨架需补 [check] 步消费证据判定」——门禁判定回引擎强制,执行细节留原子后延（形态样板见 split-patterns「门禁证据分离」节）;档2=含交互闸门（AskUserQuestion/人工确认/问人要值）→ 剥 ask/confirm;档3=其余（探索 act free+核验 check 成对,纯推理的探索半边才落 reason——首轮探索半边不写 body,body 写作归定向优化轮;commit 例外必带 body,见步骤 8 档1）。
+**leaf_plan 三档分型判据**（按内容定档,自上而下第一个命中即是——档位判据的细节与成文模板见步骤 8,本步只出方案）：档1=含不可逆动作或交付写盘（header 约束点名"不可撤销",或原文点名发送/支付/写生产/删除,**或原文承诺把交付物保存为文件**）→ 剥 commit;**判"本节点无需 commit"之前必须先回 node_source 扫交付动词**（正典词表=主流程机械体检的交付动词表,举例:写入/保存/落盘/发送/提交/部署/删除/发布/输出到）——不回原文扫,"无"是猜的不是查的（实撞两轮:原文明写"保存为 presentation.html",判定器两次判"原文无写盘动作"放行,交付语义蒸发到终检才现形）;扫到动词而交付确实由兄弟/父层节点承接的,记研判点台账点名承接处,不许静默判无;**剥出的 commit 命令生成期定不死时**（哪台机器/跑什么要看现场）,方案写备料/提交分离形态——备料段产精确执行清单文件（交付路径变量）,剥出行写「剥出commit: 按人批清单执行 <原文那句>」并加一行「剥出confirm: 呈清单人批」（confirm 前置机械读步把清单文件读入文本变量作 confirm 输入——present_inputs 是 ask 专属属性 confirm 不收,confirm 呈人的就是它声明的输入值）（形态样板见 split-patterns「备料/提交分离」节——commit body 仍静态定死为读清单逐条执行,不许因定不死就把提交语义留在 free 的描述里;**原文命令会中途停下来问人的**,按 split-patterns「交互式命令的三分处置」节办:机械确认预喂应答/中途真决策拆步走 ask 停点/拆不开的呈报用户不硬编）;**范围含门禁句时**（「必须 X 才能 Y」形态,动作句台账的门禁语汇行为底册）,方案加写证据契约：原子交付物加结构化门禁证据（检查名/PASS-FAIL/证据路径,体量大走 work_zone 文件交付路径变量）,并写明「骨架需补 [check] 步消费证据判定」——门禁判定回引擎强制,执行细节留原子后延（形态样板见 split-patterns「门禁证据分离」节）;档2=含交互闸门（AskUserQuestion/人工确认/问人要值）→ 剥 ask/confirm;档3=其余（探索 act free+核验 check 成对,纯推理的探索半边才落 reason——首轮探索半边不写 body,body 写作归定向优化轮;commit 例外必带 body,见步骤 8 档1）。
 
 **禁令与义务句的落型（定型时消费——两类句子的产物形态不同,混落即语义降档）**：原文的**禁令**（"绝不/永远不要/Never"）按强度三档认领——最强=结构性禁止（产物形态上写不出违规,如不给那一步声明工具面/不设那条路径——引擎跳不过的结构强于任何提醒）;次强=check 判据（违规产出过不了验收）;最弱=步骤说明里的强语气提醒（仅当前两档形态上落不了才用,并记研判点台账）。**义务句与门禁句分开双落点**：义务句（"必须做 X"——规定一个动作要发生）落执行步,门禁句（"必须 X 才能 Y"——规定一个前置条件）落 check 判据——义务句错落成 check 就变成了"查有没有做"而不是"做",门禁句错落成执行步就变成了"无条件做 Y"。
 
@@ -202,11 +203,21 @@ Outputs:
 引擎已自动注入（doc-ref）：
 [[split-patterns#subtask 探索范式（步骤定型与事务形态）]]
 
+**目标执行档规则（target_profile 非空时叠加生效——通用规矩全部照守,本节只加不减）**：产物是给目标档模型跑的,规则按该档实测能力边界定,当前支持一档:
+
+**qwen3.8-27b 档**（能力依据=该模型能力档案:核验能力仅单点核验可靠〔开放式自审跨轮标准漂移,按清单核验定位废〕;一次调用可靠处理的要素数上界约 4 点;到步展开会收成空壳）：
+
+1. **把关步封闭化**：check 判据写成**逐条封闭小题**形态——判据不写"验收内容完整、结构合理"这类开放句,写成一组只答 yes/no 的具体问题（"交付变量 X 是否含字段 A？原文 L 行的动作 B 是否有对应步骤？"）,判定=全部小题过才 true,说明槽逐题记没过的哪几题。判定对象多于约 4 项时不写单个大 check——拆成"机械归组（hop_python 零 LLM 把对象按可判单元分组）→ loop 逐单元单点核验（每轮只判一个单元,可包 [subtask parallel]）→ 机械汇总（body 收集各单元结论出判定+说明）"三段形态（范本=examples/hop-fact-check.qwen3.8-27b.md 步骤 2.4/2.5/2.6 与其 LineJob/LineVerdict 类型对）;
+2. **步骤任务尺寸压小**：提取/枚举/逐项处理类步骤,每步要交付的要素数不超过 4——原文一段要提 9 个要点,不写一个"提取全部要点"的大步,拆成 loop 按分组多轮小步;一步里揉不下的多个动作拆成序列小步（一步一个动作,与"当场可定型从紧"同向但门槛更低）;
+3. **交互与提交形态照通用规矩**（commit/ask/confirm 的剥离红线不因目标档变——弱模型档只影响把关形态与步骤尺寸,不影响不可逆与闸门语义的落位）。
+
+（工具件数不设限——该档工具节制实测正常;此处规则值导出自能力档案,档案实测值更新后本节同批跟改。）
+
 ### 8. [reason] 按步骤 7 的分型方案成文（叶子唯一落定路——三件套成型逻辑;mixed 是设计常态非缺陷）
-- ← node_task, node_source, parent_context, header_final, leaf_plan
+- ← node_task, node_source, parent_context, target_profile, header_final, leaf_plan
 + → fragment: text  # 叶子片段（裸片段直出——首字符即 `1`,不加围栏）
 
-**照 leaf_plan 成文,不重新判档**：档位与要剥出的动作句步骤 7 已定,你的活是按方案套对应模板写出片段——方案说"剥出commit: <某句>",片段里就必须有以那句为描述的 [commit] 步;方案说剥 ask 同理（实撞:旧形态本步独立重判,前判明写"须剥 commit"本步却交无 commit 的单步——判断只在步骤 7 做一次,本步照方案渲染,矛盾在结构上灭绝）。方案与你读到的 node_source 明显冲突时（如方案要剥的句子原文里不存在）,按原文修正并在片段成文后继续——不空转不打回。**leaf_plan 是空或占位符**（正常执行不该出现——重跑轮变量留存可能带进来）：不把占位符当方案,按步骤 7 写明的三档判据对 node_source 现判现写,判出哪档就套哪档的模板成文。
+**照 leaf_plan 成文,不重新判档**：档位与要剥出的动作句步骤 7 已定,你的活是按方案套对应模板写出片段——方案说"剥出commit: <某句>",片段里就必须有以那句为描述的 [commit] 步;方案说剥 ask 同理（实撞:旧形态本步独立重判,前判明写"须剥 commit"本步却交无 commit 的单步——判断只在步骤 7 做一次,本步照方案渲染,矛盾在结构上灭绝）。**target_profile 非空时,check 步的判据文本与步骤尺寸按上方「目标执行档规则」节写**——判据写成逐条封闭小题,超过 4 项判定对象的把关按该节三段形态展开;方案里已写的档规则行照办不重判。方案与你读到的 node_source 明显冲突时（如方案要剥的句子原文里不存在）,按原文修正并在片段成文后继续——不空转不打回。**leaf_plan 是空或占位符**（正常执行不该出现——重跑轮变量留存可能带进来）：不把占位符当方案,按步骤 7 写明的三档判据对 node_source 现判现写,判出哪档就套哪档的模板成文。
 
 拆不动的节点以自然语言步骤落定,但**落成什么类型要看节点内容,不是一律 [reason]**（把含工具操作/外部影响的任务落成 reason,等于把它的工具面全部吞掉——reason 无工具,执行期干不了活）。**范围注记通则（B0,设计 ^anc-build-expand）**：三档任一模板成文时,片段顶层步骤（subtask 或单步）的说明末尾加一行 `⟦源:L<a>-L<b>⟧`——a/b 取 node_source 首末行的行号（行首 L 前缀直接读）。注记是构建期材料非执行语义（执行 LLM 零消费,与研判点台账同性质）,二轮展开 expand 按它机械定位本原子对应的原文范围。三档成文模板：
 

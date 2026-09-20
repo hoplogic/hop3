@@ -1,0 +1,8 @@
+Q1: yes（依据：P1的line_ref为L1且quote摘自原文，完整覆盖L1断言）
+Q2: yes（依据：line_ref=L2的P2和P3分别覆盖了半衰期和影响睡眠两个内容，所有内容均被覆盖到）
+Q3: yes（依据：P4的line_ref为L3且quote摘自原文，完整覆盖L3断言）
+Q4: yes（依据：P5的line_ref为L4且quote摘自原文，完整覆盖L4断言）
+Q5: yes（依据：推理点P3和P5的premises均包含具体的前提内容，而不仅仅是编号）
+Q6: yes（依据：所有点的quote均能在原文对应行中找到完全相同的字符）
+extract_ok: true
+extract_gap: |

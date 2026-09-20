@@ -1,0 +1,8 @@
+Q1: yes（P1的line_ref为L1且quote与L1完全匹配）
+Q2: yes（P2和P3的line_ref均为L2且各自覆盖了L2的两个断言内容）
+Q3: yes（P4的line_ref为L3且quote与L3完全匹配）
+Q4: yes（P5的line_ref为L4且quote与L4完全匹配）
+Q5: yes（P3和P5是仅有的inference点且其premises均包含实质性文字内容而非仅编号）
+Q6: yes（所有五个点的quote均能在原文对应行中找到）
+extract_ok: true
+extract_gap: ""

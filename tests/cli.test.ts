@@ -1238,6 +1238,116 @@ describe('CLI function unit tests (coverage)', () => {
       expect(existsSync(join(fakeHome, 'custom-codex-home/skills/hopspec/SKILL.md'))).toBe(true);
     });
 
+    // @v: anc-cli-carrier-home-resolution —— opencode 载体（2026-09-15,见 todo/0089）
+    // opencode:home 用 XDG（~/.config/opencode,非 ~/.opencode）,复用 CC driver 源（references/driver-subagent.md 在,无 agents/）
+    // @v: anc-driver-opencode-install-layout —— opencode 装载面（driver/opencode/ 自有内容层+hop 照装〔2026-09-20 撤销不装裁定〕+hopbuild 族共装）
+    it('install-skill --carrier opencode 装到 ~/.config/opencode/skills 且用 driver/opencode/ 自有内容层（正例——2026-09-19 从复用 CC 源改判:发现层兼容不等于执行层可用,原语适配版为准）', async () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'cli-opencode-'));
+      const origHome = process.env.HOME;
+      const origCfgDir = process.env.CLAUDE_CONFIG_DIR;
+      const origCodexHome = process.env.CODEX_HOME;
+      const origOcDir = process.env.OPENCODE_CONFIG_DIR;
+      const origXdg = process.env.XDG_CONFIG_HOME;
+      process.env.HOME = fakeHome;
+      delete process.env.CLAUDE_CONFIG_DIR;
+      delete process.env.CODEX_HOME;
+      delete process.env.OPENCODE_CONFIG_DIR;   // opencode 缺席环境变量→回落 XDG ~/.config/opencode
+      delete process.env.XDG_CONFIG_HOME;
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--force']);
+      } finally {
+        cap.restore();
+        process.env.HOME = origHome;
+        if (origCfgDir === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = origCfgDir;
+        if (origCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = origCodexHome;
+        if (origOcDir === undefined) delete process.env.OPENCODE_CONFIG_DIR; else process.env.OPENCODE_CONFIG_DIR = origOcDir;
+        if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = origXdg;
+      }
+      const r = JSON.parse(cap.get().trim().split('\n').pop()!);
+      expect(r.status).toBe('ok');
+      expect(r.carrier).toBe('opencode');
+      expect(r.target).toBe(join(fakeHome, '.config', 'opencode', 'skills'));
+      expect(existsSync(join(fakeHome, '.config/opencode/skills/hopspec/SKILL.md'))).toBe(true);
+      // driver/opencode/ 自有内容层:装出的 SKILL.md 是原语适配版——含 question 工具指令,
+      // 正文零 CC 专属原语（AskUserQuestion 至多出现于 @trace note 的映射说明一处,超出=退回 CC 原文）
+      const installedSkill = readFileSync(join(fakeHome, '.config/opencode/skills/hopspec/SKILL.md'), 'utf-8');
+      expect(installedSkill).toContain('question 工具');
+      expect(installedSkill.split('AskUserQuestion').length - 1).toBeLessThanOrEqual(1);
+      expect(existsSync(join(fakeHome, '.config/opencode/skills/hopspec/references/driver-subagent.md'))).toBe(true);
+      expect(existsSync(join(fakeHome, '.config/opencode/skills/hopspec/agents'))).toBe(false);
+      // hop 件照装（2026-09-20 作者撤"v1 不装"裁定——codex 先例同款;装出件为 opencode 适配版:
+      // 隐式触发说法+question 工具,零 $hop 前缀与 CC 原语）
+      const hopSkill = readFileSync(join(fakeHome, '.config/opencode/skills/hop/SKILL.md'), 'utf-8');
+      expect(hopSkill).toContain('question');
+      expect(hopSkill).not.toContain('$hop');
+      expect(hopSkill).not.toContain('AskUserQuestion');
+      // hopbuild 族照旧共装
+      expect(existsSync(join(fakeHome, '.config/opencode/skills/hopbuild/SKILL.md'))).toBe(true);
+      expect(existsSync(join(fakeHome, '.config/opencode/skills/hopfix/hopfix.md'))).toBe(true);
+    });
+
+    // @v: anc-cli-stale-skill-scan —— 陈旧副本新鲜度提示（hopissues/0096:旧位置本器产物落后报升级路径,非本器零打扰,不代删）
+    it('install-skill 旧位置陈旧副本 → stale_notes 报提示携升级路径,文件原样不动（正例——0096:8-14 旧 demo 静默活着 29 child 全灭的对治）', async () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'cli-stale-'));
+      const origHome = process.env.HOME;
+      const origCfg = process.env.CLAUDE_CONFIG_DIR;
+      process.env.HOME = fakeHome;
+      delete process.env.CLAUDE_CONFIG_DIR;
+      // 旧位置(CC 族扫 ~/.claude/skills)造三件:①本器旧版 demo(该报)②非本器文件(零打扰)③本器当前版(零提示)
+      const oldRoot = join(fakeHome, '.claude', 'skills');
+      mkdirSync(join(oldRoot, 'demo-fact-check'), { recursive: true });
+      writeFileSync(join(oldRoot, 'demo-fact-check', 'SKILL.md'), '---\nname: demo-fact-check\n---\n<!-- driver: @hoplogic/hopjit v0.1.0 (x) installed 2026-08-14 -->\n');
+      writeFileSync(join(oldRoot, 'demo-fact-check', 'spec.md'), '# Spec: x\n');   // 无 engine_min_version 指纹
+      mkdirSync(join(oldRoot, 'user-own-skill'), { recursive: true });
+      writeFileSync(join(oldRoot, 'user-own-skill', 'SKILL.md'), '---\nname: user-own-skill\n---\n用户自建,无本器版本戳\n');
+      const targetDir = join(fakeHome, 'fresh-target');
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', targetDir, '--force']);
+      } finally {
+        cap.restore();
+        process.env.HOME = origHome;
+        if (origCfg === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = origCfg;
+      }
+      const r = JSON.parse(cap.get().trim().split('\n').pop()!);
+      expect(r.status).toBe('ok');
+      const notes: string[] = r.stale_notes ?? [];
+      expect(notes.some(n => n.includes('demo-fact-check') && n.includes('0.1.0'))).toBe(true);   // 陈旧点名带旧版本号
+      expect(notes.some(n => n.includes('user-own-skill'))).toBe(false);                          // 非本器文件零打扰
+      expect(existsSync(join(oldRoot, 'demo-fact-check', 'SKILL.md'))).toBe(true);                // 只读不删
+    });
+
+    // opencode 读 OPENCODE_CONFIG_DIR:在场装到重定向 config 目录
+    it('install-skill --carrier opencode 读 OPENCODE_CONFIG_DIR 装到重定向 home（正例）', async () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'cli-opencode-redir-'));
+      const origHome = process.env.HOME;
+      const origCfgDir = process.env.CLAUDE_CONFIG_DIR;
+      const origCodexHome = process.env.CODEX_HOME;
+      const origOcDir = process.env.OPENCODE_CONFIG_DIR;
+      const origXdg = process.env.XDG_CONFIG_HOME;
+      process.env.HOME = fakeHome;
+      delete process.env.CLAUDE_CONFIG_DIR;
+      delete process.env.CODEX_HOME;
+      delete process.env.XDG_CONFIG_HOME;
+      process.env.OPENCODE_CONFIG_DIR = join(fakeHome, 'custom-oc-home');   // 模拟重定向
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--force']);
+      } finally {
+        cap.restore();
+        process.env.HOME = origHome;
+        if (origCfgDir === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = origCfgDir;
+        if (origCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = origCodexHome;
+        if (origOcDir === undefined) delete process.env.OPENCODE_CONFIG_DIR; else process.env.OPENCODE_CONFIG_DIR = origOcDir;
+        if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = origXdg;
+      }
+      const r = JSON.parse(cap.get().trim().split('\n').pop()!);
+      expect(r.status).toBe('ok');
+      expect(r.target).toBe(join(fakeHome, 'custom-oc-home', 'skills'));
+      expect(existsSync(join(fakeHome, 'custom-oc-home/skills/hopspec/SKILL.md'))).toBe(true);
+    });
+
     // @v: anc-cli-install-skill-plus —— --plus 附装进阶研究件+工具配置落位（2026-08-30 作者定）
     it('正例：--plus 装 hop-fact-check/hop-deep-research 两 skill + tool_servers 并入 ~/.hopjit/config.yaml', async () => {
       const fakeHome = mkdtempSync(join(tmpdir(), 'cli-plus-home-'));
@@ -1349,6 +1459,402 @@ describe('CLI function unit tests (coverage)', () => {
       } finally { cap.restore(); }
       expect(existsSync(join(dir, 'hopspec', 'SKILL.md'))).toBe(true);
       expect(existsSync(join(dir, 'hopspec-mcp', 'SKILL.md'))).toBe(true);
+    });
+
+    // @v: anc-cli-install-skill — opencode 载体 --mcp 注册（2026-09-15,见 todo/0089）
+    // opencode 写用户级 opencode.json 的 mcp.hopjit（type:local + command 数组 + environment 留空靠 process.env 透传）
+    it('install-skill --carrier opencode --mcp 写 opencode.json 的 mcp.hopjit（正例）', async () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'cli-oc-mcp-'));
+      const cwd = mkdtempSync(join(tmpdir(), 'cli-oc-cwd-'));
+      const oldCwd = process.cwd();
+      const origHome = process.env.HOME;
+      const origOcDir = process.env.OPENCODE_CONFIG_DIR;
+      const origXdg = process.env.XDG_CONFIG_HOME;
+      process.env.HOME = fakeHome;
+      delete process.env.OPENCODE_CONFIG_DIR;
+      delete process.env.XDG_CONFIG_HOME;
+      process.chdir(cwd);   // 避免项目根 hopjit.yaml 挡自举（projPath=cwd/hopjit.yaml 不存在）
+      const dir = mkdtempSync(join(tmpdir(), 'oc-skill-'));
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+      } finally {
+        cap.restore();
+        process.env.HOME = origHome;
+        process.chdir(oldCwd);
+        if (origOcDir === undefined) delete process.env.OPENCODE_CONFIG_DIR; else process.env.OPENCODE_CONFIG_DIR = origOcDir;
+        if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = origXdg;
+      }
+      const oc = JSON.parse(readFileSync(join(fakeHome, '.config/opencode/opencode.jsonc'), 'utf-8'));
+      expect(oc.mcp.hopjit.type).toBe('local');
+      expect(oc.mcp.hopjit.command).toEqual(['hopjit-mcp']);
+      expect(oc.mcp.hopjit.environment).toEqual({});
+      const out = JSON.parse(cap.get().trim().split('\n').pop()!);
+      expect(out.mcp_registered).toContain('opencode.jsonc');   // 写 opencode.jsonc(candidates[0])
+      expect(out.mcp_config_note).toContain('opencode.jsonc');   // 无 model 不自举,note 指明 opencode.jsonc 不存在
+    });
+
+    // @v: anc-cli-install-skill — opencode 载体 LLM 自举（2026-09-15,见 todo/0089）
+    // 读 opencode.json 的 model（"provider/model-id"）+ provider.<id>.options.baseURL + env[0],protocol 按 provider id 推断
+    it('install-skill --carrier opencode --mcp 自举读 opencode.json 的 model/provider（正例）', async () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'cli-oc-bootstrap-'));
+      const cwd = mkdtempSync(join(tmpdir(), 'cli-oc-boot-cwd-'));
+      const oldCwd = process.cwd();
+      const origHome = process.env.HOME;
+      const origOcDir = process.env.OPENCODE_CONFIG_DIR;
+      const origXdg = process.env.XDG_CONFIG_HOME;
+      process.env.HOME = fakeHome;
+      delete process.env.OPENCODE_CONFIG_DIR;
+      delete process.env.XDG_CONFIG_HOME;
+      process.chdir(cwd);   // 避免项目根 hopjit.yaml 挡自举
+      mkdirSync(join(fakeHome, '.config/opencode'), { recursive: true });
+      writeFileSync(join(fakeHome, '.config/opencode/opencode.json'), JSON.stringify({
+        model: 'anthropic/claude-sonnet-4-6',
+        provider: { anthropic: { options: { baseURL: 'https://api.anthropic.com' }, env: ['ANTHROPIC_API_KEY'] } },
+      }), 'utf-8');
+      const dir = mkdtempSync(join(tmpdir(), 'oc-skill2-'));
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+      } finally {
+        cap.restore();
+        process.env.HOME = origHome;
+        process.chdir(oldCwd);
+        if (origOcDir === undefined) delete process.env.OPENCODE_CONFIG_DIR; else process.env.OPENCODE_CONFIG_DIR = origOcDir;
+        if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = origXdg;
+      }
+      const out = JSON.parse(cap.get().trim().split('\n').pop()!);
+      expect(out.mcp_config_bootstrapped).toContain('config.yaml');
+      expect(out.mcp_config_note).toContain('opencode 宿主配置');
+      expect(out.mcp_config_note).toContain('claude-sonnet-4-6');
+      const cfg = readFileSync(join(fakeHome, '.hopjit/config.yaml'), 'utf-8');
+      expect(cfg).toContain('opencode_host');
+      expect(cfg).toContain('protocol: anthropic');
+      expect(cfg).toContain('claude-sonnet-4-6');
+      expect(cfg).toContain('ANTHROPIC_API_KEY');
+    });
+
+    // @v: anc-cli-install-skill — opencode 注册 best-effort（坏 JSON 不阻断 skill 安装,与 cc 分支 .claude.json 同纪律）
+    it('install-skill --carrier opencode --mcp 遇坏 opencode.json 不阻断,note 提示未注册（反例:best-effort）', async () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'cli-oc-bad-'));
+      const cwd = mkdtempSync(join(tmpdir(), 'cli-oc-bad-cwd-'));
+      const oldCwd = process.cwd();
+      const origHome = process.env.HOME;
+      const origOcDir = process.env.OPENCODE_CONFIG_DIR;
+      const origXdg = process.env.XDG_CONFIG_HOME;
+      process.env.HOME = fakeHome;
+      delete process.env.OPENCODE_CONFIG_DIR;
+      delete process.env.XDG_CONFIG_HOME;
+      process.chdir(cwd);
+      mkdirSync(join(fakeHome, '.config/opencode'), { recursive: true });
+      writeFileSync(join(fakeHome, '.config/opencode/opencode.json'), '{ 坏 json', 'utf-8');
+      const dir = mkdtempSync(join(tmpdir(), 'oc-bad-skill-'));
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+      } finally {
+        cap.restore();
+        process.env.HOME = origHome;
+        process.chdir(oldCwd);
+        if (origOcDir === undefined) delete process.env.OPENCODE_CONFIG_DIR; else process.env.OPENCODE_CONFIG_DIR = origOcDir;
+        if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = origXdg;
+      }
+      const out = JSON.parse(cap.get().trim().split('\n').pop()!);
+      expect(out.status).toBe('ok');   // skill 安装不受阻断
+      expect(out.mcp_registered).toBeNull();
+      expect(out.mcp_note).toContain('不是合法 JSON');
+      expect(existsSync(join(dir, 'hopspec/SKILL.md'))).toBe(true);   // skill 照装
+    });
+
+    // @v: anc-cli-install-skill — opencode 注册已有 mcp.hopjit 跳过（注册面是用户资产,--force 不覆盖）
+    it('install-skill --carrier opencode --mcp 已有 mcp.hopjit 跳过不覆盖（反例:注册面用户资产）', async () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'cli-oc-skip-'));
+      const cwd = mkdtempSync(join(tmpdir(), 'cli-oc-skip-cwd-'));
+      const oldCwd = process.cwd();
+      const origHome = process.env.HOME;
+      const origOcDir = process.env.OPENCODE_CONFIG_DIR;
+      const origXdg = process.env.XDG_CONFIG_HOME;
+      process.env.HOME = fakeHome;
+      delete process.env.OPENCODE_CONFIG_DIR;
+      delete process.env.XDG_CONFIG_HOME;
+      process.chdir(cwd);
+      mkdirSync(join(fakeHome, '.config/opencode'), { recursive: true });
+      writeFileSync(join(fakeHome, '.config/opencode/opencode.json'), JSON.stringify({
+        mcp: { hopjit: { type: 'local', command: ['my-custom'], environment: {} } },
+      }), 'utf-8');
+      const dir = mkdtempSync(join(tmpdir(), 'oc-skip-skill-'));
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+      } finally {
+        cap.restore();
+        process.env.HOME = origHome;
+        process.chdir(oldCwd);
+        if (origOcDir === undefined) delete process.env.OPENCODE_CONFIG_DIR; else process.env.OPENCODE_CONFIG_DIR = origOcDir;
+        if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = origXdg;
+      }
+      const oc = JSON.parse(readFileSync(join(fakeHome, '.config/opencode/opencode.json'), 'utf-8'));
+      expect(oc.mcp.hopjit.command).toEqual(['my-custom']);   // 未被覆盖
+      const out = JSON.parse(cap.get().trim().split('\n').pop()!);
+      expect(out.mcp_registered).toBeNull();
+      expect(out.mcp_note).toContain('未改动');
+    });
+
+    // @v: anc-cli-install-skill — opencode 自举缺 model 不自举（学习源缺失→不写文件,note 明示）
+    it('install-skill --carrier opencode --mcp 遇 opencode.json 无 model 不自举（反例:学习源缺失）', async () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'cli-oc-nomodel-'));
+      const cwd = mkdtempSync(join(tmpdir(), 'cli-oc-nomodel-cwd-'));
+      const oldCwd = process.cwd();
+      const origHome = process.env.HOME;
+      const origOcDir = process.env.OPENCODE_CONFIG_DIR;
+      const origXdg = process.env.XDG_CONFIG_HOME;
+      process.env.HOME = fakeHome;
+      delete process.env.OPENCODE_CONFIG_DIR;
+      delete process.env.XDG_CONFIG_HOME;
+      process.chdir(cwd);
+      mkdirSync(join(fakeHome, '.config/opencode'), { recursive: true });
+      writeFileSync(join(fakeHome, '.config/opencode/opencode.json'), JSON.stringify({
+        provider: { anthropic: { options: { baseURL: 'https://api.anthropic.com' }, env: ['ANTHROPIC_API_KEY'] } },
+      }), 'utf-8');   // 有 provider 无 model
+      const dir = mkdtempSync(join(tmpdir(), 'oc-nomodel-skill-'));
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+      } finally {
+        cap.restore();
+        process.env.HOME = origHome;
+        process.chdir(oldCwd);
+        if (origOcDir === undefined) delete process.env.OPENCODE_CONFIG_DIR; else process.env.OPENCODE_CONFIG_DIR = origOcDir;
+        if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = origXdg;
+      }
+      const out = JSON.parse(cap.get().trim().split('\n').pop()!);
+      expect(out.mcp_config_bootstrapped).toBeNull();   // 不自举
+      expect(out.mcp_config_note).toContain('缺 model');
+      expect(existsSync(join(fakeHome, '.hopjit/config.yaml'))).toBe(false);   // 未写配置
+    });
+
+    // @v: anc-cli-pack — opencode 载体 pack（dir 缺省 .opencode/skills + installHint 含 opencode,走 cc 包装模板）
+    it('pack --carrier opencode 落 .opencode/skills + installHint 含 opencode（正例）', async () => {
+      const cwd = mkdtempSync(join(tmpdir(), 'cli-pack-oc-'));
+      const oldCwd = process.cwd();
+      process.chdir(cwd);
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'pack', join(REPO, 'examples/doc-review.md'), '--carrier', 'opencode', '--force']);
+      } finally {
+        cap.restore();
+        process.chdir(oldCwd);
+      }
+      const out = JSON.parse(cap.get().trim().split('\n').pop()!);
+      expect(out.status).toBe('ok');
+      expect(existsSync(join(cwd, '.opencode', 'skills', 'doc-review', 'SKILL.md'))).toBe(true);
+      const skillMd = readFileSync(join(cwd, '.opencode', 'skills', 'doc-review', 'SKILL.md'), 'utf-8');
+      expect(skillMd).toContain('hopjit install-skill --carrier opencode');   // installHint 含 opencode
+    });
+
+    // @v: anc-cli-install-skill — opencode .jsonc 保留注释(jsonc-parser modify/applyEdits,opencode 同款)
+    it('install-skill --carrier opencode --mcp 写 .jsonc 保留用户注释（正例:jsonc-parser）', async () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'cli-oc-jsonc-'));
+      const cwd = mkdtempSync(join(tmpdir(), 'cli-oc-jsonc-cwd-'));
+      const oldCwd = process.cwd();
+      const origHome = process.env.HOME;
+      const origOcDir = process.env.OPENCODE_CONFIG_DIR;
+      const origXdg = process.env.XDG_CONFIG_HOME;
+      process.env.HOME = fakeHome;
+      delete process.env.OPENCODE_CONFIG_DIR;
+      delete process.env.XDG_CONFIG_HOME;
+      process.chdir(cwd);
+      mkdirSync(join(fakeHome, '.config/opencode'), { recursive: true });
+      writeFileSync(join(fakeHome, '.config/opencode/opencode.jsonc'),
+        '{\n  // 用户注释\n  "provider": { "theta": { "options": { "baseURL": "https://x" } } }\n}\n', 'utf-8');
+      const dir = mkdtempSync(join(tmpdir(), 'oc-jsonc-skill-'));
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+      } finally {
+        cap.restore();
+        process.env.HOME = origHome;
+        process.chdir(oldCwd);
+        if (origOcDir === undefined) delete process.env.OPENCODE_CONFIG_DIR; else process.env.OPENCODE_CONFIG_DIR = origOcDir;
+        if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = origXdg;
+      }
+      const text = readFileSync(join(fakeHome, '.config/opencode/opencode.jsonc'), 'utf-8');
+      expect(text).toContain('// 用户注释');   // 注释保留(jsonc-parser 不丢)
+      expect(text).toContain('hopjit-mcp');   // mcp.hopjit 写入
+      expect(text).toContain('https://x');   // 用户配置保留
+    });
+
+    // @v: anc-cli-install-skill — opencode .jsonc 已有 mcp.hopjit 跳过(candidates 检测 .jsonc,消除静默冲突)
+    it('install-skill --carrier opencode --mcp 遇 .jsonc 已有 mcp.hopjit 跳过（正例:candidates 检测 .jsonc）', async () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'cli-oc-jsonc-skip-'));
+      const cwd = mkdtempSync(join(tmpdir(), 'cli-oc-jsonc-skip-cwd-'));
+      const oldCwd = process.cwd();
+      const origHome = process.env.HOME;
+      const origOcDir = process.env.OPENCODE_CONFIG_DIR;
+      const origXdg = process.env.XDG_CONFIG_HOME;
+      process.env.HOME = fakeHome;
+      delete process.env.OPENCODE_CONFIG_DIR;
+      delete process.env.XDG_CONFIG_HOME;
+      process.chdir(cwd);
+      mkdirSync(join(fakeHome, '.config/opencode'), { recursive: true });
+      writeFileSync(join(fakeHome, '.config/opencode/opencode.jsonc'),
+        '{\n  // 我的 hopjit\n  "mcp": { "hopjit": { "type": "local", "command": ["my-custom"], "environment": {} } }\n}\n', 'utf-8');
+      const dir = mkdtempSync(join(tmpdir(), 'oc-jsonc-skip-skill-'));
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+      } finally {
+        cap.restore();
+        process.env.HOME = origHome;
+        process.chdir(oldCwd);
+        if (origOcDir === undefined) delete process.env.OPENCODE_CONFIG_DIR; else process.env.OPENCODE_CONFIG_DIR = origOcDir;
+        if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = origXdg;
+      }
+      const text = readFileSync(join(fakeHome, '.config/opencode/opencode.jsonc'), 'utf-8');
+      expect(text).toContain('my-custom');   // 未被覆盖
+      expect(text).not.toContain('hopjit-mcp');   // 没写新的(candidates 检测到 .jsonc 的 mcp.hopjit)
+      const out = JSON.parse(cap.get().trim().split('\n').pop()!);
+      expect(out.mcp_registered).toBeNull();
+      expect(out.mcp_note).toContain('未改动');
+    });
+
+    // @v: anc-cli-install-skill — opencode 自举读 .jsonc 含注释(parseJsonc 含注释)
+    it('install-skill --carrier opencode --mcp 自举读 .jsonc 含注释的 model（正例:parseJsonc）', async () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'cli-oc-jsonc-boot-'));
+      const cwd = mkdtempSync(join(tmpdir(), 'cli-oc-jsonc-boot-cwd-'));
+      const oldCwd = process.cwd();
+      const origHome = process.env.HOME;
+      const origOcDir = process.env.OPENCODE_CONFIG_DIR;
+      const origXdg = process.env.XDG_CONFIG_HOME;
+      process.env.HOME = fakeHome;
+      delete process.env.OPENCODE_CONFIG_DIR;
+      delete process.env.XDG_CONFIG_HOME;
+      process.chdir(cwd);
+      mkdirSync(join(fakeHome, '.config/opencode'), { recursive: true });
+      writeFileSync(join(fakeHome, '.config/opencode/opencode.jsonc'),
+        '{\n  // 我的 LLM\n  "model": "anthropic/claude-sonnet-4-6",\n  "provider": { "anthropic": { "options": { "baseURL": "https://api.anthropic.com" }, "env": ["ANTHROPIC_API_KEY"] } }\n}\n', 'utf-8');
+      const dir = mkdtempSync(join(tmpdir(), 'oc-jsonc-boot-skill-'));
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+      } finally {
+        cap.restore();
+        process.env.HOME = origHome;
+        process.chdir(oldCwd);
+        if (origOcDir === undefined) delete process.env.OPENCODE_CONFIG_DIR; else process.env.OPENCODE_CONFIG_DIR = origOcDir;
+        if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = origXdg;
+      }
+      const out = JSON.parse(cap.get().trim().split('\n').pop()!);
+      expect(out.mcp_config_bootstrapped).toContain('config.yaml');   // 自举成功(parseJsonc 读含注释 .jsonc)
+      expect(out.mcp_config_note).toContain('opencode 宿主配置');
+      expect(out.mcp_config_note).toContain('claude-sonnet-4-6');
+      const cfg = readFileSync(join(fakeHome, '.hopjit/config.yaml'), 'utf-8');
+      expect(cfg).toContain('opencode_host');
+      expect(cfg).toContain('claude-sonnet-4-6');
+    });
+
+    // @v: anc-cli-install-skill — opencode 自举 deep-merge(.jsonc 无 model fallback opencode.json,与 opencode 加载一致)
+    it('install-skill --carrier opencode --mcp 自举 deep-merge:.jsonc 无 model fallback opencode.json（正例:deep-merge）', async () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'cli-oc-merge-'));
+      const cwd = mkdtempSync(join(tmpdir(), 'cli-oc-merge-cwd-'));
+      const oldCwd = process.cwd();
+      const origHome = process.env.HOME;
+      const origOcDir = process.env.OPENCODE_CONFIG_DIR;
+      const origXdg = process.env.XDG_CONFIG_HOME;
+      process.env.HOME = fakeHome;
+      delete process.env.OPENCODE_CONFIG_DIR;
+      delete process.env.XDG_CONFIG_HOME;
+      process.chdir(cwd);
+      mkdirSync(join(fakeHome, '.config/opencode'), { recursive: true });
+      // .jsonc 有 provider.env 无 model;opencode.json 有 model + provider.baseURL——验证 deep-merge 合并
+      writeFileSync(join(fakeHome, '.config/opencode/opencode.jsonc'),
+        '{\n  // 我的 provider\n  "provider": { "anthropic": { "env": ["ANTHROPIC_API_KEY"] } }\n}\n', 'utf-8');
+      writeFileSync(join(fakeHome, '.config/opencode/opencode.json'),
+        '{\n  "model": "anthropic/claude-sonnet-4-6",\n  "provider": { "anthropic": { "options": { "baseURL": "https://api.anthropic.com" } } }\n}\n', 'utf-8');
+      const dir = mkdtempSync(join(tmpdir(), 'oc-merge-skill-'));
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+      } finally {
+        cap.restore();
+        process.env.HOME = origHome;
+        process.chdir(oldCwd);
+        if (origOcDir === undefined) delete process.env.OPENCODE_CONFIG_DIR; else process.env.OPENCODE_CONFIG_DIR = origOcDir;
+        if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = origXdg;
+      }
+      const out = JSON.parse(cap.get().trim().split('\n').pop()!);
+      expect(out.mcp_config_bootstrapped).toContain('config.yaml');   // deep-merge 后有 model+baseURL,自举成功
+      expect(out.mcp_config_note).toContain('claude-sonnet-4-6');   // model 来自 opencode.json(deep-merge fallback)
+      const cfg = readFileSync(join(fakeHome, '.hopjit/config.yaml'), 'utf-8');
+      expect(cfg).toContain('claude-sonnet-4-6');   // model 来自 opencode.json
+      expect(cfg).toContain('ANTHROPIC_API_KEY');   // env 来自 .jsonc(deep-merge provider 合并)
+    });
+
+    // @v: anc-cli-install-skill — opencode 检测 candidates 含 config.json(config.json 有 mcp.hopjit 跳过)
+    it('install-skill --carrier opencode --mcp 遇 config.json 已有 mcp.hopjit 跳过（正例:candidates 含 config.json）', async () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'cli-oc-cfgjson-'));
+      const cwd = mkdtempSync(join(tmpdir(), 'cli-oc-cfgjson-cwd-'));
+      const oldCwd = process.cwd();
+      const origHome = process.env.HOME;
+      const origOcDir = process.env.OPENCODE_CONFIG_DIR;
+      const origXdg = process.env.XDG_CONFIG_HOME;
+      process.env.HOME = fakeHome;
+      delete process.env.OPENCODE_CONFIG_DIR;
+      delete process.env.XDG_CONFIG_HOME;
+      process.chdir(cwd);
+      mkdirSync(join(fakeHome, '.config/opencode'), { recursive: true });
+      writeFileSync(join(fakeHome, '.config/opencode/config.json'),
+        '{ "mcp": { "hopjit": { "type": "local", "command": ["my-custom"], "environment": {} } } }\n', 'utf-8');
+      const dir = mkdtempSync(join(tmpdir(), 'oc-cfgjson-skill-'));
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+      } finally {
+        cap.restore();
+        process.env.HOME = origHome;
+        process.chdir(oldCwd);
+        if (origOcDir === undefined) delete process.env.OPENCODE_CONFIG_DIR; else process.env.OPENCODE_CONFIG_DIR = origOcDir;
+        if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = origXdg;
+      }
+      const out = JSON.parse(cap.get().trim().split('\n').pop()!);
+      expect(out.mcp_registered).toBeNull();   // config.json 有 mcp.hopjit,candidates 检测到,跳过
+      expect(out.mcp_note).toContain('未改动');
+    });
+
+    // @v: anc-cli-install-skill — opencode 自举 deep-merge options 内部(递归合并非浅 merge;.jsonc 有 baseURL,opencode.json 有 apiKey/env → 两者都保留)
+    it('install-skill --carrier opencode --mcp 自举 deep-merge options 内部（正例:递归合并非浅 merge）', async () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'cli-oc-deepopt-'));
+      const cwd = mkdtempSync(join(tmpdir(), 'cli-oc-deepopt-cwd-'));
+      const oldCwd = process.cwd();
+      const origHome = process.env.HOME;
+      const origOcDir = process.env.OPENCODE_CONFIG_DIR;
+      const origXdg = process.env.XDG_CONFIG_HOME;
+      process.env.HOME = fakeHome;
+      delete process.env.OPENCODE_CONFIG_DIR;
+      delete process.env.XDG_CONFIG_HOME;
+      process.chdir(cwd);
+      mkdirSync(join(fakeHome, '.config/opencode'), { recursive: true });
+      // .jsonc 有 model + options.baseURL;opencode.json 有 options.apiKey + env——浅 merge 会丢 baseURL(不自举),递归 deep-merge 保留 baseURL(自举)
+      writeFileSync(join(fakeHome, '.config/opencode/opencode.jsonc'),
+        '{ "model": "anthropic/claude", "provider": { "anthropic": { "options": { "baseURL": "https://api.anthropic.com" } } } }\n', 'utf-8');
+      writeFileSync(join(fakeHome, '.config/opencode/opencode.json'),
+        '{ "provider": { "anthropic": { "options": { "apiKey": "sk-x" }, "env": ["ANTHROPIC_API_KEY"] } } }\n', 'utf-8');
+      const dir = mkdtempSync(join(tmpdir(), 'oc-deepopt-skill-'));
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+      } finally {
+        cap.restore();
+        process.env.HOME = origHome;
+        process.chdir(oldCwd);
+        if (origOcDir === undefined) delete process.env.OPENCODE_CONFIG_DIR; else process.env.OPENCODE_CONFIG_DIR = origOcDir;
+        if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = origXdg;
+      }
+      const out = JSON.parse(cap.get().trim().split('\n').pop()!);
+      expect(out.mcp_config_bootstrapped).toContain('config.yaml');   // 递归 deep-merge 保留 baseURL,自举成功(浅 merge 会丢 baseURL 不自举)
+      const cfg = readFileSync(join(fakeHome, '.hopjit/config.yaml'), 'utf-8');
+      expect(cfg).toContain('https://api.anthropic.com');   // baseURL 来自 .jsonc(options 内部递归合并保留)
+      expect(cfg).toContain('ANTHROPIC_API_KEY');   // env 来自 opencode.json
     });
 
     it('install-skill --mcp 已有 hopjit 条目跳过不覆盖（反例:注册配置是用户资产）', () => withMcpEnv(async ({ cwd }) => {

@@ -396,7 +396,9 @@ export function formatDocRefContext(fragments: DocRefFragment[]): string {
     if (f.preview !== undefined) {
       // inline 预览条目（^anc-exec-llm-inline-context v2）:值位真内容节选+明示省略量与全文去处
       const omitted = (f.full_chars ?? f.preview.length) - f.preview.length;
-      const fullLine = f.file_path ? `\n  全文: ${f.file_path}（有文件工具时可读全文）` : '';
+      // 指路语双出口静态并列（^anc-exec-inputs-deflate 普遍规则——本模块拿不到步骤工具面信号,
+      // 不能动态分叉;静态写全两条路,零工具面步不被教做不到的事）。// @a: anc-exec-inputs-deflate
+      const fullLine = f.file_path ? `\n  全文: ${f.file_path}（有文件工具时可读全文;无文件工具时基于本节选作业,不要尝试调用不存在的工具）` : '';
       return `${head}\n  体量: 全文 ${f.full_chars} 字符（本条为前 ${f.preview.length} 字符节选预览）${fullLine}\n  内容: |\n${indent(f.preview)}\n${indent(`（……以下省略 ${omitted} 字符）`)}`;
     }
     if (f.file_path) {

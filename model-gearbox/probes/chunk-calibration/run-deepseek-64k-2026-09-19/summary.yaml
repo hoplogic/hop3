@@ -1,0 +1,32 @@
+service: deepseek
+doc: model-gearbox/probes/extract-scaling/doc-xl.md
+key_points: 40
+sizes:
+  whole:
+    rates:
+      - 100
+      - 100
+  s8:
+    rates:
+      - 100
+      - 100
+    last_missed: []
+  s16:
+    rates:
+      - 100
+      - 100
+    last_missed: []
+  s32:
+    rates:
+      - 100
+      - 100
+    last_missed: []
+burst:
+  size: 8
+  'n': 3
+  solo:
+    - 100
+    - 100
+    - 97.5
+  merged: 100
+  merged_missed: []

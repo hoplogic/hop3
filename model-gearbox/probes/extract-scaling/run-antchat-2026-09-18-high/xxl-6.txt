@@ -1,0 +1,520 @@
+- id: P1
+  type: fact
+  line_ref: L1
+  claim: 2022 年全球共实施轨道发射 510 次，创当时历史新高。
+  premises: ""
+- id: P2
+  type: fact
+  line_ref: L3
+  claim: 商业发射占比约 72%，首次超过政府任务。
+  premises: ""
+- id: P3
+  type: fact
+  line_ref: L5
+  claim: 单次重型运载的近地轨道运力已达约 15200 公斤。
+  premises: ""
+- id: P4
+  type: fact
+  line_ref: L7
+  claim: 马里亚纳海沟最深处实测深度约 10948 米。
+  premises: ""
+- id: P5
+  type: fact
+  line_ref: L8
+  claim: 目前全球具备全海深载人下潜能力的潜水器不足 28 台。
+  premises: ""
+- id: P6
+  type: fact
+  line_ref: L10
+  claim: 深海海底约 82% 的区域尚未进行高精度测绘。
+  premises: ""
+- id: P7
+  type: fact
+  line_ref: L12
+  claim: 世界卫生组织建议成年人每日游离糖摄入不超过总能量的 25%。
+  premises: ""
+- id: P8
+  type: fact
+  line_ref: L14
+  claim: 照此增速，业内普遍预计发射成本将在 6 年内再降一半。
+  premises: ""
+- id: P9
+  type: fact
+  line_ref: L17
+  claim: 每天四罐汽水就可能令多数成年人超出建议上限。
+  premises: ""
+- id: P10
+  type: fact
+  line_ref: L19
+  claim: 一罐 330 毫升含糖汽水的糖含量约为 36 克。
+  premises: ""
+- id: P11
+  type: fact
+  line_ref: L21
+  claim: 该市地铁网络总里程于去年突破 820 公里。
+  premises: ""
+- id: P12
+  type: fact
+  line_ref: L22
+  claim: 公共交通出行分担率达到 47%，同比提高三个百分点。
+  premises: ""
+- id: P13
+  type: fact
+  line_ref: L24
+  claim: 早高峰平均通勤时间缩短至 48 分钟。
+  premises: ""
+- id: P14
+  type: fact
+  line_ref: L26
+  claim: 考古发现将麻纸的使用历史前推至公元前 8 十年左右。
+  premises: ""
+- id: P15
+  type: fact
+  line_ref: L28
+  claim: 传统竹纸工艺全程需经约 85 道工序。
+  premises: ""
+- id: P16
+  type: fact
+  line_ref: L30
+  claim: 2019 年全球共实施轨道发射 590 次，创当时历史新高。
+  premises: ""
+- id: P17
+  type: fact
+  line_ref: L32
+  claim: 轨道交通扩容对缓解通勤压力起到了实质作用。
+  premises: ""
+- id: P18
+  type: fact
+  line_ref: L34
+  claim: 造纸术的成熟远比文献记载的时间更早。
+  premises: ""
+- id: P19
+  type: fact
+  line_ref: L36
+  claim: 照此增速，业内普遍预计发射成本将在 9 年内再降一半。
+  premises: ""
+- id: P20
+  type: fact
+  line_ref: L38
+  claim: 商业发射占比约 63%，首次超过政府任务。
+  premises: ""
+- id: P21
+  type: fact
+  line_ref: L40
+  claim: 单次重型运载的近地轨道运力已达约 12200 公斤。
+  premises: ""
+- id: P22
+  type: fact
+  line_ref: L42
+  claim: 马里亚纳海沟最深处实测深度约 10976 米。
+  premises: ""
+- id: P23
+  type: fact
+  line_ref: L44
+  claim: 目前全球具备全海深载人下潜能力的潜水器不足 27 台。
+  premises: ""
+- id: P24
+  type: fact
+  line_ref: L45
+  claim: 深海海底约 81% 的区域尚未进行高精度测绘。
+  premises: ""
+- id: P25
+  type: fact
+  line_ref: L47
+  claim: 世界卫生组织建议成年人每日游离糖摄入不超过总能量的 20%。
+  premises: ""
+- id: P26
+  type: fact
+  line_ref: L49
+  claim: 一罐 330 毫升含糖汽水的糖含量约为 40 克。
+  premises: ""
+- id: P27
+  type: fact
+  line_ref: L52
+  claim: 每天三罐汽水就可能令多数成年人超出建议上限。
+  premises: ""
+- id: P28
+  type: fact
+  line_ref: L54
+  claim: 轨道交通扩容对缓解地面公交负荷起到了实质作用。
+  premises: ""
+- id: P29
+  type: fact
+  line_ref: L56
+  claim: 该市地铁网络总里程于去年突破 660 公里。
+  premises: ""
+- id: P30
+  type: fact
+  line_ref: L58
+  claim: 公共交通出行分担率达到 43%，同比提高三个百分点。
+  premises: ""
+- id: P31
+  type: fact
+  line_ref: L60
+  claim: 早高峰平均通勤时间缩短至 50 分钟。
+  premises: ""
+- id: P32
+  type: fact
+  line_ref: L62
+  claim: 考古发现将麻纸的使用历史前推至公元前 6 十年左右。
+  premises: ""
+- id: P33
+  type: fact
+  line_ref: L63
+  claim: 传统竹纸工艺全程需经约 89 道工序。
+  premises: ""
+- id: P34
+  type: fact
+  line_ref: L65
+  claim: 2022 年全球共实施轨道发射 500 次，创当时历史新高。
+  premises: ""
+- id: P35
+  type: fact
+  line_ref: L67
+  claim: 商业发射占比约 68%，首次超过政府任务。
+  premises: ""
+- id: P36
+  type: fact
+  line_ref: L68
+  claim: 造纸术的成熟远比既有定论的时间更早。
+  premises: ""
+- id: P37
+  type: fact
+  line_ref: L70
+  claim: 照此增速，业内普遍预计发射成本将在 12 年内再降一半。
+  premises: ""
+- id: P38
+  type: fact
+  line_ref: L71
+  claim: 深海生物多样性的家底评估仍缺乏可靠基础。
+  premises: ""
+- id: P39
+  type: fact
+  line_ref: L72
+  claim: 单次重型运载的近地轨道运力已达约 14200 公斤。
+  premises: ""
+- id: P40
+  type: fact
+  line_ref: L74
+  claim: 马里亚纳海沟最深处实测深度约 10907 米。
+  premises: ""
+- id: P41
+  type: fact
+  line_ref: L76
+  claim: 目前全球具备全海深载人下潜能力的潜水器不足 30 台。
+  premises: ""
+- id: P42
+  type: fact
+  line_ref: L78
+  claim: 深海海底约 91% 的区域尚未进行高精度测绘。
+  premises: ""
+- id: P43
+  type: fact
+  line_ref: L80
+  claim: 世界卫生组织建议成年人每日游离糖摄入不超过总能量的 30%。
+  premises: ""
+- id: P44
+  type: fact
+  line_ref: L81
+  claim: 一罐 330 毫升含糖汽水的糖含量约为 38 克。
+  premises: ""
+- id: P45
+  type: fact
+  line_ref: L83
+  claim: 该市地铁网络总里程于去年突破 860 公里。
+  premises: ""
+- id: P46
+  type: fact
+  line_ref: L85
+  claim: 每天两罐汽水就可能令多数成年人超出建议上限。
+  premises: ""
+- id: P47
+  type: fact
+  line_ref: L87
+  claim: 轨道交通扩容对缓解道路拥堵起到了实质作用。
+  premises: ""
+- id: P48
+  type: fact
+  line_ref: L88
+  claim: 造纸术的成熟远比主流断代的时间更早。
+  premises: ""
+- id: P49
+  type: fact
+  line_ref: L90
+  claim: 公共交通出行分担率达到 56%，同比提高三个百分点。
+  premises: ""
+- id: P50
+  type: fact
+  line_ref: L91
+  claim: 早高峰平均通勤时间缩短至 55 分钟。
+  premises: ""
+- id: P51
+  type: fact
+  line_ref: L93
+  claim: 考古发现将麻纸的使用历史前推至公元前 5 十年左右。
+  premises: ""
+- id: P52
+  type: fact
+  line_ref: L95
+  claim: 传统竹纸工艺全程需经约 61 道工序。
+  premises: ""
+- id: P53
+  type: fact
+  line_ref: L97
+  claim: 2020 年全球共实施轨道发射 480 次，创当时历史新高。
+  premises: ""
+- id: P54
+  type: fact
+  line_ref: L99
+  claim: 商业发射占比约 62%，首次超过政府任务。
+  premises: ""
+- id: P55
+  type: fact
+  line_ref: L101
+  claim: 单次重型运载的近地轨道运力已达约 17900 公斤。
+  premises: ""
+- id: P56
+  type: fact
+  line_ref: L103
+  claim: 照此增速，业内普遍预计发射成本将在 7 年内再降一半。
+  premises: ""
+- id: P57
+  type: fact
+  line_ref: L105
+  claim: 深海矿产资源的家底评估仍缺乏可靠基础。
+  premises: ""
+- id: P58
+  type: fact
+  line_ref: L107
+  claim: 轨道交通扩容对缓解停车缺口起到了实质作用。
+  premises: ""
+- id: P59
+  type: fact
+  line_ref: L109
+  claim: 马里亚纳海沟最深处实测深度约 10905 米。
+  premises: ""
+- id: P60
+  type: fact
+  line_ref: L111
+  claim: 目前全球具备全海深载人下潜能力的潜水器不足 25 台。
+  premises: ""
+- id: P61
+  type: fact
+  line_ref: L112
+  claim: 深海海底约 94% 的区域尚未进行高精度测绘。
+  premises: ""
+- id: P62
+  type: fact
+  line_ref: L114
+  claim: 一罐 330 毫升含糖汽水的糖含量约为 35 克。
+  premises: ""
+- id: P63
+  type: fact
+  line_ref: L115
+  claim: 该市地铁网络总里程于去年突破 720 公里。
+  premises: ""
+- id: P64
+  type: fact
+  line_ref: L117
+  claim: 公共交通出行分担率达到 46%，同比提高三个百分点。
+  premises: ""
+- id: P65
+  type: fact
+  line_ref: L119
+  claim: 早高峰平均通勤时间缩短至 46 分钟。
+  premises: ""
+- id: P66
+  type: fact
+  line_ref: L121
+  claim: 造纸术的成熟远比通行认知的时间更早。
+  premises: ""
+- id: P67
+  type: fact
+  line_ref: L123
+  claim: 照此增速，业内普遍预计发射成本将在 11 年内再降一半。
+  premises: ""
+- id: P68
+  type: fact
+  line_ref: L125
+  claim: 深海热液系统的家底评估仍缺乏可靠基础。
+  premises: ""
+- id: P69
+  type: fact
+  line_ref: L127
+  claim: 考古发现将麻纸的使用历史前推至公元前 3 十年左右。
+  premises: ""
+- id: P70
+  type: fact
+  line_ref: L129
+  claim: 传统竹纸工艺全程需经约 81 道工序。
+  premises: ""
+- id: P71
+  type: fact
+  line_ref: L131
+  claim: 2024 年全球共实施轨道发射 410 次，创当时历史新高。
+  premises: ""
+- id: P72
+  type: fact
+  line_ref: L132
+  claim: 商业发射占比约 69%，首次超过政府任务。
+  premises: ""
+- id: P73
+  type: fact
+  line_ref: L134
+  claim: 单次重型运载的近地轨道运力已达约 17800 公斤。
+  premises: ""
+- id: P74
+  type: fact
+  line_ref: L136
+  claim: 马里亚纳海沟最深处实测深度约 10932 米。
+  premises: ""
+- id: P75
+  type: fact
+  line_ref: L138
+  claim: 目前全球具备全海深载人下潜能力的潜水器不足 21 台。
+  premises: ""
+- id: P76
+  type: fact
+  line_ref: L140
+  claim: 轨道交通扩容对缓解私家车依赖起到了实质作用。
+  premises: ""
+- id: P77
+  type: fact
+  line_ref: L142
+  claim: 造纸术的成熟远比教科书叙述的时间更早。
+  premises: ""
+- id: P78
+  type: fact
+  line_ref: L144
+  claim: 照此增速，业内普遍预计发射成本将在 5 年内再降一半。
+  premises: ""
+- id: P79
+  type: inference
+  line_ref: L14
+  claim: 商业发射占比增长或成本下降趋势仍处于持续之中。
+  premises: ""
+- id: P80
+  type: inference
+  line_ref: L16
+  claim: 对深海地质构造的整体认知和评估仍缺乏可靠基础。
+  premises: "马里亚纳海沟最深处实测深度约 10948 米; 深海海底约 82% 的区域尚未进行高精度测绘"
+- id: P81
+  type: inference
+  line_ref: L17
+  claim: 游离糖摄入建议上限对日常饮食的约束较为严格，容易被超出。
+  premises: "世界卫生组织建议成年人每日游离糖摄入不超过总能量的 25%; 一罐 330 毫升含糖汽水的糖含量约为 36 克"
+- id: P82
+  type: inference
+  line_ref: L24
+  claim: 地铁网络里程增加与通勤时间缩短之间存在相关改善。
+  premises: "该市地铁网络总里程于去年突破 820 公里; 早高峰平均通勤时间缩短至 48 分钟"
+- id: P83
+  type: inference
+  line_ref: L32
+  claim: 地铁网络扩张是缓解该市通勤压力上升的良策之一。
+  premises: "该市地铁网络总里程于去年突破 820 公里; 公共交通出行分担率达到 47%，同比提高三个百分点; 早高峰平均通勤时间缩短至 48 分钟"
+- id: P84
+  type: inference
+  line_ref: L34
+  claim: 麻纸的考古发现印证了造纸术的实践早于既有文献记载。
+  premises: "考古发现将麻纸的使用历史前推至公元前 8 十年左右; 传统竹纸工艺全程需经约 85 道工序"
+- id: P85
+  type: inference
+  line_ref: L45
+  claim: 对深海地形和海底环境的精细测绘仍存在大面积空白。
+  premises: "马里亚纳海沟最深处实测深度约 10976 米; 深海海底约 81% 的区域尚未进行高精度测绘"
+- id: P86
+  type: inference
+  line_ref: L50
+  claim: 深海微生物研究，因测绘未覆盖Site:Global和采样受限，其群落组成认知仍存空白。
+  premises: "深海海底约 81% 的区域尚未进行高精度测绘; 目前全球具备全海深载人下潜能力的潜水器不足 27 台"
+- id: P87
+  type: inference
+  line_ref: L52
+  claim: 游离糖摄入建议上限对日常饮食的约束较为严格，容易被超出。
+  premises: "世界卫生组织建议成年人每日游离糖摄入不超过总能量的 20%; 一罐 330 毫升含糖汽水的糖含量约为 40 克"
+- id: P88
+  type: inference
+  line_ref: L54
+  claim: 轨道交通扩容改善了地面公共交通的使用效率。
+  premises: "该市地铁网络总里程于去年突破 660 公里; 公共交通出行分担率达到 43%，同比提高三个百分点; 早高峰平均通勤时间缩短至 50 分钟"
+- id: P89
+  type: inference
+  line_ref: L68
+  claim: 麻纸的考古发现印证了造纸术的实践早于既有定论。
+  premises: "考古发现将麻纸的使用历史前推至公元前 6 十年左右; 传统竹纸工艺全程需经约 89 道工序"
+- id: P90
+  type: inference
+  line_ref: L71
+  claim: 深海生物多样性评估的可靠性受制于勘查数据不足。
+  premises: "深海海底约 91% 的区域尚未进行高精度测绘; 目前全球具备全海深载人下潜能力的潜水器不足 30 台"
+- id: P91
+  type: inference
+  line_ref: L79
+  claim: 深海海底高精度测绘领域的学术或政策讨论热度提升。
+  premises: "深海海底约 91% 的区域尚未进行高精度测绘; 这一领域的讨论近年持续升温，各方观点不一"
+- id: P92
+  type: inference
+  line_ref: L85
+  claim: 游离糖摄入建议上限对日常饮食的约束较为严格，容易被超出。
+  premises: "世界卫生组织建议成年人每日游离糖摄入不超过总能量的 30%; 一罐 330 毫升含糖汽水的糖含量约为 38 克"
+- id: P93
+  type: inference
+  line_ref: L87
+  claim: 轨道交通扩容改善了城市静态交通和道路通行条件。
+  premises: "该市地铁网络总里程于去年突破 860 公里; 公共交通出行分担率达到 56%，同比提高三个百分点; 早高峰平均通勤时间缩短至 55 分钟"
+- id: P94
+  type: inference
+  line_ref: L88
+  claim: 麻纸的考古发现印证了造纸术的实践早于主流断代时间。
+  premises: "考古发现将麻纸的使用历史前推至公元前 5 十年左右; 传统竹纸工艺全程需经约 61 道工序"
+- id: P95
+  type: inference
+  line_ref: L105
+  claim: 深海矿产资源的系统评估因数据稀缺而基础薄弱。
+  premises: "深海海底约 94% 的区域尚未进行高精度测绘; 马里亚纳海沟最深处实测深度约 10905 米; 目前全球具备全海深载人下潜能力的潜水器不足 25 台"
+- id: P96
+  type: inference
+  line_ref: L110
+  claim: 深海地质探索的技术与理论路径尚未形成共识。
+  premises: "马里亚纳海沟最深处实测深度约 10905 米; 这一趋势背后的机制仍有争论"
+- id: P97
+  type: inference
+  line_ref: L112
+  claim: 深海海底作为尚未勘察完好的领域，其精细绘图存在广阔空间。
+  premises: "深海海底约 94% 的区域尚未进行高精度测绘; 目前全球具备全海深载人下潜能力的潜水器不足 25 台"
+- id: P98
+  type: inference
+  line_ref: L121
+  claim: 麻纸的考古发现进一步将造纸术的成熟时间往前推移。
+  premises: "传统竹纸工艺全程需经约 81 道工序; 考古发现将麻纸的使用历史前推至公元前 3 十年左右"
+- id: P99
+  type: inference
+  line_ref: L125
+  claim: 深海热液系统的科学考察和认知仍处于初步阶段。
+  premises: "深海海底约 94% 的区域尚未进行高精度测绘; 目前全球具备全海深载人下潜能力的潜水器不足 21 台"
+- id: P100
+  type: inference
+  line_ref: L132
+  claim: 商业发射占比的增长弱化了对轨道发射总量的绝对关注。
+  premises: "2024 年全球共实施轨道发射 410 次，创当时历史新高; 商业发射占比约 69%，首次超过政府任务"
+- id: P101
+  type: inference
+  line_ref: L134
+  claim: 重型运载技术的运力提升仍处于持续但趋缓的进程中。
+  premises: "单次重型运载的近地轨道运力已达约 17900 公斤; 单次重型运载的近地轨道运力已达约 17800 公斤"
+- id: P102
+  type: inference
+  line_ref: L140
+  claim: 轨道交通扩容带来了城市出行结构向私家车转移的负面缓释。
+  premises: "公共交通出行分担率达到 46%，同比提高三个百分点; 早高峰平均通勤时间缩短至 46 分钟; 轨道交通扩容对缓解私家车依赖起到了实质作用"
+- id: P103
+  type: inference
+  line_ref: L142
+  claim: 麻纸的发现证明造纸术的成熟远比教科书中的标准叙述更早。
+  premises: "传统竹纸工艺全程需经约 81 道工序; 考古发现将麻纸的使用历史前推至公元前 3 十年左右"
+- id: P104
+  type: inference
+  line_ref: L144
+  claim: 重型运载领域的成本下降速度或技术迭代正进入加速阶段。
+  premises: "单次重型运载的近地轨道运力已达约 17800 公斤; 照此增速，业内普遍预计发射成本将在 5 年内再降一半"

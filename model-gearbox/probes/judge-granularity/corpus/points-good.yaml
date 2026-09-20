@@ -1,0 +1,31 @@
+# 好卷:S 档语料 5 点提取(strong 模型判 true 的同一份——判分基准:探针期望判 extract_ok=true)
+- id: P1
+  type: fact
+  line_ref: L1
+  quote: 全球每天消费约 30 亿杯咖啡。
+  claim: 全球每天消费约 30 亿杯咖啡
+  premises: ""
+- id: P2
+  type: fact
+  line_ref: L2
+  quote: 咖啡因的半衰期约为 5 小时，因此下午晚些时候摄入会影响夜间睡眠质量。
+  claim: 咖啡因的半衰期约为 5 小时
+  premises: ""
+- id: P3
+  type: inference
+  line_ref: L2
+  quote: 咖啡因的半衰期约为 5 小时，因此下午晚些时候摄入会影响夜间睡眠质量。
+  claim: 下午晚些时候摄入咖啡因会影响夜间睡眠质量
+  premises: "① 咖啡因的半衰期约为 5 小时"
+- id: P4
+  type: fact
+  line_ref: L3
+  quote: 美国 FDA 建议健康成年人每日咖啡因摄入不超过 400 毫克。
+  claim: 美国 FDA 建议健康成年人每日咖啡因摄入不超过 400 毫克
+  premises: ""
+- id: P5
+  type: inference
+  line_ref: L4
+  quote: 这说明每天四杯以内的标准咖啡对多数人是安全的。
+  claim: 每天四杯以内的标准咖啡对多数人是安全的
+  premises: "① 美国 FDA 建议健康成年人每日咖啡因摄入不超过 400 毫克\n② 四杯以内的标准咖啡含有的咖啡因量不超过 400 毫克"

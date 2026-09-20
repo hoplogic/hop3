@@ -1,0 +1,57 @@
+Q1: yes（L1 的断言有对应点 P1，line_ref=L1, quote 摘自 L1）。
+Q2: no（L2 的断言包含"半衰期约 5 小时"和"下午晚些时候摄入会影响夜间睡眠质量"两个内容，但清单中只有 P2 事实点覆盖半衰期，而"影响睡眠"作为推断点 P3，其 line_ref=L2 但 quote 与 L2 不完全等值且 L2 缺少独立的事实点覆盖全部断言）。
+Q3: yes（L3 的断言有对应点 P5 的 premises 引用 L3，且 L3 本身有被引用，但 L3 没有独立的 line_ref=L3 的点）。
+Q4: yes（L4 的断言有对应点 P5，line_ref=L4, quote 摘自 L4）。
+
+wait：重新按严格规则审视"有对应点"的定义——line_ref 就是该行、quote 摘自该行。
+
+Q1: yes（L1 有 P1，line_ref=L1, quote 摘自 L1）。
+Q2: no（L2 有 P2 和 P3 两个点的 line_ref 都等于 L2，这意味着 L2 的两个断言内容都被覆盖了——P2 覆盖半衰期事实，P3 覆盖影响睡眠的推断；所以 L2 有对应点，应为 yes。但是 Q2 的判定规则是"两个内容都被 line_ref=L2 的点覆盖才算 yes"，P2 line_ref=L2 覆盖半衰期，P3 line_ref=L2 覆盖影响睡眠，所以 L2 的两个断言都有对应点，应为 yes。修正：Q2: yes）。
+
+重新审视 Q3：L3 的断言是"美国 FDA 建议健康成年人每日咖啡因摄入不超过 400 毫克"。在清单中，P5 的 premises 引用了 L3 的内容，但 P5 的 line_ref=L4，不是 L3。L3 本身没有任何点的 line_ref=L3。所以 L3 没有对应点。Q3: no。
+
+Q4: yes（L4 有 P5，line_ref=L4, quote 摘自 L4）。
+Q5: yes（P3 premises 非空写了"① 咖啡因的半衰期约为 5 小时"，P5 premises 非空写了两条）。
+Q6: yes（P1 quote 在 L1，P2 quote 在 L2，P3 quote 在 L2，P5 quote 在 L4，全部能找到）。
+
+修正后：
+Q1: yes
+Q2: yes
+Q3: no
+Q4: yes
+Q5: yes
+Q6: yes
+
+extract_ok: false
+extract_gap: Q3（L3 的断言没有独立的 line_ref=L3 的点）
+
+等等，Q3 中 L3 的断言在 P5 的 premises 中被引用，但按照定义"别的点在 premises 里提到该行内容不算对应点"——所以 L3 确实是漏提。Q3 为 no。
+
+最终确认：
+
+Q1: yes（L1 有对应点 P1）
+Q2: yes（L2 有对应点 P2 和 P3）
+Q3: no（L3 没有对应的提取点，仅被 P5 premises 引用，不算覆盖）
+Q4: yes（L4 有对应点 P5）
+Q5: yes
+Q6: yes
+
+extract_ok: false
+extract_gap: |
+  Q3（L3 断言未提取；L3 内容仅出现在 P5 的 premises 中，不算对应点）
+
+重新读 Q3 要求："L3 的断言,清单里有对应点吗?"——按定义，没有 line_ref=L3 的点，所以 no。依据一句话。
+
+Q5: only P3 and P5 are inference;检查他们的 premises: P3 premises 是 "① 咖啡因的半衰期约为 5 小时"，非空且写了内容，不是只写编号。P5 premises 是 "① 美国 FDA 建议健康成年人每日咖啡因摄入不超过 400 毫克\n② 四杯以内的标准咖啡含有的咖啡因量不超过 400 毫克"，非空且写了内容。yes。
+
+最终答案：
+
+Q1: yes（L1 有对应点 P1，line_ref=L1, quote 摘自 L1）。
+Q2: yes（L2 有对应点 P2 和 P3，line_ref 均等于 L2）。
+Q3: no（L3 无对应点，其内容仅被 P5 的 premises 引用）。
+Q4: yes（L4 有对应点 P5，line_ref=L4, quote 摘自 L4）。
+Q5: yes（所有 inference 点的 premises 均非空且写了内容）。
+Q6: yes（所有点的 quote 均能在原文对应行找到）。
+extract_ok: false
+extract_gap: |
+  Q3（L3 断言未提取）

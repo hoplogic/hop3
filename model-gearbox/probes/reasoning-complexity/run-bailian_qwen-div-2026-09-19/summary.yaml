@@ -1,0 +1,49 @@
+service: bailian_qwen
+model_from_response:
+  - qwen3.8-27b
+date: '2026-09-19'
+seed: 20260918
+task: div
+维度: G1 推理复杂度——2N÷N 位除法阶梯,商 2N+1 位有效数字(迭代推理:每位商依赖上一步余数;禁工具纯推理;爬梯每档 n=5,候选最大档 confirm=20 发,正确率>=90% 定档)
+curve:
+  N2:
+    climb: 5/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+    confirm: 19/20
+    confirm_rate: 0.95
+  N3:
+    climb: 0/5
+    runs:
+      - i: 1
+        correct: false
+        got: '2816.421'
+        truth: '2816.642'
+      - i: 2
+        correct: false
+        got: '1133.191'
+        truth: '1133.181'
+      - i: 3
+        correct: false
+        got: '712.0310'
+        truth: '712.0309'
+      - i: 4
+        correct: false
+        got: '816.3022'
+        truth: '816.3130'
+      - i: 5
+        correct: false
+        got: '606.5172'
+        truth: '606.5905'
+    confirm: 9/20
+    confirm_rate: 0.45
+最大N: 2

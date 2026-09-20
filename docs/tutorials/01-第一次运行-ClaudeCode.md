@@ -9,7 +9,7 @@
 
 # 教程 1（Claude Code 版）· 第一次运行
 
-> 用 Codex 的读平行版 [[01-第一次运行-Codex]]。之后的教程 02-07 两个载体通用——凡涉载体命令处都并排给出"Claude Code 命令"与"Codex 命令"两个代码框，抄你自己那个。
+> 用 Codex 的读平行版 [[01-第一次运行-Codex]]，用 cfuse（CodeFuse）的读 [[01-第一次运行-cfuse]]，用 opencode 的读 [[01-第一次运行-opencode]]。之后的教程 02-07 各载体通用——凡涉载体命令处都并排给出"Claude Code 命令"与"Codex 命令"两个代码框，抄你自己那个（cfuse 用户按内置引擎选）。
 
 **目标**：30 分钟内，从零安装到亲眼看着一个 spec 在 Claude Code 里被引擎驱动执行完。
 **前提**：装有 Node.js ≥ 18 和 Claude Code；**不需要任何 API key**（复用模式下 Claude Code 自己就是推理引擎）。

@@ -1,0 +1,9 @@
+passed: false
+defects:
+  - desc: "步骤 3 缺输入声明"
+    severity: 高
+  - desc: "备注含裸数字"
+    severity: 低
+advice: |
+  先补步骤 3 的输入声明
+  再把裸数字改成带单位形态

@@ -1,0 +1,9 @@
+Q1: yes（P1 的 line_ref 为 L1 且 quote 完全摘自该行，覆盖 L1 断言）
+Q2: yes（P2 覆盖半衰期、P3 覆盖影响睡眠，两者 line_ref 均为 L2，满足两个内容都被覆盖）
+Q3: no（L3 的 FDA 建议 400 毫克断言没有专属清单点，仅在 P5 的 premises 中被引用）
+Q4: yes（P5 的 line_ref 为 L4 且 quote 摘自该行，覆盖 L4 断言）
+Q5: yes（P3 的 premises 写出“咖啡因的半衰期约为 5 小时”，P5 的 premises 写出两句话内容，均非空且不是仅有编号）
+Q6: yes（P1–P5 的 quote 文本均能在对应原文行中找到匹配）
+extract_ok: false
+extract_gap: |
+  Q3

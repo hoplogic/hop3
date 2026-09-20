@@ -1,0 +1,75 @@
+service: deepseek
+model_from_response:
+  - deepseek-flash
+n_per_cell: 6
+date: '2026-09-19'
+维度: G2 任务复杂度(一次做正确的能力)——单发裸能力,无重试无引擎兜底
+tiers:
+  xl:
+    pass: 6/6
+    runs:
+      - i: 1
+        pass: true
+        covered: 40/40
+        prose_prefix: false
+        miss: []
+      - i: 2
+        pass: true
+        covered: 40/40
+        prose_prefix: false
+        miss: []
+      - i: 3
+        pass: true
+        covered: 40/40
+        prose_prefix: false
+        miss: []
+      - i: 4
+        pass: true
+        covered: 40/40
+        prose_prefix: false
+        miss: []
+      - i: 5
+        pass: true
+        covered: 40/40
+        prose_prefix: false
+        miss: []
+      - i: 6
+        pass: true
+        covered: 40/40
+        prose_prefix: false
+        miss: []
+  xxl:
+    pass: 5/6
+    runs:
+      - i: 1
+        pass: true
+        covered: 80/80
+        prose_prefix: false
+        miss: []
+      - i: 2
+        pass: true
+        covered: 80/80
+        prose_prefix: false
+        miss: []
+      - i: 3
+        pass: true
+        covered: 80/80
+        prose_prefix: false
+        miss: []
+      - i: 4
+        pass: true
+        covered: 80/80
+        prose_prefix: false
+        miss: []
+      - i: 5
+        pass: false
+        covered: 79/80
+        prose_prefix: false
+        miss:
+          - pt41(未命中)
+      - i: 6
+        pass: true
+        covered: 80/80
+        prose_prefix: false
+        miss: []
+坍塌点: (测程内未坍塌)

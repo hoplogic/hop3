@@ -1,0 +1,8 @@
+Q1: yes（L1 断言有 P1 对应，line_ref=L1, quote 摘自 L1）
+Q2: yes（L2 断言有 P2 和 P3 两个点对应，line_ref 均为 L2，两个内容均被覆盖）
+Q3: yes（L3 断言有 P4 对应，line_ref=L3, quote 摘自 L3）
+Q4: yes（L4 断言有 P5 对应，line_ref=L4, quote 摘自 L4）
+Q5: yes（P3 premises 写了"① 咖啡因的半衰期约为 5 小时"，P5 premises 写了"① …不超过 400 毫克\n② 四杯…不超过 400 毫克"，均非空且写了具体内容）
+Q6: yes（所有点的 quote 都能在原文对应行中找到）
+extract_ok: true
+extract_gap: |

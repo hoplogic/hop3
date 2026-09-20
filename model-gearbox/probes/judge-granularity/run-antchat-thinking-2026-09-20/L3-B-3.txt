@@ -1,0 +1,2 @@
+covered: no
+missing: 漏了第 2 个断言

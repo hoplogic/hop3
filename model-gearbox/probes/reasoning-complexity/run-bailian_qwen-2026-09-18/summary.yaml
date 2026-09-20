@@ -1,0 +1,51 @@
+service: bailian_qwen
+model_from_response:
+  - qwen3.8-27b
+date: '2026-09-18'
+seed: 20260918
+维度: G1 推理复杂度——N 位整数乘法阶梯(禁工具纯推理;爬梯每档 n=5,候选最大档 confirm=20 发,正确率>=90% 定档)
+curve:
+  N2:
+    climb: 5/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+  N3:
+    climb: 5/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+    confirm: 20/20
+    confirm_rate: 1
+  N4:
+    climb: 4/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: false
+        got: '47330804'
+        truth: '47340804'
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+最大N: 3

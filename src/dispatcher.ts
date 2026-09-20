@@ -8,7 +8,7 @@ import { load as yamlLoad } from 'js-yaml';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ExecutionEngine } from './engine.js';
-import { PromptAssembler, injectKnowledgeContext, actRoleKind, roleGuideText, renderPromptParts } from './prompt.js';
+import { PromptAssembler, injectKnowledgeContext, actRoleKind, roleGuideText, renderPromptParts, SCHEMA_KICK_MARKER } from './prompt.js';
 import { DefaultToolProvider } from './tools.js';
 import { CompositeToolProvider } from './tools-composite.js';
 import { BodyInterpreter, evalExprSync } from './act-body-interpreter.js';
@@ -261,8 +261,14 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
       // 换算超 10min 即拒发"Streaming is required"（per-request 第二参不进预检,首修修错层实证）。
       // 见 design ^anc-exec-nonstreaming-timeout。// @a: anc-exec-nonstreaming-timeout
       const timeout = this.nonstreamingTimeoutMs();
+      // 鉴权头档按 HostConfig.auth 分双臂（^anc-config-standalone-schema——2026-09-18 review 抓
+      // 缺省 provider 路径漏装:唯一 provider 配 bearer 不写显式路由时 resolveModel 落 'default'
+      // 直取本 client,原硬编码 x-api-key 恰撞回该档要治的 InvalidApiKey）。// @a: anc-config-standalone-schema
+      const defaultOpts = this.hostConfig.auth === 'bearer'
+        ? { apiKey: null, authToken: apiKey, timeout }
+        : { apiKey, authToken: null, timeout };
       this.defaultClient = wrapAnthropicClient(
-        baseURL ? new Anthropic({ apiKey, baseURL, authToken: null, timeout }) : new Anthropic({ apiKey, authToken: null, timeout }),
+        baseURL ? new Anthropic({ ...defaultOpts, baseURL }) : new Anthropic(defaultOpts),
         Anthropic);
     }
     this.clients.set('default', this.defaultClient);
@@ -686,7 +692,7 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
         }
         attempt++;
         // 把校验反馈拼回 instruction，重做该算子
-        step.context.instruction = `${baseInstruction}\n\n[上次输出未通过校验，请修正后重新输出]\n${resp.message}`;
+        step.context.instruction = `${baseInstruction}\n\n${SCHEMA_KICK_MARKER}\n${resp.message}`;
         const retry = await this.execWithEmptyRetry(step);   // 全口径罩:SCHEMA 重做口同享空响应自救（计数每口独立） // @a: anc-exec-output-empty-loud
         if (retry === 'paused') return;
         result = retry;
@@ -1504,6 +1510,12 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     const resolved = this.resolveModel('reason', step);
     const client = this.getClientForService(resolved.service_id);
     if (client.protocol === 'openai-chat') return this.executeReasonOrCheck(step);
+    // reason 工具面全按声明下发（^anc-exec-reason-tools 2026-09-18 修订——原 basic 恒下发
+    // 废除:救"少数 reason 要读盘"的决策给了全部 reason 无条件十一件,弱模型实撞七轮全灭
+    // 20 轮工具空转,闲置工具面是行为吸引子。零声明=零工具面走单发纯推理——弱模型物理
+    // 无可着魔按钮;有声明才进工具循环）。// @a: anc-exec-reason-tools
+    const reasonNode = this.findStepInSpec(step.step_id) as (StepNode & { tool_grants?: { name: string }[] }) | null;
+    if (!reasonNode?.tool_grants?.length) return this.executeReasonOrCheck(step);
     return this.executeActWithTools(step, false);
   }
 
@@ -1548,6 +1560,12 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
       hopLog.recordStepMeta(step.step_id, {
         llm: {
           model: request.model, max_tokens: request.max_tokens,   // 发送口抄实际上限（^anc-exec-output-budget 观测条——烧穿排障不再翻代码答"上限是多少"）
+          // thinking 实发参数摘要（发送口抄请求对象——0100 真机 probe 实撞:五级链装配后 hoplog 无 thinking 字段,probe '核 llm.request' 无从核）// @a: anc-exec-thinking-routing
+          thinking: (request as { thinking?: { type: string; budget_tokens?: number } }).thinking
+            ? ((request as { thinking?: { type: string; budget_tokens?: number } }).thinking!.type === 'enabled'
+              ? `enabled:budget=${(request as { thinking?: { type: string; budget_tokens?: number } }).thinking!.budget_tokens}`
+              : 'disabled')
+            : 'absent',
           input_tokens: response.usage?.input_tokens, output_tokens: response.usage?.output_tokens,
           // 缓存观测（C）:命中率=cache_read/(input+cache_read);openai 协议恒 null 如实记 // @a: anc-exec-cache-control
           cache_read_input_tokens: response.usage?.cache_read_input_tokens ?? null,
@@ -1625,9 +1643,12 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     const grantAll = grants.some(g => g.name === '*');
     const grantedNames = new Set(grants.map(g => g.name));
     const deniedNames = new Set((nodeForGrants?.tool_denies ?? []).map(d => d.name));
+    // reason 步 basic 不再豁免（^anc-exec-reason-tools 2026-09-18 修订——reason 全按声明,
+    // basic 与 special 同一文法;act/commit 的 basic 恒下发照旧）。// @a: anc-exec-reason-tools
+    const isReasonStep = nodeForGrants?.step_type === 'reason';
     const tools = this.toolProvider.list()
       .filter(t => !deniedNames.has(t.name))   // 禁用优先——被禁件（含 basic 族）从清单整体剔除,LLM 根本看不到（^anc-step-tool-deny） // @a: anc-step-tool-deny
-      .filter(t => (t.category ?? 'special') === 'basic' || grantAll || grantedNames.has(t.name))
+      .filter(t => (!isReasonStep && (t.category ?? 'special') === 'basic') || grantAll || grantedNames.has(t.name))
       // requires_commit 件在 list 期过滤（^anc-exec-reason-tools "不能 commit 写"——reason 与
       // act free 同一条不可逆红线:非 commit 步这类工具恒不下发,LLM 根本看不到;运行期
       // COMMIT_REQUIRED 拦截保留作纵深防御——LLM 可能幻觉调用未下发的工具名）。
@@ -1667,7 +1688,9 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     if (actClient.protocol === 'openai-chat' && tools.length > 0) {
       throw new Error('PROTOCOL_TOOL_LOOP_UNSUPPORTED: openai-chat 协议 provider 不支持无 body 的 act 工具循环——给 act 写 hop_python body（工具走引擎白名单通道），或该步 @model 路由到 anthropic 协议 provider');
     }
-    const toolCallLog: Array<{ name: string; result: 'success' | 'failure'; at: string }> = [];
+    const toolCallLog: Array<{ name: string; result: 'success' | 'failure'; at: string; args_preview?: string; result_preview?: string }> = [];
+    let lastSignature = '';   // 同签名断路器状态（^anc-exec-toolloop-repeat-break） // @a: anc-exec-toolloop-repeat-break
+    let repeatCount = 0;
 
     let iteration = 0;
     // 本步是否已做过压缩降级（^anc-exec-toolloop-ctx-degrade——补救档只重试一次,
@@ -1698,6 +1721,11 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
         // act/commit 照旧 0;与单发路径 buildApiRequest 的 selectTemperature 同源）。
         temperature: this.selectTemperature(step.step_type),
         tools,
+        // thinking 五级链同装（review 批 F1 修——工具循环原零 thinking 键,act free/带工具 reason
+        // 整级旁路"恒显式"承诺;与单发路径同一 resolveThinkingParam 单点,级1 记名册降档、
+        // 级2 @thinking、级5 act free 恒开自此对工具循环步真实生效）。
+        // @a: anc-exec-thinking-routing
+        ...this.resolveThinkingParam(step.step_type, step, resolved, maxOutputBudget),
       };
       let response: Anthropic.Message;
       try {
@@ -1733,6 +1761,12 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
       this.engine.getHopLog()?.recordStepMeta(step.step_id, {
         llm: {
           model: resolved.model, max_tokens: maxOutputBudget,   // 同上,工具循环轮 // @a: anc-exec-output-budget
+          // thinking 实发摘要（工具循环轮,发送口抄 loopRequest——与单发路径同款观测,F1 修后本路径真有此参数）// @a: anc-exec-thinking-routing
+          thinking: (loopRequest as { thinking?: { type: string; budget_tokens?: number } }).thinking
+            ? ((loopRequest as { thinking?: { type: string; budget_tokens?: number } }).thinking!.type === 'enabled'
+              ? `enabled:budget=${(loopRequest as { thinking?: { type: string; budget_tokens?: number } }).thinking!.budget_tokens}`
+              : 'disabled')
+            : 'absent',
           input_tokens: response.usage?.input_tokens, output_tokens: response.usage?.output_tokens,
           cache_read_input_tokens: response.usage?.cache_read_input_tokens ?? null,
           cache_creation_input_tokens: response.usage?.cache_creation_input_tokens ?? null,
@@ -1789,11 +1823,31 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
           if (!allowCommit && toolDef?.requires_commit) {
             throw new Error('COMMIT_REQUIRED: tool "' + block.name + '" requires commit step');
           }
+          // 同签名断路器（^anc-exec-toolloop-repeat-break——连续 3 次同名同参即断:同输入
+          // 重发结果不会不同,复读是形态病不是总量病〔实撞:14 连扫同一空目录,总量闸第 20 轮
+          // 才拦〕;同名不同参不触发——合法逐文件遍历形态）。// @a: anc-exec-toolloop-repeat-break
+          const signature = `${block.name}|${JSON.stringify(block.input)}`;
+          repeatCount = signature === lastSignature ? repeatCount + 1 : 1;
+          lastSignature = signature;
+          if (repeatCount >= 3) {
+            this.flushToolLog(step.step_id, toolCallLog);
+            throw new Error(`TOOL_LOOP_REPEAT: 工具调用 "${block.name}" 以完全相同的参数连续重复 ${repeatCount} 次——同一调用的结果不会不同,这是复读循环不是探索（明细已落 HopLog tool 块）`);
+          }
           // 写域随 allowCommit 分派（同 body 解释器）：act free 的 LLM 临场写文件同受 work_zone
           // 收窄——free 只影响行为可预期性,不放大权限（2026-08-28 作者定）。// @a: anc-exec-write-scope
           const result = await this.toolProvider.execute(block.name, block.input as Record<string, unknown>, allowCommit ? 'workspace' : 'work_zone');
           // tool 审计性字段，步骤完成时经 recordStepMeta 写入 // @a: anc-obs-audit
-          toolCallLog.push({ name: block.name, result: result.success ? 'success' : 'failure', at: new Date().toISOString(), ...(result.audit ?? {}) });
+          // args/result 截断预览入账（^anc-obs-audit——tool_result 是模型每轮决策的直接输入,
+          // 不在账上=验尸只能猜模型看见了什么〔Qwen 复读循环实撞:空目录注记送没送到靠 dist
+          // grep 旁证〕;500 字符短结果全文在账,大文件 read 只留头部;debug 级才记）。
+          const isDebug = this.engine.getHopLog()?.getLevel?.() === 'debug';
+          const preview = (s: string) => s.length <= 500 ? s : `${s.slice(0, 500)}…[截断,原长${s.length}]`;
+          const renderedForLog = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
+          toolCallLog.push({
+            name: block.name, result: result.success ? 'success' : 'failure', at: new Date().toISOString(),
+            ...(isDebug ? { args_preview: preview(JSON.stringify(block.input)), result_preview: preview(renderedForLog) } : {}),
+            ...(result.audit ?? {}),
+          });
           // 对象结果（Composite unwrap/裁剪通过面）序列化为 JSON 文本——String() 直转对象
           // 产 "[object Object]"，LLM 只能报"结果不可解析"（fact-check 实撞:工具全 success
           // 而 8 事实点全 not_found）。// @a: anc-exec-tool-result-render
@@ -1973,7 +2027,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     if (!node?.body) {
       return this.executeActWithTools(step, allowCommit);   // fallback
     }
-    const toolCallLog: Array<{ name: string; result: 'success' | 'failure'; at: string }> = [];
+    const toolCallLog: Array<{ name: string; result: 'success' | 'failure'; at: string; args_preview?: string; result_preview?: string }> = [];
     const warnLog: string[] = [];
     const interp = new BodyInterpreter({
       inputs: step.context.inputs,
@@ -2004,6 +2058,44 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     return outputs;
   }
 
+  /** thinking 五级优先链装配单点（0100 批;review 批 F1 修提为公共件——buildApiRequest 单发路径
+   * 与 executeActWithTools 工具循环路径同一条链,"恒显式"承诺两路径同兑现）。
+   * 五级:记名册 > 步骤 @thinking > routing_rules > provider 缺省 > 引擎内建步骤类型缺省
+   * （act 无 body 未标 free/commit 关;act free/reason/check/replan 开——作者拍分类表 2026-09-20）。
+   * 级4 缺省 provider 回退:service_id 为 default 时读首 provider 的 {SID}_THINKING
+   * （与 auth defaultClient 补装同构——缺省路径不补则唯一 provider 配键不写路由时静默失效）。 */
+  // @a: anc-exec-thinking-routing, anc-exec-thinking-exhausted, anc-exec-thinking-step-annotation, anc-exec-thinking-provider-default
+  private resolveThinkingParam(stepType: ExecutableStepType | 'replan', step: StepReady | undefined, resolved: { service_id: string; thinking?: 'enabled' | 'disabled' }, maxOutput: number): { thinking?: { type: 'disabled' } | { type: 'enabled'; budget_tokens: number } } {
+    // budget=预算半,下限夹 1024（anthropic 协议最低值——小预算+enabled 组合原发 750 违约 400;
+    // 四十六审探针抓）。budget≥maxOutput 时端点自拒,夹上限 maxOutput-1 防倒挂
+    const enabledParam = { type: 'enabled' as const, budget_tokens: Math.min(Math.max(Math.floor(maxOutput / 2), 1024), Math.max(maxOutput - 1, 1024)) };
+    // 级1 记名册（止血恒最高——该步已实证烧穿,标 on 也压不回）
+    if (step && this.thinkingExhaustedSteps.has(step.step_id)) return { thinking: { type: 'disabled' } };
+    // 级2 步骤 @thinking 标注（步骤节点查不到时短路——replan 场景无 step 天然走此路）
+    const stepNode = step ? this.findStepInSpec(step.step_id) : undefined;
+    if (stepNode?.thinking_override === 'off') return { thinking: { type: 'disabled' } };
+    if (stepNode?.thinking_override === 'on') return { thinking: enabledParam };
+    // 级3 routing_rules（resolveModel 带出）
+    if (resolved.thinking === 'disabled') return { thinking: { type: 'disabled' } };
+    if (resolved.thinking === 'enabled') return { thinking: enabledParam };
+    // 级4 provider 缺省（{SERVICE_ID}_THINKING——buildEnvSnapshot 披发;缺省 provider 路径回退首
+    // provider 的键,与 auth defaultClient 同构）
+    let provDefault = this.envOf(`${resolved.service_id.toUpperCase()}_THINKING`);
+    if (provDefault === undefined && resolved.service_id === 'default') {
+      const firstSid = this.hostConfig.model_engine?.routing_rules?.[0]?.service_id
+        ?? this.hostConfig.model_engine?.default_service_id;
+      if (firstSid && firstSid !== 'default') provDefault = this.envOf(`${firstSid.toUpperCase()}_THINKING`);
+    }
+    if (provDefault === 'disabled') return { thinking: { type: 'disabled' } };
+    if (provDefault === 'enabled') return { thinking: enabledParam };
+    // 级5 引擎内建步骤类型缺省（作者拍分类表:act 无 body 未标 free/commit → 关;
+    // act free/reason/check/replan → 开。带 body 步骤引擎直执不经本函数;
+    // 步骤节点查不到时 act 按非 free 关——设计 1390 落空分叉句）
+    const isActFree = stepType === 'act' && stepNode?.step_type === 'act' && (stepNode as { free?: boolean }).free === true;
+    const off = (stepType === 'act' && !isActFree) || stepType === 'commit';
+    return { thinking: off ? { type: 'disabled' } : enabledParam };
+  }
+
   private buildApiRequest(context: AssembledContext, stepType: ExecutableStepType | 'replan', step?: StepReady): { request: Anthropic.MessageCreateParamsNonStreaming; client: ProtocolClient } {
     const system = this.buildSystemPrompt(context, stepType);
     const messages = this.buildMessages(context, stepType);
@@ -2018,16 +2110,10 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
         messages,
         max_tokens: maxOutput,
         temperature: this.selectTemperature(stepType),
-        // thinking 路由（形态 B——route 声明才发参,undefined 不发吃端点缺省;anthropic 协议
-        // {type:'enabled'} 须带 budget_tokens,取输出预算一半;deepseek 端点两值实测认）。
-        // THINKING_EXHAUSTED 记名步强制 disabled 压在最前——该步已实证带 thinking 烧穿写不出
-        // 正文,变招降档保底拿产出（^anc-exec-thinking-exhausted 三批）。
-        // @a: anc-exec-thinking-routing, anc-exec-thinking-exhausted
-        ...(step && this.thinkingExhaustedSteps.has(step.step_id) ? { thinking: { type: 'disabled' as const } }
-          : resolved.thinking === 'disabled' ? { thinking: { type: 'disabled' as const } }
-          // budget=预算半,下限夹 1024（anthropic 协议 budget_tokens 最低值——小预算+enabled 组合
-          // 原发 750 违约 400;四十六审探针抓）。budget≥maxOutput 时端点自拒,夹上限 maxOutput-1 防倒挂
-          : resolved.thinking === 'enabled' ? { thinking: { type: 'enabled' as const, budget_tokens: Math.min(Math.max(Math.floor(maxOutput / 2), 1024), Math.max(maxOutput - 1, 1024)) } } : {}),
+        // thinking 五级优先链——单点 resolveThinkingParam(工具循环 loopRequest 同用;
+        // review 批 F1 修:原 IIFE 只装单发路径,act free/无 body act/带工具 reason 整级旁路)。
+        // @a: anc-exec-thinking-routing
+        ...this.resolveThinkingParam(stepType, step, resolved, maxOutput),
       },
       client,
     };
@@ -2615,7 +2701,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
   }
 
   /** 步骤完成时把工具调用日志写入 HopLog（非空才写）。executeActWithTools / executeActBody 共用。 */
-  private flushToolLog(stepId: string, toolCallLog: Array<{ name: string; result: 'success' | 'failure'; at: string }>): void {
+  private flushToolLog(stepId: string, toolCallLog: Array<{ name: string; result: 'success' | 'failure'; at: string; args_preview?: string; result_preview?: string }>): void {
     const hopLog = this.engine.getHopLog();
     if (hopLog && toolCallLog.length > 0) {
       hopLog.recordStepMeta(stepId, { tool: toolCallLog });
@@ -2663,11 +2749,16 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
       // {SERVICE_ID}_PROTOCOL env 决定协议（standalone provider 注入面；缺省 anthropic）// @a: anc-exec-protocol-adapter
       const envProto = this.envOf(`${service_id.toUpperCase()}_PROTOCOL`);
       const timeout = this.nonstreamingTimeoutMs();   // client 级预检解锁,同 defaultClient // @a: anc-exec-nonstreaming-timeout
+      // 鉴权头档（^anc-config-standalone-schema auth 字段——bearer=走 SDK authToken 通道发
+      // Authorization: Bearer,apiKey 置 null 防双头;缺省 api-key 形态与既有逐字节同）。
+      const envAuth = this.envOf(`${service_id.toUpperCase()}_AUTH`);
+      const anthropicOpts = envAuth === 'bearer'
+        ? { apiKey: null, authToken: envKey, timeout }
+        : { apiKey: envKey, authToken: null, timeout };
       const client: ProtocolClient = envProto === 'openai-chat'
         ? makeOpenAiClient({ apiKey: envKey, ...(envUrl ? { baseURL: envUrl } : {}) })
         : wrapAnthropicClient(
-            envUrl ? new Anthropic({ apiKey: envKey, baseURL: envUrl, authToken: null, timeout })
-                   : new Anthropic({ apiKey: envKey, authToken: null, timeout }),   // authToken: null 同 defaultClient——切断 SDK 隐式 env 读取
+            envUrl ? new Anthropic({ ...anthropicOpts, baseURL: envUrl }) : new Anthropic(anthropicOpts),
             Anthropic);
       this.clients.set(service_id, client);
       return client;

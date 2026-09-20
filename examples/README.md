@@ -16,6 +16,7 @@
 | `data-quality.md` + `demo-data.json` | 数据质量修复 | 入门四件之一（随 npm 包）；subtask + check final + adaptive |
 | `doc-review.md` | 文档评审 | 入门四件之一（随 npm 包） |
 | `hop-fact-check.md` + `fact-check-sample.md` | 事实核查完整版（sample=示范输入，埋了待抓的推理跳跃） | for-each 并行 + collect 子句 + branch 两路分流 + 行号分析物溯源 + 补搜纪律 + 双自查回路（两类缺失验收） |
+| `hop-fact-check.qwen3.8-27b.md` | 上行的模型变体（目标 profile=qwen3.8-27b,check_judge: closed-questions-only——头部注记含源母本/降档动作;母本改动后须重新生成） | check 步微判定展开范本：开放式验收拆成"机械分组 act → 逐行封闭小题 loop → 机械汇总 check final"（弱模型判官只答原子 yes/no,门槛与汇总归程序——判官摇摆无处发生） |
 | `fact-check-demo.md` | 事实核查演示版（--demo 附装为 `demo-fact-check`；随 npm 包） | 完整版的适度简化：只核一级事实（可直接查证的断言），无推演审查/自查回路 |
 | `hop-deep-research/`（spec + sample） | 主题深度研究（sample=模糊问题，触发 scope gate）。hop- 前缀区隔 Claude Code 内置同名 workflow /deep-research | scope gate 澄清分流 + 子问题外延检查 + 双语 fan-out 检索 + 本地材料对照（local_materials）+ 对抗式验证（独立二源/换语言圈/enum 四态）+ 机械完备性核对 + 对照评估节 + ask/commit 落盘交付 |
 | `contract-review/`（3 spec + 各自 params） | 合同评审：路由 + NDA triage + DPA review | call 编排（标题映射路由）+ 确定性 triage（hop_python 读 playbook 阈值零 LLM）+ 注入隔离（untrusted 正文只进 reason）+ destination/signing gate |

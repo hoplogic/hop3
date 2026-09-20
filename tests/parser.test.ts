@@ -2089,6 +2089,69 @@ g
     expect(step.instruction).toBe('Think carefully');
   });
 
+  // @v: anc-exec-thinking-step-annotation —— @thinking 步骤标注（0100,B 案独立标注:
+  // 单步思考开关,五级链第 2 级;serialize 往返保留;off/on 外的值响亮拒不静默）
+  it('extracts @thinking off — 剥出 instruction 存 thinking_override', () => {
+    const md = `# Test
+## Steps
+1. [reason] 提取要点
+  + → result: text  # 结果
+  > @thinking off
+  > 逐条提取
+`;
+    const { ast, errors } = parseSpec(md);
+    expect(errors).toHaveLength(0);
+    const step = ast.steps![0] as ReasonStep;
+    expect(step.thinking_override).toBe('off');
+    expect(step.instruction).toBe('逐条提取');
+  });
+
+  it('@thinking on 与 @model 同一步共存互不干扰', () => {
+    const md = `# Test
+## Steps
+1. [reason] 推理
+  + → result: text  # 结果
+  > @model deepseek/deepseek-flash
+  > @thinking on
+  > 想清楚
+`;
+    const { ast, errors } = parseSpec(md);
+    expect(errors).toHaveLength(0);
+    const step = ast.steps![0] as ReasonStep;
+    expect(step.model_override).toBe('deepseek/deepseek-flash');
+    expect(step.thinking_override).toBe('on');
+  });
+
+  it('@thinking 非法值响亮拒——parse error 点名步骤与坏值', () => {
+    const md = `# Test
+## Steps
+1. [reason] 推理
+  + → result: text  # 结果
+  > @thinking maybe
+`;
+    const { errors } = parseSpec(md);
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors.some(e => e.message.includes('@thinking') && e.message.includes('maybe'))).toBe(true);
+  });
+
+  it('@thinking serialize 往返保留', () => {
+    const md = `# Test
+Id: t
+## Steps
+1. [reason] 推理
+  + → result: text  # 结果
+  > @thinking off
+  > 干活
+`;
+    const { ast, errors } = parseSpec(md);
+    expect(errors).toHaveLength(0);
+    const out = serializeSpec(ast);
+    expect(out).toContain('@thinking off');
+    const { ast: ast2, errors: e2 } = parseSpec(out);
+    expect(e2).toHaveLength(0);
+    expect((ast2.steps![0] as ReasonStep).thinking_override).toBe('off');
+  });
+
   it('parses step without @model — model_override is undefined', () => {
     const md = `# Test
 ## Steps

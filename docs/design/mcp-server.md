@@ -27,7 +27,7 @@
 
 ## 定位【契约】 ^anc-struct-mcp-server
 
-> **模块版本**：mcp-server `v0.16.0`（2026-09-10）。本版 0084 批一四件（M1 并发 run 上限配置化/M2 合并补 language+文法核/M3 restore 补装 model_engine〔与 startRun 公共化真同源〕/M4 restore env 换重读面）。0.x 未承诺稳定。**MCP 工具名+输入/输出 schema 是对外稳定面**——载体注册配置依赖之，破坏即破坏已注册用户。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
+> **模块版本**：mcp-server `v0.16.1`（2026-09-18）。本版=工程链 review 补账（多 provider env 注入键名单补 `_AUTH` 与 `_MAX_OUTPUT_TOKENS、`{SERVICE_ID}_THINKING`（provider 级思考缺省,0100 批——2026-09-20 review 批补登）` 两键;auth/revision_prompt 两新配置键的 schema 权威在 [[shared-providers#^anc-config-standalone-schema]]、行为权威各在其锚,本文档只登键名单——1cc47f7b 自称'mcp-server v 随批'未兑现的账本版清）。上版 v0.16.0（2026-09-10）。本版 0084 批一四件（M1 并发 run 上限配置化/M2 合并补 language+文法核/M3 restore 补装 model_engine〔与 startRun 公共化真同源〕/M4 restore env 换重读面）。0.x 未承诺稳定。**MCP 工具名+输入/输出 schema 是对外稳定面**——载体注册配置依赖之，破坏即破坏已注册用户。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
 > **根锚点继承**（`^anc-meta-module-design-artifacts` 必备件①，本模块为首个样板）：
 > - 概念前提：[[../concepts/HopSpec V3配套HopJIT运行时能力#^anc-exec-dual-mode]]（双模式驱动——本模块是独立模式的对外协议壳，模式语义变更须重核本文）；[[../concepts/HopSpec V3核心规范#^anc-exec-hitl-presentation]]（HITL 介入点表达——paused 载荷与"不替答"纪律的上游）
 > - 元规范义务：[[../concepts/工程实现链规范#^anc-meta-module-design-artifacts]]（四必备件）；[[../concepts/工程实现链规范#^anc-meta-module-evolution]]（版本纪律，G9 互锁）；[[../concepts/工程实现链规范#^anc-meta-guard-self-trust]]（fail-fast/禁静默跳过——本模块启动与配置加载行为的依据）
@@ -321,7 +321,7 @@ struct: NotifyConfig
 
 **配置核心直接调用同样 fail-fast**：`HopjitMcpCore.startRun` 在写任何派生路由 env 前一次性读取并快照全部 provider key；任一缺失立即拒绝。必须先全读后全写，禁止边读 `api_key_env` 边写 `{SERVICE}_API_KEY`——源变量可能与另一个 provider 的派生目标同名，顺序写会把后者凭证静默串成前者。
 
-**多 provider 的 v1 语义（2026-08-07 review P1 补定——原设计未言，代码静默只吃 providers[0]）**：`providers[0]` 为默认执行 provider（HostConfig 主体 + ModelEngine.default_service_id）；**全部条目**在启动时注入本进程路由环境（`{SERVICE_ID大写}_API_KEY` / `_BASE_URL` / `_PROTOCOL`——第三项 2026-08-12 随 openai 协议加入，getClientForService 按它选适配器，缺省 anthropic；即 [[step-dispatcher]] getClientForService 的多服务约定）——spec 的 `service/model` 引用按 service_id 命中对应后端，不静默回退默认 client（错后端=烧错钱）。`default_model` 映射 ModelEngine.default_model（缺省 providers[0].model）。key 始终只在本进程 env，不出进程（隔离纪律不变）。**v1 边界（v2 复审点）**：路由走进程 env 意味着同 server 全部 run 共享一套 provider 集合——v1 单配置文件下语义一致无冲突；若将来出现"不同 run 用不同 provider 集合"的需求（多配置/每 run 覆写），env 通道会串台，须改为显式传 ModelEngine 路由表（依赖驱动决策，触发即复审）。
+**多 provider 的 v1 语义（2026-08-07 review P1 补定——原设计未言，代码静默只吃 providers[0]）**：`providers[0]` 为默认执行 provider（HostConfig 主体 + ModelEngine.default_service_id）；**全部条目**在启动时注入本进程路由环境（`{SERVICE_ID大写}_API_KEY` / `_BASE_URL` / `_PROTOCOL` / `_AUTH`（第四项 2026-09-18 随 auth:bearer 档加入,仅 bearer 时写键——getClientForService 按它选鉴权头形态,schema 权威 [[shared-providers#^anc-config-standalone-schema]] auth 行）/ `_MAX_OUTPUT_TOKENS`（输出预算解析链第 3 级,前批既有本行漏登随批补）——`_PROTOCOL` 2026-08-12 随 openai 协议加入，getClientForService 按它选适配器，缺省 anthropic；即 [[step-dispatcher]] getClientForService 的多服务约定）——spec 的 `service/model` 引用按 service_id 命中对应后端，不静默回退默认 client（错后端=烧错钱）。`default_model` 映射 ModelEngine.default_model（缺省 providers[0].model）。key 始终只在本进程 env，不出进程（隔离纪律不变）。**v1 边界（v2 复审点）**：路由走进程 env 意味着同 server 全部 run 共享一套 provider 集合——v1 单配置文件下语义一致无冲突；若将来出现"不同 run 用不同 provider 集合"的需求（多配置/每 run 覆写），env 通道会串台，须改为显式传 ModelEngine 路由表（依赖驱动决策，触发即复审）。
 
 ## 安全边界【契约】 ^anc-mcp-key-isolation
 

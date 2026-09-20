@@ -1,0 +1,9 @@
+Q1: yes（L1 有 P1 的 line_ref 和 quote 对应）
+Q2: yes（P2 和 P3 的 line_ref 均为 L2，覆盖 L2 的两个断言）
+Q3: no（L3 缺少 line_ref 为自身的对应点，仅在 P5 的 premises 中被引用）
+Q4: yes（P5 的 line_ref 为 L4，其 quote 摘自该行）
+Q5: yes（P3 和 P5 的 premises 均非空且包含实际内容）
+Q6: yes（所有点的 quote 均能在原文对应行中找到）
+extract_ok: false
+extract_gap: |
+  Q3 缺 L3 行对应的提取覆盖点

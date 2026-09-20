@@ -1,0 +1,8 @@
+Q1: yes（依据：P1 的 line_ref 为 L1 且 quote 摘自 L1）
+Q2: yes（依据：P2 和 P3 的 line_ref 均为 L2 且 quote 摘自 L2，覆盖了 L2 的全部许诺内容）
+Q3: yes（依据：P4 的 line_ref 为 L3 且 quote 摘自 L3）
+Q4: yes（依据：P5 的 line_ref 为 L4 且 quote 摘自 L4）
+Q5: yes（依据：P3 和 P5 的 premises 均为非空且包含具体内容，非仅编号）
+Q6: yes（依据：所有点的 quote 均能在原文对应行中完全找到）
+extract_ok: true
+extract_gap: ""

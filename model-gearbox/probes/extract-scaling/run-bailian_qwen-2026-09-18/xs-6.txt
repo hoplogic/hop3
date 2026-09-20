@@ -1,0 +1,15 @@
+- id: P1
+  type: fact
+  line_ref: L1
+  claim: 咖啡因的半衰期约为5小时
+  premises: ""
+- id: P2
+  type: inference
+  line_ref: L2
+  claim: 下午3点后喝咖啡的人睡前体内仍会残留相当比例的咖啡因
+  premises: "咖啡因的半衰期约为5小时"
+- id: P3
+  type: fact
+  line_ref: L2
+  claim: 下午3点后喝咖啡的人睡前体内仍会残留相当比例的咖啡因
+  premises: ""

@@ -1,0 +1,8 @@
+Q1: yes（存在 line_ref=L1 的点 P1）
+Q2: yes（存在 line_ref=L2 的点 P2 覆盖半衰期，P3 覆盖影响睡眠）
+Q3: yes（存在 line_ref=L3 的点 P4）
+Q4: yes（存在 line_ref=L4 的点 P5）
+Q5: yes（P3 和 P5 的 premises 均非空且写了具体内容）
+Q6: yes（所有点的 quote 均能在原文对应行找到）
+extract_ok: true
+extract_gap: |

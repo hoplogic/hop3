@@ -1,0 +1,95 @@
+- id: P1
+  type: fact
+  line_ref: L2
+  claim: "咖啡是全球消费量最大的饮品之一。"
+  premises: ""
+- id: P2
+  type: fact
+  line_ref: L3
+  claim: "2023 年全球咖啡消费量约为 1.77 亿袋。"
+  premises: ""
+- id: P3
+  type: fact
+  line_ref: L3
+  claim: "咖啡消费量的计量中，每袋为 60 公斤。"
+  premises: ""
+- id: P4
+  type: fact
+  line_ref: L3
+  claim: "2023 年欧盟是最大的咖啡消费市场。"
+  premises: ""
+- id: P5
+  type: fact
+  line_ref: L4
+  claim: "咖啡因在健康成人体内的半衰期约为 5 小时。"
+  premises: ""
+- id: P6
+  type: fact
+  line_ref: L5
+  claim: "美国 FDA 建议健康成人每日咖啡因摄入量不超过 400 毫克。"
+  premises: ""
+- id: P7
+  type: fact
+  line_ref: L5
+  claim: "400 毫克咖啡因大约相当于四到五杯咖啡。"
+  premises: ""
+- id: P8
+  type: fact
+  line_ref: L6
+  claim: "2015 年，国际癌症研究机构（IARC）将“非常热的饮品”列为 2A 类致癌物。"
+  premises: ""
+- id: P9
+  type: fact
+  line_ref: L6
+  claim: "IARC 界定的“非常热的饮品”指温度高于 65°C 的饮品。"
+  premises: ""
+- id: P10
+  type: fact
+  line_ref: L6
+  claim: "国际癌症研究机构（IARC）于 2016 年将咖啡本身移出致癌物清单。"
+  premises: ""
+- id: P11
+  type: inference
+  line_ref: L7
+  claim: "每天不超过四杯咖啡相当于不超过美国 FDA 建议的每日 400 毫克咖啡因上限。"
+  premises:
+    - "美国 FDA 建议健康成人每日咖啡因摄入量不超过 400 毫克。"
+    - "400 毫克咖啡因大约相当于四到五杯咖啡。"
+- id: P12
+  type: inference
+  line_ref: L7
+  claim: "IARC 将咖啡移出致癌物清单相当于为咖啡正名。"
+  premises:
+    - "国际癌症研究机构（IARC）于 2016 年将咖啡本身移出致癌物清单。"
+- id: P13
+  type: inference
+  line_ref: L7
+  claim: "在每天不超过四杯的条件下，喝咖啡对所有人都是安全的。"
+  premises:
+    - "美国 FDA 建议健康成人每日咖啡因摄入量不超过 400 毫克。"
+    - "400 毫克咖啡因大约相当于四到五杯咖啡。"
+    - "国际癌症研究机构（IARC）于 2016 年将咖啡本身移出致癌物清单。"
+- id: P14
+  type: inference
+  line_ref: L7
+  claim: "在每天不超过四杯的条件下，喝咖啡对所有人都是有益的。"
+  premises:
+    - "美国 FDA 建议健康成人每日咖啡因摄入量不超过 400 毫克。"
+    - "400 毫克咖啡因大约相当于四到五杯咖啡。"
+    - "国际癌症研究机构（IARC）于 2016 年将咖啡本身移出致癌物清单。"
+- id: P15
+  type: inference
+  line_ref: L7
+  claim: "在每天不超过四杯的条件下，孕妇可以放心享用咖啡。"
+  premises:
+    - "美国 FDA 建议健康成人每日咖啡因摄入量不超过 400 毫克。"
+    - "400 毫克咖啡因大约相当于四到五杯咖啡。"
+    - "国际癌症研究机构（IARC）于 2016 年将咖啡本身移出致癌物清单。"
+- id: P16
+  type: inference
+  line_ref: L7
+  claim: "在每天不超过四杯的条件下，心脏病患者可以放心享用咖啡。"
+  premises:
+    - "美国 FDA 建议健康成人每日咖啡因摄入量不超过 400 毫克。"
+    - "400 毫克咖啡因大约相当于四到五杯咖啡。"
+    - "国际癌症研究机构（IARC）于 2016 年将咖啡本身移出致癌物清单。"

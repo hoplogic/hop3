@@ -1,0 +1,3 @@
+extract_ok: false
+extract_gap: |
+  - fact 类别缺少对 L4 "每天四杯以内的标准咖啡" 的可能核查断言（如四杯咖啡的咖啡因含量是否常被引用为 400mg 以内），应列为 fact 或 补全 inference 前提；P5 inference 的第二个前提未引用或间接来源，应标明出处。

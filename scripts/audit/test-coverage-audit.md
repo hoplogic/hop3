@@ -164,6 +164,7 @@ Outputs:
 
     5.1.1. [reason] 分类该文件的未覆盖区域
       - ← gap
+      - 工具: read  # 读源码与对应测试文件（gap 只含路径与覆盖率,内容须自读）
       + → gap_analyse: yaml  # {file, line_pct, branch_pct, uncovered:[{lines, description, severity}]}
       > gap 是一个低覆盖文件（含路径/覆盖率/未覆盖区段）。读该文件源码与对应测试文件，
       > 对每个未覆盖区域按注入的判据定级并排序，产出本文件的缺口分析 yaml。引擎已自动注入（doc-ref）：
@@ -171,6 +172,7 @@ Outputs:
 
 6. [reason] 审计 mock 质量
   - ← project_root
+  - 工具: read  # 读 .coverage-audit/mock_patterns.yaml（输入只有路径,文件内容须自读）
   + → mock_audit: yaml  # {total, flagged:[{file,line,target,issue,explanation,recommendation}], acceptable_count, acceptable_groups:[{kind,target,count}]}
   > 读 `{project_root}/.coverage-audit/mock_patterns.yaml`（脚本已按 (种类,目标) 分组统计并机械预筛：
   > candidates=内部模块目标或模块级 mock 的候选组，acceptable_groups=其余组的分组计数）。

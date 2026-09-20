@@ -1246,24 +1246,35 @@ function buildStepTree(flatSteps: FlatStep[], errors: ParseError[]): StepNode[] 
 }
 
 const MODEL_RE = /^@model\s+(\S+)$/;
+// @thinking 步骤标注（0100,^anc-exec-thinking-step-annotation——B 案独立标注不与 @model 耦合;
+// off/on 两值,其它值响亮拒不静默）// @a: anc-exec-thinking-step-annotation
+const THINKING_RE = /^@thinking\s+(\S+)$/;
 const SRC_RE = /^@src\s+(.+)$/;   // 源锚点——出处记法自由(段落号/短引文/章节名),整行余下全收 // @a: anc-step-src-annotation
 
-function extractModelAnnotation(lines: string[]): { instruction: string[]; model_override?: string; src_ref?: string } {
+function extractModelAnnotation(lines: string[]): { instruction: string[]; model_override?: string; src_ref?: string; thinking_override?: 'on' | 'off'; thinking_bad_value?: string } {
   let model_override: string | undefined;
   let src_ref: string | undefined;
+  let thinking_override: 'on' | 'off' | undefined;
+  let thinking_bad_value: string | undefined;
   const filtered: string[] = [];
   for (const line of lines) {
     const m = MODEL_RE.exec(line.trim());
     const s = SRC_RE.exec(line.trim());
+    const th = THINKING_RE.exec(line.trim());
     if (m) {
       model_override = m[1];
+    } else if (th) {
+      // @thinking 同通道剥出不进执行 prompt;off/on 之外的值经 thinking_bad_value 带出,
+      // 调用点落 errors 响亮拒（静默失效是 0008③ 同病;本函数无 errors 通道,不在此抛）
+      if (th[1] === 'on' || th[1] === 'off') thinking_override = th[1];
+      else thinking_bad_value = th[1];
     } else if (s) {
       src_ref = s[1].trim();   // 剥出不进 instruction=不进执行 prompt（零执行语义,概念 ^anc-step-src-annotation）
     } else {
       filtered.push(line);
     }
   }
-  return { instruction: filtered, model_override, src_ref };
+  return { instruction: filtered, model_override, src_ref, thinking_override, thinking_bad_value };
 }
 
 /** 取布尔修饰属性（true / 'true' 都算真）。adaptive/finally/require_human 共用，消 5 处复制。 */
@@ -1364,7 +1375,10 @@ function checkAttrGate(flat: FlatStep, errors: ParseError[]): void {
 
 function flatToStepNode(flat: FlatStep, errors: ParseError[]): StepNode {
   checkAttrGate(flat, errors);
-  const { instruction: rawInstruction, model_override, src_ref } = extractModelAnnotation(flat.instruction);
+  const { instruction: rawInstruction, model_override, src_ref, thinking_override, thinking_bad_value } = extractModelAnnotation(flat.instruction);
+  if (thinking_bad_value !== undefined) {
+    errors.push({ kind: 'parse', line: flat.source_location?.line_start ?? 0, message: `步骤 "${flat.step_id}" 的 @thinking 值 '${thinking_bad_value}' 非法——只收 on | off` });
+  }
   const instructionText = rawInstruction.length > 0 ? rawInstruction.join('\n') : undefined;
   const docRefs = instructionText ? extractDocRefs(instructionText) : []; // @a: anc-rule-doc-ref-extract
   const base = {
@@ -1376,6 +1390,7 @@ function flatToStepNode(flat: FlatStep, errors: ParseError[]): StepNode {
     instruction: instructionText,
     ...(docRefs.length > 0 ? { doc_refs: docRefs } : {}),
     ...(model_override ? { model_override } : {}),
+    ...(thinking_override ? { thinking_override } : {}),
     ...(src_ref ? { src_ref } : {}),
     source_location: flat.source_location,
   };
@@ -2092,6 +2107,7 @@ function serializeSteps(steps: StepNode[], lines: string[], lang: SpecLang = 'en
     // @model/@src 标注写回（提取时剥出 instruction,写回须补——@model 序列化丢失系存量缺口
     // v0.11.0 顺带修:标注是语义子句,丢失后 re-parse 路由/锚点漂移）。// @a: anc-exec-model-annotation, anc-step-src-annotation
     if (step.model_override) lines.push(`${bodyIndent}> @model ${step.model_override}`);
+    if (step.thinking_override) lines.push(`${bodyIndent}> @thinking ${step.thinking_override}`);   // serialize 往返保留（与 @model 同款纪律）// @a: anc-exec-thinking-step-annotation
     if (step.src_ref) lines.push(`${bodyIndent}> @src ${step.src_ref}`);
     if (step.instruction) {
       for (const iline of step.instruction.split('\n')) {

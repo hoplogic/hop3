@@ -43,6 +43,7 @@ hopjit install-skill
 > cfuse 内置载体：cfuse 内置窗口表现为原生 Claude Code 或 Codex,按该载体的原生命令跑即可（环境变量 `CLAUDE_CONFIG_DIR`/`CODEX_HOME` 自动装到 `~/.codefuse/engine/{cc,codex}/skills/`）。裸终端预装（目标 agent 未启动）用显式 carrier:
 >   - `hopjit install-skill --carrier cfuse-cc`（装到 `~/.codefuse/engine/cc/skills/`——cfuse 内置 cc 读取的目录）
 >   - `hopjit install-skill --carrier cfuse-codex`（装到 `~/.codefuse/engine/codex/skills/`——cfuse 内置 codex 读取的目录）
+> OpenCode 载体：`hopjit install-skill --carrier opencode`（装到 `~/.config/opencode/skills/`——opencode 原生发现路径,`OPENCODE_CONFIG_DIR` 在场则优先;驱动件为 `driver/opencode/` 适配版——question 工具问人/subagent 外包,非 CC 原文,2026-09-19 真适配批起）。`--mcp` 注册写用户级 `~/.config/opencode/opencode.json` 的 `mcp.hopjit`（`type:"local"` + `command` 数组 + `environment` 留空靠进程环境透传凭证）。
 > 想覆盖已装的：加 `--force`。
 > 想要开箱演示：加 `--demo`——附装全部演示 skill（统一 `demo-` 前缀防撞名）：CC 为 `/demo-coffee-week`（入门周报）与 `/demo-fact-check`（事实核查，只核一级事实的简化版），Codex 为 `$demo-*` 同名；演示数据均打包在 skill 内。
 
@@ -97,7 +98,7 @@ Claude Code 作为主 agent 会：
 |------|------|
 | `hopjit validate <spec>` | 校验 spec 合法性（执行前闸门） |
 | `hopjit list <dir>` | 列目录下可执行 spec |
-| `hopjit install-skill [--dir] [--carrier cc\|codex\|cfuse-cc\|cfuse-codex] [--demo]` | 装驱动 skill 到 Claude Code / Codex（原生或 cfuse 内置;`--demo` 附装演示 skill） |
+| `hopjit install-skill [--dir] [--carrier cc\|codex\|cfuse-cc\|cfuse-codex\|opencode] [--demo]` | 装驱动 skill 到 Claude Code / Codex / OpenCode（原生或 cfuse 内置;`--demo` 附装演示 skill） |
 | `hopjit run <spec> [--params]` | 启动执行（复用模式一般由 skill 调） |
 | `hopjit status` / `resume` | 查进度 / 从中断恢复 |
 
@@ -139,6 +140,8 @@ providers:
 
 > 不用指配置路径——server 自动读 `~/.hopjit/config.yaml`（系统级）＋ 项目根 `hopjit.yaml`（项目级，可选）并逐节合并。`HOPJIT_CONFIG` 环境变量是显式覆盖（只用指定文件、**不再合并两级**），留给测试等特殊场景。
 
+> **cfuse 内置 cc**：注册格式与上面 Claude Code 完全一致（cfuse-cc 是 CC 套壳，`.mcp.json` 同为项目级，不用另写）。`hopjit install-skill --mcp` 会自动写入 `.mcp.json`。carrier 规则同 §2：在 cfuse 内置窗口里跑不用加 `--carrier`（`CLAUDE_CONFIG_DIR` 自动适配到 `~/.codefuse/engine/cc/`）；在普通终端里跑要加 `--carrier cfuse-cc`，否则会装到 `~/.claude/` 而 cfuse 读不到。
+
 **Codex**（`~/.codex/config.toml`）：
 
 ```toml
@@ -151,6 +154,8 @@ default_tools_approval_mode = "auto"
 ```
 
 > ⚠️ Codex + DeepSeek 模型用户：先看 `docs/WORKAROUNDS.md` W-1（上游 bug 会让 MCP 工具静默不可用，需给 model catalog 打一行补丁）。
+
+> **cfuse 内置 codex**：注册格式同上，但 `hopjit install-skill --mcp` 会写到 cfuse-codex 的 home（`~/.codefuse/engine/codex/config.toml`，不是 `~/.codex/`）。carrier 规则同 §2：在 cfuse 内置窗口里跑不用加 `--carrier`（`CODEX_HOME` 自动适配）；在普通终端里跑要加 `--carrier cfuse-codex`。
 
 ## 常见问题
 

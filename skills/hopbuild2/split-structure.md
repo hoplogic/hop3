@@ -20,6 +20,7 @@ Inputs:
 - parent_vars: [line]  # 父层可用变量名清单（与 parent_context 第二段同名同源——片段机械验证的 known_vars 供给）
 - depth: int  # 本节点绝对层深（根节点=1;值=本节点片段顶层步骤在最终产物里的嵌套层数,按步骤号段数计——'3'=1层/'3.2'=2层/'3.2.1'=3层,容器与叶子同算）
 - max_depth: int  # 产物嵌套深度上限（缺省 3;1.3 深度闸按它机械拦超深行）
+- target_profile: line  # 目标执行档（空串=通用形态;非空=产物给该档模型跑——骨架成文与递归透传按它走,规则见 split-node「目标执行档规则」节）
 - iteration: int  # 分拆迭代序数（本节点是第几迭代拆的;3.2 产 sub_iteration=iteration+1 随递归 call 传——迭代闸在 split-node 判定侧拦,本 spec 只管透传递增）
 - header_final: yaml  # 头部契约
 - judgement_log: line  # 研判点台账路径（workspace 相对路径,或引擎涂鸦区绝对路径〔work_zone 豁免〕;其余绝对路径工具面拒;全树共写）
@@ -37,7 +38,7 @@ Outputs:
 + → log_notes: [line]  # 本轮研判点条目（补 check/case(else)/暂定判据各一行;无则空 []——由后续步骤统一落台账,reason/check 无工具面不自己写盘）
 
 #### 1.1. [reason] 按 split_plan 写出骨架
-- ← split_kind, split_plan, node_task, parent_context, header_final
+- ← split_kind, split_plan, node_task, parent_context, target_profile, header_final
 + → skeleton: text  # 裸步骤序列直出（首字符即 `1`,不加围栏不加键前缀不写前言后语）;**内容=node_task 业务流程的步骤**（照 split_plan 各行成文——不是抄本规约自己的步骤）;上游变量从 parent_context 清单选真名;占位行自带 ⟦范围:⟧ 标记（占位清单由 1.2 机械提取,你不写清单）
 + → log_notes: [line]  # 研判点条目（每行"<处置>:<一句说明>";无则空 []）
 
@@ -57,6 +58,8 @@ Outputs:
 - **含 commit 的段落**：commit 单列;它前面必须有针对交付物的 check——产出步骤、check、commit 三段同套一个 subtask（形如 `[subtask retry=K]`(产出步骤… + `[check final]` 验收 + `[commit]` 提交)）。验收不过的轮次走不到 commit;commit 一旦执行,该 subtask 停止 retry,引擎防重复提交。check 直接平铺在顶层是不合法的（校验规则要求 check 必须在 subtask/case 内——片段单独校验时暂不报,拼成全文一定报）。原文没写验收也要补,并记 log_notes。
 - **横切动作抽子 spec,各落点一行 call**：同一套动作在多个落点重复出现（每阶段通知/逐段落盘/分级验收——原文"每个阶段完成后都要 X"即此形态）时,不逐处复制同构步骤块——该动作抽成独立子 spec（登记 log_notes 呈上层,子 spec 全步带 body 引擎直执零 LLM 最佳）,各落点一行 `[call 子spec(参数)]`（实撞:每阶段通知 ×5 阶段=60 行同构样板,抽子 spec 后每处一行,改逻辑只改一处）。自查判据不变:漏写某处 call 与漏抄样板同为动作蒸发;
 - **跨轮依赖的多轮派发**：原文"分多轮、后轮依据前轮发现差异化"的形态,成文=外层 `[loop max=N]` 串行承载轮次（体内 reason 按前轮发现设计本轮成员,容器头累加器变量承载跨轮依赖）+轮内 for-each `[call … parallel]` 并发派发。两条纪律:跨轮依赖合法（经变量流动）;同轮成员必须独立（同批并行不可能依赖彼此未产出的东西——原文写同批内依赖=原文不自洽,记 log_notes）。降级成单批全并发=丢跨轮语义,是保真缺陷不是简化。
+
+**目标执行档**（target_profile 非空时叠加生效）：骨架里当场定型的 check 步与小步,判据与尺寸按 split-node「目标执行档规则」节写——qwen3.8-27b 档=check 判据逐条封闭小题化、判定对象超约 4 项的把关留 NL 占位交递归层按三段形态（机械归组→逐单元核验→机械汇总）展开、提取/枚举步每步要素数 ≤4（超界拆 loop 分组多轮）。空串=本段不生效,照通用规矩。
 
 **关键词语言**：环境参数 hop_env_language 为 "zh" 时,骨架步骤行用中文关键词书写（`[推理]`/`[探索 开放]`/`[子任务 重试=2]`/`[循环 遍历 x 于 xs, 收集 r 入 rs]`——完整对照表在语法速查）;为 "en" 或缺席时用英文关键词。两种语言引擎恒等价（双语直通,写错语言不报错只是与项目缺省不一致——机械关不拦语言,存量归一交 hopjit lang 工具）。
 
@@ -199,7 +202,7 @@ Outputs:
 + → child_frag_path: line  # 子树片段的文件路径（递归成功=子调用产物路径;子层烧尽=兜底片段落盘后的路径）
 + → child_tier: line  # 子树档位（兜底路径固定 mixed）
 
-##### 3.3.1. [call split-node(node_task: sub_task, node_source: sub_source, parent_context: sub_context, parent_vars: sub_vars, depth: sub_depth, max_depth, iteration: sub_iteration, header_final, judgement_log)] 递归分拆（壳内串行——并行度由外层壳承载,一层并行原则）
+##### 3.3.1. [call split-node(node_task: sub_task, node_source: sub_source, parent_context: sub_context, parent_vars: sub_vars, depth: sub_depth, max_depth, iteration: sub_iteration, target_profile, header_final, judgement_log)] 递归分拆（壳内串行——并行度由外层壳承载,一层并行原则）
 + → child_frag_path: fragment_path  # 收取子调用的 fragment_path（值是路径）
 + → child_tier: tier  # 收取子调用的 tier
 

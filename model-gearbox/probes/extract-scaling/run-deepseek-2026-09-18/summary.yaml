@@ -1,0 +1,158 @@
+service: deepseek
+model_from_response:
+  - deepseek-flash
+n_per_cell: 6
+date: '2026-09-18'
+维度: G2 任务复杂度(一次做正确的能力)——单发裸能力,无重试无引擎兜底
+tiers:
+  xs:
+    pass: 6/6
+    runs:
+      - i: 1
+        pass: true
+        covered: 2/2
+        prose_prefix: false
+        miss: []
+      - i: 2
+        pass: true
+        covered: 2/2
+        prose_prefix: false
+        miss: []
+      - i: 3
+        pass: true
+        covered: 2/2
+        prose_prefix: false
+        miss: []
+      - i: 4
+        pass: true
+        covered: 2/2
+        prose_prefix: false
+        miss: []
+      - i: 5
+        pass: true
+        covered: 2/2
+        prose_prefix: false
+        miss: []
+      - i: 6
+        pass: true
+        covered: 2/2
+        prose_prefix: false
+        miss: []
+  s:
+    pass: 6/6
+    runs:
+      - i: 1
+        pass: true
+        covered: 4/4
+        prose_prefix: false
+        miss: []
+      - i: 2
+        pass: true
+        covered: 4/4
+        prose_prefix: false
+        miss: []
+      - i: 3
+        pass: true
+        covered: 4/4
+        prose_prefix: false
+        miss: []
+      - i: 4
+        pass: true
+        covered: 4/4
+        prose_prefix: false
+        miss: []
+      - i: 5
+        pass: true
+        covered: 4/4
+        prose_prefix: false
+        miss: []
+      - i: 6
+        pass: true
+        covered: 4/4
+        prose_prefix: false
+        miss: []
+  m:
+    pass: 0/6
+    runs:
+      - i: 1
+        pass: false
+        covered: 7/9
+        prose_prefix: false
+        miss:
+          - 四五杯换算(词中但 type 错)
+          - IARC 热饮(未命中)
+      - i: 2
+        pass: false
+        covered: 8/9
+        prose_prefix: false
+        miss:
+          - 四五杯换算(词中但 type 错)
+      - i: 3
+        pass: false
+        covered: 7/9
+        prose_prefix: false
+        miss:
+          - 四五杯换算(词中但 type 错)
+          - IARC 热饮(未命中)
+      - i: 4
+        pass: false
+        covered: 7/9
+        prose_prefix: false
+        miss:
+          - 四五杯换算(词中但 type 错)
+          - IARC 热饮(未命中)
+      - i: 5
+        pass: false
+        covered: 7/9
+        prose_prefix: false
+        miss:
+          - 四五杯换算(词中但 type 错)
+          - IARC 热饮(未命中)
+      - i: 6
+        pass: false
+        covered: 8/9
+        prose_prefix: false
+        miss:
+          - 四五杯换算(词中但 type 错)
+  l:
+    pass: 0/6
+    runs:
+      - i: 1
+        pass: false
+        covered: 16/18
+        prose_prefix: false
+        miss:
+          - 四五杯换算(词中但 type 错)
+          - IARC 热饮(未命中)
+      - i: 2
+        pass: false
+        covered: 17/18
+        prose_prefix: false
+        miss:
+          - 四五杯换算(词中但 type 错)
+      - i: 3
+        pass: false
+        covered: 16/18
+        prose_prefix: false
+        miss:
+          - 四五杯换算(词中但 type 错)
+          - IARC 热饮(未命中)
+      - i: 4
+        pass: false
+        covered: 17/18
+        prose_prefix: false
+        miss:
+          - 四五杯换算(词中但 type 错)
+      - i: 5
+        pass: false
+        covered: 17/18
+        prose_prefix: false
+        miss:
+          - 四五杯换算(词中但 type 错)
+      - i: 6
+        pass: false
+        covered: 17/18
+        prose_prefix: false
+        miss:
+          - 四五杯换算(词中但 type 错)
+坍塌点: m

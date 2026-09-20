@@ -1,0 +1,36 @@
+# Ling-3.0-Flash 能力档案（字段契约见 ../README.md;评测账详见 D12 实例一,六件评测四件有 deepseek 同件基线）
+model: Ling-3.0-Flash
+provider_ref: antchat
+endpoint_note: antchat /api/anthropic 通道(x-api-key;/anthropic 前缀是登录态网关别用)
+context_window: 262144        # 官称 256K
+max_output_tokens: 65536
+measured: 2026-09-17
+
+dims:
+  check_judge: checklist-only      # ⚠ 开放式判官岗真实任务两案实锤(2026-09-19 real-task-scaling 验尸):fact-check L 档三轮三套标准轮间口径对调(spec 防摇摆条款明文在场照犯)+dv M 档自检两头占+编造依据(qwen 同件 1.4 万完赛对照)——L+ 档开放判官恒不派 Ling,微判定变体或判官路由强模型。fact-check S/M 双完赛(18.2/65.2 万,行为诚实:查不到报 no_evidence 不编)是执行侧的好账,判官侧的病照旧。思考开档重测(2026-09-20,--thinking on 对照臂):L2 全满(好 6/6 真/坏 6/6 假/零矛盾/定位 6/6)+L3 12/12 与关档持平;L1 开放式好卷 6 发 3 true/3 false——三轮 false 意见恒同一条(P5 隐含前提),意见框架收敛了(关档时是每轮换框架),但同卷判定阈值仍摇摆,不达 open-ok(open-ok 判据=跨轮框架一致且判定一致)。定档不变 checklist-only,思考开的增益在意见质量不在判定稳定。 原探针账: P1 三层实测(2026-09-18 run-judge-granularity 仪器,n=6):L2 全满(好 6/6 真/坏 6/6 假/零表内矛盾/定位 6/6)+L3 12/12——封闭形态满分;但 L1 开放式核验自反实锤:同一对象 P2 的分类,第3轮判'正确'、第4/5轮判'错误应改 inference'、第6轮整卷判 true——跨轮标准漂移排除 open-ok。适配:check 判据写成按清单核验形态可自审(定位也可信,与 qwen 的 checklist 档不同——qwen 定位废本模型定位满分);开放式把关仍 routing→强模型
+  reasoning_complexity: weak-default-mid-with-thinking   # 双档并记(2026-09-19 思考开关重估+完整爬梯,90% 线 20 发确认):
+    # 缺省档(思考关,历史口径):乘法最大 N=2(N3 16/20 不达线);除法 N=2 不达标——weak;
+    # 思考开档(thinking enabled 显式请求):乘法最大 N=6(N6 20/20;N8 17/20=85% 不达线);除法最大 N=6(13 位有效数字 18/18;N4 19/20;N8 2/5 不达线——N8 判分已用四舍五入键复核,真错)。
+    # 与 deepseek 对照:乘 6 vs ≥12、除 6 vs ≥8——思考开档约为 deepseek 的一半位数,不同级(首报'同量级'系初探小样本夸大,20 发爬梯后修正);但对比自身思考关档(乘 2/除 <2)提升三倍位数,mid 档成立。费用:乘 N6 均耗 1 万/N8 1.9 万 tok每发。
+    # 适配结论:重推理步派 Ling 须显式开思考(N≤6 可靠);N>6 的推理仍路由 deepseek。判官幻觉前科是思考关档观测,思考开档判官表现待重测。
+    # 判分教训(留给下个跑梯子的人):除法判分键恒用四舍五入(正式仪器 run-reasoning-complexity 即此键)——临时脚本曾用截断键冤枉 14 发,复判翻正
+  task_complexity: mid-weak            # 小件一次过(coffee/fact-check S 档新版零重试);构建 8KB 烧尽 accept、60KB header 关就死——坍塌点在构建档
+  # 指令遵从=层二冒烟项非维度(小件无越界过冒烟);构建面硬指令随复杂度衰减归 task_complexity 观测
+  planning_decompose: weak         # G3 分解与规划:方法论 8KB 整份收缩成单个未尽原子;incident 修检烧尽带 4 实质缺陷 accept
+  tool_use: weak                   # incident 单件 MAX_TOOL_ITERATIONS 137 次(deepseek 同件零)
+  structured_delivery: mid         # 双指标制:嵌套复杂度=到对象列表稳,三层嵌套半数失手(T4 3/6——把对象交成列表,真形态错引擎容忍救不了);容错后=与裸皮同档(失分非围栏类)。探针细账(run-structured-delivery 2026-09-19,n=6):T1 6/6/T2 5/6/T3 6/6/T4 3/6/T5(yaml 结构值——hb2 死相同款考点)6/6/T6 6/6——指令明说"写缩进结构不用块标量"时它会交结构;弱点收窄为深嵌套(T4 三层)。hb2 丙案的 aux_ledger 五连 SCHEMA 死(2026-09-18)验尸定性为引擎冤案:交付格式例把 yaml 型渲染成 `名: |` 块标量占位,模型照抄模板死——引擎 ^anc-exec-format-example-structural 已修(结构型教缩进结构),修后 hb2 同语料复跑(2026-09-19)实证:上轮死点步 2 越过——aux_ledger 交付已是缩进结构形态,残余打回 6 次全是自身缩进手抖(列表第二键少缩一格致 YAML 解析失败),重试预算内自愈;全程 59.2 万 tokens 完赛(上轮 3.1 万烧死),产物 8.1KB,修检额度烧尽 accept 带 4 缺陷(2 运行级:四阶段工作流蒸发/闸门落位缺失)+act body 3 处语法 error——构建质量弱项(G3/task_complexity)接棒成为新瓶颈,交付皮病不再是死因。G2 裸提取:XS-M 全 6/6,L 4/6,XL 3/6(三模型最佳),XXL 0/6
+  feedback_correction: weak        # 同一验收意见连打两轮原样不改 retry 烧尽;schema 纠错 3 轮不改——高频形态。追注 2026-09-18:该实撞发生在旧版供给(任务垫底/判官吃自产判词/无门槛分级)上——新版母本+引擎下 fact-check S 档同题全程零重试完赛 1.2 万 tokens(hoplog /tmp/claude-502/rev-short-live6/),修订能力本身未被再考(没触发打回轮);本维度按新版供给重测后再定档
+  domain_knowledge: untested        # G7 领域知识充分度(2026-09-19 作者立维度——轻量模型专属短板:参数量小领域知识存量少,与推理能力独立;探针=跨领域对照卷待建;适配面=doc-ref/@knowledge 知识供给,缺多少喂多少不换模型)
+  knowledge_acquisition: untested-positive-signals  # G8 渐进知识获取(2026-09-19 作者立——缺知识时察觉→检索→筛选→使用四环闭环;与 G7 存量半边成对):初步正向(real-task-scaling fact-check S/M 双完赛:检索链与引证合格;四环观测待正式定档)
+
+real_task_notes: deep-research 卷步骤 8(claim 提取,多源材料汇聚)两跑双死稳定死点(2026-09-19):一跑 SCHEMA 错位(把整个 claims 列表塞进首元素 source_tag 字段——值放错槽,非已知壳形态),二跑 THINKING_EXHAUSTED(输出 65536 烧满,正文循环文本反刍)。定性=多源汇聚+复杂 [Claim] 结构的联合负载超界,与 fact-check S/M 双完赛(单源材料)对照——Ling 的 dr 岗资格待 spec 侧按 G5 嵌套档拆步后再试,现档不派。
+
+act_free:
+  reliability_curve: {}            # 未按阶梯矩阵测过(评测早于曲线契约立)——档案纪律:不回填推断值
+  rating: untested-curve           # 定性观察:小件执行干净(coffee 7.6K 一次过),满配下也未见 Qwen 式着魔
+subtask_free: untested
+
+adapt:
+  max_inline_tools: null           # 曲线未测,不拍上限
+  thinking: endpoint-default       # 裁量步禁 disabled(边界题实测翻转)。⚠ 本端点缺省=思考关(与 deepseek 相反!)——重推理步须显式 thinking: enabled 才拿到思考档能力(G1 双档差距见 reasoning_complexity;显式开法=routing_rules 按步骤类型带 thinking 键,或 0100 步骤级开关落地后逐步标)
+  build_target_profile: null       # 路由建议=仅简单执行步(schema 平坦/无长工具循环);判官步撤销候选(幻觉一票否决)

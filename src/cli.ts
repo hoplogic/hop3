@@ -5,6 +5,7 @@
 // @module: hop-cli ^anc-struct-hop-cli
 import { Command } from 'commander';
 import { dump as yamlDump, load as yamlLoad } from 'js-yaml';
+import { parse as parseJsonc, modify as jsoncModify, applyEdits as jsoncApplyEdits, type ParseError } from 'jsonc-parser';
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync, copyFileSync, cpSync, realpathSync, rmSync } from 'node:fs';
 import { resolve, join, isAbsolute, dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -901,9 +902,9 @@ program.command('resume')
 // 裸终端跑 install-skill 时目标 agent 可能未启动,环境变量无法表达"装给谁",须显式 carrier 声明目标）。
 // driver 源用 carrierFamily 派生（cc|codex）——cfuse-* 复用对应原生源,不新写 driver。
 // @a: anc-cli-carrier-home-resolution
-type Carrier = 'cc' | 'codex' | 'cfuse-cc' | 'cfuse-codex';
+type Carrier = 'cc' | 'codex' | 'cfuse-cc' | 'cfuse-codex' | 'opencode';
 type DriverFamily = 'cc' | 'codex';
-const CARRIER_VALUES: Carrier[] = ['cc', 'codex', 'cfuse-cc', 'cfuse-codex'];
+const CARRIER_VALUES: Carrier[] = ['cc', 'codex', 'cfuse-cc', 'cfuse-codex', 'opencode'];
 function carrierFamily(c: Carrier): DriverFamily {
   return c === 'codex' || c === 'cfuse-codex' ? 'codex' : 'cc';
 }
@@ -914,11 +915,37 @@ function resolveCarrierHome(c: Carrier): string {
     case 'codex':       return process.env.CODEX_HOME       || join(h, '.codex');
     case 'cfuse-cc':    return join(h, '.codefuse', 'engine', 'cc');
     case 'cfuse-codex': return join(h, '.codefuse', 'engine', 'codex');
+    // opencode 用 XDG：OPENCODE_CONFIG_DIR 重定向 config 目录,缺席回落 $XDG_CONFIG_HOME/opencode（默认 ~/.config/opencode,非 ~/.opencode）。
+    case 'opencode':    return process.env.OPENCODE_CONFIG_DIR || join(process.env.XDG_CONFIG_HOME || join(h, '.config'), 'opencode');
   }
 }
 function assertCarrier(c: string, cmd: string): asserts c is Carrier {
   if (!CARRIER_VALUES.includes(c as Carrier))
     throw new Error(`${cmd}_ERROR: 未知 carrier '${c}'（支持: ${CARRIER_VALUES.join(' | ')}）`);
+}
+
+// opencode 配置文件:跟随 opencode globalConfigFile,candidates [opencode.jsonc, opencode.json],
+// 第一个存在;都不存在用 opencode.jsonc（opencode 标准,首次启动生成它）。见 ^anc-cli-install-skill opencode 载体。
+function resolveOcConfigPath(carrier: Carrier): string {
+  const home = resolveCarrierHome(carrier);
+  for (const f of ['opencode.jsonc', 'opencode.json', 'config.json']) {   // 对齐 opencode globalConfigFile 三候选
+    const p = join(home, f);
+    if (existsSync(p)) return p;
+  }
+  return join(home, 'opencode.jsonc');
+}
+
+// 递归 deep-merge(对齐 opencode mergeDeep):object 递归合并(后者覆盖同名),数组/原始值后者覆盖。
+// 用于 opencode 自举 deep-merge provider——options 内部(baseURL/apiKey)也合并,而非浅 merge 整体覆盖。
+function deepMerge<T>(a: T, b: unknown): T {
+  if (typeof a === 'object' && a !== null && !Array.isArray(a) && typeof b === 'object' && b !== null && !Array.isArray(b)) {
+    const result: Record<string, unknown> = { ...(a as Record<string, unknown>) };
+    for (const [k, v] of Object.entries(b as Record<string, unknown>)) {
+      result[k] = deepMerge(result[k], v);
+    }
+    return result as T;
+  }
+  return (b ?? a) as T;
 }
 
 // --mcp 配置自举：两级 standalone 配置全缺席时,按载体学习宿主 LLM 后端写系统级配置。
@@ -933,7 +960,53 @@ export function bootstrapStandaloneConfig(carrier: Carrier): { written: string |
   }
 
   let entry: { service_id: string; protocol: string; base_url: string; model: string; api_key_env: string };
-  if (carrierFamily(carrier) === 'cc') {
+  if (carrier === 'opencode') {
+    // opencode 自举：deep-merge 三文件（opencode 加载顺序 config.json → opencode.json → opencode.jsonc,
+    // 后者覆盖、.jsonc 优先,与 opencode 加载一致）取 model + provider.<id>.options.baseURL + env[0]（凭证名）。
+    // protocol 按 provider id 推断（含 anthropic→anthropic,否则 openai-chat,与 Codex 同——openai-responses 未实装）。
+    // 只写凭证名不写值。学习源缺失→不写文件,note 明示。见 design/hop-cli.md ^anc-cli-install-skill opencode 载体 LLM 自举子条。
+    // @a: anc-cli-install-skill
+    const home = resolveCarrierHome(carrier);
+    const ocFiles = ['config.json', 'opencode.json', 'opencode.jsonc'].map(f => join(home, f));   // opencode 加载顺序
+    let model: string | undefined;
+    const provider: Record<string, { options?: { baseURL?: string }; env?: string[] }> = {};
+    let anyExists = false;
+    for (const f of ocFiles) {
+      if (!existsSync(f)) continue;
+      anyExists = true;
+      const errs: ParseError[] = [];
+      const c = parseJsonc(readFileSync(f, 'utf-8'), errs) as { model?: string; provider?: Record<string, { options?: { baseURL?: string }; env?: string[] }> };
+      if (errs.length > 0) continue;   // 坏文件跳过(best-effort,不阻断 deep-merge 其他文件)
+      if (c.model) model = c.model;   // 后者覆盖(.jsonc 优先)
+      if (c.provider) {
+        for (const [id, p] of Object.entries(c.provider)) {
+          provider[id] = deepMerge(provider[id], p);   // 递归 deep-merge provider.<id>(对齐 opencode mergeDeep,options 内部也合并)
+        }
+      }
+    }
+    if (!anyExists) {
+      return { written: null, note: `未自举 standalone 配置：${resolveOcConfigPath(carrier)} 不存在——请自建 ~/.hopjit/config.yaml` };
+    }
+    if (!model || !model.includes('/')) {
+      return { written: null, note: `未自举 standalone 配置：opencode 配置缺 model（"provider/model-id" 格式）——请自建 ~/.hopjit/config.yaml` };
+    }
+    const slashIdx = model.indexOf('/');
+    const providerId = model.slice(0, slashIdx);
+    const modelId = model.slice(slashIdx + 1);
+    const prov = provider[providerId];
+    const baseUrl = prov?.options?.baseURL;
+    const envKey = prov?.env?.[0];
+    if (!baseUrl) {
+      return { written: null, note: `未自举 standalone 配置：provider.${providerId} 缺 options.baseURL——请自建 ~/.hopjit/config.yaml` };
+    }
+    entry = {
+      service_id: 'opencode_host',
+      protocol: providerId.toLowerCase().includes('anthropic') ? 'anthropic' : 'openai-chat',
+      base_url: baseUrl,
+      model: modelId,
+      api_key_env: envKey ?? 'OPENAI_API_KEY',
+    };
+  } else if (carrierFamily(carrier) === 'cc') {
     // 两级学习链：①进程环境 ANTHROPIC_* ②CC settings 文件族 env 块+顶层 model（项目级>用户级——
     // 覆盖"普通终端跑装配"形态:settings env 块只在 CC 会话内注入子进程;运行期 server 由 CC 拉起
     // 必继承 env 块,凭证名引用仍有效）。只取"哪个名字被配了"不抄值（standalone 不变量第 1 条）。
@@ -999,13 +1072,13 @@ export function bootstrapStandaloneConfig(carrier: Carrier): { written: string |
   // providers 节走 YAML 序列化器——值来自宿主配置不可控,裸模板拼接遇 ": "/"#" 类字符产物
   // 即炸自家加载器（二审探针实抓:model 值含冒号空格 → loadStandaloneConfig bad indentation）
   const yaml = `# hopjit standalone 配置——install-skill --mcp 自举于 ${new Date().toISOString()}
-# 学习源：${carrierFamily(carrier) === 'cc' ? 'Claude Code 宿主环境变量（ANTHROPIC_*）' : 'Codex 宿主 config.toml（model_provider 链）'}
+# 学习源：${carrier === 'opencode' ? 'opencode 宿主配置文件（deep-merge config.json/opencode.json/opencode.jsonc,model + provider.<id>）' : carrierFamily(carrier) === 'cc' ? 'Claude Code 宿主环境变量（ANTHROPIC_*）' : 'Codex 宿主 config.toml（model_provider 链）'}
 # 凭证只存环境变量名（${entry.api_key_env}）,值不落盘。格式与改法见 docs/reference/配置参考.md
 ` + yamlDump({ providers: [entry] });
   writeFileSync(sysPath, yaml, 'utf-8');
   return {
     written: sysPath,
-    note: `已自举 standalone 缺省模型（学自${carrierFamily(carrier) === 'cc' ? ' Claude Code 宿主环境' : ' Codex 宿主配置'}）：model=${entry.model} / 端点=${entry.base_url} / 凭证=环境变量 ${entry.api_key_env}（只存名不存值）→ ${sysPath}。不合适可直接编辑该文件`,
+    note: `已自举 standalone 缺省模型（学自${carrier === 'opencode' ? ' opencode 宿主配置文件（deep-merge config.json/opencode.json/opencode.jsonc）' : carrierFamily(carrier) === 'cc' ? ' Claude Code 宿主环境' : ' Codex 宿主配置'}）：model=${entry.model} / 端点=${entry.base_url} / 凭证=环境变量 ${entry.api_key_env}（只存名不存值）→ ${sysPath}。不合适可直接编辑该文件`,
   };
 }
 
@@ -1052,8 +1125,8 @@ export function detectCcHopjitRegistration(carrier: 'cc' | 'cfuse-cc' = 'cc'): s
 // @a: anc-cli-install-skill
 program.command('install-skill')
   .description('Install hopspec driver skills for Claude Code / Codex (native or cfuse) from the package driver/ sources')
-  .option('--dir <target>', 'Skills root directory (default: resolved per carrier — cc/codex read CLAUDE_CONFIG_DIR/CODEX_HOME, cfuse-cc/cfuse-codex use ~/.codefuse/engine/{cc,codex}/skills)')
-  .option('--carrier <carrier>', 'Driver carrier: cc | codex | cfuse-cc | cfuse-codex', 'cc')
+  .option('--dir <target>', 'Skills root directory (default: resolved per carrier — cc/codex read CLAUDE_CONFIG_DIR/CODEX_HOME, cfuse-cc/cfuse-codex use ~/.codefuse/engine/{cc,codex}/skills, opencode uses ~/.config/opencode/skills)')
+  .option('--carrier <carrier>', 'Driver carrier: cc | codex | cfuse-cc | cfuse-codex | opencode', 'cc')
   .option('--demo', 'Also install the coffee-week demo skill for the selected carrier')
   .option('--plus', 'Also install the hop-fact-check and hop-deep-research research skills, and merge their tool_servers config into ~/.hopjit/config.yaml')
   .option('--mcp', 'Bootstrap standalone config and register the hopjit MCP server (CC: .mcp.json; Codex: <Codex home>/config.toml per ^anc-cli-carrier-home-resolution). Both shells (hopspec + hopspec-mcp) are always installed')   // 双名双壳,--mcp 只管注册 // @a: anc-cli-install-skill
@@ -1149,7 +1222,37 @@ program.command('install-skill')
       };
 
       let codexLegacyNote: string | undefined;
-      if (carrierFamily(carrier) === 'codex') {
+      if (carrier === 'opencode') {
+        // opencode 载体（driver/opencode/ 自有内容层——2026-09-19 作者抓"opencode 完全复用 cc 的?"后立:
+        // 0089 批只适配了路径与配置面,driver 正文逐字节搭 CC 车（AskUserQuestion/subagent 等 CC 原语
+        // 30 处零适配,真机能通靠模型自由发挥非协议保证）。本分支装 driver/opencode/ 适配版
+        //（原语映射权威 opencode-driver-carrier ^anc-driver-opencode-primitive-map）;
+        // hopbuild 族照旧共装（构建件载体中立度高,v1 接受）;hop 件照装（2026-09-20 撤销首版
+        // "不装"裁定——作者抓"在 codex /hop 都能用,为什么在 opencode 不装?",详下方装载段）。
+        // @a: anc-driver-opencode-install-layout
+        const skillDir = join(target, 'hopspec');
+        if (copyFile(join(driverDir, 'opencode', 'SKILL.md'), join(skillDir, 'SKILL.md'))) installed.push(join(skillDir, 'SKILL.md'));
+        if (copyFile(join(driverDir, 'opencode', 'SKILL-mcp.md'), join(target, 'hopspec-mcp', 'SKILL.md'))) installed.push(join(target, 'hopspec-mcp/SKILL.md'));
+        if (copyFile(join(driverDir, 'opencode', 'references', 'discovery.md'), join(target, 'hopspec-mcp', 'references', 'discovery.md'))) installed.push(join(target, 'hopspec-mcp/references/discovery.md'));
+        if (copyDir(join(driverDir, 'opencode', 'references'), join(skillDir, 'references'))) installed.push(join(skillDir, 'references/'));
+        pruneManagedDir([join(driverDir, 'opencode', 'references')], join(skillDir, 'references'));
+        for (const buildSkill of ['hopbuild', 'hopbuild2', 'hopfix'] as const) {
+          if (copyDir(join(driverDir, '..', 'skills', buildSkill), join(target, buildSkill))) {
+            installed.push(join(target, `${buildSkill}/`));
+            const sk = join(target, buildSkill, 'SKILL.md');
+            if (existsSync(sk)) writeFileSync(sk, stampSkill(readFileSync(sk, 'utf-8'), sk), 'utf-8');
+          }
+        }
+        if (copyFile(join(driverDir, '..', 'scripts', 'hopfix', 'hopfix.md'), join(target, 'hopfix', 'hopfix.md'))) {
+          installed.push(join(target, 'hopfix/hopfix.md'));
+        }
+        // hop 件（2026-09-20 作者抓"在 codex /hop 都能用,为什么在 opencode 不装?"——撤销上一批
+        // "v1 不装"裁定:Codex 先例已证 /hop 适配成本=三处载体差异,opencode 能力面只强不弱;
+        // driver/opencode/hop-skill.md 照 codex 版适配,stale 清理与 carrier_note 随撤）。
+        if (copyFile(join(driverDir, 'opencode', 'hop-skill.md'), join(target, 'hop', 'SKILL.md'))) {
+          installed.push(join(target, 'hop/SKILL.md'));
+        }
+      } else if (carrierFamily(carrier) === 'codex') {
         // Codex 载体（codex | cfuse-codex,共用 codex driver 源）：main / segment driver 按 agent 主体拆分。
         // 只复用真正载体中立的 cli-discovery，其余 references 使用 Codex 自包含版本。
         // 装点=<target>/hopspec 直拼（2026-08-27 看齐批——target 即 skills 根,不再拼 .agents/skills 中间层）。
@@ -1370,7 +1473,40 @@ program.command('install-skill')
       let mcpRegistered: string | null = null;
       let mcpNote: string | undefined;
       if (opts.mcp === true) {
-        if (carrierFamily(carrier) === 'codex') {
+        if (carrier === 'opencode') {
+          // opencode 注册:跟随 opencode 配置管理——写 candidates [opencode.jsonc, opencode.json, config.json] 第一个存在
+          // （对齐 opencode globalConfigFile 三候选;都不存在用 opencode.jsonc）的 mcp.hopjit。
+          // jsonc-parser modify/applyEdits 保留原格式+注释——hoplogic 对所有候选文件统一 jsoncModify
+          // （opencode 仅 .jsonc 用 patchJsonc,非 .jsonc 用 stringify 重新格式化;hoplogic 统一 jsoncModify 更优雅——
+          // 保留原格式不重新格式化用户文件,是"高质量优雅"取舍,不严格跟随 opencode 非 .jsonc 的 stringify）。
+          // 检测 candidates 查 mcp.hopjit（.jsonc/opencode.json/config.json 任一已有则跳过,消除只查一个文件漏其他的静默冲突）。
+          // 坏 JSON best-effort 不阻断 skill 安装（与 cc 分支 .claude.json 同纪律）。// @a: anc-cli-install-skill
+          const home = resolveCarrierHome(carrier);
+          const candidates = [join(home, 'opencode.jsonc'), join(home, 'opencode.json'), join(home, 'config.json')];
+          const existing = candidates.find(p => {
+            if (!existsSync(p)) return false;
+            const errs: ParseError[] = [];
+            const c = parseJsonc(readFileSync(p, 'utf-8'), errs) as { mcp?: Record<string, unknown> };
+            return errs.length === 0 && !!c.mcp?.['hopjit'];   // 坏 JSON(errs 非空)不算已配
+          });
+          if (existing) {
+            mcpNote = `已有 mcp.hopjit 条目，未改动（${existing}）——请自查 command`;
+          } else {
+            const configPath = candidates.find(p => existsSync(p)) ?? candidates[0];
+            const text = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '{}';
+            const errs: ParseError[] = [];
+            parseJsonc(text, errs);
+            if (errs.length > 0) {   // jsonc-parser parse 不抛错,坏 JSON 填 errs
+              mcpNote = `${configPath} 不是合法 JSON——未注册 MCP（不覆盖用户配置,请修复后重试 --mcp）`;
+            } else {
+              const value = { type: 'local', command: ['hopjit-mcp'], enabled: true, environment: {} };
+              const edits = jsoncModify(text, ['mcp', 'hopjit'], value, { formattingOptions: { insertSpaces: true, tabSize: 2 } });
+              mkdirSync(dirname(configPath), { recursive: true });
+              writeFileSync(configPath, jsoncApplyEdits(text, edits), 'utf-8');
+              mcpRegistered = configPath;
+            }
+          }
+        } else if (carrierFamily(carrier) === 'codex') {
           const configPath = join(resolveCarrierHome(carrier), 'config.toml');
           const existing = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '';
           if (/\[mcp_servers\.hopjit\]/.test(existing)) {
@@ -1411,6 +1547,38 @@ program.command('install-skill')
       }
 
       const skipped = installed.length === 0;
+      // 陈旧副本新鲜度提示（hopissues/0096——作者定"给的不是清理命令,是 hopfix 这样的升级命令"：
+      // 只读扫描本安装器写过的旧位置,发现陈旧报 stale_notes 携升级路径,不代删不代改。
+      // 认领判据=SKILL.md 含本器版本戳才认（非本器文件零打扰）;陈旧判据=戳版本落后当前包版本,
+      // 或 spec.md 无 engine_min_version 指纹（0093 前旧产物）。0096 实撞:8-14 旧 demo 副本
+      // 缺 web_search 授权在历史用户级位置静默活着,29 child 全灭 116 次失败提交后才被发现。
+      // 见 hop-cli ^anc-cli-stale-skill-scan）。// @a: anc-cli-stale-skill-scan
+      const staleNotes: string[] = [];
+      {
+        const scanRoots = carrierFamily(carrier) === 'codex'
+          ? [join(homedir(), '.agents', 'skills')]                       // Codex 族历史用户级装载点（demo 恒项目级口径前）
+          : [join(homedir(), '.claude', 'skills')];                      // CC 族:demo 改恒项目级前的旧装位置
+        for (const root of scanRoots) {
+          if (resolve(root) === resolve(target)) continue;               // 现行目标不算旧位置
+          if (!existsSync(root)) continue;
+          for (const name of readdirSync(root)) {
+            const sk = join(root, name, 'SKILL.md');
+            if (!existsSync(sk)) continue;
+            let head = '';
+            try { head = readFileSync(sk, 'utf-8'); } catch { continue; }
+            const m = head.match(/driver: @hoplogic\/hopjit v(\S+)/);
+            if (!m) continue;                                            // 非本安装器产物,零打扰
+            const specPath = join(root, name, 'spec.md');
+            const noFingerprint = existsSync(specPath) && !readFileSync(specPath, 'utf-8').includes('engine_min_version');
+            const older = m[1] !== driverVersion;
+            if (!older && !noFingerprint) continue;
+            const isBundled = ['hopspec', 'hopspec-mcp', 'hop', 'hopbuild', 'hopbuild2', 'hopfix'].includes(name) || name.startsWith('demo-') || name.startsWith('hop-');
+            staleNotes.push(isBundled
+              ? `⚠️ 旧位置发现陈旧副本 ${join(root, name)}（装于 v${m[1]},当前 v${driverVersion}）——该位置已不受本次安装管辖,可能被载体优先加载盖住新版。升级:现行位置已随本次安装刷新;旧位置文件请自行处置（确认无自改内容后可删,路径如上）`
+              : `⚠️ 旧位置发现陈旧的自建 skill ${join(root, name)}（装于 v${m[1]},当前 v${driverVersion}）——升级走 /hopfix 定向修正（validate error 清单为工单的版本迁移正门,不是简单覆盖）`);
+          }
+        }
+      }
       output({
         status: 'ok',
         carrier: carrier,
@@ -1426,6 +1594,7 @@ program.command('install-skill')
         ...(mcpNote ? { mcp_note: mcpNote } : {}),
         ...(opts.mcp === true ? { mcp_config_bootstrapped: mcpConfigBootstrapped } : {}),
         ...(mcpConfigNote ? { mcp_config_note: mcpConfigNote } : {}),
+        ...(staleNotes.length ? { stale_notes: staleNotes } : {}),   // @a: anc-cli-stale-skill-scan
         ...(skipped ? { note: '无文件写入（目标已存在，用 --force 覆盖）' } : {}),
       });
     } catch (err: unknown) {
@@ -1527,6 +1696,7 @@ function packSpec(specPath: string, opts: { dir: string; carrier: Carrier; name?
   // 要指引用户装到 cfuse home,不能硬编码原生 ~/.claude / ~/.codex,否则 cfuse 用户照做装错位置）
   const installHint = opts.carrier === 'cfuse-cc' ? '`hopjit install-skill --carrier cfuse-cc`'
     : opts.carrier === 'cfuse-codex' ? '`hopjit install-skill --carrier cfuse-codex`'
+    : opts.carrier === 'opencode' ? '`hopjit install-skill --carrier opencode`'
     : carrierFamily(opts.carrier) === 'codex' ? '`hopjit install-skill --carrier codex`'
     : '`hopjit install-skill`';
   const codexHopspecPath = opts.carrier === 'cfuse-codex'
@@ -1683,8 +1853,8 @@ ${paramLines}
 
 program.command('pack <spec>')
   .description('Pack a hopskill spec into a standalone named skill for Claude Code or Codex')
-  .option('--carrier <carrier>', 'Skill carrier: cc | codex | cfuse-cc | cfuse-codex', 'cc')
-  .option('--dir <target>', 'Target skills directory (default: .claude/skills for cc/cfuse-cc, .agents/skills for codex/cfuse-codex — project-level per carrierFamily; cfuse home needs --dir)')
+  .option('--carrier <carrier>', 'Skill carrier: cc | codex | cfuse-cc | cfuse-codex | opencode', 'cc')
+  .option('--dir <target>', 'Target skills directory (default: .claude/skills for cc/cfuse-cc, .agents/skills for codex/cfuse-codex, .opencode/skills for opencode — project-level per carrierFamily; cfuse home needs --dir)')
   .option('--name <name>', 'Skill name (default: spec Id)')
   .option('--assets <files>', 'Comma-separated data files (in spec dir) to bundle into the skill')
   .option('--skill-version <v>', 'Inject version into packed SKILL.md frontmatter (0092: consumers reading version get unknown otherwise)')
@@ -1694,7 +1864,7 @@ program.command('pack <spec>')
       assertCarrier(opts.carrier, 'PACK');
       const carrier = opts.carrier as Carrier;
       const specPath = isAbsolute(specArg) ? specArg : resolve(process.cwd(), specArg);
-      const target = opts.dir ?? (carrierFamily(carrier) === 'codex' ? '.agents/skills' : '.claude/skills');
+      const target = opts.dir ?? (carrier === 'opencode' ? '.opencode/skills' : carrierFamily(carrier) === 'codex' ? '.agents/skills' : '.claude/skills');
       const result = packSpec(specPath, {
         dir: target,
         carrier: carrier,

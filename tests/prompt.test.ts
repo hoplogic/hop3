@@ -376,15 +376,15 @@ Test sliding window
   });
 
   describe('L4 instruction', () => {
-    it('combines summary and instruction text', () => {
+    it('instruction 在场时不复读 summary（任务先行批——L4 步骤行已带 summary,任务段重复是纯噪声）', () => {
       const engine = new ExecutionEngine();
       engine.initExecution(THREE_STEP_SPEC, HOST, { params: { source: 's' } });
 
       const s = engine.nextStep();
       expect(s.status).toBe('step_ready');
       if (s.status === 'step_ready') {
-        expect(s.context.instruction).toContain('Analyze input');
         expect(s.context.instruction).toContain('Analyze the source data carefully');
+        expect(s.context.instruction).not.toContain('Analyze input');
       }
     });
   });
@@ -773,6 +773,188 @@ Test adaptive replan
     });
 
     // formatParallelPromptText 测试已删（P0.5：函数随旧通道派活单退役）
+
+    // @v: anc-exec-format-example-structural —— 交付格式例按值性质分形（结构型字段禁 | 块标量:
+    // Ling hb2 实撞——引擎把 yaml 型 aux_ledger 渲染成 `aux_ledger: |` 占位,模型逐字照抄交出
+    // 字符串包结构,validator 拒收五轮烧尽;G5 探针 T5 同考点明示指令下 6/6 立据是引擎教错不是模型不会）
+    describe('交付格式例按值性质分形', () => {
+      const mkCtx = (outs: AssembledContext['output_schema']): AssembledContext =>
+        ({ ...FULL_CTX, output_schema: outs });
+
+      it('正例：yaml 型占位=缩进结构,不出 | 块标量;结构规则短句在场', () => {
+        const out = formatPromptText(mkCtx([{ name: 'ledger', type: 'yaml', description: '台账' }]), 'reason');
+        expect(out).not.toContain('ledger: |');
+        expect(out).toContain('ledger:\n  （台账——结构化数据:直接写缩进的 YAML 对象/列表');
+        expect(out).toContain('不要用 | 把结构包成字符串');
+      });
+
+      it('正例：[Type] 列表型占位=- 条目起头;自定义 TypeDecl 型同归结构档', () => {
+        const out = formatPromptText(mkCtx([
+          { name: 'items', type: '[CheckPoint]', description: '清单' },
+          { name: 'card', type: 'IssueCard', description: '卡' },
+        ]), 'reason');
+        expect(out).toContain('items:\n  - （清单——列表值');
+        expect(out).not.toContain('items: |');
+        expect(out).toContain('card:\n  （卡——结构化数据');
+      });
+
+      it('反例：文本多行型仍教块标量,标量型仍单行;全非结构型时结构规则短句不出现', () => {
+        const out = formatPromptText(mkCtx([
+          { name: 'report', type: 'markdown', description: '报告' },
+          { name: 'ok', type: 'bool', description: '判定' },
+        ]), 'reason');
+        expect(out).toContain('report: |');
+        expect(out).toContain('ok: （判定）');
+        expect(out).not.toContain('不要用 | 把结构包成字符串');
+      });
+
+      it('正例：修订短 prompt 的格式例同一分形源——yaml 型不出块标量', () => {
+        const shortCtx: AssembledContext = {
+          ...FULL_CTX, revision_short: true,
+          output_schema: [{ name: 'ledger', type: 'yaml', description: '台账' }],
+        };
+        const out = formatPromptText(shortCtx, 'reason');
+        expect(out).not.toContain('ledger: |');
+        expect(out).toContain('ledger:\n  （修订后的完整值——结构化数据');
+      });
+    });
+
+    // @v: anc-exec-revision-short-weak —— 弱模型档修订短 prompt（打回重试轮换卷:命令整体替换
+    // 为修订祈使句,从头教学框架全撤;A/B 实锤框架在场弱模型按篇幅选"从头做题"模板 schema 0/6,
+    // 砍净 6/6。缺省 standard 全模型零变化——revision_short 不置位时渲染与本组其余测试同卷）。
+    describe('revision_short 修订短 prompt', () => {
+      const SHORT_CTX: AssembledContext = {
+        ...FULL_CTX,
+        revision_short: true,
+        constraints_text: '- SENTINEL_CONSTRAINT_LINE',
+        retry_context: {
+          check_failed_origin: true,
+          rejected_by: { step_id: '2.4', summary: '验收提取完备性', checked_inputs: ['doc_content', 'points'] },
+          prior_outputs: [{ name: 'points', type: '[CheckPoint]', rendered: 'SENTINEL_PRIOR_POINTS' }],
+        },
+      };
+
+      it('正例：短卷=修订命令头+基准+意见+落实规则在场;从头教学框架全撤', () => {
+        const out = formatPromptText(SHORT_CTX, 'reason');
+        // 换掉的命令:修订祈使句开卷
+        expect(out).toContain('修订任务');
+        expect(out).toContain('不是重做任务');
+        // 六件在场
+        expect(out).toContain('SENTINEL_CONSTRAINT_LINE');   // Constraints 保留(作者拍)
+        expect(out).toContain('SENTINEL_INPUT_VAL');          // 输入材料
+        expect(out).toContain('sentinel_out');                // 输出声明
+        expect(out).toContain('SENTINEL_PRIOR_POINTS');       // 上一版基准
+        expect(out).toContain('SENTINEL_RETRY_FB');           // 打回意见
+        expect(out).toContain('意见未提到的地方原样保留');      // 落实规则
+        expect(out).toContain('被步骤 2.4');                   // 打回来源点名
+        // 从头教学框架全撤
+        expect(out).not.toContain('SENTINEL_TASK_CTX');       // L1 全局契约撤
+        expect(out).not.toContain('SENTINEL_KNOWLEDGE');      // L2 知识撤
+        expect(out).not.toContain('SENTINEL_PROGRESS');       // L3 轨迹撤
+        expect(out).not.toContain('SENTINEL_INSTRUCTION');    // 原任务祈使句整体撤下(命令替换的本体)
+        expect(out).not.toContain('═══ L0');                   // 世界观撤
+        expect(out).not.toContain('L4. 当前节点');             // 标准分层框架不在场
+      });
+
+      it('正例：schema 行内反馈单独摘出保留（例外保真②——纠错信息不随 instruction 撤下蒸发）', () => {
+        const kicked = { ...SHORT_CTX, instruction: 'SENTINEL_INSTRUCTION\n\n[上次输出未通过校验，请修正后重新输出]\nSENTINEL_SCHEMA_KICK' };
+        const out = formatPromptText(kicked, 'reason');
+        expect(out).toContain('SENTINEL_SCHEMA_KICK');        // 校验反馈保留
+        expect(out).toContain('[上次输出未通过校验');
+        expect(out).not.toContain('SENTINEL_INSTRUCTION');    // 原任务本体仍撤
+      });
+
+      it('正例：工具清单保留（例外保真①——下发面与清单同源）;反例：revision_short 不置位走标准卷零变化', () => {
+        const withTools = { ...SHORT_CTX, tool_manifest: 'SENTINEL_TOOL_MANIFEST' };
+        expect(formatPromptText(withTools, 'reason')).toContain('SENTINEL_TOOL_MANIFEST');
+        // 反例:同一 ctx 去掉 revision_short → 标准卷(教学框架在场)
+        const std = { ...SHORT_CTX, revision_short: undefined } as AssembledContext;
+        const out = formatPromptText(std, 'reason');
+        expect(out).toContain('SENTINEL_TASK_CTX');
+        expect(out).toContain('SENTINEL_INSTRUCTION');
+        expect(out).toContain('L4. 当前节点');
+      });
+
+      it('契约：短卷全入易变面（stableSections 空——system 只剩工作目录行,短档无缓存亲和稳定面）', () => {
+        const parts = renderPromptParts(SHORT_CTX, 'reason');
+        expect(parts.stableSections).toHaveLength(0);
+        expect(parts.volatileSections.join('\n')).toContain('修订任务');
+      });
+
+      // @v: anc-exec-revision-short-weak —— 装配层触发块（2026-09-18 review 面三变异 M1 实锤:
+      // 置位块整删 3068 全绿零保护——渲染层四钉全用手工 ctx,只锁"置位后渲染什么"不锁"何时置位";
+      // 本组真走 assembleContext 锁触发条件全域:short×reason×打回轮置位+constraints 抽出剥注记,
+      // standard 档/首轮不置位）
+      describe('装配层 revision_short 触发（真走 assembleContext）', () => {
+        const RETRY_SPEC = `# T
+Id: t-rev
+## Goal
+g
+## Constraints
+- 每条核查须标注证据来源,不得凭记忆断言;搜不到就如实标注,禁止编造数据（完整判据见 [[某设计#^anc-fake-ref]]）
+## Inputs
+- doc: text  # 料
+## Steps
+1. [subtask retry=2] 提取并验收
+  - ← doc
+  + → pts: text  # 清单
+  1.1. [reason] 提取
+    - ← doc
+    + → pts: text  # 清单
+    > 提取
+  1.2. [check final] 验收
+    - ← pts
+    + → ok: bool  # 判
+    + → gap: text  # 说明
+    > 核对`;
+        function mkRetryCtx(mode: 'standard' | 'short'): AssembledContext {
+          // 按引擎真实驱动序构造打回轮（与"L5 打回轮恒供给"组同款——nextStep 驱动,不越过引擎直调）
+          const engine = new ExecutionEngine();
+          engine.initExecution(RETRY_SPEC, HOST, { params: { doc: 'd' } });
+          engine.setRevisionPromptMode(mode);
+          engine.nextStep();                                   // → 1.1
+          engine.completeStep('1.1', { pts: '旧版清单' });
+          engine.nextStep();                                   // → 1.2
+          engine.failStep('1.2', 'CHECK_FAILED: 漏了X');
+          const r = engine.nextStep();                         // → 1.1 打回重跑轮
+          return (r as { context: AssembledContext }).context;
+        }
+
+        it('正例：short 档×reason 打回轮 → revision_short 置位+constraints_text 抽出且剥装配注记', () => {
+          const ctx = mkRetryCtx('short');
+          expect(ctx.retry_feedback).toBeDefined();            // 前置自证:打回轮真构造出来了
+          expect(ctx.revision_short).toBe(true);
+          expect(ctx.constraints_text).toContain('每条核查须标注证据来源');   // 约束本体保留
+          expect(ctx.constraints_text).not.toContain('[[某设计');   // stripAssemblyNotes 剥装配注记（含指路短语所在半句——句读边界收窄）
+        });
+
+        it('反例：standard 档同打回轮 → 不置位;首轮（无打回）short 档 → 不置位', () => {
+          const ctxStd = mkRetryCtx('standard');
+          expect(ctxStd.retry_feedback).toBeDefined();
+          expect(ctxStd.revision_short).toBeUndefined();
+          const engineFirst = new ExecutionEngine();
+          engineFirst.initExecution(RETRY_SPEC, HOST, { params: { doc: 'd' } });
+          engineFirst.setRevisionPromptMode('short');
+          const first = engineFirst.nextStep();
+          const ctxFirst = (first as { context: AssembledContext }).context;
+          expect(ctxFirst.revision_short).toBeUndefined();
+        });
+      });
+
+      // @v: anc-exec-inputs-deflate —— retry 基准卸载指路语按工具面分叉（2026-09-18 review 面二抓
+      // 组装期拼死文案"用 read 工具按需取"对零工具面步是死指路——决策5 普遍规则第三处落点;
+      // 修后组装层只存中性事实,渲染层按 tool_manifest 分叉）
+      it('retry 基准卸载条目：有工具面指 read 按需取;零工具面给"凭节选修订"出口不指死路', () => {
+        const po = { name: 'pts', type: 'text', rendered: 'X'.repeat(500), offloaded: true, offload_path: '/wz/vars/retry_base_pts.txt', full_chars: 9999 };
+        const base = { ...SHORT_CTX, retry_context: { check_failed_origin: true, prior_outputs: [po] } };
+        const withTools = formatPromptText({ ...base, tool_manifest: 'M' } as any, 'reason');
+        expect(withTools).toContain('可用 read 工具按需取');
+        expect(withTools).toContain('/wz/vars/retry_base_pts.txt');
+        const noTools = formatPromptText(base as any, 'reason');
+        expect(noTools).toContain('基于以下节选修订');
+        expect(noTools).not.toContain('read 工具按需取');
+      });
+    });
   });
 });
 
@@ -1423,15 +1605,40 @@ describe('输入材料条目化渲染（HopSchema 赋值形态,2026-08-31 并入
     expect(out).not.toContain('值: |');
   });
 
-  it('正例：$file 指针条目保持元信息头,值位换指针说明', () => {
-    const ctx: AssembledContext = {
-      task_context: 'T', progress_summary: 'P',
-      inputs: { big: { $file: '/wz/vars/big.json' } },
-      input_meta: { big: { type: 'yaml' } },
-      instruction: 'I', output_schema: [],
+  it('正例：$file 指针条目保持元信息头,值位换指针说明——指路语按工具面分叉（组合死锁修复:零工具面不教做不到的事）', () => {
+    const mk = (withManifest: boolean): string => {
+      const ctx: AssembledContext = {
+        task_context: 'T', progress_summary: 'P',
+        inputs: { big: { $file: '/wz/vars/big.json' } },
+        input_meta: { big: { type: 'yaml' } },
+        instruction: 'I', output_schema: [],
+        ...(withManifest ? { tool_manifest: '当前可用工具（未列出的工具不可用）：\n- read：读文件' } : {}),
+      };
+      return formatPromptText(ctx, 'reason');
     };
-    const out = formatPromptText(ctx, 'reason');
-    expect(out).toContain('- big: yaml =（值已卸载至 /wz/vars/big.json');   // 卸载条目头行尾注形态
+    // @v: anc-exec-inputs-deflate —— 有工具面:指路 read 取真值;零工具面:合法出口不指死路
+    expect(mk(true)).toContain('- big: yaml =（值已卸载至 /wz/vars/big.json');
+    expect(mk(false)).toContain('本步无文件工具,无法取全文');
+    expect(mk(false)).not.toContain('read 该文件取真值');
+  });
+
+  // @v: anc-exec-inputs-deflate —— $preview 条目指路语分叉（2026-09-18 review 面三变异 M3 实锤:
+  // else 分支删除恒走"可读全文"3068 全绿零保护——实撞形态恰是 $preview〔dv 判官步喂 spec 卸载件
+  // 三攻全灭〕,却只有 $file 半边有钉;本钉锁 $preview 双臂）
+  it('正例：$preview 条目指路语按工具面分叉——有工具面指 read 读全文;零工具面给"凭节选如实作业"出口', () => {
+    const mk = (withManifest: boolean): string => {
+      const ctx: AssembledContext = {
+        task_context: 'T', progress_summary: 'P',
+        inputs: { doc: { $preview: '节选内容'.repeat(10), full_chars: 30000, full_file: '/wz/vars/doc.json' } },
+        input_meta: { doc: { type: 'text' } },
+        instruction: 'I', output_schema: [],
+        ...(withManifest ? { tool_manifest: '当前可用工具：\n- read：读文件' } : {}),
+      };
+      return formatPromptText(ctx, 'reason');
+    };
+    expect(mk(true)).toContain('可用 read 工具读全文');
+    expect(mk(false)).toContain('因材料截断未完整覆盖');
+    expect(mk(false)).not.toContain('可用 read 工具读全文');
   });
 
   it('反例：短单行值不套围栏（条目形态但轻量）', () => {
@@ -1693,8 +1900,9 @@ describe('L4 完整节点呈现', () => {
     expect(out).toContain('**本步输入材料**（HopSchema 赋值形态');   // L4 并入后输入条目就地在 L4
     expect(out).toContain('- a');   // 输入条目 HopSchema 头行(该用例 meta 缺省仅字段名,无类型注)
     expect(out).toContain('- a = 1');   // 短值单行形态
-    expect(out).toContain('**本步你的输出**（HopSchema 声明');
-    expect(out).toContain('- h: yaml  # 契约');
+    // @v: anc-exec-l5-task-first —— 段序契约:产出段承接任务,条目=名(类型)——生成指引
+    expect(out).toContain('**本步要产出**（任务完成=交付这些字段');
+    expect(out).toContain('- h（yaml）——契约');   // 产出条目=名(类型)——生成指引(任务先行批新形态)
     expect(out).toContain('不得多也不得少');
     // ←/→ 源码记号不出现在 L4 渲染（L1 骨架的步骤行不带箭头,故全文断言安全面窄化到 L4 标记行形态）
     expect(out).not.toContain('- ← a');
@@ -1810,7 +2018,7 @@ g
     expect(out2).toContain('会作为修改依据发给重做的执行者');   // 说明槽下游消费指引(作者定'应该给check指引')
     // 细则就地:在 L4 输出段(声明句之后),不挤角色档(作者抓"太遥远";L0 恒定化后角色档也在 L4
     // "本步操作指引"子块——边界从 ═══ 改到下一个 **段题**,断言意图不变:细则贴输出声明)
-    expect(out2).toMatch(/不得多也不得少。[\s\S]{0,40}判定槽（bool）/);
+    expect(out2).toMatch(/本步要产出[\s\S]{0,200}判定槽（bool）/);
     expect(out2.split('你的角色：验证判定')[1].split('**本步')[0]).not.toContain('判定槽（bool）');
   });
 
@@ -1920,8 +2128,10 @@ g
     engine.failStep('1.2', 'CHECK_FAILED: 假红');
     const r = engine.nextStep();
     const out = (r as any).context ? formatPromptText((r as any).context, 'reason') : '';
-    if (out.includes('已卸载至')) {
-      expect(out).toContain('开头节选');
+    if (out.includes('（已卸载）')) {
+      // 卸载档:节选指路语两臂任一在场（有工具面"以下为开头节选"/零工具面"基于以下节选修订"——
+      // 2026-09-18 review 修:组装期死文案改渲染层按工具面分叉,本断言随新形态）
+      expect(out).toMatch(/以下为开头节选|基于以下节选修订/);
       expect(out).not.toContain('X'.repeat(550));   // 全文没进 prompt
     } else {
       // 无 workZone 场景:如实全文（内联真值纪律）——两种出口都合法,断言至少居其一
@@ -2205,6 +2415,7 @@ g
 - r: text  # r
 ## Steps
 1. [reason] 分析
+  - 工具: read  # 声明才有清单（2026-09-18 修订:零声明 reason 零清单——清单与下发面同源）
   + → r: text  # r
   > 想
 `;
@@ -2218,13 +2429,13 @@ g
     return engine;
   }
 
-  it('正例：standalone（注册面在场）reason 步 → L4 含工具清单与 tool_failure 教条', () => {
+  it('正例：standalone reason 步带声明 → L4 含工具清单与 tool_failure 教条（2026-09-18 修订:声明才渲染——零声明零清单,与下发面同源）', () => {
     const engine = mkEngineWithTools();
     const assembler = new PromptAssembler(engine);
     const step1 = engine.getSpec()!.steps![0];
     const ctx = assembler.assembleReasonContext(step1);
     expect(ctx.tool_manifest).toBeDefined();
-    expect(ctx.tool_manifest).toContain('本步可用工具');
+    expect(ctx.tool_manifest).toContain('当前可用工具');
     expect(ctx.tool_manifest).toContain('read');
     expect(ctx.tool_manifest).toContain('tool_failure');       // 故障出口教条同供
     expect(ctx.tool_manifest).toContain('先自己想办法');        // 自救优先半句同供
@@ -2236,6 +2447,22 @@ g
     const assembler = new PromptAssembler(engine);
     const step1 = engine.getSpec()!.steps![0];
     const ctx = assembler.assembleReasonContext(step1);
+    expect(ctx.tool_manifest).toBeUndefined();
+  });
+
+  // @v: anc-exec-reason-tools —— 零声明 reason 零清单（2026-09-18 review 面三变异 M4 实锤:
+  // reasonHasGrants 收窄条件回退旧形态〔零声明也渲染满配清单〕3068 全绿零保护——本反例锁
+  // "有注册面但零声明 → prompt 零工具清单",清单与下发面同源的收窄半边;既有"反例"钉测的是
+  // 复用模式无注册面,挡不住本形态）
+  it('反例：有注册面+零声明 reason 步 → 不渲染工具清单（清单与下发面同源——零声明单发零工具,prompt 不许挂幽灵清单）', () => {
+    const NO_GRANT_SPEC = REASON_SPEC.replace('  - 工具: read  # 声明才有清单（2026-09-18 修订:零声明 reason 零清单——清单与下发面同源）\n', '');
+    const engine = new ExecutionEngine();
+    engine.initExecution(NO_GRANT_SPEC, HOST);
+    engine.setToolDefsSource({
+      list: () => [{ name: 'read', description: '读文件', input_schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }, requires_commit: false, category: 'basic' as const }],
+      execute: async () => ({ result: '', success: true }),
+    } as never);
+    const ctx = new PromptAssembler(engine).assembleReasonContext(engine.getSpec()!.steps![0]);
     expect(ctx.tool_manifest).toBeUndefined();
   });
 });
@@ -2253,7 +2480,7 @@ describe('L4 工具清单（buildToolManifest,0054）', () => {
     expect(out).toContain('参数 path: string  # 路径');
     expect(out).toContain('- pdf_extract：提取 PDF 文本（本步用途：提取合同页）');
     expect(out).not.toContain('ocr_image');
-    expect(out).toContain('未列出的工具本步不可用');
+    expect(out).toContain('未列出的工具不可用');
   });
 
   it('正例：* 全量含全部 special', () => {

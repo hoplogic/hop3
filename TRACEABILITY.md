@@ -1184,12 +1184,34 @@ ModelEngine——多模型路由配置（default_service / default_model / routi
 
 ### anc-exec-thinking-routing ✅
 
-thinking 路由（2026-08-20 作者拍板形态 B『routing_rules 每条可选带 thinking: enabled|disabled』——与模型分档同维度第二旋钮）：推理型端点缺省开 thinking,机械含量高的步骤边际价值远低于烧掉的预算与延迟（重档实录:flash 90% output_tokens 是 thinking,16384/65536 双档 OUTPUT_TRUNCATED 第一凶手;disabled 实测同题 15→1 token）。route 声明才发参（disabled 发 {type:disabled}/enabled 发 {type:enabled,budget=输出预算半}）,缺省不发吃端点缺省存量零变化;commit 吃 act 条时随整条继承;加载期枚举核;openai-chat 不透传（协议无此概念）。
+thinking 路由五级优先链（2026-08-20 作者拍板形态 B 立 routing_rules 档;2026-09-20 0100 批扩五级,作者拍分类表）：记名册（止血恒最高）> 步骤 @thinking 标注 > routing_rules 按类别 > provider 级缺省 > 引擎内建步骤类型缺省（act 无 body 未标 free/commit 关;act free/reason/check/replan 开）。第 5 级恒兜底=思考行为恒显式恒可审计,端点私有缺省从行为面退场（动因:各端点缺省互相相反且不可见——deepseek 开/antchat 关,同 spec 换模型思考行为静默翻转;实撞:Ling 历史 G1 全档在思考关下测出,推理档被低估三倍位数）。参数形态各级同一（disabled 发 {type:disabled}/enabled 发 {type:enabled,budget=输出预算半夹 [1024, maxOutput-1]}）;openai-chat 不透传（协议无此概念）。
 
-- [[step-dispatcher#^anc-exec-thinking-routing]] ← 设计权威；[[shared-providers]] schema 登记
-  - provider-types.ts ModelRoute.thinking / dispatcher.ts resolveModel 透传+buildApiRequest 发参 / mcp-server.ts 文法核+装配透传 — @a: anc-exec-thinking-routing
-    - dispatcher.test.ts thinking 路由组（正2:disabled 发参+commit 继承/enabled 带 budget;反1:未声明零 thinking 键） — @v: anc-exec-thinking-routing
-    - mcp-server.test.ts 枚举核（正1:合法值过;反1:枚举外拒） — @v: anc-exec-thinking-routing
+- [[step-dispatcher#^anc-exec-thinking-routing]] ← 设计权威（五级链）；[[shared-providers]] schema 登记
+  - provider-types.ts ModelRoute.thinking / dispatcher.ts buildApiRequest 五级链装配 / mcp-server.ts routing_rules 文法核+装配透传 — @a: anc-exec-thinking-routing
+    - dispatcher.test.ts 形态B组(route 声明发参/budget 夹逼)+五级链组(级5 六格分道〔真 act/act free/replan 补钉 2026-09-20 review 批〕/级2 压级5 与压级4/级1 压级2/级3 异答格/级4 两值)+工具循环消费面钉(loopRequest 实发请求带 thinking——F1 修重放锁) — @v: anc-exec-thinking-routing（变招重试组归 anc-exec-thinking-exhausted 卡,2026-09-20 review 批勘正归属）
+    - mcp-server.test.ts routing_rules 枚举核（正1:合法值过;反1:枚举外拒） — @v: anc-exec-thinking-routing
+
+---
+
+### anc-exec-thinking-step-annotation ✅
+
+@thinking 步骤标注（0100,2026-09-20 作者拍"单步开关需要补",B 案独立标注不与 @model 耦合）：`> @thinking on|off` 单步思考开关——五级链第 2 级（记名册恒压过它:标 on 的烧穿步重试轮照样 disabled）。机械提取步标 off 省 8-9 倍（deepseek 实测 1.7-2 万 tok→2 千得分持平）,重推理步标 on 补档（Ling 实测开思考 G1 从 N2 抬 N6）。解析同 @model 通道剥出不进执行 prompt;off/on 外的值响亮拒;serialize 往返保留;带 body 步骤标了无义不拒。
+
+- [[../concepts/HopSpec V3语法参考]] 标注条目 ← 概念权威；[[step-dispatcher#^anc-exec-thinking-step-annotation]] ← 设计权威
+  - parser.ts THINKING_RE+extractModelAnnotation 扩+serializeSpec 往返 / ast-types.ts thinking_override 字段 / dispatcher.ts 五级链级 2 消费 — @a: anc-exec-thinking-step-annotation
+    - parser.test.ts @thinking 组（正3:off 剥出/与 @model 共存/serialize 往返;反1:非法值点名拒） — @v: anc-exec-thinking-step-annotation
+    - dispatcher.test.ts 级2 压级5+级1 压级2 — @v: anc-exec-thinking-step-annotation
+
+---
+
+### anc-exec-thinking-provider-default ✅
+
+provider 级思考缺省（0100,2026-09-20 作者问"ling 和 ds 缺省思考状态不一样,以后是不是需要统一"——统一落点=配置层显式化,不在端点）：ProviderEntry 可选 thinking: enabled|disabled——五级链第 4 级,逐模型矫正档（antchat 类"端点缺省关"的服务配 disabled 压回第 5 级 reason 恒开——Ling 开思考费用 ×10,只给重推理步 @thinking on 点名开）。env 键 {SERVICE_ID}_THINKING 随快照披发,dispatcher envOf 消费;加载期枚举核坏值响亮拒。
+
+- [[shared-providers#^anc-config-standalone-schema]] ProviderEntry thinking 行 ← schema 权威；[[../reference/配置参考]] thinking 行 ← 对外文法
+  - mcp-server.ts ProviderEntry.thinking+文法核+buildEnvSnapshot 披发 / dispatcher.ts 五级链级 4 消费 — @a: anc-exec-thinking-provider-default
+    - mcp-server.test.ts（正1:合法加载+快照披发;反2:枚举外拒/缺席不披假值） — @v: anc-exec-thinking-provider-default
+    - dispatcher.test.ts 级4 压级5 — @v: anc-exec-thinking-provider-default
 
 ---
 
@@ -1747,6 +1769,16 @@ L4 输入材料条目化——区块头声明"围栏内是数据材料,不是对
 
 ---
 
+### anc-exec-l5-task-first ✅（2026-09-18 新立——节点段序契约）
+
+L5 节点段序=任务→产出→材料→格式，产出承接任务。四件：任务先行（instruction 是 L5 第一个内容段，操作指引不再前向引用"执行说明"）；产出紧跟任务且每字段渲染带生成口径（声明的 # 说明升权重进"本步要产出"条目与格式模板占位位，不作注释尾巴）；输入材料垫后；格式规则拆短句。另含工具清单挪 L4 之前作独立环境段（题"当前可用工具（任务不需要时严格禁止使用）"，去"本步"强调）与 instruction/summary 不复读。立据=作者两抓（"任务描述不是很清晰""任务说明没有说清楚怎么生成输出，完全靠猜"）+Qwen3.8-27B 七轮控制变量实验（文字五级+结果语义两级全部无效的完整光谱，实验账在 D12 与 todo/0095）。
+
+- [[prompt-assembler#^anc-exec-l5-task-first]] ← 设计权威（v0.20.0）
+  - src/prompt.ts renderPromptParts L5 段序重排+工具段前置两处 — @a: anc-exec-l5-task-first
+    - tests/prompt.test.ts 段序与产出条目形态钉（"本步要产出"标题/名(类型)——生成指引条目/instruction 不复读 summary）+ tests/dispatcher.test.ts 工具段题与禁令措辞钉 — @v: anc-exec-l5-task-first
+
+---
+
 ### anc-exec-l5-node-impl ✅（2026-08-24 新立——L0-L6 重构批）
 
 L5 完整节点呈现——步骤行+[类型]+← 清单（标注值见 L4）+→ 声明（带 # 说明与"不得多不得少"定位句）+执行说明正文一体渲染;旧独立"L6. 输出约束"区块废除并入。实撞:节点被肢解四处（类型丢/←散 L4/→孤立旧 L6/正文裸 L5 无步骤号）,模型从未见过自己节点的完整原貌。
@@ -1843,6 +1875,11 @@ MCP server 协议壳——standalone 执行面（2026-08-06 作者拍板 MCP 方
     - mcp-server.ts `providerToHostConfig` — @a: anc-mcp-key-isolation
   - [[shared-providers#^anc-config-standalone-schema]] StandaloneConfig 实现行为契约（**对外文法权威已迁 [[docs/reference/配置参考#^anc-ref-config-contract]]**——2026-08-13 作者定对外契约的权威属对外文档,新类别 anc-ref-*;工具面文法半边 ^anc-ref-tool-servers;纯文档契约无代码锚义务,实现经本行为契约落码）
     - mcp-server.ts `loadStandaloneConfig`（fail-fast；YAML/JSON 同 schema；明文 key 明确拒绝；两级合并 mergeConfigs） — @a: anc-config-standalone-schema
+    - mcp-server.ts ProviderEntry.auth 鉴权头档（可选枚举 api-key|bearer 文法核 fail-fast + buildEnvSnapshot 经 {SID}_AUTH 键透传 + providerToHostConfig 贯穿 HostConfig.auth;bearer=SDK authToken 通道发 Authorization: Bearer——只认此形态的网关实测百炼 claude-code-proxy） — @a: anc-config-standalone-schema
+    - dispatcher.ts getClientForService bearer 分支（显式 service 路由按 {SID}_AUTH 分双臂,apiKey 置 null 防双头）+ defaultClient 构造按 HostConfig.auth 同分双臂（缺省 provider 路径生效面——2026-09-18 review 抓漏装补） — @a: anc-config-standalone-schema
+    - provider-types.ts HostConfig.auth 字段（providerToHostConfig 贯穿→defaultClient 消费——缺省路径生效面的类型半边） — @a: anc-config-standalone-schema
+      - mcp-server.test.ts auth 鉴权头档正反例（bearer 合法载入/非法值 fail-fast + 快照键透传与缺省不写键两钉——2026-09-18 review 抓卡虚记〔原文声称两钉而测试不存在〕后真补） — @v: anc-config-standalone-schema
+      - dispatcher.test.ts defaultClient bearer 双臂构造断言（bearer→authToken 通道 apiKey null/缺省→x-api-key 通道） — @v: anc-config-standalone-schema
 
 ### anc-mcp-config ✅
 
@@ -2136,9 +2173,17 @@ hopjit pack——把 hopskill spec 打包成独立具名 CC skill（薄包装三
 
   - 2026-09-15 0093 件二:hopfix 进装载清单（壳+流程件副本两载体对等——版本兼容三义务迁移通道进分发面;流程件含"版本迁移对照"知识节〔义务③落点,首批 B2 commit 档对照〕;package.json files 补 skills/hopfix+scripts/hopfix 两条）— @a: anc-cli-install-skill;cli.test.ts 两钉（CC 装出含对照节/Codex 对等）— @v: anc-cli-install-skill;重放:CC 分支装载块删→钉红复原绿
 
+### anc-cli-stale-skill-scan ✅（2026-09-20 hopissues/0096 期望2——作者定"给的不是清理命令,是 hopfix 这样的升级命令":0093 engine_min_version 链管"产物要求引擎太老"方向,本卡补反方向"引擎新了、已装产物太老";实撞=8-14 旧 demo 副本缺 web_search 授权在历史用户级位置静默活着,29 child 全灭 116 次失败提交后才被发现）
+
+// install-skill 装载后只读扫描本器写过的旧位置,陈旧副本报 stale_notes 携升级路径（引擎自带件→force 刷新指引+旧位置点名归用户处置;自建件→/hopfix 迁移正门）——不拦装载不代删不代改
+  - [[hop-cli#^anc-cli-stale-skill-scan]] ← 设计权威（扫描面=carrier 历史装载位置只读/认领判据=本器版本戳在场才认非本器零打扰/陈旧判据=戳版本落后或 spec 缺 engine_min_version 指纹/提示按对象分流两路升级命令）;InstallSkillResponse struct 补 stale_notes 字段
+    - cli.ts install-skill 装载后扫描段+响应 stale_notes 接线 — @a: anc-cli-stale-skill-scan
+      - cli.test.ts 三合一钉（旧位置本器旧版→点名带版本号/非本器文件→零打扰/文件原样不动——只读不删断言） — @v: anc-cli-stale-skill-scan
+      - 重放一拍:认领判据改全认→非本器零打扰断言红复原绿
+
 ### anc-cli-carrier-home-resolution ✅
 
-// install-skill 载体 home 解析（2026-09-02 cfuse 内置载体适配）：carrier 扩展为 cc|codex|cfuse-cc|cfuse-codex。
+// install-skill 载体 home 解析（2026-09-02 cfuse 内置载体适配;2026-09-15 加 opencode,见 todo/0089）：carrier 扩展为 cc|codex|cfuse-cc|cfuse-codex|opencode。
 // cc/codex 读官方环境变量 CLAUDE_CONFIG_DIR/CODEX_HOME（自动适配当前环境——cfuse 内置 cc/codex 通过
 // 这两个变量把 home 重定向到 ~/.codefuse/engine/{cc,codex}/）;cfuse-cc/cfuse-codex 固定
 // ~/.codefuse/engine/{cc,codex}/skills（裸终端显式指定,不读环境变量——目标 agent 未启动时环境变量
@@ -2148,8 +2193,21 @@ hopjit pack——把 hopskill spec 打包成独立具名 CC skill（薄包装三
 
   - [[hop-cli#^anc-cli-carrier-home-resolution]]
     - cli.ts Carrier 类型 + carrierFamily/resolveCarrierHome/assertCarrier 三 helper + install-skill/bootstrapStandaloneConfig/detectCcHopjitRegistration/pack 8 处触点 — @a: anc-cli-carrier-home-resolution
+      - opencode 载体（2026-09-15,见 todo/0089;2026-09-16 方案C .jsonc + 完整对齐 opencode 配置管理）:resolveCarrierHome 加 opencode 分支（OPENCODE_CONFIG_DIR ?? XDG ~/.config/opencode）;resolveOcConfigPath 检测 candidates [opencode.jsonc, opencode.json, config.json] 第一个存在（对齐 opencode globalConfigFile 三候选,都不存在用 opencode.jsonc）;carrierFamily('opencode')='cc' 复用 CC driver 源（skill 展开走 cc 分支零改动）;bootstrapStandaloneConfig 加 opencode 分支（deep-merge 三文件 opencode 加载顺序 config.json→opencode.json→opencode.jsonc,后者覆盖 .jsonc 优先,与 opencode 加载一致;取 model+provider.<id>.options.baseURL+env[0],jsonc-parser parse 含注释）;--mcp 注册加 opencode 分支（写 candidates 第一个存在的 mcp.hopjit,jsonc-parser modify/applyEdits 保留注释 + 检测 candidates 三文件查 mcp.hopjit 消除只查一个文件漏其他的静默冲突）;installHint/pack dir 缺省加 opencode — @a: anc-cli-carrier-home-resolution, anc-cli-install-skill
       - cli.test.ts install-skill cfuse-cc/cfuse-codex 目标目录+driver 源复用 2 例 + cc/codex 读环境变量重定向 2 例 — @v: anc-cli-carrier-home-resolution
       - cli.test.ts pack cfuse-cc/cfuse-codex 产物前置段指引 cfuse 路径不含原生 2 例 — @v: anc-cli-carrier-home-resolution
+      - cli.test.ts opencode 4 例（install-skill 装到 ~/.config/opencode/skills 走 CC driver 源/读 OPENCODE_CONFIG_DIR 重定向/--mcp 写 opencode.json mcp.hopjit/自举读 opencode.json model+provider）— @v: anc-cli-carrier-home-resolution, anc-cli-install-skill
+
+### anc-driver-opencode-carrier ✅（落点=driver 载体产物：driver/opencode/ 四件+守卫脚本——同 driver 卡惯例;2026-09-19 作者三连抓后立——"完全不考虑 agent 适配的架构设计?"/"cfuse 和 opencode 都放哪儿了?"/"opencode 完全复用 cc 的?":0089 批只适配路径与配置面,driver 正文逐字节搭 CC 车零验证,发现层兼容被扩大成执行层假设）
+
+// driver/opencode/ 自有内容层（SKILL.md+SKILL-mcp.md+references 四件,派生自 CC 源按原语映射表适配:AskUserQuestion→question 工具/Agent 工具 subagent→opencode subagent 含 inline 降级/无后台通知机制轮询放宽）+cli.ts opencode 专属装载分支（hop 件不装 carrier_note 明示）+载体准入两档规则（纯路径适配 vs 内容适配——cfuse 折原生有理与 opencode 须自有内容层的分档判据,拿不准归内容适配档）
+  - [[opencode-driver-carrier#^anc-driver-opencode-carrier]] ← 定位与三层复用判据（发现层同构维持/正文层派生适配/协议层零适配）;原语映射表 ^anc-driver-opencode-primitive-map;安装布局 ^anc-driver-opencode-install-layout;准入规则 ^anc-driver-carrier-admission
+    - cli.ts install-skill opencode 分支（driver/opencode/ 展开+hopbuild 族共装+hop 不装带 note） — @a: anc-driver-opencode-install-layout
+      - cli.test.ts opencode 装载钉更新（装出件含"question 工具"+AskUserQuestion 至多 @trace note 一处+hop 缺席+carrier_note 在场+hopbuild 族在场——原"复用 CC 源"断言随改判翻写） — @v: anc-driver-opencode-install-layout
+      - check-driver-carriers.mjs 三载体扩员（opencodeBundle 协议签名核+续接交接 token 核〔<PENDING>/DRIVER_PROTOCOL_ERROR〕+自包含核〔正文 CC 原语禁令,@trace note 豁免一处——首跑即抓获 SKILL-mcp note 里 run_in_background 字样,措辞改写后绿:守卫上线当场自证〕+--json 纪律扫描面扩） — @v: anc-driver-opencode-carrier
+  - hop 件补装（2026-09-20 作者抓"在 codex /hop 都能用,为什么在 opencode 不装?"——撤销首版"v1 不装"裁定:该裁定把"原语密度高"误当"适配成本高",Codex 先例已证 /hop 适配=三处载体差异且全部降级路径已铺好,opencode 能力面只强不弱。driver/opencode/hop-skill.md 以 codex 版为基准适配〔隐式触发/question 工具/subagent 降级〕;cli.ts 装载分支改装+首版 stale 清理与 carrier_note 随撤〔hop 现为正装件,清理逻辑失去存在前提〕;设计安装布局节改判+映射表 task-notification 行随改;守卫 opencodeBundle 与自包含核各扩 hop-skill.md;测试钉翻写〔hop 缺席断言→在场+适配标志物〕。教训入卡:agent 自拍"不装"是替用户砍能力面的决策,砍之前该对照同类载体先例——Codex 有的 opencode 没有,要么有真实差异依据,要么就是欠账）
+  - 阅卷六缺陷全收（ok:true 带 2 真缺陷+4 小疵,按"修彻底"口径不挂账）:①dispatch_kind: call 占位符解析指令丢失（parallel call 在 opencode 会把带占位命令原样执行必败——补回并入映射表"协议件原样保留"行:占位解析是引擎协议非 CC 原语,串行退化只改执行形态不改协议）;②0089 旧装 hop 件升级不清（CC 原文长住 opencode 盘面与"hop 不装"意图矛盾——装载分支加 stale 清理,判据=本安装器版本戳在场才删,CC 分支 hopskill-build 旧名清理同款先例）;③钉钉/SandboxConfig 两句误删补回（载体中立件非 CC 原语,映射表补两行声明）;④cli-discovery/step-execution-rules 残留 CC 形态 token 清;⑤守卫 --json 扫描面补 opencode discovery;⑥Doctree 列数修
+  - 真机 E2E 两轮（opencode v1.18.31+deepseek,coffee-week 全链）:轮一装 CC 原文——能通但 transcript 自述"没有 AskUserQuestion 工具改为直接问"=靠模型自由发挥非协议;轮二装适配版——present_inputs 完整 dump/执行段外包 General subagent/HITL 停点问人/终态 YAML 契约块全按协议走,completed。协议化前后行为对照即本批价值实证
 
 ### anc-driver-codex-carrier ✅（落点=driver 载体产物：driver/codex/SKILL.md+agents/+references/——非 src/tests，见 codex-driver-carrier.md 头部落点声明）
 
@@ -2542,14 +2600,17 @@ anc-exec-output-schema-check
 围栏输出恢复阶梯（BUG-C 修 2026-08-13,hopkb 级二真机实撞销账：deepseek 把 [yaml] 输出写成围栏文本塞字段值——期望列表实际字符串 SCHEMA_MISMATCH,盲重试同因必死 3 实例全灭;deepseek/qwen/glm 系围栏习惯 standalone 直调高频踩,CC 复用模式 driver 自修不踩）：校验前对"字符串且过不了声明类型检查"的字段跑三步恢复——剥围栏→YAML 解析（JSON 子集覆盖）→单键嵌套 {字段名:值} 剥层；解出的值必须重过类型检查才采用,解不出原样进校验照拒（与"禁止宽松接受"分界：解出真值放行≠放行待解析字符串,@file 指针串照拒回归钉死）。反馈半边：围栏痕迹 mismatch 反馈追加"直接返回值"提示（两模式同享——message 在 completeStep 组装）。
 
   - [[exec-engine#^anc-exec-output-fence-recovery]] ← 权威源
-    - validator.ts `recoverOutputValues`（恢复/校验/归一三函数分立;含列表元素位单键自嵌套剥壳——hopissues/0053 家族第 5 马甲,2026-08-31）+ `recoverFencedValue` 剥壳原语（无声明档——call 边界用,BUG-D） — @a: anc-exec-output-fence-recovery
+    - validator.ts `recoverOutputValues`（恢复/校验/归一三函数分立;含列表元素位单键自嵌套剥壳——hopissues/0053 家族第 5 马甲,2026-08-31）+ `recoverFencedValue` 剥壳原语（无声明档——call 边界用,BUG-D）+ `stripSchemaEcho` 回声剥壳（家族第 6 马甲 2026-09-19——deepseek 把输入渲染语法 `名: 类型 = 值` 逐字回声进输出,毒值过校验炸下游机械对账'同点双清单'矛盾;整串匹配内建类型词+递归进结构+引用同一性保持,fact-check S 档 355 处全污染实撞） — @a: anc-exec-output-fence-recovery
     - engine.ts mapCallOutputs 逐值剥壳（reapParallelCall 喂 collect 不经 completeStep 的覆盖缺口,hopkb 级二实撞） — @a: anc-exec-output-fence-recovery
     - engine.ts reapParallelSubtask 收割前带声明档恢复+边界归一（subtask 收割直写同族第 4/5 处——recover 后接 coerce 与 completeStep 同序;至此全谱 variables.write 调用点核尽,值跨边界写入全有恢复覆盖;collect finalize/call 边界不加 coerce 的理由入设计防重议） — @a: anc-exec-output-fence-recovery
     - engine.ts completeStep 校验前接入 + 围栏提示 — @a: anc-exec-output-fence-recovery
     - dispatcher.ts parseStepOutput 多输出围栏剥除认任意语言标签（coffee4 实撞半边——```json 剥不掉走回退,与 validator parseYamlStructure 同口径） — @a: anc-exec-output-fence-recovery
       - engine.test.ts 围栏恢复组（正4:实撞原型围栏yaml嵌套/围栏json/裸yaml列表/enum 围栏剥出合法枚举成员〔终审门唯一守卫,字符串预筛废除〕;反3:真散文照拒/@file 指针回归/enum 剥出仍非成员照拒;反馈半边1;留痕1:恢复字段落 HopLog warn;不碰面1:markdown 合法围栏原样过）+ call 边界组（正2:围栏yaml进collect/来源键单键嵌套剥层;反2:纯文本不碰/散文围栏原样——BUG-D）+ subtask 收割组（正2:兄弟位围栏值按声明档解出/数字串按声明归一〔第5处〕;反1:散文原样不造值） — @v: anc-exec-output-fence-recovery
       - validator.test.ts 列表元素位单键自嵌套组（hopissues/0053——正4:卡probe主判据元素壳剥+拼平/逐元素标量壳就地替换/元素内多层剥至不动点/normalizeOutputsToFixpoint 全链过校验;反3:任一元素键名≠字段名整列表不碰含混合形态/[yaml] 多键对象元素不误伤/空列表不触发〔every 空数组恒真边界钉〕。变异两拍:删整分支 4 红/every 改 some 混合守卫钉 1 红,恢复全绿） — @v: anc-exec-output-fence-recovery
+      - validator.test.ts HopSchema 赋值形态回声剥壳组（家族第 6 马甲——正2:列表嵌套字段实撞同形剥净/顶层+enum 约束参数形态;反2:非整串不碰〔散文中部 = 与代码首行〕/干净值引用同一性零重建） — @v: anc-exec-output-fence-recovery
 
+  - （壳 8 追注 2026-09-20 review 批——170b68af 当批漏记,面四抓账实不符）validator.ts recoverOutputValues 字符串档壳 8 分支(散文前置+字段名键尾随:lastIndexOf 最后键行截断重解析;块级 @a: review 批补) — @a: anc-exec-output-fence-recovery
+    - validator.test.ts 散文前置组 4 钉(正例实撞同形/双键行 lastIndexOf 语义锁〔变异 C 重放红〕/反例通篇散文/反例键行后散文) — @v: anc-exec-output-fence-recovery
 ---
 
 ### anc-exec-output-fence-content-retry ✅
@@ -3995,6 +4056,10 @@ deflate 的"LLM 看指针决定 Read"隐含消费端有文件工具——standal
     - act-body-interpreter.test.ts $preview 四例（还原全文/缺 full_file 抛/形状守卫/full_file 非 string 原样保留） — @v: anc-exec-llm-inline-context, anc-exec-inputs-deflate
   - engine.ts setInlineLlmContext/getInlineLlmContext + attachHopEnvTable(L2e) + resolveStepDocRefs inlinePreview 传参 — @a: anc-exec-llm-inline-context
   - prompt.ts EngineAccessor.getInlineLlmContext? + resolveInputs 跳 deflate/超限转 $preview 对象(L4) + renderInputEntries 预览条目渲染 — @a: anc-exec-llm-inline-context
+  - prompt.ts renderInputEntries hasToolFace 指路语分叉（$file/$preview 的"全文去处"按本步实际下发面措辞——零工具面步不教"可 read 全文"的死路,给"凭节选如实作业"合法出口;组合死锁实撞:零声明 reason 照指路伸手把 read 写成 <tool_call> 文本交卷,check 连环打回烧尽,设计=prompt-assembler 决策5 分叉条款〔2026-09-18 review 后升普遍规则〕） — @a: anc-exec-inputs-deflate
+  - prompt.ts renderPriorOutputEntry retry 基准卸载条目分叉（组装层只存中性事实 offload_path/full_chars,措辞渲染层按 hasToolFace 拼——review 面二抓组装期死文案第三处残留后改） — @a: anc-exec-inputs-deflate
+  - doc-ref.ts 预览条目指路语双出口静态并列（本模块无步骤工具面信号,静态写全两条路——普遍规则第四处落点） — @a: anc-exec-inputs-deflate
+    - prompt.test.ts 指路语分叉正反例（有工具面指 read 取真值/零工具面给合法出口不指死路） — @v: anc-exec-inputs-deflate
   - doc-ref.ts resolveDocRefs inlinePreview 分支（fragment.preview/full_chars,全文落盘）+ formatDocRefContext 预览条目 — @a: anc-exec-llm-inline-context
   - ast-helpers.ts INLINE_PREVIEW_MAX=20000（三消费点共用,登 spec-ast 出口清单） — @a: anc-exec-llm-inline-context
   - dispatcher.ts 构造置标志 + formatInputs 截断废除 — @a: anc-exec-llm-inline-context
@@ -4153,6 +4218,32 @@ skill repo 全量 12 件滚动验证收官后，把攒下的五条构建器缺�
 
 背景：合理关判官步原来一个人干八个审查子面、吃八份大材料，是修检环里窗口最重、输出最贵的一步。本批把其中机械可判的部分下放给引擎直执的 body，判官只留真正需要读懂语义的活。四件：①指针闭合改由机械体检步做——从产物里抽反引号包裹的包内路径，与附属文件台账做集合比对，产出比对报告；判官对报告逐条表态即可，不再自己扫全文（字符串比对这种活，引擎做是确定性的，LLM 做是概率性的）。②变量断链只查"该引未引"——步骤说明需要某数据但没声明成输入，这只能靠读懂文字来判；"引了但产出者不存在"那一半机械校验早已覆盖，明写不重查。③数值对账的抽取暂不下放——原文每行带行号前缀，hop_python 又没有正则，机械剥前缀抽数字太容易写坏，写坏就等于悄悄漏查，先维持判官人工抽。④立写作纪律：执行体会读到的一切文本不写工程过程编号与来历（执行体没读过设计文档，编号对它是噪声），存量清理 54 处，行为规则与实撞例子全保留。设计权威=hopbuild2.md ^anc-build-qc-mechanize。spec 载体的行为测试归真机档，不虚列 @v
 
+### anc-exec-revision-short-weak ✅（2026-09-18 弱模型档修订短 prompt——hoplog 验尸+A/B 各 n=6 立据,S 档真机四轮迭代收全绿）
+
+打回重试轮的供给里住着两套互斥行为模板（从头做题 vs 改卷）,弱模型按篇幅权重选模板:标准态命令祈使句逐字不变+280 行从头教学,修订轮 schema 0/6 散文前置、数值增补意见 0/6 落实;换短卷（命令整体替换为修订祈使句+只留 Constraints/输入/输出声明/L5 修正块,教学框架全撤）后 6/6 全绿。档 `revision_prompt: standard | short` 缺省 standard 全模型零变化;精度 env HOPJIT_REVISION_PROMPT > 项目 hopjit.yaml > 缺省;最终户口=model-gearbox 档案 adapt.revision_prompt（消费链挂 0095）。两条例外保真:有声明工具的 reason 步清单保留（下发面同源）/schema 行内反馈单独摘出保留。适用面=reason 打回重试轮。
+- [[prompt-assembler#^anc-exec-revision-short-weak]] 行为契约 ← 设计权威
+  - prompt.ts assembleContext revision_short 置位（short 档×reason 打回轮;constraints 单独抽出）+ renderRevisionShortParts 短卷渲染（全入易变面零稳定段） — @a: anc-exec-revision-short-weak
+  - engine.ts revisionPromptMode 字段+set/get 访问器（会话级不入 StateFile——档案消费链落地前的轻量开关位） — @a: anc-exec-revision-short-weak
+  - mcp-server.ts StandaloneConfig.revision_prompt 字段+mergeConfigs 项目级赢+文法核 fail-fast+startRun 装配（env > 配置 > 缺省）+restoreRun 同装（2026-09-18 review 抓漏装补——恢复档位跟随盘上配置现值） — @a: anc-exec-revision-short-weak
+  - runtime-types.ts AssembledContext.revision_short/constraints_text 两字段（2026-09-18 review 抓卡漏列落点补） — @a: anc-exec-revision-short-weak
+    - prompt.test.ts revision_short 四钉（短卷六件在场教学框架全撤/schema 行内反馈保真/工具清单保真+不置位标准卷零变化/stableSections 空契约） — @v: anc-exec-revision-short-weak
+    - mcp-server.test.ts revision_prompt 文法核正反例（short 合法/坏值响亮拒） — @v: anc-exec-revision-short-weak
+
+### anc-exec-format-example-structural ✅（2026-09-19 交付格式例按值性质分形——Ling hb2 五轮 SCHEMA_MISMATCH 验尸+G5 探针 T5 同考点 6/6 立据）
+
+交付格式例的占位形态原按"是否多行"一刀切,yaml 型与 text/markdown 同教 `名: |` 块标量——弱模型逐字照抄模板（照抄本是该模板的设计前提）,把结构化数据包进字符串,validator 按 ^anc-type-yaml-structured 拒收确定性死（Ling 3.0 flash 跑 hopbuild2 在 aux_ledger: yaml 上连烧五轮死于步 2;同模型 G5 结构化交付探针 T5 档同考点、指令明说"写缩进结构"时 6/6 全过——是引擎教错形态,不是模型不会交结构）。修后按值性质分三形:文本多行型（text/markdown/prompt/HopSpec）仍教块标量/结构型（yaml/[Type]/自定义 TypeDecl）教缩进结构占位且格式规则区追加"不要用 | 把结构包成字符串"短句/标量型单行照旧;标准态与修订短 prompt 两个渲染位共用单一分形源。
+- [[prompt-assembler#^anc-exec-format-example-structural]] 分形契约 ← 设计权威
+  - prompt.ts isStructuralOutputType 分类词表（与 validator checkValue 收口面同源同向）+ renderOutputExampleLine 单字段格式例行（标准态 L5 与 renderRevisionShortParts 两渲染位共用） — @a: anc-exec-format-example-structural
+    - prompt.test.ts 分形四钉（yaml 型缩进结构不出块标量+规则短句在场/[Type] 条目起头+TypeDecl 归结构档/文本与标量档零变化+全非结构型规则短句不出现/修订短 prompt 同分形源） — @v: anc-exec-format-example-structural
+
+### anc-exec-toolloop-repeat-break ✅（2026-09-18 工具循环同签名断路器,0095 批——批内漏立卡,次日全检抓漏补记）
+
+act/reason 工具循环共用的形态闸：连续 3 次同名同参（参数 JSON 串相等）工具调用即抛 `TOOL_LOOP_REPEAT:` 断掉本步——与 MAX_TOOL_ITERATIONS(20 轮)分工:那个管总量,这个管形态。实撞:Qwen 走样件第五轮 14 连扫同一空目录,总量闸到第 20 轮才拦,断路器第 3 次重复即止损。同名不同参不触发（合法逐文件遍历）;进确定性口袋免预算首撞重试（同输入重发大概率原样复读,与 THINKING_EXHAUSTED 同待遇）。对全部模型生效。
+- [[docs/design/step-dispatcher#^anc-exec-toolloop-repeat-break]] 断路器契约 ← 设计权威
+  - dispatcher.ts executeActWithTools lastSignature/repeatCount 断路器状态与阈值 3 抛断（抛前 flushToolLog 保留痕） — @a: anc-exec-toolloop-repeat-break
+  - engine.ts stepTransient 瞬态口袋 TOOL_LOOP_REPEAT 前缀纳入（免预算首撞重试,与 OUTPUT_TRUNCATED/THINKING_EXHAUSTED 并列） — @a: anc-exec-toolloop-repeat-break
+    - dispatcher.test.ts 断路器正反例（同名同参 3 次抛断不烧到 20 轮/同名不同参遍历不触发） — @v: anc-exec-toolloop-repeat-break
+
 ### anc-exec-thinking-exhausted 追注（2026-09-17 新增降档重试）
 
 此前对 THINKING_EXHAUSTED（推理通道烧满输出上限、正文一个字没写出来）的处置只有三件：检出、留档、重试不扣预算——但重试请求的参数与第一次完全相同，而这种失败绑定的是该步骤的输入形态，同样的请求重发大概率原样再烧一次。真机实例：sandbox 语料一次构建里同型失败 13 次，每次烧满 65535 个输出 token、正文全空，约 85 万 token 纯浪费。本批新增的处置：检出时把步骤号记入 dispatcher 的 thinkingExhaustedSteps 集合，该步骤此后每次请求装配都强制关闭推理通道（thinking: disabled），先保证拿到正文；记名在 dispatcher 实例生命周期内一直有效。replan 流水线段没有步骤号，不参与记名。
@@ -4254,6 +4345,15 @@ body 读侧字面绝对路径静态检,error——读侧四件（read/exists/lis
       - tools.test.ts 三名单同源对账组 B10 行（读侧四件对注册面逐员——2026-09-06 review 立,撤补员本钉红） — @v: anc-rule-b10
 
 ---
+
+### anc-rule-v15 ✅
+
+check 步输入声明禁含自己的输出变量,warn（2026-09-18 弱模型验收真机批——实撞:hop-fact-check 2.4 输入含自己的输出 extract_gap,重试轮引擎按声明忠实渲染上轮判词进判官输入,判官照抄旧判词交卷不重判,修订全部落实仍三轮同词烧尽;引擎"check 不吃 L5 重试反馈"防线只罩引擎通道,spec 自设变量通道从输入声明正门进,须写时拦。warn 档理由=自读自写确定性 body check〔累积计数器类〕零 LLM 无锚定风险属边缘合法;存量全库扫描零命中〔母本修复先行〕。片段可判照验〔判定材料=步骤自身声明〕）。
+
+- [[../concepts/HopSpec V3核心规范#^anc-step-check-criteria]] 判官不吃自产判词条 ← 概念权威
+- [[spec-parser#^anc-rule-v15]] ← 设计权威（v0.39.0）
+  - validator.ts checkSelfVerdictV15（validateSpec 主体挂点,片段照验） — @a: anc-rule-v15
+    - validator.test.ts V15 正反例（输入含自身输出 warn 点名步骤号与变量名/修复后形态零 warn+gap 喂重做步不受约束） — @v: anc-rule-v15
 
 ### anc-rule-v14 ✅
 

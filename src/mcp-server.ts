@@ -45,10 +45,15 @@ export interface ProviderEntry {
   base_url: string;
   model: string;
   api_key_env: string;
+  auth?: 'api-key' | 'bearer';   // 鉴权头档,缺省 api-key（x-api-key 头）;bearer=Authorization: Bearer（只认此形态的网关——实测百炼 claude-code-proxy 对 x-api-key 报 InvalidApiKey） // @a: anc-config-standalone-schema
   // 可选。该 provider 模型的输出上限（作者定"按 LLM 的上限去设置"——缺省按模型能力发满,
   // 产出约束归 spec 输出声明;经 {SID}_MAX_OUTPUT_TOKENS 快照键透传 dispatcher 解析链第3级）。
   // @a: anc-exec-output-budget
   max_output_tokens?: number;
+  // provider 级思考缺省（五级链第 4 级——逐模型矫正档:antchat 类"端点缺省关"的服务配 disabled
+  // 压回第 5 级步骤类型缺省的 reason 恒开;设计 [[shared-providers#^anc-config-standalone-schema]]
+  // thinking 行）。env 键 {SERVICE_ID}_THINKING 与 _AUTH 同披。// @a: anc-exec-thinking-provider-default
+  thinking?: 'enabled' | 'disabled';
 }
 
 /** StandaloneConfig：standalone 执行的完整配置。见 [[shared-providers#^anc-config-standalone-schema]] */
@@ -64,6 +69,10 @@ export interface StandaloneConfig {
   // 生成物语言（项目级 hopjit.yaml language: zh|en 缺省 en,^anc-i18n-language-config——
   // 序列化/read_spec_tree 读回/hopbuild2 生成面消费;注入 hop_env_language）// @a: anc-i18n-serialize-lang
   language?: 'en' | 'zh';
+  // 修订供给档（^anc-exec-revision-short-weak——short=弱模型档打回重试轮换短 prompt;缺省
+  // standard 全模型零变化。最终户口=model-gearbox 档案 adapt.revision_prompt,档案消费链落地
+  // 前本键即人工开关位;env HOPJIT_REVISION_PROMPT 每 run 可覆盖）// @a: anc-exec-revision-short-weak
+  revision_prompt?: 'standard' | 'short';
   // 外部工具注册节（原独立 hoptools.yaml 收编,tools_file 指针退役——统一配置 2026-08-13 作者定;
   // 文法权威 tool-interface ^anc-config-tool-registry 不变）。加载器给每项打 _base_dir（声明所在
   // 配置文件目录——in-process module 相对路径解析基准,项目级声明相对项目根）。
@@ -138,6 +147,8 @@ export function buildEnvSnapshot(config: StandaloneConfig, providerKeys: Map<Pro
     snap[`${p.service_id.toUpperCase()}_API_KEY`] = providerKeys.get(p)!;
     snap[`${p.service_id.toUpperCase()}_BASE_URL`] = p.base_url;
     snap[`${p.service_id.toUpperCase()}_PROTOCOL`] = p.protocol;   // getClientForService 按此选适配器
+    if (p.auth === 'bearer') snap[`${p.service_id.toUpperCase()}_AUTH`] = 'bearer';   // 鉴权头档（^anc-config-standalone-schema auth 字段——只认 Bearer 的网关实测百炼 claude-code-proxy）
+    if (p.thinking !== undefined) snap[`${p.service_id.toUpperCase()}_THINKING`] = p.thinking;   // provider 级思考缺省（五级链第 4 级,^anc-exec-thinking-provider-default——dispatcher envOf 消费）
     if (p.max_output_tokens !== undefined) snap[`${p.service_id.toUpperCase()}_MAX_OUTPUT_TOKENS`] = String(p.max_output_tokens);   // 输出预算解析链第3级 // @a: anc-exec-output-budget
   }
   for (const k of SNAPSHOT_PASSTHROUGH_KEYS) {
@@ -214,6 +225,7 @@ export function mergeConfigs(sys: StandaloneConfig, proj: StandaloneConfig): Sta
     ...((sys.resource_limits || proj.resource_limits) ? { resource_limits: { ...(sys.resource_limits ?? {}), ...(proj.resource_limits ?? {}) } } : {}),   // 逐键合并项目级赢（env 节同法）
     ...((proj.log_level ?? sys.log_level) ? { log_level: proj.log_level ?? sys.log_level } : {}),   // 项目级赢 // @a: anc-config-standalone-schema
     ...((proj.language ?? sys.language) ? { language: proj.language ?? sys.language } : {}),   // 项目级赢（todo/0084 M2——本键曾漏合并:项目级 zh 在 MCP 侧静默蒸发落 en 与 CLI 劈叉,恰是上一行 commands 前车注警告的同型复发;新顶层键必须同步本函数+补合并测试钉） // @a: anc-i18n-serialize-lang
+    ...((proj.revision_prompt ?? sys.revision_prompt) ? { revision_prompt: proj.revision_prompt ?? sys.revision_prompt } : {}),   // 项目级赢（^anc-exec-revision-short-weak;新顶层键必须同步本函数——0084 M2 前车） // @a: anc-exec-revision-short-weak
   };
 }
 
@@ -340,6 +352,15 @@ function parseConfigFile(path: string, required: boolean): StandaloneConfig {
     if (typeof p['api_key_env'] !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(p['api_key_env'])) {
       throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}].api_key_env '${String(p['api_key_env'] ?? '')}' 非法——须匹配 [A-Za-z_][A-Za-z0-9_]*`);
     }
+    // auth 鉴权头档文法核（可选枚举——拼错静默漂过=运行期 InvalidApiKey 才暴露,病灶离症状两步）// @a: anc-config-standalone-schema
+    // provider 级 thinking 文法核（0100 批,^anc-exec-thinking-provider-default——枚举外值加载期
+    // 响亮拒,静默失效是 0008③ 同病）// @a: anc-exec-thinking-provider-default
+    if (p['thinking'] !== undefined && p['thinking'] !== 'enabled' && p['thinking'] !== 'disabled') {
+      throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}].thinking '${String(p['thinking'])}' 非法（enabled | disabled;缺省落引擎内建步骤类型缺省——五级链第 5 级）`);
+    }
+    if (p['auth'] !== undefined && p['auth'] !== 'api-key' && p['auth'] !== 'bearer') {
+      throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}].auth '${String(p['auth'])}' 不支持（api-key | bearer;缺省 api-key 发 x-api-key 头）`);
+    }
     // max_output_tokens 文法核（可选正整数——静默漂过=预算悄悄错档,同 resource_limits 姿势）// @a: anc-exec-output-budget
     const mot = p['max_output_tokens'];
     if (mot !== undefined && (typeof mot !== 'number' || !Number.isInteger(mot) || mot <= 0)) {
@@ -377,7 +398,7 @@ function parseConfigFile(path: string, required: boolean): StandaloneConfig {
       }
       // thinking 枚举核（形态 B 2026-08-20——非法值静默失效是 0008③ 同病）// @a: anc-exec-thinking-routing
       if (r['thinking'] !== undefined && r['thinking'] !== 'enabled' && r['thinking'] !== 'disabled') {
-        throw new Error(`STANDALONE_CONFIG_INVALID: routing_rules[${i}].thinking '${String(r['thinking'])}' 非法（enabled | disabled,缺省不发参数吃端点缺省）`);
+        throw new Error(`STANDALONE_CONFIG_INVALID: routing_rules[${i}].thinking '${String(r['thinking'])}' 非法（enabled | disabled;缺省落 provider 级 thinking 或引擎内建步骤类型缺省——五级链见设计 ^anc-exec-thinking-routing）`);
       }
       parseModelRef(r['model'] as string);   // 文法核（两段式合法性）——引用在场核延后到合并后（BUG-E:项目级合法形态就是无 providers,逐文件核引用必误拒）
     }
@@ -417,6 +438,11 @@ function parseConfigFile(path: string, required: boolean): StandaloneConfig {
   if (lg !== undefined && lg !== 'en' && lg !== 'zh') {
     throw new Error(`STANDALONE_CONFIG_INVALID: language 须为 en|zh（实际: ${JSON.stringify(lg)}）`);
   }
+  // revision_prompt 文法核（^anc-exec-revision-short-weak——坏值静默当 standard=开关悄悄失效,响亮拒）。// @a: anc-exec-revision-short-weak
+  const rp = raw['revision_prompt'];
+  if (rp !== undefined && rp !== 'standard' && rp !== 'short') {
+    throw new Error(`STANDALONE_CONFIG_INVALID: revision_prompt 须为 standard|short（实际: ${JSON.stringify(rp)}）`);
+  }
   return raw as unknown as StandaloneConfig;
 }
 
@@ -444,6 +470,7 @@ export function providerToHostConfig(p: ProviderEntry, workspaceDir: string, com
     ...(p.base_url ? { base_url: p.base_url } : {}),
     model: p.model,
     protocol: p.protocol,   // wire 协议贯穿到 Dispatcher 构造分派 // @a: anc-exec-protocol-adapter
+    ...(p.auth ? { auth: p.auth } : {}),   // 鉴权头档贯穿到 defaultClient 构造（缺省 provider 路径生效面——2026-09-18 review 补） // @a: anc-config-standalone-schema
   };
 }
 
@@ -749,6 +776,12 @@ export class HopjitMcpCore {
     if (init.status !== 'ok') {
       return { error: { code: 'INIT_FAILED', message: ('errors' in init ? init.errors : []).map(e => e.message).join('; ') || 'init 失败' } };
     }
+    // 修订供给档装配（^anc-exec-revision-short-weak）:精度 env > 项目配置 > 缺省 standard。
+    // env 读进程环境属组合根一次读取（与 HOPJIT_CONTEXT_MODE 同款豁免——低危调档开关,
+    // 不碰凭证/解析根）。// @a: anc-exec-revision-short-weak
+    const envRp = process.env['HOPJIT_REVISION_PROMPT']?.toLowerCase();
+    const rpMode = (envRp === 'short' || envRp === 'standard') ? envRp : (effectiveConfig.revision_prompt ?? 'standard');
+    engine.setRevisionPromptMode(rpMode);
 
     const dispatcher = new StepDispatcher(engine, hostConfig);
     const entry: RunEntry = {
@@ -1024,6 +1057,13 @@ export class HopjitMcpCore {
       // 回落 providers[0];构造单点 buildModelEngine 与 startRun 同调,用重读合并后配置）。
       // @a: anc-exec-model-routing
       hostConfig.model_engine = this.buildModelEngine(restoreConfig);
+      // 修订供给档随恢复同装（^anc-exec-revision-short-weak——原 restore 漏装,恢复的 short 档
+      // run 静默回落 standard;0084 M3 restore 漏装 model_engine 同型前车。恢复档位跟随盘上
+      // 配置现值,env 覆盖同 startRun 精度链）。// @a: anc-exec-revision-short-weak
+      {
+        const envRp = process.env['HOPJIT_REVISION_PROMPT']?.toLowerCase();
+        engine.setRevisionPromptMode((envRp === 'short' || envRp === 'standard') ? envRp : (restoreConfig.revision_prompt ?? 'standard'));
+      }
       hostConfig.language = restoreConfig.language === 'zh' ? 'zh' : 'en';   // 与 startRun 对齐（M4 随批） // @a: anc-i18n-serialize-lang
       // hop_env restore 合成：配置 env 节打底,快照恢复表覆盖（host_context 持久化了原 run 的
       // params 覆盖与 ask 回填——它是覆盖链更下游产物,配置重合成会丢）。声明根同扩读白名单。

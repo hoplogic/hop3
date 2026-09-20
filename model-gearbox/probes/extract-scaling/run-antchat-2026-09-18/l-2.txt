@@ -1,0 +1,100 @@
+- id: P1
+  type: fact
+  line_ref: L2
+  claim: 咖啡是全球消费量最大的饮品之一。
+  premises: ""
+- id: P2
+  type: fact
+  line_ref: L3
+  claim: 2023 年全球咖啡消费量约为 1.77 亿袋，每袋 60 公斤。
+  premises: ""
+- id: P3
+  type: fact
+  line_ref: L3
+  claim: 欧盟是全球最大的咖啡消费市场。
+  premises: ""
+- id: P4
+  type: fact
+  line_ref: L4
+  claim: 健康成人体内咖啡因的半衰期约为 5 小时。
+  premises: ""
+- id: P5
+  type: fact
+  line_ref: L5
+  claim: 美国 FDA 建议健康成人每日咖啡因摄入量不超过 400 毫克。
+  premises: ""
+- id: P6
+  type: fact
+  line_ref: L5
+  claim: 四到五杯咖啡的咖啡因含量约等于 400 毫克。
+  premises: ""
+- id: P7
+  type: fact
+  line_ref: L6
+  claim: 2015 年 IARC 曾将"非常热的饮品"（高于 65°C）列为 2A 类致癌物。
+  premises: ""
+- id: P8
+  type: fact
+  line_ref: L6
+  claim: 咖啡本身于 2016 年被移出致癌物清单。
+  premises: ""
+- id: P9
+  type: fact
+  line_ref: L9
+  claim: 世界卫生组织下属机构 IARC 在 2016 年将咖啡从致癌物清单中移除。
+  premises: ""
+- id: P10
+  type: inference
+  line_ref: L7
+  claim: 只要不超过每天四杯，喝咖啡对所有人都是安全甚至有益的。
+  premises: "美国 FDA 建议健康成人每日咖啡因摄入量不超过 400 毫克，大约相当于四到五杯咖啡；IARC 将咖啡从致癌物清单中移除。"
+- id: P11
+  type: inference
+  line_ref: L7
+  claim: 孕妇和心脏病患者也可以放心享用咖啡。
+  premises: "咖啡本身于 2016 年被移出致癌物清单。"
+- id: P12
+  type: fact
+  line_ref: L8
+  claim: 绿茶的咖啡因含量约为同量咖啡的三分之一。
+  premises: ""
+- id: P13
+  type: fact
+  line_ref: L9
+  claim: IARC 在 2016 年将咖啡从 2B 类致癌物清单中移除。
+  premises: ""
+- id: P14
+  type: inference
+  line_ref: L10
+  claim: "咖啡可能致癌"的公众担忧缺乏当前证据支持。
+  premises: "世界卫生组织下属机构 IARC 在 2016 年将咖啡从致癌物清单中移除。"
+- id: P15
+  type: fact
+  line_ref: L11
+  claim: 英国的人均年茶叶消费量约 1.9 公斤，居世界前列。
+  premises: ""
+- id: P16
+  type: fact
+  line_ref: L12
+  claim: 有研究表明每天饮用 3-4 杯绿茶与心血管疾病风险降低相关。
+  premises: ""
+- id: P17
+  type: inference
+  line_ref: L12
+  claim: 一些营养学家认为茶是比咖啡更稳妥的日常饮品选择。
+  premises: "有研究表明每天饮用 3-4 杯绿茶与心血管疾病风险降低相关。"
+- id: P18
+  type: fact
+  line_ref: L13
+  claim: 红牛等能量饮料单罐咖啡因约 80 毫克，与一杯浓缩咖啡相当。
+  premises: ""
+- id: P19
+  type: inference
+  line_ref: L14
+  claim: 青少年摄入能量饮料的比例逐年上升预示着未来年轻人群的咖啡因依赖问题可能加剧。
+  premises: "青少年摄入能量饮料的比例逐年上升。"
+- id: P20
+  type: fact
+  line_ref: L15
+  claim: 脱因咖啡并非零咖啡因，一般仍含原有咖啡因的 2-3%。
+  premises: ""

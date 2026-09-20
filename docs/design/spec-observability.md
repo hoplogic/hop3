@@ -585,7 +585,7 @@ hitl:
 
 | 步骤类型 | 审计性字段 | 内容 |
 | ------- | --------- | ---- |
-| act | `tool: [{name, result, at, server?, duration_ms?, discarded_text_blocks?}]` | 每次工具调用的名称、成败、时间；外部工具（mcp 绑定）另记 server 逻辑名与耗时——外部调用出引擎进程,归属与延迟是审计必需（2026-08-12 hopkb 五点需求⑤兑现）；discarded_text_blocks=多 text 块取首块的丢弃计数（0006 留痕——审计读出"server 发了 N+1 块引擎取了首块",declared-or-flagged） |
+| act | `tool: [{name, result, at, args_preview?, result_preview?, server?, duration_ms?, discarded_text_blocks?}]` | 每次工具调用的名称、成败、时间；外部工具（mcp 绑定）另记 server 逻辑名与耗时——外部调用出引擎进程,归属与延迟是审计必需（2026-08-12 hopkb 五点需求⑤兑现）；discarded_text_blocks=多 text 块取首块的丢弃计数（0006 留痕——审计读出"server 发了 N+1 块引擎取了首块",declared-or-flagged）；**args_preview/result_preview=调用参数与注回结果的截断预览（debug 级才记,各截 500 字符超长加 `…[截断,原长N]` 尾标——2026-09-18 作者定"应该加入,对 result 大小做个控制":Qwen 复读循环验尸全程只能猜模型看见了什么〔空目录注记送没送到靠 dist grep 旁证〕,tool_result 是模型每轮决策的直接输入,不在账上=观测面在事实边界内侧断链;500 字符对空目录注记/报错文案/短 JSON 全文在账,大文件 read 只留头部——账是行为对证不是数据备份）** |
 | commit | `commit_audit: {target, authorized_by, result, at}` | 不可逆操作的目标、授权来源、结果 |
 | confirm | `hitl: {response, responder, at}` | 决策内容、决策者（human / caller——引擎绝不替 caller 决策，无超时默认值） |
 | call | `callee_spec_id` | 被调 Spec 的 ID（子 run 经 trace_id 继承关联，见命名规则） |

@@ -1,0 +1,112 @@
+service: bailian_qwen
+model_from_response:
+  - qwen3.8-27b
+n_per_cell: 6
+date: '2026-09-18'
+维度: G2 任务复杂度(一次做正确的能力)——单发裸能力,无重试无引擎兜底
+tiers:
+  xl:
+    pass: 2/6
+    runs:
+      - i: 1
+        pass: false
+        covered: 37/40
+        prose_prefix: false
+        miss:
+          - pt1(未命中)
+          - pt20(词中但 type 错)
+          - pt39(词中但 type 错)
+      - i: 2
+        pass: false
+        covered: 38/40
+        prose_prefix: false
+        miss:
+          - pt20(词中但 type 错)
+          - pt39(词中但 type 错)
+      - i: 3
+        pass: false
+        covered: 38/40
+        prose_prefix: false
+        miss:
+          - pt20(词中但 type 错)
+          - pt39(词中但 type 错)
+      - i: 4
+        pass: true
+        covered: 40/40
+        prose_prefix: false
+        miss: []
+      - i: 5
+        pass: false
+        covered: 38/40
+        prose_prefix: false
+        miss:
+          - pt1(未命中)
+          - pt37(未命中)
+      - i: 6
+        pass: true
+        covered: 40/40
+        prose_prefix: false
+        miss: []
+  xxl:
+    pass: 1/6
+    runs:
+      - i: 1
+        pass: true
+        covered: 80/80
+        prose_prefix: false
+        miss: []
+      - i: 2
+        pass: false
+        covered: 70/80
+        prose_prefix: false
+        miss:
+          - pt8(未命中)
+          - pt20(词中但 type 错)
+          - pt39(词中但 type 错)
+          - pt58(词中但 type 错)
+          - pt69(词中但 type 错)
+          - pt76(未命中)
+          - pt77(未命中)
+          - pt78(未命中)
+          - pt79(未命中)
+          - pt80(未命中)
+      - i: 3
+        pass: false
+        covered: 79/80
+        prose_prefix: false
+        miss:
+          - pt80(未命中)
+      - i: 4
+        pass: false
+        covered: 74/80
+        prose_prefix: false
+        miss:
+          - pt8(未命中)
+          - pt76(未命中)
+          - pt77(未命中)
+          - pt78(未命中)
+          - pt79(未命中)
+          - pt80(未命中)
+      - i: 5
+        pass: false
+        covered: 74/80
+        prose_prefix: false
+        miss:
+          - pt8(未命中)
+          - pt76(未命中)
+          - pt77(未命中)
+          - pt78(未命中)
+          - pt79(未命中)
+          - pt80(未命中)
+      - i: 6
+        pass: false
+        covered: 74/80
+        prose_prefix: false
+        miss:
+          - pt8(未命中)
+          - pt76(未命中)
+          - pt77(未命中)
+          - pt78(未命中)
+          - pt79(未命中)
+          - pt80(未命中)
+坍塌点: (测程内未坍塌)

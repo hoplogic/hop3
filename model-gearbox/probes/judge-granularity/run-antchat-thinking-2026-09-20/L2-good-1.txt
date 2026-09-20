@@ -1,0 +1,8 @@
+Q1: yes（L1 有 P1 对应）
+Q2: yes（L2 有 P2/P3 对应，且覆盖半衰期与影响睡眠）
+Q3: yes（L3 有 P4 对应）
+Q4: yes（L4 有 P5 对应）
+Q5: yes（P3、P5 的 premises 均非空且含具体内容）
+Q6: yes（各点 quote 均能在原文对应行找到）
+extract_ok: true
+extract_gap: ""

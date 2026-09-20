@@ -14,6 +14,7 @@ Constraints:
 Inputs:
 - input_skill_path: line  # 待翻译的自然语言 skill 文件路径,或 hopbuild2 产的 mixed 档 spec.md 路径(二轮展开——同目录须有成套 source.md,分型机械判见 1.3)
 - max_depth: int  # 产物 spec 嵌套深度上限（缺省 3——步骤号最多三段如 3.2.1;语料确实巨大时显式传更大值放宽。值为空/0 时步骤 3 归一到 3）
+- target_profile: line  # 目标执行档——产物给哪个模型档跑（空=通用形态零变化;非空=已支持档名,当前仅 qwen3.8-27b。非空时成文步按「目标执行档规则」节出产物:把关步封闭化/步骤尺寸压坍塌点下。值为空时步骤 3 归一为空串）
 
 Outputs:
 - generated_spec_path: line  # 交付的 spec.md 写盘路径
@@ -31,18 +32,20 @@ Outputs:
 
 若 input_skill_path 已指向存在的自然语言 skill,采用它作默认值（无歧义直接采用不必强问）;否则请用户给出路径。default_value = input_skill_path。**请给 workspace 相对路径**——绝对路径（/ 开头）与含 .. 的路径沙箱会拒:后续读原文（步骤 2）与交付写盘（步骤 7 以 skill_path 派生交付路径）两处都过不去。重问轮按体检说明改形态再给。
 
-#### 1.2. [check] 路径形态机械体检
-- ← skill_path
+#### 1.2. [check] 路径形态机械体检（含目标执行档词表核）
+- ← skill_path, target_profile
 + → path_ok: bool  # 判定
 + → path_note: text  # 说明（拒因——重问轮呈给用户照改）
 
-机械三判零 LLM：绝对路径拒、含 .. 拒、文件不在场拒（拼错路径当场抓,不带毒进构建）。exists 返回 JSON 文本,parse_json 取 .exists（4.1 同款）;形态坏时不碰 exists（绝对路径进读侧工具会被沙箱拒成工具失败,先判形态再探在场）：
+机械四判零 LLM：绝对路径拒、含 .. 拒、文件不在场拒（拼错路径当场抓,不带毒进构建）、目标执行档名不在支持词表内拒（未知档名响亮拒,不静默按通用形态构建——拼错档名的人以为拿到了适配产物,实际拿到的是通用产物,静默回落比报错贵）。exists 返回 JSON 文本,parse_json 取 .exists（4.1 同款）;形态坏时不碰 exists（绝对路径进读侧工具会被沙箱拒成工具失败,先判形态再探在场）：
 > ```hop_python
 > bad_abs = startswith(skill_path, "/")
 > bad_dots = ".." in skill_path
 > on_disk = parse_json(exists(path: skill_path)).exists if (not bad_abs) and (not bad_dots) else false
-> path_ok = on_disk
-> path_note = "" if path_ok else ("绝对路径沙箱会拒,请改成 workspace 相对路径（去掉开头的 /,从工作目录起算）: " + skill_path if bad_abs else "") + ("路径含 .. 越界形态沙箱会拒,请给工作目录内的直连相对路径: " + skill_path if bad_dots else "") + ("文件不存在（按 workspace 相对解析）: " + skill_path if (not bad_abs) and (not bad_dots) else "")
+> known_profiles = ["", "qwen3.8-27b"]
+> bad_profile = (target_profile if target_profile else "") not in known_profiles
+> path_ok = on_disk and (not bad_profile)
+> path_note = "" if path_ok else ("绝对路径沙箱会拒,请改成 workspace 相对路径（去掉开头的 /,从工作目录起算）: " + skill_path if bad_abs else "") + ("路径含 .. 越界形态沙箱会拒,请给工作目录内的直连相对路径: " + skill_path if bad_dots else "") + ("文件不存在（按 workspace 相对解析）: " + skill_path if (not bad_abs) and (not bad_dots) and (not on_disk) else "") + ("目标执行档不支持: " + target_profile + "（当前支持: qwen3.8-27b;留空=通用形态）" if bad_profile else "")
 > ```
 
 #### 1.3. [act] 输入分型（mixed 产物二轮展开进同一入口,分流在 hopspec 层做）
@@ -59,7 +62,7 @@ Outputs:
 #### 1.4. [branch] 构建路由:mixed 产物走二轮展开,NL 原文走首轮全链
 
 ##### 1.4.1. [case(is_expand)] 二轮展开——call expand 后直接交付
-###### 1.4.1.1. [call hopbuild2-expand(mixed_spec_path: skill_path, max_depth)] 展开未尽原子
+###### 1.4.1.1. [call hopbuild2-expand(mixed_spec_path: skill_path, max_depth, target_profile)] 展开未尽原子
 + → generated_spec_path: generated_spec_path  # expand 交付路径
 + → tier: tier  # 展开后档位
 
@@ -143,20 +146,23 @@ Outputs:
 > ```
 
 ### 3. [act] 初始化递归入参
-- ← max_depth
+- ← max_depth, target_profile
 + → root_task: text = "把整个 NL skill 的执行流程翻译为 HopSpec Steps"  # 根节点任务描述
 + → empty_context: text = ""  # 根节点父上下文（根节点无父层骨架）
 + → no_vars: [line]  # 根节点父层变量清单（空——根节点无父层产出）
 + → max_depth: int  # 归一后的产物嵌套深度上限（调用方传空/0 时落缺省 3;根 call 传给分拆器,递归逐层透传）
++ → target_profile: line  # 归一后的目标执行档（空值归空串;根 call 传给分拆器,递归逐层透传——分拆器成文步按它选把关形态与步骤尺寸）
 + → judgement_log: line  # 研判点台账的文件路径（值是路径不是内容;台账内容由分拆各层 append 写入该文件,全树共写一份。路径落引擎涂鸦区——work_zone 是绝对路径禁令唯一豁免,跨 call 实例可共享）
 
-纯初始化零推理（max_depth 归一:非正/空值一律落缺省 3——引擎无 Inputs 缺省值语义,缺省在此机械补）：
+纯初始化零推理（max_depth 归一:非正/空值一律落缺省 3——引擎无 Inputs 缺省值语义,缺省在此机械补;target_profile 空值归空串）：
 > ```hop_python
 > root_task = "把整个 NL skill 的执行流程翻译为 HopSpec Steps"
 > empty_context = ""
 > no_vars = []
 > md_parsed = int(max_depth) if max_depth else 3
 > max_depth = md_parsed if md_parsed else 3
+> target_profile = target_profile if target_profile else ""
+> tier = ""
 > judgement_log = work_zone_path("judgement-log.md")
 > ```
 
@@ -254,7 +260,7 @@ tools_available:
 - ← header_final, aux_ledger
 + → header_feedback: text  # 用户修订意见（目标/交付物/业务输入/工具面各面）;确认无误则置空
 
-完整呈现 header_final 与 aux_ledger（附属文件台账——哪些文件并入了构建视野、哪些留档按需读、哪些未引用呈裁）,请用户核查：目标对不对、交付物是不是要的、业务输入有无多缺、工具面有无漏（"待确认"项在此裁定）、附属文件定性有无错判（流程性文件漏判成参考性=它里面的门禁原话进不了构建视野,产物把关面直接缺一块——这是最值得人看一眼的定性）。有修订意见 → 原话记入;确认无误 → 置空。（台账定性意见与 header 意见走同一条记录通道,生效时点不同——对齐门重试回路只对 header 定向修订;定性意见在此如实记入原话后,经口径日志落盘进产物同目录 alignment-notes.md,**下一轮构建时步骤 2 按该口径定性、构建基准随之重拼**——当轮不改台账:台账定性的下游〔source.md 拼接〕本轮已冻结,只改定性字段不重拼基准,把关面照缺、账面反而假绿。收到定性意见时把这个生效时点告诉用户。）
+完整呈现 header_final 与 aux_ledger（附属文件台账——哪些文件并入了构建视野、哪些留档按需读、哪些未引用呈裁）,请用户核查：目标对不对、交付物是不是要的、业务输入有无多缺、工具面有无漏（"待确认"项在此裁定）、附属文件定性有无错判（流程性文件漏判成参考性=它里面的门禁原话进不了构建视野,产物把关面直接缺一块——这是最值得人看一眼的定性）、**原文的结构性设计意图有没有被简化**（原文对执行结构有设计的——分几轮、什么顺序、后面的做法依赖前面的产出——产物做了简化就逐处列出:简化了什么、为什么,请用户批方向;用户批了才算数,不批就保住原文结构。与数值禁软化同一条原则:设计意图不许静默降级）。有修订意见 → 原话记入;确认无误 → 置空。（台账定性意见与 header 意见走同一条记录通道,生效时点不同——对齐门重试回路只对 header 定向修订;定性意见在此如实记入原话后,经口径日志落盘进产物同目录 alignment-notes.md,**下一轮构建时步骤 2 按该口径定性、构建基准随之重拼**——当轮不改台账:台账定性的下游〔source.md 拼接〕本轮已冻结,只改定性字段不重拼基准,把关面照缺、账面反而假绿。收到定性意见时把这个生效时点告诉用户。）
 
 #### 4.5. [check final] 对齐门：修订意见清空才放行
 - ← header_feedback
@@ -274,6 +280,8 @@ tools_available:
 + → review_outcome: line = "init"  # 圈信号（值语义:"init"=本圈未走到分流;"revise"=有修订意见,续圈消化;"approved"=终审意见为空;"accepted"=意见轮耗尽人裁接受现状;"out_of_scope"=意见指向头部契约,超本流程修复范围）
 + → build_directive: line = "build"  # 构建路由指令（值语义:"build"=整树构建;"fix"=沿用盘上现稿定向修）
 + → pending_feedback: text = ""  # 待消化的终审意见原话（跨圈携带——loop 迭代没有重试反馈通道,意见走变量进修错工单与任务书）
++ → tier: line  # 产物档位（每圈经 5.1 产出;声明进循环输出——不声明则值困在循环内,首轮主路收口时头部 Outputs 的 tier 无值,完备闸在整树构建+质检+终审全部干完之后判 failed,最贵的失败位）
++ → spec_text: text  # 当前产物全文（同 tier——步骤 7/8 跨圈消费,声明出循环边界）
 
 （**为什么是循环不是重试**（实撞:dr21 两条局部意见〔补一个写盘步/两个 commit 换形态〕烧 10 小时整树重建,重建树与上版大同小异）：重试形态下意见闸一失败整层重跑=整树重建（小时级）,而质检环现成的修错机械（分钟级）就干得动局部意见。循环形态把"意见轮次"与"机械失败重试"解耦：每圈=构建或定向修→质检→终审→分诊,意见经变量进入下一圈,build_directive 路由定这圈是重建还是修现稿;内层事务的 retry 只兜机械失败。max=10 圈封顶——十轮意见都不收敛,出圈由意见闸如实判败。）
 
@@ -321,7 +329,7 @@ tools_available:
 
 （构建事务,retry=2 只兜构建自身的偶发崩溃〔递归 call 死/拼装炸〕——带反馈重跑重 call 即可;产物质量问题不在本层打回——归 5.1.3 修错环节定向修,不整树重建。深层子树的失败由分拆器逐层降档消化,通常到不了本层。）
 
-######## 5.1.2.2.1.1. [call split-node(node_task: effective_task, node_source: skill_content, parent_context: empty_context, parent_vars: no_vars, depth: 1, iteration: 1, max_depth, header_final, judgement_log)] 递归分拆整个 skill
+######## 5.1.2.2.1.1. [call split-node(node_task: effective_task, node_source: skill_content, parent_context: empty_context, parent_vars: no_vars, depth: 1, iteration: 1, max_depth, target_profile, header_final, judgement_log)] 递归分拆整个 skill
 + → spec_body_path: fragment_path  # 产物 Steps 全文的文件路径（work_zone 涂鸦区文件——值是路径不是内容,片段全文不过变量通道;内容=分拆器递归返回的完整片段,编号已机械重刷,拼装整验已跑）
 + → tier: tier  # 子树档位（hop / mixed）
 

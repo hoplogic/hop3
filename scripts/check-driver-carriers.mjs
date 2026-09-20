@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// @v: anc-driver-codex-agent-roles, anc-driver-codex-inline-fallback, anc-driver-codex-rule-parity, anc-driver-codex-static-lint, anc-cli-json-io
-// Codex carrier 静态纪律 + CC/Codex 稳定协议签名检查。
+// @v: anc-driver-codex-agent-roles, anc-driver-codex-inline-fallback, anc-driver-codex-rule-parity, anc-driver-codex-static-lint, anc-cli-json-io, anc-driver-opencode-carrier
+// Codex carrier 静态纪律 + CC/Codex/opencode 三载体稳定协议签名检查（opencode 自包含核+续接 token 核 2026-09-19 扩员）。
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { execSync } from 'node:child_process';
@@ -32,6 +32,15 @@ const codexBundle = [
   'driver/codex/references/execution-rules.md',
 ];
 
+// opencode 载体（2026-09-19 三载体扩员——driver/opencode/ 自有内容层,协议签名与 CC/Codex 同构;
+// 设计权威 opencode-driver-carrier ^anc-driver-opencode-install-layout 守卫条款）
+const opencodeBundle = [
+  'driver/opencode/SKILL.md',
+  'driver/opencode/hop-skill.md',   // 2026-09-20 补装（作者撤"v1 不装"裁定,codex 版同款清单成员）
+  'driver/opencode/references/driver-subagent.md',
+  'driver/opencode/references/step-execution-rules.md',
+];
+
 const protocolTokens = [
   'step_ready',
   'tool_request',
@@ -58,6 +67,17 @@ const protocolTokens = [
 ];
 
 const errors = [];
+
+// opencode 载体自包含核（与 Codex 'CC 术语=装错载体诊断信号'同款纪律——正文零 CC 专属原语,
+// @trace note 的原语映射说明豁免一处;设计权威 opencode-driver-carrier ^anc-driver-opencode-primitive-map）
+for (const f of ['driver/opencode/SKILL.md', 'driver/opencode/SKILL-mcp.md', 'driver/opencode/hop-skill.md']) {
+  const c = readProjectFile(f);
+  const hits = c.split('AskUserQuestion').length - 1;
+  if (hits > 1) errors.push(`${f}: CC 原语 AskUserQuestion 出现 ${hits} 次（>1=正文含 CC 原语,opencode 载体须自包含——@trace note 映射说明仅豁免一处）`);
+  for (const bad of ['task-notification', 'run_in_background']) {
+    if (c.includes(bad)) errors.push(`${f}: 含 CC 专属原语 '${bad}'——opencode 载体须自包含（原语映射表 ^anc-driver-opencode-primitive-map）`);
+  }
+}
 const machineCommands = [
   'run',
   'submit_and_fetch_next',
@@ -186,6 +206,8 @@ for (const [path, tokens] of [
   ['driver/hopspec-skill.md', ['<PENDING>', 'stale']],
   ['driver/references/driver-subagent.md', ['<PENDING>', 'DRIVER_PROTOCOL_ERROR']],
   ['driver/codex/SKILL.md', ['current_response']],
+  ['driver/opencode/SKILL.md', ['<PENDING>']],
+  ['driver/opencode/references/driver-subagent.md', ['<PENDING>', 'DRIVER_PROTOCOL_ERROR']],
 ]) {
   const content = readProjectFile(path);
   for (const token of tokens) {
@@ -206,10 +228,11 @@ function checkBundle(name, paths) {
 
 checkBundle('CC', ccBundle);
 checkBundle('Codex', codexBundle);
+checkBundle('opencode', opencodeBundle);
 
 // @v: anc-cli-json-io
 // CLI 缺省输出 YAML；driver 是机器消费方，命令模板必须在子命令前显式带全局 --json。
-for (const path of [...ccBundle, ...codexBundle, 'driver/references/discovery.md', 'driver/codex/references/discovery.md']) {
+for (const path of [...ccBundle, ...codexBundle, ...opencodeBundle, 'driver/references/discovery.md', 'driver/codex/references/discovery.md', 'driver/opencode/references/discovery.md']) {
   const content = readProjectFile(path);
   for (const command of machineCommands) {
     const missingJson = new RegExp(`(?:node\\s+)?<CLI>\\s+(?!\\-\\-json\\b)${command.replace('-', '\\-')}\\b`);

@@ -1,0 +1,31 @@
+# deepseek-flash 能力档案（字段契约见 ../README.md;在册主力——R2-R5 四轮滚动验证与全部真机档的工作模型）
+model: deepseek-flash
+provider_ref: deepseek
+endpoint_note: api.deepseek.com/anthropic
+context_window: 131072        # 官称 128K
+max_output_tokens: 65536      # 运行实配值(保守档)。端点真限核实(2026-09-19 作者问'64K 是模型的设置么'):官方文档 max_tokens 上限 384K,未设置时缺省=非思考 8K/思考 64K;实测 200K 请求被收、单发真写出 89000 output tokens——65536 非端点硬限而是我们的运行保守值。含义:重输出步(全文改写/大清单)可按步放宽;探针纪律=恒用本档案值起测,预算敏感性另开对照臂
+measured: 2026-09-17          # 档期=R5 收官;历史账跨 R2-R5
+
+dims:
+  check_judge: open-ok             # P1 三层实测(2026-09-18 run-judge-granularity 仪器,n=6):L1 开放式核验六轮判词高度一致——恒同两条意见(P3/P5 前提不足)同方向,零自反(跨轮框架一致是 open-ok 的判据本体;判严不判摇:好卷 6/6 判 false 系前提完备性严档,意见可落实执行者可收敛);L2 全满(好 6/6 真/坏 6/6 假/零矛盾/定位 6/6);L3 12/12。侧写:L1 在 4096 输出预算下 5/6 thinking 烧穿空正文(G4 弱区旁证,16384 预算下全正常——探针预算须给足)
+  reasoning_complexity: strong-mid          # 双任务阶梯实测:直接推理(乘法)最大 N≥12(测程顶,N12 confirm 19/20,thinking 原文验证真手算零工具);迭代推理(除法 2N÷N 商 2N+1 位有效数字,2026-09-19)最大 N≥8(测程顶,爬梯 N2-N8 全 5/5,N8=16位÷8位 17 位有效数字 confirm 19/20——迭代长链在测程内未见塌;三模型迭代档距 8/2/<2 与直接档 12/3/2 同序)。正确性面 strong;稳定性面重载塌形态两处实锤:R4 THINKING_EXHAUSTED 13 次(D97 已治理)+G2 XXL 80 点档 6/6 全 thinking 烧穿空正文(16384 预算全烧思考,任务大到先想完预算——'想不完'与'提不全'两因待拆,探针加大预算或 thinking 对照档,0095)
+  task_complexity: strong               # 480KB 构建大件一次过(R5 修检 1 轮)。G2 阶梯 64K 档案预算重测(2026-09-19,n=6):XL(40 点)6/6、XXL(80 点)5/6(唯一一败=真漏一点 pt41,非烧穿)——测程内无坍塌点。旧账勘误:探针写死 16384 预算时代曾记 XL 1/6/XXL 0/6,全是思考文字烧光小预算的假数据(正文零字节,答案在思考里全对);两探针(task-complexity/chunk-calibration)均已改为强制读档案预算
+  # 指令遵从=层二冒烟项非维度(四轮滚动验证全过);复杂任务下指令衰减由 task_complexity 与 P3 观测
+  planning_decompose: strong       # G3 分解与规划:480KB 大件浅拆收敛(R5 sandbox 修检 1 轮过)
+  tool_use: strong                 # R5 全批 MAX_TOOL_ITERATIONS 零(D95 预算纪律后)
+  structured_delivery: strong      # R5 四件零 SCHEMA 打回;复杂 header/嵌套台账稳定交付。双指标制:嵌套复杂度=全深度稳(六档全 6/6:平坦/混型/对象列表/三层嵌套/yaml 结构值/混排),容错后=裸皮即满(零皮错零围栏,G5 探针 2026-09-19 n=6)
+  feedback_correction: strong      # 修检工单逐轮销项;issue-ledger 底册消费正常
+  real_task_notes: 真实任务全卷官(2026-09-19 real-task-scaling 两批):fact-check S/M 双完赛(55.3/137.8 万,回声剥壳修复后)——核查深度三模型天花板(算术级抓伤:招股书 60 亿 vs 定价后 61.19 亿的归因错误;15.03+11.97+33=60≠61.19 反驳'全部投入');dv S/M/L 三件全过(2.1/3.4/4.3 万)判官岗天花板;deep-research S 完赛 58.8 万(spec 修授权行后,对抗验证真跑通 supported 24/partial 12,换语言圈检索在场)。仅存短板=成本:fc L 档 83 点全查深度撞 220 万帽(能力无恙,成本超线性——L+ 档配抽样口径);单点核查 2 万+级,日常核查岗性价比不敌 Ling(同卷 65 万)
+  domain_knowledge: untested        # G7 领域知识充分度(2026-09-19 作者立维度——轻量模型专属短板:参数量小领域知识存量少,与推理能力独立;探针=跨领域对照卷待建;适配面=doc-ref/@knowledge 知识供给,缺多少喂多少不换模型)
+  knowledge_acquisition: untested-positive-signals  # G8 渐进知识获取(2026-09-19 作者立——缺知识时察觉→检索→筛选→使用四环闭环;与 G7 存量半边成对):初步正向(real-task-scaling fact-check S 档:逐点独立检索+交叉引证,来源分层打标正常;四环观测口径待成文后正式定档)
+
+act_free:
+  reliability_curve: {}            # 未按阶梯矩阵单测(全部真机档在满配下长期稳定,曲线补测优先级低)
+  rating: full-tolerance-observed  # 观察档:满配十件+重供给长期零着魔形态
+subtask_free: ok                   # 到步展开真机在用(有序思考/subtaskfree 线)
+adapt:
+  max_inline_tools: null           # 无需收窄
+  thinking: endpoint-default       # act 步禁 disabled(2026-08-20 实测工具循环打转);烧穿有 D97 变招防线
+  thinking_cost_probe: measured    # 思考开销探测(2026-09-19 三配置对照,40 点提取任务):思考开销 1.5-1.8 万输出 token(思考开+64K 预算实用 1.7-2 万,思考关仅 2190);8K 预算+思考开=思考烧光预算正文零字节得 0 分(答案在思考里全对——预算病非能力病);思考关+8K=满分且费用降 8-9 倍。适配结论:机械提取类步骤关思考(概念篇方法 8),act 工具步照旧不关
+  thinking_off_whitelist: 提取/格式转换/机械推演/纯推理演算   # 关思考适用面实测(2026-09-19):推理最高档任务关思考照样全对——N12×N12 乘法 4/4、13 位有效数字迭代除法 3/3,每发 2-3 千 token(推理迁移到正文,比思考通道省 6-8 倍字数)。硬边界=工具编排步恒不关(2026-08-20 打转实锤);未验证面=判官/核验类(对照未做)与禁分析文字的交付格式。落地等 0100 步骤级 @thinking 开关
+  build_target_profile: normal

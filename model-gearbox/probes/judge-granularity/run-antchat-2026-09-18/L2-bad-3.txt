@@ -1,0 +1,9 @@
+Q1: yes（L1 的断言有对应的 fact 点 P1，line_ref=L1，quote 与 L1 一致）
+Q2: no（L2 包含两个断言，但清单中只有点 P2 覆盖半衰期，没有对应点覆盖"下午晚些时候摄入会影响夜间睡眠质量"这一推论）
+Q3: no（L3 的断言在清单中没有 line_ref=L3 的对应点）
+Q4: yes（L4 的断言有对应的 inference 点 P5，line_ref=L4，quote 与 L4 一致）
+Q5: yes（P3 premises 写了非空内容，P5 premises 也写了非空内容）
+Q6: yes（所有点的 quote 均能在原文对应行找到）
+extract_ok: false
+extract_gap: |
+  Q2（下午晚些时候摄入会影响夜间睡眠质量的推论缺对应点）,Q3（L3 的 FDA 建议缺对应点）

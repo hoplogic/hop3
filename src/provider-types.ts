@@ -147,7 +147,7 @@ export interface ModelRoute {
   model: string;
   // thinking 路由（2026-08-20 作者拍板形态 B——与模型分档同维度的第二旋钮:推理型端点缺省开
   // thinking,机械含量高的步骤边际价值远低于烧掉的预算与延迟〔flash 重档 90% 输出是 thinking,
-  // 三轮 OUTPUT_TRUNCATED 第一凶手〕）。缺省 undefined=不发参数吃端点缺省,存量零变化。
+  // 三轮 OUTPUT_TRUNCATED 第一凶手〕）。缺省 undefined=落五级链下级（provider 缺省/引擎内建步骤类型缺省——0100 批后思考恒显式,见 ^anc-exec-thinking-routing）。
   // @a: anc-exec-thinking-routing
   thinking?: 'enabled' | 'disabled';
 }
@@ -167,6 +167,11 @@ export interface HostConfig { // @a: anc-config-host
   // LLM wire 协议（缺省 anthropic——复用模式与存量注入零变化；standalone 由 provider 条目带入）。
   // 见 [[step-dispatcher#^anc-exec-protocol-adapter]]。// @a: anc-exec-protocol-adapter
   protocol?: 'anthropic' | 'openai-chat' | 'openai-responses';
+  // 鉴权头档（^anc-config-standalone-schema auth 字段——standalone 由 provider 条目带入,
+  // defaultClient 构造按此分双臂;缺省 api-key 与既有逐字节同。2026-09-18 review 抓缺省
+  // provider 路径漏装:原只有显式 service 路由消费 {SID}_AUTH,唯一 provider 配 bearer 不写
+  // 路由时 defaultClient 硬编码 x-api-key 恰撞回该档要治的 InvalidApiKey）。// @a: anc-config-standalone-schema
+  auth?: 'api-key' | 'bearer';
   // 外部工具注册条目（配置 tool_servers 节加载产物）——CompositeToolProvider 装配消费。
   // 类型在 tools-registry.ts（避免共享层反向依赖 tools 层,此处用结构化弱类型）。
   // 见 [[tool-interface#^anc-config-tool-registry]]。// @a: anc-config-tool-registry

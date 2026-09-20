@@ -818,6 +818,12 @@ export class DefaultToolProvider implements ToolProvider { // @a: anc-exec-tool-
       const t = st.isDirectory() ? 'dir' : 'file';
       return { name, type: t, kind: t };   // type=正名(行业惯例),kind=兼容别名(2026-09-07 作者拍——R9 实撞 e.type 缺键恒假) // @a: anc-exec-builtin-file-tools
     });
+    // 空目录语义明示（2026-09-18 作者对 Qwen 复读循环追问"listdir 符合常见 tool 行为么"后定——
+    // 裸 [] 对弱模型是哑数据:与"没返回"难区分,不构成换路信号,实撞连续 14 轮重扫同一空目录;
+    // JSON 前缀保持在首位,机械 parse 面不变,注记只进 LLM 通道）。// @a: anc-exec-builtin-file-tools
+    if (entries.length === 0) {
+      return { result: '[]\n（目录存在但为空——没有任何文件或子目录。重复查询同一目录不会得到不同结果；若在找输入材料，本步所需输入已在提示词的"本步输入材料"段给出。）', success: true, content_type: 'json' };
+    }
     return { result: JSON.stringify(entries), success: true, content_type: 'json' };
   }
 

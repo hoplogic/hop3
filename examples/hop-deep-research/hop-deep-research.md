@@ -145,6 +145,7 @@ Outputs:
 + → verify_result: VerifyResult  # 本 claim 验证结果(verdict enum 四态引擎强制)
 ##### 9.1.1. [act free] web_search 交叉核对
 - ← claim
+- 工具: web_search  # 独立第二来源交叉检索(不写授权行引擎不下发——实撞:16 条 claim 全 no_evidence,执行者自救叙述"可用工具清单中未注册 web_search")
 + → cross_source: line  # 独立第二来源 URL(非 claim 原来源)
 + → cross_evidence: text  # 交叉核对证据(支持/反驳/无佐证)
 > 用 web_search 工具就 claim.statement 检索**独立第二来源**(非 claim.source_url),取其 URL 作 cross_source + 收集证据。**找独立来源优先换语言圈检索**(claim 源是中文就用英文查询再搜一次,反之亦然)——同语言圈的"独立 URL"常是同一份一手材料的转述链(URL 独立≠独立测量),换语言圈更容易命中真正独立的报道与评论。**检索有硬上限：至多 6 次 web_search 调用(两语言圈各至多 3 次)**,用完仍无独立来源就接受现状——cross_source="" 判 no_evidence 是完全合法的结论,meta 型/细节型 claim 常常就是没有独立二源,无底洞检索只会烧掉工具轮次配额(引擎 20 轮硬闸,超限本 child 直接死,连 no_evidence 都产不出)。cross_source 来自 web_search → 标 [web search — verify](9.1.2 写入 cross_source_tag)。无独立来源 → cross_source=""(9.1.2 判 no_evidence)。**web_search 工具调用失败(连接错/超时/无结果)不得 fail 本步/本 child——产 cross_source="" + cross_evidence="web_search failed: <错误>"**,claim 按 no_evidence(无独立佐证)处理。**确保每条 claim 都产 verify_result(失败也产,标 no_evidence),不缺席**——这是"每条 claim 须有 verify_result"的保障(10.2 check 核)。

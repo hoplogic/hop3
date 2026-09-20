@@ -55,7 +55,7 @@ export interface AssembledContext { // @a: anc-exec-prompt-assembly
   // prior_outputs=当前步骤输出声明的留存值逐条（重试回滚不清变量——留存缺省半边实装;
   // 值分档:≤2000 chars inline / 超阈 $file 卸载路径+预览 / 卸载不可用如实全文）。
   // @a: anc-exec-l2c-retry-feedback
-  retry_context?: { rejected_by?: { step_id: string; summary?: string; checked_inputs: string[] }; check_failed_origin?: boolean; prior_outputs?: { name: string; type: string; rendered: string; offloaded?: boolean }[] };
+  retry_context?: { rejected_by?: { step_id: string; summary?: string; checked_inputs: string[] }; check_failed_origin?: boolean; prior_outputs?: { name: string; type: string; rendered: string; offloaded?: boolean; offload_path?: string; full_chars?: number }[] };   // offload_path/full_chars:卸载档中性事实（指路措辞归渲染层按工具面分叉——^anc-exec-inputs-deflate 普遍规则） // @a: anc-exec-inputs-deflate
   fail_context?: string;          // L3 尾: on fail 兜底步的失败上下文（哪步/第几轮/原因文本,人话渲染——仅激活态 on_fail 子树内步骤供给;措辞对善后者,不落 L6 修正指令语义）// @a: anc-exec-onfail-context
   inputs: Record<string, unknown>; // L4: 输入材料——← var 实际值字典
   // L4: 输入元信息（组装期从声明处预计算——渲染层保持纯函数）。type_closure=该变量声明类型
@@ -65,6 +65,12 @@ export interface AssembledContext { // @a: anc-exec-prompt-assembly
   node_decl?: { step_id: string; step_type: string; summary: string; input_names: string[] }; // L5: 当前节点声明形态（渲染层拼节点行与 ← 清单）// @a: anc-exec-l5-node-impl
   instruction: string;            // L5: 执行说明正文
   output_schema: OutputDecl[];    // L5: 输出声明（渲染进 L5 节点内,不再独立成层）
+  // 弱模型档修订短 prompt（^anc-exec-revision-short-weak——revision_prompt: short 档且打回重试轮
+  // 时组装期置位;渲染层见此标志走短分支:命令整体替换为修订祈使句,从头教学框架全撤。
+  // constraints_text=L1 Constraints 单独抽出（安全红线保留,其余 L1 撤下）。
+  // @a: anc-exec-revision-short-weak
+  revision_short?: boolean;
+  constraints_text?: string;
 }
 
 // --- Persistence snapshot types ---

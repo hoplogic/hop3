@@ -1,0 +1,34 @@
+service: bailian_qwen
+doc: model-gearbox/probes/extract-scaling/doc-xl.md
+key_points: 40
+sizes:
+  whole:
+    rates:
+      - 100
+      - 100
+  s4:
+    rates:
+      - 95
+      - 97.5
+    last_missed:
+      - pt20
+  s8:
+    rates:
+      - 97.5
+      - 97.5
+    last_missed:
+      - pt9
+  s16:
+    rates:
+      - 100
+      - 100
+    last_missed: []
+burst:
+  size: 16
+  'n': 3
+  solo:
+    - 100
+    - 100
+    - 100
+  merged: 100
+  merged_missed: []

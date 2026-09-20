@@ -1,0 +1,66 @@
+service: antchat
+model_from_response:
+  - Ling-3.0-Flash
+n_per_cell: 6
+date: '2026-09-19'
+L1_open:
+  runs:
+    - i: 1
+      extract_ok: 'false'
+    - i: 2
+      extract_ok: 'false'
+    - i: 3
+      extract_ok: 'true'
+    - i: 4
+      extract_ok: 'true'
+    - i: 5
+      extract_ok: 'true'
+    - i: 6
+      extract_ok: 'false'
+  自反判定: 归人——逐份读 L1-open-*.txt 比对判词是否出现相反指令(语义识别不机械化)
+L2_checklist:
+  good_true: 6/6
+  bad_false: 6/6
+  表内矛盾: 0/12
+  坏卷定位准确: 6/6
+L3_single:
+  correct: 12/12
+  A:
+    - i: 1
+      covered: 'yes'
+      correct: true
+    - i: 2
+      covered: 'yes'
+      correct: true
+    - i: 3
+      covered: 'yes'
+      correct: true
+    - i: 4
+      covered: 'yes'
+      correct: true
+    - i: 5
+      covered: 'yes'
+      correct: true
+    - i: 6
+      covered: 'yes'
+      correct: true
+  B:
+    - i: 1
+      covered: 'no'
+      correct: true
+    - i: 2
+      covered: 'no'
+      correct: true
+    - i: 3
+      covered: 'no'
+      correct: true
+    - i: 4
+      covered: 'no'
+      correct: true
+    - i: 5
+      covered: 'no'
+      correct: true
+    - i: 6
+      covered: 'no'
+      correct: true
+判档建议: checklist-only 候选(待 L1 自反比对:零自反则升 open-ok 候选)

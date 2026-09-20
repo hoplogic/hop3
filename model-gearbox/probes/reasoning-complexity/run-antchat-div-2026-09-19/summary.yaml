@@ -1,0 +1,26 @@
+service: antchat
+model_from_response:
+  - Ling-3.0-Flash
+date: '2026-09-19'
+seed: 20260918
+task: div
+维度: G1 推理复杂度——2N÷N 位除法阶梯,商 2N+1 位有效数字(迭代推理:每位商依赖上一步余数;禁工具纯推理;爬梯每档 n=5,候选最大档 confirm=20 发,正确率>=90% 定档)
+curve:
+  N2:
+    climb: 4/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: false
+        got: '200.51'
+        truth: '205.10'
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+    confirm: 16/20
+    confirm_rate: 0.8
+最大N: (N=2 都不达标)

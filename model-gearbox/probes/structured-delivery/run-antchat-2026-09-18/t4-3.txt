@@ -1,0 +1,14 @@
+project:
+  name: 北斗改造
+  status: 进行中(active)
+  budget:
+    total: 120000
+    used: 45000
+    currency: CNY
+  milestones:
+    - title: 方案定稿
+      due: "2026-10-01"
+      done: true
+    - title: 联调完成
+      due: "2026-11-15"
+      done: false

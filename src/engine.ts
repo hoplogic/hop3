@@ -184,6 +184,12 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
   // fan-out 窗口上限，跨进程持久化（host_context 不含 resource_limits，load 后 hostConfig 丢失窗口值）。
   private maxConcurrent: number | null = null;
   private contextMode: 'full' | 'minimal' = 'full';  // @a: anc-exec-context-mode — context 精简档；run 时定、持久化，env 可覆盖
+  // 修订供给档（^anc-exec-revision-short-weak——short=弱模型档打回重试轮换短 prompt）。
+  // 精度链 env HOPJIT_REVISION_PROMPT > 项目 hopjit.yaml revision_prompt > 缺省 standard;
+  // 会话级开关不入 StateFile（与 contextMode 不同:那是 run 时定持久化——本档面向探针与弱模型
+  // 适配,档案消费链落地后由 model-gearbox adapt.revision_prompt 供值,现阶段轻量不落盘）。
+  // @a: anc-exec-revision-short-weak
+  private revisionPromptMode: 'standard' | 'short' = 'standard';
   // 统一模型在飞记账（call parallel 渐进派发）：派发即入账落盘（防重），收割即出账；
   // killed 项保留（不复活凭据）。见 design/parallel-execution.md §U2。// @a: anc-exec-parallel-inflight
   private inflight: InflightCall[] = [];
@@ -546,6 +552,8 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
   getWorkspaceDir(): string { return this.hostConfig?.workspace_dir ?? ''; }  // L4 清单 work_zone 相对化基准 // @a: anc-exec-tool-manifest-supply
   setContextMode(mode: 'full' | 'minimal'): void { this.contextMode = mode; }  // env 覆盖用
   getContextMode(): 'full' | 'minimal' { return this.contextMode; }  // @a: anc-exec-context-mode
+  setRevisionPromptMode(mode: 'standard' | 'short'): void { this.revisionPromptMode = mode; }  // 组合根装配用（^anc-exec-revision-short-weak）// @a: anc-exec-revision-short-weak
+  getRevisionPromptMode(): 'standard' | 'short' { return this.revisionPromptMode; }  // @a: anc-exec-revision-short-weak
 
   // 分层压缩契约:max_context_tokens 覆盖告警线（EngineAccessor 扩展,2026-08-09）。// @a: anc-exec-token-budget
   getMaxContextTokens(): number | undefined {
@@ -3716,9 +3724,10 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
       return;
     }
     const stepTransient = reason.includes('OUTPUT_TRUNCATED:')   // 步级瞬态:下轮带新反馈输入即变（0037 环二 9 轮修过关实证）
-      || reason.includes('THINKING_EXHAUSTED:');   // @a: anc-exec-thinking-exhausted
+      || reason.includes('THINKING_EXHAUSTED:')   // @a: anc-exec-thinking-exhausted
+      || reason.includes('TOOL_LOOP_REPEAT:');   // 同签名复读——同输入重发大概率原样复读,免预算首撞重试（^anc-exec-toolloop-repeat-break） // @a: anc-exec-toolloop-repeat-break
     if (stepTransient) {
-      const truncPrefix = reason.includes('OUTPUT_TRUNCATED:') ? 'OUTPUT_TRUNCATED' : 'THINKING_EXHAUSTED';
+      const truncPrefix = reason.includes('OUTPUT_TRUNCATED:') ? 'OUTPUT_TRUNCATED' : reason.includes('TOOL_LOOP_REPEAT:') ? 'TOOL_LOOP_REPEAT' : 'THINKING_EXHAUSTED';
       const waiveKey = `${stepId}|${truncPrefix}`;
       if (!this.deterministicWaived.has(waiveKey)) {
         this.deterministicWaived.add(waiveKey);
@@ -3915,8 +3924,8 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
   ): Record<string, unknown> {
     const decls = node.outputs ?? [];
     if (decls.length === 0) return answer ?? {};
-    // ① answer 的 key 已匹配声明名 → 直接采用
-    if (answer && decls.some(d => d.name in answer)) return answer;
+    // ① answer 的 key 已匹配声明名 → 直接采用（同样过类型归一）
+    if (answer && decls.some(d => d.name in answer)) return this.coerceAskTypes(decls, answer);
     const raw = this.extractDecision(answer);
     const mapped: Record<string, unknown> = {};
     // ③ approve 快捷：采用 default_value（首个声明在前序产出中的同名推断值）
@@ -3931,7 +3940,26 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
         mapped[d.name] = raw;
       }
     }
-    return mapped;
+    return this.coerceAskTypes(decls, mapped);
+  }
+
+  /** ask 应答按输出声明做标量类型归一（^anc-step-ask 类型归一半边——人工/MCP 应答经 JSON
+   * 进来数字常成字符串:声明 int 存 "26000",下游渲染按实际类型走字符串通道,int 字段渲染成
+   * 多行块形态自相矛盾〔2026-09-18 作者抓"这个是什么鬼"〕。归一只做无损标量转换:int/float
+   * 收数字形字符串则转数,bool 收 true/false 字面则转 bool;转不动保原值不拦——形态错留给
+   * 下游 SCHEMA 闸按既有通道判,本函数不新增拒收面）。 */
+  // @a: anc-step-ask
+  private coerceAskTypes(decls: OutputDecl[], outputs: Record<string, unknown>): Record<string, unknown> {
+    const result: Record<string, unknown> = { ...outputs };
+    for (const d of decls) {
+      const v = result[d.name];
+      if (typeof v !== 'string') continue;
+      const s = v.trim();
+      if (d.type === 'int' && /^-?\d+$/.test(s)) result[d.name] = parseInt(s, 10);
+      else if (d.type === 'float' && /^-?\d+(\.\d+)?$/.test(s)) result[d.name] = parseFloat(s);
+      else if (d.type === 'bool' && /^(true|false)$/i.test(s)) result[d.name] = s.toLowerCase() === 'true';
+    }
+    return result;
   }
 
   // 重试容器祖先查找：subtask 或 case（case 就是 branch 下的 subtask，retry 语义相同）。

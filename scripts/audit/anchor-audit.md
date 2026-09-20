@@ -97,6 +97,7 @@ Outputs:
 
   4.2. [reason] 解读比对结果并撰写报告正文
     - ← project_root, compare_done
+    - 工具: read  # 读 .anchor-audit/cross_compare_results.yaml（compare_done 只是完成标记,结果文件须自读）
     + → report_md: text  # 结构审计报告完整 markdown 正文
     > 读 `{project_root}/.anchor-audit/cross_compare_results.yaml`（脚本已完成全部集合运算，你只解读、判严重度、撰写，不重做集合差）。按引擎注入的以下判据解读每一项并判定严重度（P0 链路断裂 / P1 覆盖缺口 / P2 命名风格），按注入的报告模板组织成完整 markdown 正文（含 module_scale 模块规模表）。引擎已自动注入（doc-ref）：
     > - 15 项比对的语义与缺失含义：[[anchor-audit-knowledge#结构比对判据]]
@@ -136,6 +137,7 @@ Outputs:
 
       5.2.1.1. [reason] 逐锚点判定 S→D / D→C / C→T
         - ← batch, project_root
+        - 工具: read  # 按协议读设计/代码/测试源文件行号段（batch 只含锚点清单,语义审计必须读源文件）
         + → batch_result_item: text  # 本批结果 yaml 文本（批头 module+scale，每锚点含 s2d/d2c/c2t verdict+note）
         > 你是语义一致性审计员，工作关系到系统正确性——任何遗漏的不对齐都会累积并最终导致执行灾难，必须以最严格标准审查每一个锚点。batch 是**一个模块**（批头带模块名与规模），对批内的**每个**锚点按引擎注入的协议读源文件做判定，并结合模块规模判断覆盖是否失衡，产出本批结果 yaml 文本（批头记 module+scale，不写盘，写盘交下一步）。引擎已自动注入（doc-ref）：
         > - 单批执行步骤 + 按模块分批协议（读哪些文件、±行号范围、规模如何参与判断、输出 yaml 格式；**超 ~30 锚点的批必须按"大批分段落盘"分段执行,严禁一口气攒全量输出**）：[[anchor-audit-knowledge#单批语义审计执行协议]]

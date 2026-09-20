@@ -64,6 +64,7 @@ hoplogic3/
 ├── src/                ← HopJIT 引擎（21 个 TS 源文件，@a: 代码锚点；见下方源码层专节）
 ├── tests/              ← vitest 测试（34 个 *.test.ts，@v: 测试锚点）
 ├── examples/           ← 可执行 spec 范本 + doc-ref 知识文档（纯演示）
+├── model-gearbox/      ← 模型变速箱（2026-09-18 作者定纲,比喻经认可升格为目录名——两根变速轴之模型轴;载体轴归 driver/）：profiles/ 机读能力档案（三段:七维粗档/act_free 稳定性数值曲线/适配开关,引擎与 hopbuild2 消费面挂 todo/0095）+ probes/ 度量仪器（协议探针/引擎冒烟/act-free 稳定性阶梯矩阵/七维定性——D12 教程四层测试的机械化,教程管方法论本目录管跑法与数据）（度量数据总表.md=三 service 人读汇总快照,Obsidian 阅读版——权威恒在 profiles/ 机读档案）
 ├── scripts/            ← 机检守卫（chain-health / check-* / run-audit）+ audit/ 审计工具链（anchor-audit/test-coverage-audit spec+知识文档+scan/cross_compare+standalone 化五件 prep_env/make_batches/tally_batches/write_artifact/write_batch，2026-08-08 自 examples/ 迁入；+test-coverage-audit 配套 collect_coverage.py 四子命令，2026-09-01 双模式化批新建；见守卫脚本专节）
 ```
 
@@ -92,6 +93,7 @@ hoplogic3/
 | HopSpec V3配套HopJIT运行时能力 | 引擎运行时能力契约——模式无关原则、driver 角色分工、durable resume | 源 |
 | HopSpec V3扩展-有序思考与渐进固化 | 无 Steps 能力声明的探索验证闭环，"动态→候选→沉淀" | 源 |
 | HopSpec V3扩展-可观测性与YAMLL日志格式 | YAMLL 立为跨载体观测标准——格式不变量与保证属性 | 源 |
+| HopSpec V3扩展-模型变速箱适配 | 变速箱半边概念规范——度量两原则（model service 非模型/维度非症状）、能力维度两组制（G1-G8+P1-P3）、九个适配方法（把关按核验能力选形态/每步任务量不超过模型可靠处理上限/不让弱规划模型现场拆任务/修订轮换短提示词/用不上的工具不给/缺领域知识随步喂/按目标模型定制构建产物/思考型模型跑机械步骤关思考/概率型步骤并发多实例取并集）、两条铁律（教学清不了零/弱档消费是适配非弃用）；工程实装归 model-gearbox/ 与设计文档 | 源（2026-09-19 作者定"概念层应该加一个 model 变速箱适配文档"） |
 | HopSpec V3错误模型 | 错误分类与传播语义 | 源 |
 | HopSpec V3扩展-事务与补偿 | commit 失败处理的两种扩展模式（saga 补偿/事务边界） | extend（源=核心规范） |
 | HopSpec核心创新 | 核心创新独立阐述（从核心规范定位章提取） | extract（源=核心规范） |
@@ -135,6 +137,7 @@ hoplogic3/
 | standalone-mode | standalone（独立模式）统一设计（2026-08-11 作者定"本质上是一个统一接口端，需要统一的设计和审查"）——配置/凭证/选定/工具/参数组装四份文档各管哪块的地图 + 整体必须守住的五件事（跨文档约束，单看一块推不出）+ 改动时的六问审查 |
 | reuse-mode-prompt-flow | 复用模式两层提示叠加 + 进程模型 + 三要害风险 + /hop 自驱四之补三/四（阅卷分权与知识供给、提纯与现货复用）（落点在 driver 层，见文档头声明） |
 | codex-driver-carrier | Codex 载体逻辑三角色 + 按当次 effective config 通信握手选择 delegated/inline + envelope/错误边界 + fanout/barrier + 真机验收矩阵 + **开发规约十三条**（改 driver/codex/** 前必读） |
+| opencode-driver-carrier | opencode 载体驱动设计:三层复用判据(发现同构/正文派生适配/协议中立)+原语映射表(question 工具/subagent/无后台通知)+安装布局+载体准入两档规则(纯路径适配 vs 内容适配——cfuse 折原生有理与 opencode 须自有内容层的分档判据) |
 | carrier-live-e2e | CC/Codex 真实载体 E2E：隔离工作区、事件归一、执行体归属、凭证防泄露、显式失败与 opt-in CI |
 | i18n | 国际化设计——文档镜像树 docs/i18n/<lang>/ 三纪律 + spec 关键词双语直通（方案 B）+ 关键词保留字族（术语表五轮定稿 2026-08-15） |
 | hopbuild | 构建器设计（2026-08-15 自举批立卷）——自举形态决策（spec 权威散文退役）+ 分发布局（pack 产物形态+双源同步守卫）+ 知识源三层 + 五关落位如实边界 + 参数原则分两层（spec 层 I/O 判归属↔壳层 ^anc-cli-pack-shell） |
@@ -207,17 +210,20 @@ hoplogic3/
 | D9-Obsidian可视化插件 | 插件安装引导版——为什么需要（markdown 6 级标题上限截断深层步骤,按编号识别与形态解耦）/三步装进 vault+启用/三能力表（折叠/大纲/落点四色+语法分族着色）/更新须重载/零打扰与边界（不做诊断补全执行） | compact（源=design/obsidian-plugin;安装命令权威 editors/obsidian/README） |
 | 01-第一次运行-ClaudeCode | CC 入口：30 分钟从安装到跑通 coffee-week + 体验 ask 介入点 | extend（源=USAGE） |
 | 01-第一次运行-Codex | Codex 入口（与 CC 版平行）：安装布局/触发方式/载体差异；三路 E2E 全绿（2026-08-10） | compact（源=codex-driver-carrier） |
+| 01-第一次运行-cfuse | cfuse 入口（第三载体,与 CC/Codex 版平列）：三形态分辨（自有 agent 未适配/内置 cc/内置 codex）+装对家（carrier 与环境变量两场景）+MCP 注册落点 | compact（源=hop-cli ^anc-cli-carrier-home-resolution） |
+| 01-第一次运行-opencode | opencode 入口（第四载体,与 CC/Codex/cfuse 版平列）：隐式触发/question 工具问人/装载验证/独立模式注册;复用模式真机 E2E 已验（2026-09-20） | compact（源=opencode-driver-carrier） |
 | 02-读懂一份spec | ★地基：头部契约 vs Steps 路径/14 类型分工表（谁动脑谁把关）/两个箭头的数据流/容器与介入点/coffee-week 三分钟实练 | compact（源=HopSpec V3语法参考 §1-3） |
 | 03-探索与提交 | 先讲安全——act/commit 分界（可逆探索 vs 不可逆提交）、commit 三规矩、work_zone 自由领地、沙箱四维度 | compact（源=HopSpec核心创新+语法参考 act/commit 节） |
 | D10-hop_python计算体 | agent 代写的简单逻辑代码呈现——四类能力、白名单、人读得懂核得对即可、三种错误结局 | compact（源=HopSpec V3语法参考 §5） |
 | D11-维护spec的内置工具 | spec 内容工具族教学——为什么需要（步骤号即树结构,手工改号必手滑）/read_spec_tree 两档（骨架/下钻）/树编辑四件独立函数（insert_node 落位号原位者后移/replace_node/replace_children/renumber_steps——2026-08-30 函数化,旧 edit_spec_tree 单入口废除）/validate_spec 改完必验/完整链与常见坑 | compact（源=design/tools ^anc-exec-spec-tools-family） |
+| D12-新模型接入与验证 | 接新模型的四层测试方法论——协议面探针（端点变体/thinking 双档/tool_use/截断形态）/引擎冒烟两步 spec/能力面度量（两条原则:度量对象是 model service 非模型、从能力维度展开非故障现象;八维度两组制:通识 G1-G5 推理复杂度/任务复杂度/分解规划/工具使用/结构化交付+实践 P1-P3 核验能力/工具耐受/修订落实,各带仪器现状与适配换算表）/能力定位出路由建议;实例=Ling/Qwen 接入记录与端点混因勘误、三模型横比与度量表 | extend（源=D8 配置教学+design/step-dispatcher 防线面） |
 | 05-并行与遍历 | 效率进阶——for-each+collect 遍历不漏、parallel 承诺与三条常见错法、部分失败语义 | compact（源=HopSpec V3语法参考 §parallel） |
 | 06-实战-事实核查器 | 主线组装篇——hop-fact-check 逐段解剖：自查回路/四层并行分流/act 机械点名+reason 审查；提取-扇出-汇聚母版 | analyze（源=examples/hop-fact-check） |
 | 07-升级你的自然语言skill | 收官应用——/hopbuild 翻译实操：事故对照、终审忠实核（对 source.md 原文副本）、pack 成具名 skill | compact（源=hopbuild SKILL） |
 
 ## driver/ — 驱动载体多态（架构要点）
 
-**这是本库的一个核心架构决策**（[[ARCHITECTURE]] `^anc-driver-carrier-polymorphism`）：复用模式下外层 LLM（CC / Codex / 将来的 OpenCode…）当推理引擎，**引擎与 CLI 保持载体中立**（纯 JSON in/out，不假设任何工具执行能力），因此**每接入一个载体，只需为它写一套等价的驱动指令**，并列放在 `driver/` 下——引擎代码零改动。
+**这是本库的一个核心架构决策**（[[ARCHITECTURE]] `^anc-driver-carrier-polymorphism`）：复用模式下外层 LLM（CC / Codex / OpenCode…）当推理引擎，**引擎与 CLI 保持载体中立**（纯 JSON in/out，不假设任何工具执行能力），因此**每接入一个载体，只需为它写一套等价的驱动指令**，并列放在 `driver/` 下——引擎代码零改动。
 
 **同语义、分载体实现**是这个目录的组织原则：各载体的执行规则对齐同一组设计锚点（`^anc-exec-mode-invariants` / `^anc-exec-advance-to-caller` / `^anc-exec-work-zone`…），允许调用原语和并发交互方式不同（CC 用 Agent 工具 + 滑动窗口通知；Codex 有 subagent 时批式 barrier join，无 subagent 时 inline 串行降级），**不允许步骤语义静默漂移**。静态纪律由 `scripts/check-driver-carriers.mjs` 机检（在 `check:fast` 内）。
 

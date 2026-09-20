@@ -1,0 +1,8 @@
+Q1: yes（L1 的内容在清单中有对应的 fact 点 P1）。
+Q2: yes（L2 的半衰期与影响睡眠两个断言均在清单中有对应的对应点 P2、P3，且 line_ref 均为 L2）。
+Q3: yes（L3 的内容在清单中有对应的 fact 点 P4）。
+Q4: yes（L4 的内容在清单中有对应的 inference 点 P5）。
+Q5: yes（每个 inference 点的 premises 都非空，P3 列出了前提①，P5 列出了前提①和②）。
+Q6: yes（所有点的 quote 都能在原文对应行中找到原文内容）。
+extract_ok: true
+extract_gap: |

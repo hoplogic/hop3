@@ -36,7 +36,7 @@
 | impl execute_step | 说明 | — |
 | lack_of_info 知识补充路径 | 说明 | — |
 | 节点级工具授权分档下发 | 契约 | `anc-step-tool-grant` |
-| reason 步工具面（standalone） | 契约 | `anc-exec-reason-tools` |
+| reason 步工具面（standalone） | 契约 | `anc-exec-reason-tools` / `anc-exec-toolloop-repeat-break` |
 | 工具故障自报通道（reason+无 body act 的 tool_failure） | 契约 | `anc-exec-tool-failure-report` |
 | ~~doc-ref 文档引用解析~~（已抽出 [[doc-ref]]） | — | `anc-exec-doc-ref-resolve` 迁 doc-ref.md |
 | 算子级重试 | 契约 | `anc-exec-operator-retry` |
@@ -50,6 +50,8 @@
 | LLM 前缀缓存注入 | 契约 | `anc-exec-cache-control` |
 | 工具循环 tool_result 内容渲染 | 契约 | `anc-exec-tool-result-render` |
 | 烧穿疑似反刍分流（正文空/in-band 高重复两形态） | 契约 | `anc-exec-thinking-exhausted`（归截断闸节内） |
+| thinking 五级优先链（记名册>@thinking>routing_rules>provider 缺省>步骤类型缺省） | 契约 | `anc-exec-thinking-routing`（2026-09-20 review 批补登——旧欠;新锚一并） |
+| @thinking 步骤标注（单步思考开关,B 案独立标注） | 契约 | `anc-exec-thinking-step-annotation` |
 | API 密钥管理 | 契约 | — |
 | 多模型路由 | 契约 | `anc-exec-model-routing` |
 | 路由解析 | 契约 | `anc-exec-model-resolve` |
@@ -61,7 +63,7 @@
 
 ## 定位【契约】 ^anc-struct-step-dispatcher
 
-> **模块版本**：step-dispatcher `v0.25.0`（2026-09-17）。本版 THINKING_EXHAUSTED 变招重试（^anc-exec-thinking-exhausted 三批——检出记名步号,该步后续重试轮 thinking 强制 disabled;R4 实撞同 run 13 次烧满 65535 正文全空 ≈85 万纯废,免预算重试无变招同型反复撞）。上版 v0.24.0 新增成本护栏第 5 机制——实例级上下文体量观测与软阈值告警（^anc-exec-ctx-watermark,hopissues/0095——长转录 150K+ 延迟超线性恶化撞超时墙全程零观测;峰值水位入账 hoplog/run_status+双档 warn+超时重试水位提示,纯观测加法零语义变更）。上版（v0.23.1）补 ^anc-step-tool-grant 设计侧锚定义节（0088 批清 0054 批挂账——内容收拢自 spec-parser 版本行文法半边与本文档消费面,TRACEABILITY ⚠ 注记随清）。上版（v0.23.0）新增 call callee 位插值解引用契约（^anc-step-call-dynamic-callee,todo/0066——resolveCalleeId 公共件/三消费点/非空字符串收紧/寻址政策零开口/executor 教学落 L0）。上版（v0.22.0）节点级工具禁用下发过滤契约（^anc-step-tool-deny,与 edit_file 同批）。前版（v0.21.0）工具循环上下文压缩降级（0070:撞墙预检+补救两档任务相关摘要压缩/二次撞墙 CONTEXT_OVERFLOW 前缀入确定性口袋）。0.x 未承诺稳定。独立模式驱动适配层；复用模式不经本模块）。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
+> **模块版本**：step-dispatcher `v0.27.0`（2026-09-20）。本版=0100 思考开关批:步骤级 @thinking off|on 标注（^anc-exec-thinking-step-annotation 新锚——B 案独立标注;机械步关思考省 8-9 倍/重推理步开思考补档两手柄的落点）+thinking 路由扩五级优先链（记名册>步骤标注>routing_rules>provider 缺省>引擎内建步骤类型缺省〔作者定:act 关,act free/reason/check 开〕——思考行为自此恒显式,端点私有缺省退场;provider 级=逐模型矫正档,schema 权威 shared-providers）。上版 v0.26.0（2026-09-18）。彼版 reason 工具面改全按声明下发+max_inline_tools 档案上限联动+工具循环同签名断路器（^anc-exec-reason-tools 修订+^anc-exec-toolloop-repeat-break 新锚——Qwen3.8-27B 七轮实验与阶梯探针实锤:闲置工具面对弱执行者是行为吸引子,长供给×满配走偏 5/6 而 0 工具 3/3 交卷;model-gearbox 消费面第一环）。上版 v0.25.0 THINKING_EXHAUSTED 变招重试（^anc-exec-thinking-exhausted 三批——检出记名步号,该步后续重试轮 thinking 强制 disabled;R4 实撞同 run 13 次烧满 65535 正文全空 ≈85 万纯废,免预算重试无变招同型反复撞）。上版 v0.24.0 新增成本护栏第 5 机制——实例级上下文体量观测与软阈值告警（^anc-exec-ctx-watermark,hopissues/0095——长转录 150K+ 延迟超线性恶化撞超时墙全程零观测;峰值水位入账 hoplog/run_status+双档 warn+超时重试水位提示,纯观测加法零语义变更）。上版（v0.23.1）补 ^anc-step-tool-grant 设计侧锚定义节（0088 批清 0054 批挂账——内容收拢自 spec-parser 版本行文法半边与本文档消费面,TRACEABILITY ⚠ 注记随清）。上版（v0.23.0）新增 call callee 位插值解引用契约（^anc-step-call-dynamic-callee,todo/0066——resolveCalleeId 公共件/三消费点/非空字符串收紧/寻址政策零开口/executor 教学落 L0）。上版（v0.22.0）节点级工具禁用下发过滤契约（^anc-step-tool-deny,与 edit_file 同批）。前版（v0.21.0）工具循环上下文压缩降级（0070:撞墙预检+补救两档任务相关摘要压缩/二次撞墙 CONTEXT_OVERFLOW 前缀入确定性口袋）。0.x 未承诺稳定。独立模式驱动适配层；复用模式不经本模块）。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
 
 **① 自身定位**：StepDispatcher 是独立模式的驱动适配层（TypeScript 模块，文件 `src/dispatcher.ts` + `protocol-openai.ts`）——负责**调度循环**（init → next → execute → done → repeat）和**单步执行**（按步骤类型分派，经协议适配层调 LLM API——anthropic/openai 双协议，见 ^anc-exec-protocol-adapter；工具循环当下仅 anthropic）。它是 HopJIT"自带执行能力"的承载者：复用模式把执行能力交给 caller（CC），独立模式则由本组件自己调模型执行。
 
@@ -781,22 +783,25 @@ Inputs:
 Outputs:
 - outputs: yaml  # 按声明 schema 解析的产出（经既有 parseStepOutput 阶梯,lack_of_info/tool_failure 前置探测照常）
 Constraints:
-- 工具面与无 body act 同构：basic 族恒下发（本步被禁件除外——2026-09-05 禁用半边落地,改造前本条无此括注;禁用语义见本文档 ^anc-step-tool-deny 契约节）,special 按节点 `- 工具:` 声明（^anc-step-tool-grant 分档机械原样复用,零新分档）
+- **reason 的工具面全按节点声明下发（2026-09-18 修订——basic 族不再恒下发）**：`- 工具:` 声明什么下发什么（basic 与 special 同一文法零分档差异）,零声明=零工具面走单发纯推理。原"basic 恒下发"口径废除——那是 2026-09-01 救 anchor-audit 真饥荒时的实装选择,救的是"少数 reason 步真要读盘",给的却是全部 reason 步无条件十一件;弱模型实撞:Qwen3.8-27B 在输入全实值的最简 reason 步上七轮全灭 20 轮工具空转,文字五级+结果语义两级干预全部无效,直连探针实证长供给×满配工具面走偏 5/6 而 0 工具 3/3 交出正确产出——闲置工具面对弱执行者不是备而不用,是行为吸引子;声明制同时天然把用工具步的工具面压到少数几件（Qwen ≤3 件档 0/6 走偏）。act 步不动（act 本就是干活步,basic 恒下发照旧）
 - requires_commit=true 的工具恒不下发（"不能 commit 写"——reason 与 act free 同一条不可逆红线;list 期过滤,非运行期拒）
 - check 不入本面（判官纯判定,作者未放开;要放开另立批）
-- openai 协议降级：工具循环当下仅 anthropic（^todo-openai-tool-loop 既有账）——openai 路由的 reason 退回单发零工具形态（与改造前行为逐字节一致,存量零回归;不 fail-fast——reason 不同于 act:它总能纯推理产出,工具只是增强）
+- openai 协议降级：工具循环当下仅 anthropic（^todo-openai-tool-loop 既有账）——openai 路由的 reason 退回单发零工具形态（不 fail-fast——reason 不同于 act:它总能纯推理产出,工具只是增强）
+- **模型档案上限联动（model-gearbox 消费面第一环）**：下发前读目标模型 profile 的 `adapt.max_inline_tools`（有档案且非 null 时）,声明件数超上限则截到上限并 recordWarn 点名被截件（声明制管"步骤要什么",档案管"模型受得了什么",取交集;无档案/null=不设限,存量零变化）
 ```
 
-**HopSop（执行流程）**：
+**HopSop（执行流程，2026-09-18 修订版）**：
 
 ```
 # impl execute_reason_standalone
-1. [act] 组装工具清单（basic 恒 + special 按声明 + requires_commit 过滤）——与 executeActWithTools 同一分档代码
-2. [branch] 协议分派
-  2.1. [case(anthropic)] 走工具循环（与 act 共用循环体:滚动 cache 断点/预算闸/超轮上限/tool_failure 终轮探测）——角色档=reason 档（L4 指引,见 prompt-assembler L0 恒定化条款）
-  2.2. [case(openai)] 单发零工具（既有 executeReasonOrCheck 形态）
-3. [act] 终轮文本经 parseStepOutput 既有阶梯解析（lack_of_info 前置探测在 reason 路径已接——工具循环形态下位置不变）
+1. [act] 组装工具清单（全按节点声明 + requires_commit 过滤 + max_inline_tools 截断）
+2. [branch] 分派
+  2.1. [case(零声明或 openai 协议)] 单发零工具（既有 executeReasonOrCheck 形态——纯推理步的缺省路,弱模型物理无可着魔按钮）
+  2.2. [case(有声明且 anthropic)] 走工具循环（与 act 共用循环体:滚动 cache 断点/预算闸/超轮上限/tool_failure 终轮探测）——角色档=reason 档
+3. [act] 终轮文本经 parseStepOutput 既有阶梯解析（lack_of_info 前置探测在 reason 路径已接）
 ```
+
+**工具循环同签名断路器（2026-09-18 同批新增,act/reason 工具循环共用）** ^anc-exec-toolloop-repeat-break：连续 3 次同名同参（参数 JSON 串相等）工具调用即断——抛错前缀 `TOOL_LOOP_REPEAT:` 报文点名"同一调用连续 N 次重复,结果不会不同"（deterministic 口袋:同输入重发大概率原样复读,不烧重试阶梯预算——与 THINKING_EXHAUSTED 同待遇）。与 MAX_TOOL_ITERATIONS(20 轮)分工:那个管总量,这个管形态——实撞:Qwen 第五轮 14 连扫同一空目录,总量闸到第 20 轮才拦,断路器第 3 次重复即止损,17 轮陪葬费省下。对全部模型生效;"同名不同参"不触发（合法的逐文件遍历形态）。
 
 **正反例**：reason 声明 special 工具→清单含之/未声明→仅 basic/requires_commit 件恒缺席/check 步零工具面照旧单发/openai 路由 reason 单发零工具与旧行为同构/工具循环终轮 lack_of_info 照常探测。
 
@@ -1378,7 +1383,15 @@ API 错误不回传到 Engine 的 fail_step 除非 API 层重试全部耗尽—�
 
 StepDispatcher 支持多 LLM 服务路由：不同步骤可路由到不同模型（如 reason→DeepSeek, check→Claude），实现成本优化和交叉验证。
 
-**thinking 路由**（2026-08-20 作者拍板形态 B——与模型分档同维度的第二旋钮）：`routing_rules` 每条可选 `thinking: enabled|disabled`——命中该类别的请求带 anthropic 协议 thinking 参数（`disabled` 发 `{type:'disabled'}`;`enabled` 发 `{type:'enabled', budget_tokens: max_output/2}`;**缺省 undefined 不发参数吃端点缺省,存量零变化**）。动因：推理型端点（deepseek-v4-flash 等）缺省开 thinking,机械含量高的步骤边际价值远低于烧掉的预算与延迟（重档实录:90% output_tokens 是 thinking,16384/65536 双档 OUTPUT_TRUNCATED 第一凶手;`thinking:{type:'disabled'}` deepseek 端点实测认——同题 15 tokens → 1 token）。commit 无专条吃 act 条时 thinking 随整条继承（同 service/model 半边）。加载期文法核:枚举外值拒（静默失效是 0008③ 同病）。**budget 下限夹 1024**（anthropic 协议最低值——小预算+enabled 组合原发 750 违约 400,四十六审探针抓;上限夹 maxOutput-1 防倒挂）。两级合并按 step_type **整条覆盖**（项目级同类别条目不写 thinking 则系统级的 thinking 随条消失——与 tool_servers 同名整体替换同一语义,项目级写全该条）。openai-chat 适配器暂不透传（该协议无对应参数,静默忽略即正确——thinking 是 anthropic 协议概念）。**使用判据（真机反证记档 2026-08-20）**：disabled 只该用在'一次性直出且模式固定'的调用面——**无 body 的 act/commit 是自主规划的多轮工具编排,恰需推理,禁配 disabled**（实撞:act disabled 下 flash 步骤2〔读原文落盘,此前 6 工具即完〕工具循环打转 20 轮 MAX_TOOL_ITERATIONS 耗尽,run 终局——thinking 省预算的收益在规划型调用面倒挂为致命退化）;带 body 的 act/check 引擎直执零 LLM 本就不发请求,配了无义。hopbuild 场景结论:无安全的 disabled 面,hopjit.yaml 留端点缺省;机制保留供确有把握的场景（如纯格式转换的 reason 步）。 ^anc-exec-thinking-routing
+**thinking 路由**（2026-08-20 作者拍板形态 B——与模型分档同维度的第二旋钮;2026-09-20 0100 批扩为五级优先链,第 5 级=作者定"缺省 act 关、act free/reason/check 开,除非手动开关"）：思考开关的决策链从高到低五级,第一命中生效——
+
+1. **THINKING_EXHAUSTED 记名册**（恒最高,止血防线不被任何配置顶回）：烧穿检出步的重试轮强制 disabled;
+2. **步骤级 `@thinking off|on` 标注**（0100 新增,^anc-exec-thinking-step-annotation）：单步显式开关——机械提取步标 off 省 8-9 倍费用（deepseek 实测 1.7-2 万 tok → 2 千,得分持平）,重推理步标 on 补档（Ling 实测开思考 G1 从 N2 抬到 N6）;
+3. **routing_rules 每条可选 `thinking: enabled|disabled`**：按步骤类别整类生效;
+4. **provider 级 `thinking` 缺省**（[[shared-providers#^anc-config-standalone-schema]] ProviderEntry thinking 键,0100 批新增）：该 provider 全部请求的兜底显式值——逐模型矫正档;路由落缺省 provider（service_id 为 default——spec 未配显式路由的形态）时回退首 provider 的 thinking 缺省（与 auth 的 defaultClient 补装同构:缺省路径不补则唯一 provider 配了键不写路由时静默失效,v0.13.0 auth 实撞同型）,治"各端点思考缺省互相相反且不可见"的隐式行为差（deepseek 缺省开/antchat 缺省关,同 spec 换模型思考行为静默翻转;实撞:Ling 历史 G1 全档在思考关下测出,推理档被低估三倍位数）。矫正样例:antchat 配 disabled 压回第 5 级的 reason 恒开（Ling 开思考费用 ×10 而切块提取实测不需要——只给重推理步 @thinking on 点名开）;
+5. **引擎内建步骤类型缺省**（0100 批,作者拍分类表 2026-09-20）：**act（无 body 且未标 free）→ disabled;commit → disabled;act free / reason / check / replan → enabled**。步骤节点查不到时按步骤类型缺省判（act 按非 free 关——replan 场景调用无 step 天然走此路,级 1/级 2 随之短路,级 3/4/5 照走）。逐格理由:带 body 的任何步骤引擎直执零 LLM 不经本链;act 无 body 未标 free 是 B7 反模式形态（本该补 body）,机械直出关;act free 开——工具编排关思考实锤会死（循环打转 20 轮,2026-08-20）;reason 开——推理本体（省钱靠 @thinking off 逐步点名,不靠整类关）;check 开——判错代价不对称（判错一轮=下游几万重试,思考开销几百到几千;deepseek 判官全部好成绩在开档,Ling A/B 开档意见质量正贡献）;commit 关——设计本义零裁量照单执行,思考无益（无 body 的 commit 被 B7 error 拦,实际罕经此级）;replan 开——subtask free 到步展开与失败重规划共用此类别,元编程最重推理面（G3 是弱模型最弱维度）。
+
+五级全缺省不再存在"不发参数吃端点缺省"的形态——第 5 级恒兜底,思考行为自此恒显式恒可审计（端点私有缺省从行为面退场;不认 thinking 参数的端点〔百炼代理实测〕照发吞掉无害）。参数形态各级同一（`disabled` 发 `{type:'disabled'}`;`enabled` 发 `{type:'enabled', budget_tokens: max_output/2}`）。**存量行为变化申报**（第 5 级不是零变化——设计如实）:deepseek 类"端点缺省开"的服务零变化;antchat 类"端点缺省关"的服务 reason/check/act free 步转为开(费用升,矫正=provider 级 disabled);变化面随批写进配置参考与 D12。动因：推理型端点（deepseek-v4-flash 等）缺省开 thinking,机械含量高的步骤边际价值远低于烧掉的预算与延迟（重档实录:90% output_tokens 是 thinking,16384/65536 双档 OUTPUT_TRUNCATED 第一凶手;`thinking:{type:'disabled'}` deepseek 端点实测认——同题 15 tokens → 1 token）。commit 无专条吃 act 条时 thinking 随整条继承（同 service/model 半边）。加载期文法核:枚举外值拒（静默失效是 0008③ 同病）。**budget 下限夹 1024**（anthropic 协议最低值——小预算+enabled 组合原发 750 违约 400,四十六审探针抓;上限夹 maxOutput-1 防倒挂）。两级合并按 step_type **整条覆盖**（项目级同类别条目不写 thinking 则系统级的 thinking 随条消失——与 tool_servers 同名整体替换同一语义,项目级写全该条）。openai-chat 适配器暂不透传（该协议无对应参数,静默忽略即正确——thinking 是 anthropic 协议概念）。**使用判据（真机反证记档 2026-08-20;2026-09-20 五级链落地后归一注记——本段禁令针对 routing_rules 整类配 disabled〔当年实撞形态:act 整类关思考致工具循环打转〕,与级 5 的逐格缺省不冲突:级 5 恰把 act free〔真正的工具编排形态〕定为恒开,而'act 无 body 未标 free'是 B7 反模式形态〔本该带 body 的机械步〕缺省关——两者对象有别）**：disabled 只该用在'一次性直出且模式固定'的调用面——**无 body 的 act/commit 是自主规划的多轮工具编排,恰需推理,禁配 disabled**（实撞:act disabled 下 flash 步骤2〔读原文落盘,此前 6 工具即完〕工具循环打转 20 轮 MAX_TOOL_ITERATIONS 耗尽,run 终局——thinking 省预算的收益在规划型调用面倒挂为致命退化）;带 body 的 act/check 引擎直执零 LLM 本就不发请求,配了无义。hopbuild 场景结论:无安全的 disabled 面,hopjit.yaml 留端点缺省;机制保留供确有把握的场景（如纯格式转换的 reason 步）。 ^anc-exec-thinking-routing
 
 **协议面**：wire 协议双档 `anthropic` | `openai-chat`（v0.7.0 起,per-provider 声明——协议适配层见 ^anc-exec-protocol-adapter;`openai-responses` 枚举预留未实装）。Anthropic 格式后端（DeepSeek `api.deepseek.com/anthropic`/代理网关 zenmux/oneapi/litellm）经 `base_url` 切换;OpenAI 兼容端点走 openai-chat 适配器（LLM 工具循环暂不支持,fail-fast 指路）。
 
@@ -1611,16 +1624,26 @@ get_or_create_client(service_id: string):
   credential = identity_provider.get_credential(service_id)
   base_url = resolve_base_url(service_id)
   if service_id != 'default' and !credential: throw UNKNOWN_SERVICE
-  client = new Anthropic({
-    apiKey: credential.values.api_key ?? credential.values.token,
-    baseURL: base_url,                  // 指向 Anthropic / DeepSeek / 代理网关
-  })
+  auth = env_of(`{SERVICE_ID}_AUTH`)   // 鉴权头档（^anc-config-standalone-schema auth 字段——bearer=只认 Authorization: Bearer 的网关）
+  opts = auth == 'bearer'
+    ? { apiKey: null, authToken: key }  // bearer 档:走 SDK authToken 通道;apiKey 置 null 防双头（两头都发部分网关 401）
+    : { apiKey: key, authToken: null }  // 缺省 api-key 档:x-api-key 头,authToken 置 null 切断 SDK 隐式 env 读取
+  client = new Anthropic({ ...opts, baseURL: base_url })
   clients.set(service_id, client)
   return client
 ```
 
-默认服务（service_id='default'）从环境变量构建：`ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` + `ANTHROPIC_BASE_URL`。
+默认服务（service_id='default'）从环境变量构建：`ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` + `ANTHROPIC_BASE_URL`。**standalone 下 defaultClient 同样消费首 provider 的 auth 档**（providers[0] 快照 `{SID}_AUTH=bearer` 在场时 defaultClient 按 bearer 双臂构造——2026-09-18 review 抓缺省路径漏装:唯一 provider 配 bearer 不写显式路由时,resolveModel 落 'default' 直取 defaultClient,原构造硬编码 x-api-key 恰撞回该档要治的 InvalidApiKey）。
 额外服务从 YAML 配置加载。所有服务统一走 Anthropic SDK，只是 base_url 和凭证不同。
+
+### `@thinking` 步骤标注【契约】 ^anc-exec-thinking-step-annotation
+
+（0100 批,2026-09-20 作者拍"单步开关需要补"——B 案:独立标注不与 @model 耦合）步骤 `>` 指令区可写 `@thinking off` 或 `@thinking on`（一步至多一条,off/on 两值,其它值解析期报错不静默）:
+
+- **解析**：extractModelAnnotation 同族同通道——解析期从指令区剥出存 AST 步骤节点（`thinking_override?: 'on' | 'off'`）,不进执行 LLM 的 prompt;serialize 往返保留（与 @model/@src 同款纪律）;
+- **消费**：请求装配层直查步骤节点（buildApiRequest 与 executeActWithTools 共用 resolveThinkingParam 单点——单发路径与工具循环路径同一条五级链,resolveModel 返回面只承载 routing_rules 半边不扩步骤覆盖）——决策链第 2 级（见 ^anc-exec-thinking-routing 五级链;记名册强制项恒压过它——止血优先,标 on 的烧穿步重试轮照样 disabled）;
+- **只对可执行步骤有效**（reason/act/check/commit——与 @model 同边界）;带 body 的步骤引擎直执零 LLM,标了无义解析不拒（与 @model 同容忍——生成器可能统一带标注）;
+- **构建器消费面**：hopbuild2 目标执行档规则可按目标模型档案的 thinking_off_whitelist 给机械提取/格式转换步自动带 `@thinking off`（思考型目标模型专属;非思考型模型此标注发 disabled 参数无害——端点不认 thinking 参数的〔如百炼代理〕照发不炸,实测吞掉零效果）。
 
 ### `@model` 标注解析
 
@@ -1635,6 +1658,8 @@ build_api_request(context, step_type, step):
   capabilities = resolve_capabilities_for_service(service)
   return {
     model: model,
+    ...resolve_thinking_param(step_type, step, resolved, max_output),   # thinking 五级链单点(工具循环 loopRequest 同用——2026-09-20 review 批补,伪码原漏装配行)
+
     system: build_system_prompt(context),
     messages: build_messages(context),
     max_tokens: capabilities.max_output,

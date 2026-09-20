@@ -1,0 +1,136 @@
+service: deepseek
+model_from_response:
+  - deepseek-flash
+n_per_cell: 6
+date: '2026-09-18'
+维度: G2 任务复杂度(一次做正确的能力)——单发裸能力,无重试无引擎兜底
+tiers:
+  xl:
+    pass: 1/6
+    runs:
+      - i: 1
+        pass: true
+        covered: 40/40
+        prose_prefix: false
+        miss: []
+      - i: 2
+        pass: false
+        covered: 0/40
+        prose_prefix: true
+        miss:
+          - (产出不可解析为数组)
+      - i: 3
+        pass: false
+        covered: 32/40
+        prose_prefix: false
+        miss:
+          - pt32(未命中)
+          - pt33(未命中)
+          - pt35(未命中)
+          - pt36(未命中)
+          - pt37(未命中)
+          - pt38(未命中)
+          - pt39(未命中)
+          - pt40(未命中)
+      - i: 4
+        pass: false
+        covered: 25/40
+        prose_prefix: false
+        miss:
+          - pt25(未命中)
+          - pt26(未命中)
+          - pt27(未命中)
+          - pt28(未命中)
+          - pt29(未命中)
+          - pt30(词中但 type 错)
+          - pt31(未命中)
+          - pt32(未命中)
+          - pt33(未命中)
+          - pt35(未命中)
+          - pt36(未命中)
+          - pt37(未命中)
+          - pt38(未命中)
+          - pt39(未命中)
+          - pt40(未命中)
+      - i: 5
+        pass: false
+        covered: 11/40
+        prose_prefix: false
+        miss:
+          - pt12(未命中)
+          - pt13(未命中)
+          - pt14(未命中)
+          - pt15(未命中)
+          - pt16(未命中)
+          - pt17(未命中)
+          - pt18(未命中)
+          - pt19(未命中)
+          - pt20(未命中)
+          - pt21(未命中)
+          - pt22(未命中)
+          - pt23(未命中)
+          - pt24(未命中)
+          - pt25(未命中)
+          - pt26(未命中)
+          - pt27(未命中)
+          - pt28(未命中)
+          - pt29(未命中)
+          - pt30(未命中)
+          - pt31(未命中)
+          - pt32(未命中)
+          - pt33(未命中)
+          - pt34(未命中)
+          - pt35(未命中)
+          - pt36(未命中)
+          - pt37(未命中)
+          - pt38(未命中)
+          - pt39(未命中)
+          - pt40(未命中)
+      - i: 6
+        pass: false
+        covered: 38/40
+        prose_prefix: false
+        miss:
+          - pt39(未命中)
+          - pt40(未命中)
+          - pt38(前提空/纯编号)
+  xxl:
+    pass: 0/6
+    runs:
+      - i: 1
+        pass: false
+        covered: 0/80
+        prose_prefix: true
+        miss:
+          - (产出不可解析为数组)
+      - i: 2
+        pass: false
+        covered: 0/80
+        prose_prefix: true
+        miss:
+          - (产出不可解析为数组)
+      - i: 3
+        pass: false
+        covered: 0/80
+        prose_prefix: true
+        miss:
+          - (产出不可解析为数组)
+      - i: 4
+        pass: false
+        covered: 0/80
+        prose_prefix: true
+        miss:
+          - (产出不可解析为数组)
+      - i: 5
+        pass: false
+        covered: 0/80
+        prose_prefix: true
+        miss:
+          - (产出不可解析为数组)
+      - i: 6
+        pass: false
+        covered: 0/80
+        prose_prefix: true
+        miss:
+          - (产出不可解析为数组)
+坍塌点: (测程内未坍塌)

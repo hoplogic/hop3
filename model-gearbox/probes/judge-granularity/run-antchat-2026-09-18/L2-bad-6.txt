@@ -1,0 +1,9 @@
+Q1: yes（L1 对应清单点 P1，line_ref=L1 且 quote 来自 L1）
+Q2: no（L2 断言包含"半衰期"和"影响睡眠"两个内容，但清单中只有 P2 覆盖半衰期，P3 覆盖影响睡眠，二者的 line_ref 都是 L2，但按严格定义，每个行断言应有一个对应点覆盖全部内容，P2 和 P3 分别只覆盖其中一个，因此 L2 作为整体缺少一个覆盖其全部断言的单一对应点）
+Q3: yes（L3 对应清单点 P3 的 premises 中引用了 L3 内容，且 P3 的 line_ref 是 L2，这意味着 L3 断言的独立性缺失；但 L3 的内容被 P3 的 premises 非主键引用，按严格定义，L3 没有自己的 line_ref=L3 的点）
+Q4: yes（L4 对应清单点 P5，line_ref=L4 且 quote 来自 L4）
+Q5: yes（每个 inference 点 P3、P5 的 premises 均非空且写出了具体内容，不只是编号）
+Q6: yes（所有点的 quote 均能在原文对应行中找到原文）
+extract_ok: false
+extract_gap: |
+  Q2（L2 的两个断言未被一个 line_ref=L2 的点完整覆盖）、Q3（L3 没有 line_ref=L3 的提取点）

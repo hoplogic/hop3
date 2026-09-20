@@ -1,0 +1,10 @@
+Q1: yes（L1 的引用 "全球每天消费约 30 亿杯咖啡" 被清单中 line_ref=L1 的 P1 完整覆盖）
+Q2: no（L2 包含"半衰期约 5 小时"和"下午晚些时候摄入会影响夜间睡眠质量"两个断言，清单中只有 P2 覆盖了半衰期，P3 仅引用 L2 但其 line_ref 名义上是 L2，然而它实际是对 L2 整体句的 inference 提取，严格按 rule：'line_ref 就是该行'才算对应，P3 的 line_ref=L2，所以覆盖。但再核规则：Q2 要求两个内容都被 line_ref=L2 的点覆盖才算 yes。P2 和 P3 的 line_ref 都是 L2，所以 yes。修正为：yes）
+修正后：Q2: yes（L2 的两个断言"半衰期约 5 小时"和"下午晚些时候摄入会影响睡眠" 分别被 P2（fact）和 P3（inference）覆盖，两者 line_ref 均为 L2）
+Q3: no（L3 的断言"美国 FDA 建议健康成年人每日咖啡因摄入不超过 400 毫克"在清单中无对应 point）
+Q4: yes（L4 的引用"每天四杯以内的标准咖啡对多数人是安全的"被清单中 line_ref=L4 的 P5 覆盖）
+Q5: yes（P3 premises 写了完整内容"① 咖啡因的半衰期约为 5 小时"，P5 premises 写了完整内容"① 美国 FDA 建议… ② 四杯以内的标准咖啡…"，均非空且内容具名）
+Q6: yes（所有点的 quote 均可逐字在原文对应行中找到）
+extract_ok: false
+extract_gap: |
+  Q3: L3 的 FDA 建议 400 毫克/日这一断言在清单中无对应 point

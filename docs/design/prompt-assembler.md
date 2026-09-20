@@ -34,9 +34,9 @@
 | L2 知识（含 doc-ref/hop_env） | 契约 | `anc-exec-knowledge-retrieval` / `anc-exec-doc-ref-injection` / `anc-exec-hop-env-table` |
 | L3 轨迹与位置 | 契约（展示规则）+说明（示例） | `anc-exec-l3-display-rules` / `anc-exec-l3-branch` / `anc-exec-l3-loop` / `anc-exec-onfail-context` |
 | L4 输入材料渲染 | 契约 | `anc-exec-inputs-render` / `anc-exec-inputs-deflate` |
-| L5 当前节点 | 契约 | `anc-exec-l5-node-impl` / `anc-exec-tool-manifest-source` / `anc-exec-tool-manifest-supply` |
+| L5 当前节点 | 契约 | `anc-exec-l5-node-impl` / `anc-exec-l5-task-first` / `anc-exec-tool-manifest-source` / `anc-exec-tool-manifest-supply` |
 | L6 修正指令（重试/上游反馈） | 契约 | `anc-exec-l2c-retry-feedback`（锚名沿革，语义=L6） |
-| 修订场景短 prompt（已废除,锚存废除记录） | 契约 | `anc-exec-revision-prompt` |
+| 修订场景短 prompt（已废除,锚存废除记录）+弱模型档修订短 prompt | 契约 | `anc-exec-revision-prompt` / `anc-exec-revision-short-weak` |
 | 超预算处理 | 契约 | — |
 | 激进压缩模式 | 决策+契约 | — |
 | Token 计数方法 | 说明 | — |
@@ -44,7 +44,7 @@
 
 ## 定位【契约】 ^anc-struct-prompt-assembler
 
-> **模块版本**：prompt-assembler `v0.19.1`（2026-09-09）。本版=L6 触发条款同步 0073 受众收窄口径(review 抓两文档对同一契约说两套话)。本版 L4 对象/列表值递归 HopSchema 展开（每层每字段 名: 类型 = 值,解释项逐层在场）+ inline $preview 通道扩对象档（hopissues/0064——JSON.stringify 与裸 YAML dump 均从值位绝迹）。0.x 未承诺稳定。对内提供 AssembledContext 组装与 L0-L6 单一渲染源,EngineAccessor 是其与 engine 的收窄接口边界。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
+> **模块版本**：prompt-assembler `v0.22.0`（2026-09-19）。本版=交付格式例按值性质分形（^anc-exec-format-example-structural——结构型字段〔yaml/[Type]/TypeDecl〕的占位从 `|` 块标量改缩进结构+格式规则追加结构条;Ling hb2 五轮 SCHEMA_MISMATCH 死于引擎自教块标量、G5 探针 T5 同考点明示指令下 6/6 立据）。上版 v0.21.1=工程链 review 修复批（AssembledContext struct 补 revision_short/constraints_text 两行〔第三次同型漏,登执行义务〕/卸载指路语分叉条款列举式改普遍规则〔retry 基准卸载文案第三处死指路同批代码修复〕/短卷条款补 upstream_feedback 点名+restore 恢复语义+精度链实装面收窄与 env 坏值裁定记录）。上版 v0.21.0=本版弱模型档修订短 prompt（^anc-exec-revision-short-weak——打回重试轮 revision_prompt: short 档命令整体替换+供给六件收窄,hoplog 验尸与 A/B 各 n=6 立据:标准态修订轮命令祈使句逐字不变致弱模型按篇幅选'从头做题'模板,schema 0/6→短档 6/6;缺省 standard 全模型零变化）。上版 v0.20.0=L5 节点段序契约（^anc-exec-l5-task-first——任务先行/产出承接任务/材料垫后/格式短句化+工具清单挪 L4 前作环境背景段,作者两抓'任务描述不清晰''没说清楚怎么生成输出全靠猜'+Qwen3.8 七轮控制变量实验立据）。前版 v0.19.1=L6 触发条款同步 0073 受众收窄口径+L4 对象/列表值递归 HopSchema 展开（每层每字段 名: 类型 = 值,解释项逐层在场）+ inline $preview 通道扩对象档（hopissues/0064——JSON.stringify 与裸 YAML dump 均从值位绝迹）。0.x 未承诺稳定。对内提供 AssembledContext 组装与 L0-L6 单一渲染源,EngineAccessor 是其与 engine 的收窄接口边界。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
 
 **① 自身定位**：PromptAssembler 是 HopJIT 的上下文组装组件——把 ExecutionEngine 的运行时状态（Spec、步骤状态、变量、执行链）组装成 L0-L6 结构化上下文（AssembledContext），作为单步 LLM 调用的唯一 user message 来源。HopSpec 每步是独立 API 调用，无对话历史，AssembledContext 必须自包含地承载该步推理所需的全部信息。（解释性类比：类似编译器的代码生成阶段——把内部 IR/状态翻译成目标平台可执行的最终形态。）
 
@@ -81,6 +81,7 @@ struct: PromptAssembler
 | `roleGuideText` | 函数 | prompt.ts | 角色档指引文本单档提取（dispatcher executeActWithTools system 尾块注入——standalone 真实请求的角色分道半边,同上契约） | provisional |
 | `formatHumanContext` | 函数 | prompt.ts | 人通道 context deflate（engine 渲染 paused） | provisional |
 | `injectKnowledgeContext` | 函数 | prompt.ts | L2 知识检索注入（dispatcher 调 + 记 HopLog sources） | provisional |
+| `SCHEMA_KICK_MARKER` | 常量 | prompt.ts | schema 校验打回行内反馈标记——dispatcher 生产侧与短卷消费侧同源共享（^anc-exec-revision-short-weak 例外保真②,2026-09-18 review 抓两侧硬编码后提出） | provisional |
 
 > **内部（表外即内部）**：`BudgetConfig`/预算常量、各 `build*`/`reassemble*` 私有组装方法、`truncateToChars` 等 helper。
 
@@ -178,6 +179,8 @@ trait（按职责分两组）：
 
 （维持 v0.5）`resolveInputs` 按 agent 通道阈值（`DEFLATE_THRESHOLD = 4096`，见 [[shared-types#^anc-exec-deflate]]）：≤4K 原样内联；超阈写 `<inst>/work_zone/vars/<var_name>.json`，置 `{"$file": abs_path}` 指针。截断给 LLM 的是"半值+损坏指示"无法决策；指针保真值可按需 Read。人通道差异：`formatHumanContext` 阈值 5000，返 `{$file, preview}` 复合。受众分流见 [[../concepts/HopSpec V3配套HopJIT运行时能力#^anc-exec-audience-routing]]。
 
+**卸载指路语按本步工具面分叉（2026-09-18,零工具面组合死锁实撞;同日 review 面二抓列举面窄于病理面后改普遍规则）**：**一切"内容已卸载/截断,全文在盘上"形态的指路语**（$file 指针、$preview 预览、retry 基准卸载文案、doc-ref 大节卸载——现有四处,将来新增卸载形态自动落入本规则）,渲染时按**本步是否真有文件工具面**分两个措辞档——有工具面（act 工具环 / 有声明的 reason）照旧指路"可用 read 工具读全文";**零工具面**（零声明 reason 的单发路径,tools 参数整个不发）时指路语替换为合法出口:"本步无文件工具——基于本节选作业,节选不足以完成的部分在产出中如实写明,不要尝试调用不存在的工具"。病理:reason 按声明下发落地后,零声明步物理上没有工具,而旧指路语仍教"可 read 全文"——模型照指路伸手,read 发不出去就把 `<tool_call>` 当文本写进产出,check 连环打回烧尽（实撞:deep-validate 判官步喂 spec 全文卸载件,三攻全灭,死相全部是调用文本当产出交）。原则与 lack_of_info 补出口同一条:**不教模型做物理上做不到的事,堵死一条路时必须同时给出合法出口**。判定依据=装配时的实际下发面（`tool_manifest` 在不在场）,不是 spec 声明的静态样子——同一 spec 在不同下发策略下措辞自动跟随。
+
 **check 判定步 inline 预览豁免（2026-08-27 #53,dr20 实撞）**：inline 模式（standalone 裸 API）下 **check 步的输入不做 $preview 截头,全量内联**。实撞:5.2.5 整体合理关的 spec_text 35092 字符被截成前 20000 预览,判官读不到后 15092 字符里的待复验项无法销项,四轮判不通过烧尽 5.2 打回小时级重建——重建后输入不会变短,同因死循环。病理:**判定基于不完整输入=假判定,比失败更糟（静默错误）**——预览形态的"节选+指路"对作业型步骤成立（act 工具环可 read 全文）,对判定步不成立（裸 API check 无文件工具,指路=死路）。豁免的量级安全:20000 字符≈5-10K tokens 远未近模型窗口,真超限会触 CONTEXT_OVERFLOW→激进重组,响亮可见好过静默截断。act/commit/reason 照旧预览（reason 是产出型非判定型,截头可容忍;若将来实证 reason 同病再扩豁免——先修实撞面不过度泛化）。
 
 ### 决策 6：修订场景换短 prompt（2026-08-24 作者定，D66 定形）
@@ -249,6 +252,8 @@ struct: AssembledContext
     - node_decl: yaml           # L5：当前节点声明形态——{step_id, step_type, summary, input_names}（渲染层拼节点行与 ← 清单用;output_schema 已单列）
     - instruction: text         # L5：执行说明正文（节点行/←/→ 由渲染层按 node_decl 补齐,见 ^anc-exec-l5-node-impl）
     - output_schema: [OutputDecl]  # L5：输出声明——+ → 类型结构（渲染进 L5 节点内,不再独立成层）
+    - revision_short: bool        # 可选。弱模型档修订短卷标志（^anc-exec-revision-short-weak——short 档×reason 打回重试轮组装期置位,渲染层见之走短卷分支;2026-09-18 review 面一抓 struct 漏行补——本表第三次同型漏,新增字段本表同批登为执行义务）
+    - constraints_text: line      # 可选。L1 Constraints 单独抽出（经 stripAssemblyNotes 剥装配注记——短卷保留安全红线,其余 L1 撤下;与 revision_short 成对在场）
 ```
 
 （TS 形态是代码层投影，在 src/runtime-types.ts `AssembledContext`——设计以本 HopType 为准。）
@@ -330,6 +335,33 @@ trait: OnFailContextSupply
 
 正反例：4.2 的 L5 首行 `4.2 [reason] 生成/修订头部契约` 带 ← 与 + → 齐全=正；L5 只有裸描述正文、输出声明在别处=反（旧形态）。
 
+### 节点段序=任务→产出→材料→格式,产出承接任务【契约】 ^anc-exec-l5-task-first
+
+（2026-09-18 作者两抓合卷立段序契约。抓一"任务描述不是很清晰"：原段序把唯一的业务指令〔执行说明〕垫在输入/输出/格式模板全部之后,L4 末三行才说要干什么,且开头操作指引前向引用"基于 L4 的执行说明"——那时执行说明还在几十行之后。抓二"任务说明没有说清楚怎么生成输出,完全靠猜"：任务段与输出声明各自独立,"判断达标"落哪个字段、按什么口径写全靠执行者自行拼线——强模型自动补上,弱模型拿着三块互不相连的材料转身去翻文件系统找线索〔Qwen 同一 spec 三连 20 轮 listdir 空转,三轮 hoplog 为证〕。）
+
+段序与承接四件：
+
+1. **任务先行**：`**本步任务**`（=步骤 instruction 正文）紧跟操作指引,是 L5 第一个内容段——读者第一眼见任务;操作指引措辞"基于本步任务和输入材料推理"（前向引用消除）;
+2. **产出紧跟任务且承接任务**：输出段紧随任务段（材料段垫后）——输出字段是任务的分解形态,每字段渲染=名字+类型+**生成指引**（即声明的 `#` 说明——它不是注释是该字段的生产口径,渲染时升权重不作尾巴）;格式模板与字段声明一体呈现,模板占位文字写的是该字段的生成指引不是格式套话（弱模型照抄占位符的历史实撞防线）;
+3. **输入材料垫后**：材料是"用什么料"不是"干什么",任务与产出讲完才轮到它;
+4. **格式规则短句化**：交付形态规则（YAML 键值收尾/键间不夹散文/超长走文件）拆两三条短句附模板后,不挤一个 90 字长括号。
+
+### 格式例按值性质分形【契约】 ^anc-exec-format-example-structural
+
+（2026-09-19 立据：Ling 3.0 flash 跑 hopbuild2 在 2.3 步（产出 `aux_ledger: yaml`）连烧五轮 SCHEMA_MISMATCH 死于步 2——hoplog 验尸发现交付格式例把 yaml 类型字段渲染成 `aux_ledger: |` 块标量占位,模型逐字照抄模板形态、把结构化台账包进了字符串;而 G5 结构化交付探针 T5 档（同款考点、指令明说"值必须是缩进结构不是块标量"）同模型 6/6 全过——**模型会交结构,是引擎的格式例教了错形态**。"弱模型照抄占位符"本是该模板的设计前提〔占位文字=生成指引〕,前提成立则模板自身的形态错误必然被逐字复制。）
+
+交付格式例的占位形态按输出字段的**值性质**分三形,不按"是否多行"一刀切：
+
+1. **文本多行型**（text/markdown/prompt/HopSpec）：教 `名: |` 块标量——值本来就是字符串,块标量是正确容器;
+2. **结构型**（yaml / `[Type]` 列表 / 自定义 TypeDecl）：教**缩进结构占位**——`名:` 换行后缩进写占位（列表型首行 `- ` 起头示意元素形态）,**禁止 `|` 块标量**（那正是"内容对皮不对"的死相:值成了字符串,validator 按 ^anc-type-yaml-structured 拒收,hop_python 取字段 undefined）。结构型字段在场时,格式规则短句区**追加一条**："结构型字段的值直接写缩进的 YAML 结构（对象/列表）,不要用 `|` 把结构包成字符串"——规则与模板同向,不靠模型自己识破模板;
+3. **标量型**（bool/int/float/line 及其约束形态/enum）：单行 `名: （指引）` 照旧。
+
+分形判据用类型词表机械判,不做启发式猜测；与 validator 的 checkValue 收口面（yaml 拒散文/`[Type]` 拒非数组）**同源同向**——格式例教的形态必须恰是校验层收的形态,两处词表漂移即此缺陷重演。
+
+**instruction 与 summary 不复读**：instruction 在场时任务段只渲染 instruction（步骤行已带 summary,复读是纯噪声）。
+
+**spec 作者侧的对偶义务（教学面,落 hopbuild2 成文教学与 deep-validate 检查面）**：instruction 合格判据=每个输出字段在任务描述里有对应的生成句（"对照 X 判断达标〔=verdict〕;结合差距给建议〔=advice〕"）——任务描述覆盖不到的输出字段,生成路径靠执行者猜,弱模型必翻车。
+
 ### 工具清单料源【契约】 ^anc-exec-tool-manifest-source
 
 层表 L4 行定义了工具清单的两档形态（真身档=每件工具参数逐条展开 / 通道指引档=复用模式的调用通道说明）；本节钉**两档怎么选、料从哪来**——这条链断过一次（2026-08-31 作者对 coffee-week 真机 hoplog 实抓：独立模式渲染出"用你环境里的同义操作落实"——那是写给复用模式 caller 的话，裸 API LLM 没有环境同义操作、没有 shell，它唯一的能力面是 API tools 参数下发的工具）：
@@ -390,6 +422,23 @@ trait: OnFailContextSupply
 **随废清单**：assembleRevisionContext/resolveRevisionBase/revision 角色档与修订版区块地图/AssembledContext.revision_base 字段/engine 的 revision 免注入分支/hopbuild2 spec 的 @revision_base 声明行（其防重写需求由标准态 L5 三层覆盖:基准+逐条落实框架+4.3 机械空转对比）。概念层"修订场景换短 prompt"条款待回同步源时同步废除标注。
 
 **留存的正确遗产**：^anc-exec-retry-output-retention（重试留存被拒产出）不废——它是标准态 L5 基准供给的料源;"修订产出收窄为定向编辑指令"的 v2 构想随 D44 编辑代数另议,与本废除无关。
+
+### 弱模型档修订短 prompt（2026-09-18 新增——不推翻上方废除决策,适用边界=显式开关） ^anc-exec-revision-short-weak
+
+**为什么废除决策管不到这里**：上方废除的三条依据全部只对强模型成立。2026-09-18 hoplog 验尸（S 档 run e3c9 九发全查）+ A/B 直连实验（同一修订供给,Qwen3.8-27B 百炼件各 n=6）实锤:标准态打回轮=生成轮全量 prompt 追加修正块,**L4 本步任务祈使句九发逐字不变**（"通读文档,穷举两类点"）,修订语境全靠条件脚注与垫尾 L5——弱模型跟着篇幅大头执行生成命令重做全题,schema 形态 0/6 散文前置、需引入新信息的意见 0/6 落实;换成修订短 prompt（命令整体替换为修订祈使句+只留基准/意见/落实规则/交付格式）后同模型三关 6/6 全绿。病理定性:**打回重试轮的供给里住着两套互斥的行为模板（从头做题 vs 改卷）,弱模型按篇幅权重选模板,不按语义优先级**。
+
+**行为契约**：修订供给档 `revision_prompt: standard | short`,缺省 `standard`（现行标准态,全模型零变化）。`short` 档下,**打回重试轮**（retry_feedback 在场）的 reason 步组装换形态:
+
+- **命令整体替换**——L4 本步任务位渲染修订祈使句（"本轮是修订任务:在上一版基础上把打回意见逐条落实,不是重做任务"）,原步骤 instruction **整体撤下不降级保留**（A/B 实锤:框架残留即模板竞争,砍干净才 6/6）;
+- **供给只留六件**：极小 L0（YAML 输出规则段）/ L1 Constraints 原文（安全红线几百字符不构成框架压制,作者拍 2026-09-18 保留）/ 本步输入材料 / 输出声明+交付格式（只给声明不给"字段怎么写"教学）/ L5 修正块（基准+意见+落实规则,形态同标准态——**含上游修正意见 upstream_feedback**,与标准态 L5 同位同序,不属超供）;
+- **撤下清单**：L0 世界观全文/区块地图/L1 Goal/Types/骨架/L2 知识/L3 轨迹/字段完整示例/生成口径——凡教"从头做题"的都不在场;
+- **材料唯一性**：基准与意见各出现一次（标准态同料三处:L4 输入/L5 块/L3 轨迹——重复即权重,弱模型按重复计票）;
+- **适用面**：reason 步打回重试轮;check/commit 本就不吃 retry_feedback 不涉;act 工具环轮暂不适用（工具环有自己的循环上下文形态,待实证再扩——先修实撞面不过度泛化,与 check 豁免条款同哲学）;首轮照常走标准态;
+- **两条例外保真**：①有声明工具的 reason 步**工具清单段保留**（清单与下发面同源不可破——下发了工具而 prompt 不提=清单失同源,与卸载指路语分叉同一条红线）;②**schema 校验打回的行内反馈保留**（SCHEMA_MISMATCH 重做走 instruction 追加通道非 L5,短档撤 instruction 时把"[上次输出未通过校验"起的追加段单独摘出保留——否则短档轮内 schema 打回的纠错信息蒸发）。
+
+**开关精度链**：`HOPJIT_REVISION_PROMPT` 环境变量 > 项目 hopjit.yaml `revision_prompt` 键 > 缺省 `standard`——**实装面=MCP 组合根**（startRun 与 restoreRun 两路同装;CLI/复用模式通道无消费点,弱模型经复用模式驱动的需求实证后再扩,按需不预建——2026-09-18 review 抓"同款三级"措辞宽于实装后收窄）。**env 坏值静默回落**（非法值按配置/缺省走,不响亮拒——与 HOPJIT_CONTEXT_MODE 同款:env 是每 run 临时覆盖,坏值有配置兜底伤害面小;配置通道坏值仍响亮拒,两通道分档是裁定不是疏漏——2026-09-18 review 裁定记录）。**server 重启恢复语义**：revisionPromptMode 会话级不入 StateFile,restoreRun 从重读的项目配置重新装配（与 startRun 同式）——恢复的 run 档位跟随盘上配置现值（2026-09-18 review 抓 restore 漏装后补齐,0084 M3 restore 漏装 model_engine 同型前车）。**最终户口=model-gearbox 档案 `adapt.revision_prompt`**（这是按模型能力换挡的开关,不是按项目偏好——档案消费链随 todo/0095 max_inline_tools 同批实装,落地后档案值进同一条 HostConfig 通道,本键降为人工覆盖位）。
+
+**强模型缺省不动的边界**：hoplog 验尸同时暴露"命令不换、靠脚注自判轮次"是标准态的结构性问题（脚注在 extract_gap 空的 schema 重试轮还把模型引向"这是首轮=全新提取"）,理论上全模型打回轮都该见修订命令头——但这动全部模型全部重试轮的行为,强模型现行链路（hb2 修检环/D97 判官链）实测健康,升缺省需 deepseek 对照数据先行,决策挂 todo/0095 2a 项不在本条款内。
 
 ---
 

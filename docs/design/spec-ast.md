@@ -255,6 +255,7 @@ struct: BaseStep
     - outputs: [OutputDecl]          # 可选。+ → 输出声明（OutputDecl 定义见 shared-types）
     - instruction: text              # 可选。> 执行说明（多行合并，@model 标注已提取移除）
     - model_override: line           # 可选。@model 标注提取值（格式: service/model） ^anc-exec-model-annotation
+    - thinking_override: line   # 可选。@thinking 步骤标注(on|off)——单步思考开关,五级链第 2 级;解析与 serialize 往返同 @model 通道。权威 [[step-dispatcher#^anc-exec-thinking-step-annotation]]（2026-09-20 review 批补登——struct 唯一定义处漏字段同型病第四犯后堵）
     - src_ref: line                  # 可选。@src 源锚点（翻译自上游文档哪一处——纯追溯零执行语义 ^anc-step-src-annotation）
     - source_location: SourceLocation  # 可选。markdown 原文位置（错误报告用）
     - doc_refs: [DocRef]             # 可选。doc-ref 提取落点（spec-parser ^anc-rule-doc-ref-extract 权威,本块补同步）

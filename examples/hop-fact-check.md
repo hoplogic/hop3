@@ -145,13 +145,15 @@ L24: 所以说，只要别超过四杯，谁喝都放心。
 **首轮**（points 为 None、extract_gap 空）= 全新提取；**重试轮**（points 是上轮产物、extract_gap 非空）= 在上轮 points 基础上按 extract_gap 定向补齐（补漏项、修正误分类），已对的点原样保留不推翻。
 
 #### 2.4. [check final] 验收提取完备性
-- ← doc_content, points, extract_gap
+- ← doc_content, points
 + → extract_ok: bool  # 判定槽：提取是否完备
 + → extract_gap: text  # 说明槽：漏项清单（通过时置空）
 
-逐段扫 doc_content，核对 points 是否穷尽——是否有可查证断言未列为 fact、有结论/预测/评价未列为 inference、有断言被误分类、推演点前提缺失。
+逐段扫 doc_content，核对 points 是否穷尽——是否有可查证断言未列为 fact、有结论/预测/评价未列为 inference、有断言被误分类、推演点前提缺失。每轮对着当前 points 独立重判，不参考上轮判词——输入里不给 extract_gap 是刻意的：判官读到自己上轮写的判词会照抄交卷，已改对的产出被原判词二次打回（真机实撞：三轮判词逐字节相同，修订全部落实仍烧尽）。
 
-完备 → extract_ok=true、extract_gap=""；有遗漏/误分类 → extract_ok=false、extract_gap 逐条列出缺项（触发 subtask retry，2.3 据 extract_gap 补齐重提）。
+**打回门槛——只有严重问题才打回，一次列全**：严重问题=漏了可查证断言（文档里有、points 里没有）、分类错到核查路径走错（fact 标成 inference 或反之，导致后续按错误路径核查）、推演点前提缺到没法核查。**拆分方式的裁量偏好不是打回理由**——同一句话合成一点还是拆成两点，只要断言内容都被覆盖、类型不影响核查路径，两种处理都算完备（真机实撞：三轮判官对同一句话先要求合并、再要求拆分、再换第三个角度，每轮换标准永不收敛）。打回时把全部严重问题一次列全，不分批挤牙膏。
+
+完备 → extract_ok=true、extract_gap=""；有严重问题 → extract_ok=false、extract_gap 逐条列出（触发 subtask retry，2.3 据 extract_gap 补齐重提）。
 
 ### 3. [act] 生成核查点速览与统计
 - ← points
@@ -290,12 +292,12 @@ L24: 所以说，只要别超过四杯，谁喝都放心。
 输出逐点复核清单（含 point.id、原降级、复核结论）。flagged_items 为空则记"无降级项"。
 
 #### 5.4. [check final] 验收汇总完备性
-- ← missing_in_report, unchecked_ids, downgrade_review, factcheck_report, points, report_gap
+- ← missing_in_report, unchecked_ids, downgrade_review, factcheck_report, points
 + → report_ok: bool  # 判定槽：汇总是否完备
 + → report_gap: text  # 说明槽：遗漏清单（通过时置空）
 
 综合判定报告完备性（两类缺失 doctrine 与 examples/hop-deep-research 10.2 是同一条规矩的两处落点——改这边须同步看彼处）：① **missing_in_report 必须为空**（有结论却漏汇=真漏，重汇可修）；② **unchecked_ids 非空时报告须有"未能核查的点"节且逐个列出**（如实交代即完备——不要求变出不存在的结论）；③ downgrade_review 中标为"误判/过苛"的降级项须已在报告体现（未体现=汇总失真）；④ 概览统计数与表格实际条数一致；⑤ 所有问题点都进了问题清单。
 
-全部满足 → report_ok=true、report_gap=""；否则 → report_ok=false，report_gap 逐条列出缺项（漏汇编号/未交代的失败点/失真项，触发 subtask retry，5.1 据 report_gap 补齐重汇）。
+全部满足 → report_ok=true、report_gap=""；否则 → report_ok=false，report_gap 逐条列出缺项（漏汇编号/未交代的失败点/失真项，触发 subtask retry，5.1 据 report_gap 补齐重汇）。每轮对着当前报告独立重判，不参考上轮判词——输入里不给 report_gap 与 2.4 同一条规矩（判官读到自己上轮判词会照抄交卷）。打回门槛也同 2.4：只有上列①-⑤的实质缺失才打回且一次列全，行文措辞、排版形态的裁量偏好不是打回理由。
 
 ### 6. [exit] 交付核查结果

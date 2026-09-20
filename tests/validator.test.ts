@@ -2571,6 +2571,75 @@ ${steps}`);
   });
 });
 
+// V15: check 步输入禁含自己的输出变量（^anc-step-check-criteria 判官不吃自产判词——实撞:
+// 验收步输入含自己上轮判词,判官照抄旧判词交卷不重判,修订全部落实仍三轮同词烧尽。） // @v: anc-rule-v15
+describe('V15 check 步自产判词静态检（warn 档）', () => {
+  const mk = (checkStep: string) => parseSpec(`# T
+Id: t
+Goal: g
+## Inputs
+- doc: text  # 料
+## Steps
+1. [subtask retry=2] 提取并验收
+  - ← doc
+  + → points: text  # 清单
+  1.1. [reason] 提取
+    - ← doc, gap
+    + → points: text  # 清单
+    > 提取;重试轮按 gap 补
+${checkStep}`);
+
+  it('反例：check 输入含自己的输出 gap → V15 warn 点名（实撞形态——判官抄旧判词）', () => {
+    const r = mk(`  1.2. [check final] 验收
+    - ← doc, points, gap
+    + → ok: bool  # 判
+    + → gap: text  # 漏项清单
+    > 核对完备性`);
+    const hits = validateSpec(r.ast!).filter(e => e.rule === 'V15');
+    expect(hits.length).toBe(1);
+    expect(hits[0].severity).toBe('warn');
+    expect(hits[0].message).toContain('"gap"');
+    expect(hits[0].message).toContain('1.2');
+  });
+
+  it('正例：带 body 的机械 check 同交集 → 照 warn（设计第三例——body 步零 LLM 无锚定风险属边缘合法,同形态提示作者自证意图,warn 不拦不误伤）', () => {
+    const r = mk(`  1.2. [check final] 验收
+    - ← doc, points, gap
+    + → ok: bool  # 判
+    + → gap: text  # 漏项清单
+    > 机械判定零 LLM：
+    > \`\`\`hop_python
+    > ok = len(points) > 0
+    > gap = "" if ok else "空清单"
+    > \`\`\``);
+    const hits = validateSpec(r.ast!).filter(e => e.rule === 'V15');
+    expect(hits.length).toBe(1);
+    expect(hits[0].severity).toBe('warn');
+  });
+
+  it('正例：片段模式照验（判定材料=步骤自身声明,片段可判——commit 0e964e21 声称的片段照验此前零钉）', () => {
+    const frag = `1.2. [check] 验收
+  - ← doc, gap
+  + → ok: bool  # 判
+  + → gap: text  # 说明
+  > 核对`;
+    const r = parseFragment(frag);
+    expect(r.errors.filter(e => e.severity === 'error')).toHaveLength(0);
+    const hits = validateSpec(r.ast, undefined, { fragment: true, knownVars: ['doc', 'gap'] }).filter(e => e.rule === 'V15');
+    expect(hits.length).toBe(1);
+    expect(hits[0].message).toContain('"gap"');
+  });
+
+  it('正例：check 输入不含自身输出（修复后形态）→ 零 V15；gap 喂给重做步 1.1 不受本规则约束', () => {
+    const r = mk(`  1.2. [check final] 验收
+    - ← doc, points
+    + → ok: bool  # 判
+    + → gap: text  # 漏项清单
+    > 核对完备性,每轮独立判`);
+    expect(validateSpec(r.ast!).filter(e => e.rule === 'V15')).toHaveLength(0);
+  });
+});
+
 describe('V11 叶子输入声明完备性（散文引用 warn 档）', () => {
   const mk = (steps: string) => parseSpec(`# T
 Id: t
@@ -5614,6 +5683,55 @@ describe('repairQuotedPrefixScalars（值内前置引号片段修复）', () => 
     expect(repairQuotedPrefixScalars(text)).toBe(text);
   });
 
+  // @v: anc-exec-output-fence-recovery —— HopSchema 赋值形态回声剥壳（家族第 6 马甲,
+  // 2026-09-19 real-task-scaling fact-check 实撞:deepseek 把输入渲染语法 `名: 类型 = 值`
+  // 逐字回声进 [CheckResult] 输出,污染 id 与干净 points id 机械对账出"同点双清单"矛盾,
+  // 改产物永远修不平,单 run 355 处全污染重试烧尽）
+  describe('HopSchema 赋值形态回声剥壳', () => {
+    it('正例：列表元素嵌套字段的回声剥净——id: "line = \'P4\'" 解出 "P4"（实撞同形）', () => {
+      const polluted = [
+        { id: "line = 'P4'", verdict: "line = 'supported'", conclusion: "text = '前提成立'" },
+        { id: "line = 'P7'", verdict: "line = 'refuted'", conclusion: "text = '被反驳'" },
+      ];
+      const out = recoverOutputValues(
+        [{ name: 'check_result', type: '[CheckResult]', description: '' }],
+        { check_result: polluted },
+      );
+      const rs = out.check_result as Array<Record<string, string>>;
+      expect(rs[0].id).toBe('P4');
+      expect(rs[0].verdict).toBe('supported');
+      expect(rs[0].conclusion).toBe('前提成立');
+      expect(rs[1].id).toBe('P7');
+    });
+
+    it('正例：顶层字符串值回声剥净,带约束参数的类型词同剥——enum(a,b) = 形态', () => {
+      const out = recoverOutputValues(
+        [{ name: 'mode', type: 'line', description: '' }, { name: 'level', type: 'line', description: '' }],
+        { mode: "line = 'new'", level: 'enum(high,low) = high' },
+      );
+      expect(out.mode).toBe('new');
+      expect(out.level).toBe('high');
+    });
+
+    it('反例：非整串匹配不碰——值中部含 " = " 或以散文开头的照留原样', () => {
+      const out = recoverOutputValues(
+        [{ name: 'note', type: 'text', description: '' }, { name: 'code', type: 'text', description: '' }],
+        { note: '结论是 x = 5 成立', code: 'result = compute()\ntext = fetch()' },
+      );
+      expect(out.note).toBe('结论是 x = 5 成立');           // 类型词不在串首,不碰
+      expect(out.code).toBe('result = compute()\ntext = fetch()');  // 首行非类型词形态,不碰
+    });
+
+    it('反例：干净值零变化（引用同一性——未污染对象不重建）', () => {
+      const clean = [{ id: 'P1', verdict: 'supported' }];
+      const out = recoverOutputValues(
+        [{ name: 'check_result', type: '[CheckResult]', description: '' }],
+        { check_result: clean },
+      );
+      expect(out.check_result).toBe(clean);
+    });
+  });
+
   it('反例：纯散文（无键值形态）→ 无命中,原样返回', () => {
     const text = '这是一段"带引号"的散文,不是键值对。';
     expect(repairQuotedPrefixScalars(text)).toBe(text);
@@ -5654,6 +5772,94 @@ describe('repairQuotedPrefixScalars（值内前置引号片段修复）', () => 
       { data: raw },
     );
     expect(out.data).toBe(raw);   // 原样保留(恢复放弃),不造假结构
+  });
+});
+
+// @v: anc-exec-output-fence-recovery —— 散文前置+字段名键尾随剥壳（家族第 8 马甲,
+// 2026-09-20 fc 27b M 档二轮实撞:27b 在值位先写整段逐行分析散文,再以 `pts_b:` 键行挂出
+// 完好列表——整体 YAML 解析炸而真值在场,三路子实例 SCHEMA 三连败 88 万 tokens 烧尽。
+// 剥法=整体解析失败后找最后一个行首 `字段名:` 键行截断重解析,解出物走单键剥层+终审门）
+describe('散文前置+字段名键尾随剥壳', () => {
+  it('正例：分析散文后跟 字段名: 键行挂列表——截断解出（实撞同形）', () => {
+    const polluted = `我需要从给定的文本块中提取事实点和推演点。让我逐行分析：
+
+L25: "以前，AI启动一个'沙箱'可能要等半天" - 这是可查证的数据断言
+
+pts_b:
+- id: P1
+  type: fact
+  line_ref: L25
+  claim: AI启动沙箱的速度提升了30倍
+  premises: ""
+- id: P2
+  type: inference
+  line_ref: L26
+  claim: 优化后的存储系统能让AI记住更多对话细节
+  premises: 存储数据仓库经过特殊优化`;
+    const out = recoverOutputValues(
+      [{ name: 'pts_b', type: '[CheckPoint]', description: '' }],
+      { pts_b: polluted },
+      [{ name: 'CheckPoint', description: '', fields: [
+        { name: 'id', type: 'line', description: '' },
+        { name: 'type', type: 'line', description: '' },
+        { name: 'line_ref', type: 'line', description: '' },
+        { name: 'claim', type: 'text', description: '' },
+        { name: 'premises', type: 'text', description: '' },
+      ] }],
+    );
+    const pts = out.pts_b as Array<Record<string, string>>;
+    expect(Array.isArray(pts)).toBe(true);
+    expect(pts.length).toBe(2);
+    expect(pts[0].id).toBe('P1');
+    expect(pts[1].claim).toBe('优化后的存储系统能让AI记住更多对话细节');
+  });
+
+  it('正例：散文里先提过一次键名、真值挂最后一个键行——lastIndexOf 取最后截断解出（"最后一个"语义锁;变异 C〔lastIndexOf→indexOf〕重放须红）', () => {
+    const polluted = `我先说明思路。注意下面
+pts_a: 这个键会在后面正式给出,先分析 L25 的断言结构。
+
+分析完毕,正式交付:
+
+pts_a:
+- id: P1
+  type: fact
+  line_ref: L25
+  claim: 真值列表挂在第二个键行下
+  premises: ""`;
+    const out = recoverOutputValues(
+      [{ name: 'pts_a', type: '[CheckPoint]', description: '' }],
+      { pts_a: polluted },
+      [{ name: 'CheckPoint', description: '', fields: [
+        { name: 'id', type: 'line', description: '' },
+        { name: 'type', type: 'line', description: '' },
+        { name: 'line_ref', type: 'line', description: '' },
+        { name: 'claim', type: 'text', description: '' },
+        { name: 'premises', type: 'text', description: '' },
+      ] }],
+    );
+    const pts = out.pts_a as Array<Record<string, string>>;
+    expect(Array.isArray(pts)).toBe(true);
+    expect(pts.length).toBe(1);
+    expect(pts[0].claim).toBe('真值列表挂在第二个键行下');
+  });
+
+  it('反例：通篇散文没有字段名键行——照拒不救（真散文边界）', () => {
+    const prose = '我需要分析这段文本。L25 有一个数据断言,L26 有一个推演……总之内容如上。';
+    const out = recoverOutputValues(
+      [{ name: 'pts_a', type: '[CheckPoint]', description: '' }],
+      { pts_a: prose },
+    );
+    expect(out.pts_a).toBe(prose);   // 原值不动,交校验层拒
+  });
+
+  it('反例：散文里有键行但键行后解不出结构——照拒（键行后是散文续文）', () => {
+    const prose = '分析如下。\npts_a: 这里我认为提取要点有三条,分别是……';
+    const out = recoverOutputValues(
+      [{ name: 'pts_a', type: '[CheckPoint]', description: '' }],
+      { pts_a: prose },
+    );
+    // 键行截断后解出 {pts_a: "这里我认为…"} → 单键剥层得字符串 → [T] 终审过不了 → 不采用
+    expect(out.pts_a).toBe(prose);
   });
 });
 

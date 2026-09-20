@@ -1,0 +1,8 @@
+Q1: yes（L1 断言由 P1 覆盖，P1 的 line_ref 为 L1 且 quote 摘自 L1）
+Q2: yes（P2 覆盖半衰期，P3 覆盖影响睡眠，二者 line_ref 均为 L2 且 quote 摘自 L2）
+Q3: yes（L3 断言由 P4 覆盖，P4 的 line_ref 为 L3 且 quote 摘自 L3）
+Q4: yes（L4 断言由 P5 覆盖，P5 的 line_ref 为 L4 且 quote 摘自 L4）
+Q5: yes（P3、P5 两个 inference 点的 premises 均非空并写出了具体内容）
+Q6: yes（P1-P5 的 quote 均能在对应 line_ref 的原文行中找到）
+extract_ok: true
+extract_gap: |

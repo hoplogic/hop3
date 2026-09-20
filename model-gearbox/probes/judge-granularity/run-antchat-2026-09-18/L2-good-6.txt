@@ -1,0 +1,8 @@
+Q1: yes（L1 的内容被 P1 覆盖，且 line_ref=L1、quote 来自 L1）
+Q2: yes（L2 的半衰期断言被 P2 的 line_ref=L2 覆盖，影响睡眠的推论被 P3 的 line_ref=L2 覆盖，两个内容都各有对应点）
+Q3: yes（L3 的内容被 P4 覆盖，且 line_ref=L3、quote 来自 L3）
+Q4: yes（L4 的内容被 P5 覆盖，且 line_ref=L4、quote 来自 L4）
+Q5: yes（P3 的 premises "① 咖啡因的半衰期约为 5 小时" 非空且写了内容，P5 的 premises 两条前提均非空且写了内容）
+Q6: yes（P1-P5 的 quote 都能在原文对应行里找到）
+extract_ok: true
+extract_gap: |

@@ -1,0 +1,9 @@
+Q1: yes（P1 的 line_ref=L1，quote 摘自 L1，覆盖了 L1 断言。）
+Q2: yes（P2 覆盖半衰期，P3 覆盖影响睡眠，二者 line_ref 均为 L2。）
+Q3: no（清单中没有 line_ref=L3 且 quote 摘自 L3 的点；P5 的 premises 提到 L3 内容不算对应点。）
+Q4: yes（P5 的 line_ref=L4，quote 摘自 L4，覆盖了 L4 断言。）
+Q5: yes（P3 和 P5 两个 inference 点的 premises 均非空且写了具体内容。）
+Q6: yes（P1、P2、P3、P5 的 quote 均能在各自对应行原文中找到。）
+extract_ok: false
+extract_gap: |
+  Q3: L3 的 FDA 建议断言没有对应点，缺少 line_ref=L3 且 quote 摘自 L3 的提取点。

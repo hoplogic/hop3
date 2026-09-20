@@ -1,0 +1,70 @@
+- id: P1
+  type: fact
+  line_ref: L2
+  claim: 咖啡是全球消费量最大的饮品之一。
+  premises: ""
+- id: P2
+  type: fact
+  line_ref: L3
+  claim: 2023 年全球咖啡消费量约为 1.77 亿袋，每袋 60 公斤。
+  premises: ""
+- id: P3
+  type: fact
+  line_ref: L3
+  claim: 欧盟是全球最大的咖啡消费市场。
+  premises: ""
+- id: P4
+  type: fact
+  line_ref: L4
+  claim: 健康成人体内咖啡因的半衰期约为 5 小时。
+  premises: ""
+- id: P5
+  type: fact
+  line_ref: L5
+  claim: 美国 FDA 建议健康成人每日咖啡因摄入量不超过 400 毫克。
+  premises: ""
+- id: P6
+  type: fact
+  line_ref: L5
+  claim: 400 毫克咖啡因大约相当于四到五杯咖啡。
+  premises: ""
+- id: P7
+  type: fact
+  line_ref: L6
+  claim: 2015 年 IARC 曾将"非常热的饮品"（高于 65°C）列为 2A 类致癌物。
+  premises: ""
+- id: P8
+  type: fact
+  line_ref: L6
+  claim: 咖啡本身于 2016 年被移出致癌物清单。
+  premises: ""
+- id: P9
+  type: inference
+  line_ref: L7
+  claim: 只要不超过每天四杯，喝咖啡对所有人都是安全的。
+  premises: "美国 FDA 建议健康成人每日咖啡因摄入量不超过 400 毫克，大约相当于四到五杯咖啡；咖啡因的半衰期在健康成人体内约为 5 小时。IARC 曾将'非常热的饮品'列为 2A 类致癌物但咖啡本身已被移出致癌物清单。"
+- id: P10
+  type: inference
+  line_ref: L7
+  claim: 只要不超过每天四杯，喝咖啡对所有人都是有益的。
+  premises: "咖啡于 2016 年被移出致癌物清单。美国 FDA 建议健康成人每日咖啡因摄入量不超过 400 毫克，大约相当于四到五杯咖啡。"
+- id: P11
+  type: inference
+  line_ref: L7
+  claim: IARC 为咖啡正了名。
+  premises: "咖啡本身于 2016 年被移出致癌物清单，而此前 IARC 曾将'非常热的饮品'（高于 65°C）列为 2A 类致癌物。"
+- id: P12
+  type: inference
+  line_ref: L7
+  claim: 孕妇可以放心享用咖啡。
+  premises: "美国 FDA 建议健康成人每日咖啡因摄入量不超过 400 毫克，大约相当于四到五杯咖啡；咖啡于 2016 年被移出致癌物清单。"
+- id: P13
+  type: inference
+  line_ref: L7
+  claim: 心脏病患者可以放心享用咖啡。
+  premises: "美国 FDA 建议健康成人每日咖啡因摄入量不超过 400 毫克，大约相当于四到五杯咖啡；咖啡于 2016 年被移出致癌物清单。"
+- id: P14
+  type: inference
+  line_ref: L7
+  claim: 每天不超过四杯咖啡意味着摄入不超过 400 毫克咖啡因。
+  premises: "美国 FDA 建议健康成人每日咖啡因摄入量不超过 400 毫克，大约相当于四到五杯咖啡。"

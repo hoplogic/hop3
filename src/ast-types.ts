@@ -123,6 +123,9 @@ export interface BaseStep { // @a: anc-ast-base-step
   outputs?: OutputDecl[];
   instruction?: string;
   model_override?: string; // @a: anc-exec-model-annotation
+  // @thinking 步骤标注——单步思考开关（五级优先链第 2 级,记名册强制项恒压过它）。
+  // serialize 往返保留。// @a: anc-exec-thinking-step-annotation
+  thinking_override?: 'on' | 'off';
   // @src 源锚点——本步翻译自上游文档（NL skill）哪一处。纯追溯元数据零执行语义:不进执行 prompt/
   // 不参与校验;serialize 往返保留（锚随产物持久化,原文演进后翻译工具链增量对账）。// @a: anc-step-src-annotation
   src_ref?: string;

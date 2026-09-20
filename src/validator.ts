@@ -85,6 +85,7 @@ export function validateSpec(ast: SpecAST, docRefCtx?: DocRefCheckCtx, fragmentO
   variableRules(effectiveAst, errors, !!fragmentOpts);
   specialStepRules(effectiveAst, errors);
   if (!fragmentOpts) toolDeclConsumptionV14(effectiveAst, errors);   // 片段无 header 声明面,V14 不适用 // @a: anc-rule-v14
+  checkSelfVerdictV15(effectiveAst, errors);   // 判定材料=步骤自身声明,片段可判照验 // @a: anc-rule-v15
   if (docRefCtx) docRefRuleP15(effectiveAst, errors, docRefCtx); // 仅当有 workspace 访问能力时校验
 
   if (fragmentOpts) {
@@ -164,6 +165,29 @@ function toolDeclConsumptionV14(ast: SpecAST, errors: ValidationError[]): void {
         message: `V14: Tools 段声明的工具 "${name}" 未被任何步骤授权或调用——standalone 下它对所有步骤不可见,声明即空转;要用它给消费步加 "- 工具: ${name}" 授权行,不用它删声明` });
     }
   }
+}
+
+// V15: check 步输入声明禁含自己的输出变量（^anc-rule-v15,概念权威 ^anc-step-check-criteria
+// 判官不吃自产判词条——实撞:验收步输入含自己上轮判词,重试轮判官照抄旧判词交卷不重判,修订
+// 全部落实仍三轮同词烧尽;引擎"check 不吃 L5 重试反馈"防线只罩引擎通道,spec 变量通道从输入
+// 声明正门进。warn 档:自读自写的确定性 body check（累积计数器类）零 LLM 无锚定风险属边缘
+// 合法,同形态照 warn 提示作者自证意图不误伤。）// @a: anc-rule-v15
+function checkSelfVerdictV15(ast: SpecAST, errors: ValidationError[]): void {
+  const walk = (nodes: StepNode[] | undefined): void => {
+    for (const n of nodes ?? []) {
+      if (n.step_type === 'check') {
+        const outs = new Set((n.outputs ?? []).map(o => o.name));
+        for (const b of n.inputs ?? []) {
+          if (outs.has(b.source)) {
+            errors.push({ kind: 'validate', rule: 'V15', severity: 'warn',
+              message: `V15: check 步骤 "${n.step_id}" 的输入含自己的输出变量 "${b.source}"——判官会读到自己上轮的判词并照抄交卷,不重判;判官每轮应对着当前产出独立判,反馈变量只喂给重做的执行步,从本步输入删除它` });
+          }
+        }
+      }
+      walk((n as SubtaskStep).children);
+    }
+  };
+  walk(ast.steps);
 }
 
 // P15: doc-ref [[doc#章节]] 静态存在性校验 // @a: anc-rule-p15
@@ -2347,6 +2371,51 @@ export function recoverFencedValue(value: unknown, expectKey?: string): unknown 
   return parsed;
 }
 
+// HopSchema 赋值形态回声剥壳（家族第 6 马甲,2026-09-19 real-task-scaling 实撞——deepseek 把
+// 输入渲染语法 `名: 类型 = 值` 逐字回声进输出:交付值字面成 "line = 'P4'"/"text = '原文'"。
+// 毒值过校验不炸〔line 收任意字符串〕,炸在下游机械对账:污染 id 与干净 id 算集合,同一点
+// 同时落进两个互斥清单——矛盾靠改产物修不平,重试必死〔单 run 355 处全污染〕。
+// 判据从紧:字符串**整串**匹配 `内建类型词 = 值`（` = ` 空格形态与渲染器逐字一致）才剥,
+// 引号包裹去引号;递归进结构（对象字段/列表元素——毒住在嵌套字段里,顶层档够不着）。
+// 整串匹配是安全闸:text 字段装的代码恰好整串形如 `text = '...'` 会误剥——特异形态×整串
+// 把误伤面压到可忽略。// @a: anc-exec-output-fence-recovery
+const ECHO_TYPE_WORDS = ['bool', 'int', 'float', 'line', 'text', 'markdown', 'yaml', 'prompt', 'HopSpec', 'enum'];
+const ECHO_RE = new RegExp(`^(?:${ECHO_TYPE_WORDS.join('|')})(?:\\([^)]*\\))? = ([\\s\\S]*)$`);
+function stripSchemaEcho(value: unknown): unknown {
+  if (typeof value === 'string') {
+    const m = value.match(ECHO_RE);
+    if (!m) return value;
+    let inner = m[1];
+    // 引号包裹去引号（渲染器值位常见 'v' 或 "v" 形态;成对才剥）
+    if (inner.length >= 2 && ((inner.startsWith("'") && inner.endsWith("'")) || (inner.startsWith('"') && inner.endsWith('"')))) {
+      inner = inner.slice(1, -1);
+    }
+    return inner;
+  }
+  // 结构档保引用同一性——零污染时返回原引用（既有阶梯测试以 toBe 钉"不碰即原对象",
+  // 新建等值副本会假触发"恢复留痕"）。// @a: anc-exec-output-fence-recovery
+  if (Array.isArray(value)) {
+    let changed = false;
+    const out = value.map(el => {
+      const nv = stripSchemaEcho(el);
+      if (nv !== el) changed = true;
+      return nv;
+    });
+    return changed ? out : value;
+  }
+  if (value !== null && typeof value === 'object') {
+    let changed = false;
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(value as Record<string, unknown>)) {
+      const nv = stripSchemaEcho(val);
+      if (nv !== val) changed = true;
+      out[k] = nv;
+    }
+    return changed ? out : value;
+  }
+  return value;
+}
+
 /** 围栏输出恢复阶梯（BUG-C 修 2026-08-13,deepseek/qwen/glm 系把结构化输出写成围栏文本塞字段值——
  * 盲重试同因必死,hopkb 级二 3 实例全灭实撞）：字段值为字符串且过不了声明类型检查时，
  * ①剥代码围栏 ②YAML 解析（JSON 是子集）③单键嵌套 {字段名: 值} 再剥一层——解出的值必须
@@ -2362,6 +2431,12 @@ export function recoverOutputValues(
   if (!decls || decls.length === 0) return outputs;
   const result = { ...outputs };
   for (const decl of decls) {
+    // 回声剥壳最先跑（家族第 6 马甲——回声可与其他壳组合,先剥回声再走既有阶梯;
+    // 不动点循环 normalizeOutputsToFixpoint 会把组合壳自然吃净）。// @a: anc-exec-output-fence-recovery
+    if (decl.name in result) {
+      const stripped = stripSchemaEcho(result[decl.name]);
+      if (stripped !== result[decl.name]) result[decl.name] = stripped;
+    }
     const v = result[decl.name];
     // 列表型显式 null 归一空列表（2026-08-23 作者定"要有宽容度"——dr10 实撞:骨架步两个列表
     // 产出本轮恰好无条目,flash 连交三轮 null 烧尽算子重试,内容全对败在空值形态。null 与 []
@@ -2419,12 +2494,24 @@ export function recoverOutputValues(
     let s = v.trim();
     const fence = s.match(/^```[a-zA-Z]*\s*\n([\s\S]*?)\n?\s*```$/);
     if (fence) s = fence[1];
-    // ② YAML 解析（失败先试引号前缀行修复 ^anc-exec-output-quoted-prefix-repair,仍炸=真散文放弃）
+    // ② YAML 解析（失败先试引号前缀行修复 ^anc-exec-output-quoted-prefix-repair,再试散文前置
+    // 截断〔壳 8〕,全炸=真散文放弃）
     let parsed: unknown;
     try { parsed = yamlLoad(s); } catch {
       const repaired = repairQuotedPrefixScalars(s);
-      if (repaired === s) continue;
-      try { parsed = yamlLoad(repaired); } catch { continue; }
+      let ok = false;
+      if (repaired !== s) {
+        try { parsed = yamlLoad(repaired); ok = true; } catch { /* 落壳 8 */ }
+      }
+      // 壳 8: 散文前置+字段名键尾随（27b 值位先写整段分析散文再以 `字段名:` 键行挂出完好列表——
+      // 整体解析炸而真值在场;找最后一个行首 `字段名:` 键行截断重解析,解出物走下方单键剥层+终审门。
+      // fc M 档二轮三路 SCHEMA 三连败 88 万 tokens 实撞。设计=恢复阶梯表 8。
+      // @a: anc-exec-output-fence-recovery
+      if (!ok) {
+        const keyIdx = s.lastIndexOf(`\n${decl.name}:`);
+        if (keyIdx < 0) continue;
+        try { parsed = yamlLoad(s.slice(keyIdx + 1)); } catch { continue; }
+      }
     }
     if (parsed === null || parsed === undefined) continue;
     // 解析结果为字符串不预先放弃——终审门(下方 checkValue)是唯一必要守卫:进阶梯前提=原值

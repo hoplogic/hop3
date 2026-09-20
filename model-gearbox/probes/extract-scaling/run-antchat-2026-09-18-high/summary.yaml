@@ -1,0 +1,161 @@
+service: antchat
+model_from_response:
+  - Ling-3.0-Flash
+n_per_cell: 6
+date: '2026-09-18'
+维度: G2 任务复杂度(一次做正确的能力)——单发裸能力,无重试无引擎兜底
+tiers:
+  xl:
+    pass: 3/6
+    runs:
+      - i: 1
+        pass: true
+        covered: 40/40
+        prose_prefix: false
+        miss: []
+      - i: 2
+        pass: true
+        covered: 40/40
+        prose_prefix: false
+        miss: []
+      - i: 3
+        pass: false
+        covered: 40/40
+        prose_prefix: false
+        miss:
+          - pt8(前提空/纯编号)
+          - pt20(前提空/纯编号)
+          - pt39(前提空/纯编号)
+      - i: 4
+        pass: true
+        covered: 40/40
+        prose_prefix: false
+        miss: []
+      - i: 5
+        pass: false
+        covered: 39/40
+        prose_prefix: false
+        miss:
+          - pt20(未命中)
+          - pt8(前提空/纯编号)
+          - pt39(前提空/纯编号)
+          - pt40(前提空/纯编号)
+      - i: 6
+        pass: false
+        covered: 40/40
+        prose_prefix: false
+        miss:
+          - pt8(前提空/纯编号)
+          - pt20(前提空/纯编号)
+          - pt39(前提空/纯编号)
+  xxl:
+    pass: 0/6
+    runs:
+      - i: 1
+        pass: false
+        covered: 77/80
+        prose_prefix: false
+        miss:
+          - pt10(词中但 type 错)
+          - pt29(词中但 type 错)
+          - pt48(词中但 type 错)
+          - pt8(前提空/纯编号)
+          - pt20(前提空/纯编号)
+          - pt39(前提空/纯编号)
+          - pt58(前提空/纯编号)
+          - pt69(前提空/纯编号)
+          - pt80(前提空/纯编号)
+      - i: 2
+        pass: false
+        covered: 68/80
+        prose_prefix: false
+        miss:
+          - pt2(未命中)
+          - pt3(未命中)
+          - pt4(未命中)
+          - pt5(未命中)
+          - pt6(未命中)
+          - pt7(未命中)
+          - pt9(词中但 type 错)
+          - pt16(未命中)
+          - pt36(词中但 type 错)
+          - pt46(未命中)
+          - pt60(未命中)
+          - pt75(词中但 type 错)
+          - pt8(前提空/纯编号)
+          - pt20(前提空/纯编号)
+          - pt39(前提空/纯编号)
+          - pt58(前提空/纯编号)
+          - pt69(前提空/纯编号)
+          - pt80(前提空/纯编号)
+      - i: 3
+        pass: false
+        covered: 56/80
+        prose_prefix: false
+        miss:
+          - pt8(词中但 type 错)
+          - pt9(词中但 type 错)
+          - pt10(词中但 type 错)
+          - pt18(词中但 type 错)
+          - pt19(词中但 type 错)
+          - pt20(未命中)
+          - pt28(词中但 type 错)
+          - pt29(词中但 type 错)
+          - pt30(词中但 type 错)
+          - pt38(词中但 type 错)
+          - pt39(词中但 type 错)
+          - pt40(词中但 type 错)
+          - pt48(词中但 type 错)
+          - pt49(词中但 type 错)
+          - pt50(词中但 type 错)
+          - pt58(词中但 type 错)
+          - pt59(词中但 type 错)
+          - pt60(词中但 type 错)
+          - pt68(词中但 type 错)
+          - pt69(未命中)
+          - pt70(词中但 type 错)
+          - pt78(词中但 type 错)
+          - pt79(词中但 type 错)
+          - pt80(词中但 type 错)
+      - i: 4
+        pass: false
+        covered: 75/80
+        prose_prefix: false
+        miss:
+          - pt10(词中但 type 错)
+          - pt29(词中但 type 错)
+          - pt39(词中但 type 错)
+          - pt58(词中但 type 错)
+          - pt80(词中但 type 错)
+      - i: 5
+        pass: false
+        covered: 72/80
+        prose_prefix: false
+        miss:
+          - pt8(词中但 type 错)
+          - pt9(未命中)
+          - pt20(词中但 type 错)
+          - pt39(词中但 type 错)
+          - pt58(词中但 type 错)
+          - pt69(词中但 type 错)
+          - pt75(未命中)
+          - pt80(词中但 type 错)
+      - i: 6
+        pass: false
+        covered: 67/80
+        prose_prefix: false
+        miss:
+          - pt8(词中但 type 错)
+          - pt10(词中但 type 错)
+          - pt20(词中但 type 错)
+          - pt28(未命中)
+          - pt29(词中但 type 错)
+          - pt39(词中但 type 错)
+          - pt48(词中但 type 错)
+          - pt58(词中但 type 错)
+          - pt60(词中但 type 错)
+          - pt68(词中但 type 错)
+          - pt69(词中但 type 错)
+          - pt70(词中但 type 错)
+          - pt80(词中但 type 错)
+坍塌点: (测程内未坍塌)

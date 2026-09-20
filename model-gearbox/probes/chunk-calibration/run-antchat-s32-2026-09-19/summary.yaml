@@ -1,0 +1,62 @@
+service: antchat
+doc: model-gearbox/probes/extract-scaling/doc-xl.md
+key_points: 40
+sizes:
+  whole:
+    rates:
+      - 97.5
+      - 90
+  s32:
+    rates:
+      - 95
+      - 92.5
+    last_missed:
+      - pt1
+      - pt8
+      - pt33
+burst:
+  size: 32
+  'n': 0
+  solo: []
+  merged: 0
+  merged_missed:
+    - pt1
+    - pt2
+    - pt3
+    - pt4
+    - pt5
+    - pt6
+    - pt7
+    - pt8
+    - pt9
+    - pt10
+    - pt11
+    - pt12
+    - pt13
+    - pt14
+    - pt15
+    - pt16
+    - pt17
+    - pt18
+    - pt19
+    - pt20
+    - pt21
+    - pt22
+    - pt23
+    - pt24
+    - pt25
+    - pt26
+    - pt27
+    - pt28
+    - pt29
+    - pt30
+    - pt31
+    - pt32
+    - pt33
+    - pt34
+    - pt35
+    - pt36
+    - pt37
+    - pt38
+    - pt39
+    - pt40

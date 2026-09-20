@@ -12,6 +12,7 @@ Constraints:
 Inputs:
 - mixed_spec_path: line  # mixed 档产物 spec.md 路径(workspace 相对;同目录须有成套 source.md)
 - max_depth: int  # 产物嵌套深度上限(同主 spec 语义,空/0 归一缺省 3)
+- target_profile: line  # 目标执行档(同主 spec 语义,空=通用形态;展开出的新结构按 split-node「目标执行档规则」节走,经递归 call 透传)
 
 Outputs:
 - generated_spec_path: line  # 交付写盘路径
@@ -25,14 +26,16 @@ Outputs:
 + → spec_original: text  # 原产物 spec.md 全文(骨架保真核的对照基准,冻结不再改)
 + → history_notes: text  # alignment-notes.md 内容(历史口径先验;缺席=空串)
 + → depth_cap: int  # 归一后的深度上限
++ → profile_norm: line  # 归一后的目标执行档(空值归空串)
 + → expand_log: line  # 二轮研判点台账文件路径(work_zone,对位结果与展开决策全记这里)
 
 #### 1.1. [act] 读产物包并归一入参
-- ← mixed_spec_path, max_depth
+- ← mixed_spec_path, max_depth, target_profile
 + → source_path: line  # source.md 路径
 + → spec_original: text  # 原产物全文
 + → history_notes: text  # 历史口径(缺席空串)
 + → depth_cap: int  # 归一后深度上限
++ → profile_norm: line  # 归一后目标执行档
 + → expand_log: line  # 台账路径
 + → pkg_ok: bool  # 成套与档位判定
 + → pkg_note: text  # 不齐时的拒因
@@ -55,6 +58,7 @@ Outputs:
 > history_notes = read(path: prefix + "alignment-notes.md") if notes_probe.exists else ""
 > dc_parsed = int(max_depth) if max_depth else 3
 > depth_cap = dc_parsed if dc_parsed and dc_parsed > 0 else 3
+> profile_norm = target_profile if target_profile else ""
 > expand_log = work_zone_path("expand-judgement-log.txt")
 > ```
 
@@ -89,6 +93,9 @@ Outputs:
 
 #### 4.1. [reason] 按裁定定稿清单
 - ← expand_ledger, confirm_note, spec_original, source_path, expand_log
+- 工具: read  # 追加下钻项按 ⟦源⟧ 注记行号段读 source.md
+- 工具: search_file  # 无注记时按说明关键句进 source.md 定位
+- 工具: append  # 对位依据记入 expand 台账
 + → confirmed_list: [yaml]  # 定稿清单
 
 confirm_note 空=照 expand_ledger 全收;点名步骤号=只留点名项;纠正对位范围=按纠正值改该项行号段;**"下钻:<步骤号>"追加项**=清单外新增条目——从 spec_original 取该步说明全文作任务描述,对位原文范围(说明尾 ⟦源⟧ 注记有则机械读,无则按说明关键句 search_file 进 source.md 定位,对位依据 append 进 expand 台账),带提示词的把提示词并进任务描述(如"按三个场景分支拆"——split-node 判定序据此有倾向地判结构)。逐项落成 {步骤号, 任务描述, 原文行号段} 三键形态。
@@ -135,7 +142,7 @@ confirm_note 空=照 expand_ledger 全收;点名步骤号=只留点名项;纠正
 
 （`bad_bounds` 非空时 parts 为空列表、原子切片为空串——split-node 成套核对空 node_source 响亮拒,失败带拒因浮出;不静默把 `L?` 喂给 int 炸出难读的 None 链。）
 
-##### 5.1.2. [call split-node(node_task: 原子任务, node_source: 原子切片, parent_context: 空上下文, parent_vars: 空变量清单, depth: 1, iteration: 2, max_depth: depth_cap, header_final: header_contract, judgement_log: expand_log)] 展开本原子
+##### 5.1.2. [call split-node(node_task: 原子任务, node_source: 原子切片, parent_context: 空上下文, parent_vars: 空变量清单, depth: 1, iteration: 2, max_depth: depth_cap, target_profile: profile_norm, header_final: header_contract, judgement_log: expand_log)] 展开本原子
 + → 片段路径: fragment_path  # 展开子树片段的文件路径
 + → 子档位: tier  # 本原子展开后档位(hop=全结构化;mixed=再烧尽仍含未尽——渐进语义合法)
 

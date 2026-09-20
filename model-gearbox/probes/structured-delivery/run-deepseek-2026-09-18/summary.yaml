@@ -1,0 +1,223 @@
+service: deepseek
+model_from_response:
+  - deepseek-flash
+n_per_cell: 6
+date: '2026-09-18'
+维度: G5 结构化交付——schema 复杂度阶梯(内容全给定零难度,失败必为形态失败;皮错=yaml/结构字段交成字符串,单列计数)
+tiers:
+  t1:
+    name: 平坦三标量
+    pass: 6/6
+    skin_error: 0/6
+    fence: 0/6
+    runs:
+      - i: 1
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 2
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 3
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 4
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 5
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 6
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+  t2:
+    name: 六字段混型含多行
+    pass: 6/6
+    skin_error: 0/6
+    fence: 0/6
+    runs:
+      - i: 1
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 2
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 3
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 4
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 5
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 6
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+  t3:
+    name: 对象列表 5×4
+    pass: 6/6
+    skin_error: 0/6
+    fence: 0/6
+    runs:
+      - i: 1
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 2
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 3
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 4
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 5
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 6
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+  t4:
+    name: 三层嵌套+内层列表
+    pass: 6/6
+    skin_error: 0/6
+    fence: 0/6
+    runs:
+      - i: 1
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 2
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 3
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 4
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 5
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 6
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+  t5:
+    name: yaml 字段结构值(Ling 死相考点)
+    pass: 6/6
+    skin_error: 0/6
+    fence: 0/6
+    runs:
+      - i: 1
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 2
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 3
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 4
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 5
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 6
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+  t6:
+    name: 多输出混排(结构+多行文本相邻)
+    pass: 6/6
+    skin_error: 0/6
+    fence: 0/6
+    runs:
+      - i: 1
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 2
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 3
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 4
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 5
+        pass: true
+        skin: false
+        fence: false
+        issues: []
+      - i: 6
+        pass: true
+        skin: false
+        fence: false
+        issues: []

@@ -1,0 +1,8 @@
+Q1: yes（L1 有对应点 P1，line_ref 为 L1 且 quote 摘自 L1）
+Q2: yes（L2 的两个内容分别由 line_ref=L2 的 P2 和 P3 覆盖）
+Q3: yes（L3 有对应点 P4，line_ref 为 L3 且 quote 摘自 L3）
+Q4: yes（L4 有对应点 P5，line_ref 为 L4 且 quote 摘自 L4）
+Q5: yes（inference 点 P3、P5 的 premises 都非空且写出了具体内容）
+Q6: yes（P1-P5 的 quote 都能在各自 line_ref 对应行中找到）
+extract_ok: true
+extract_gap: ""

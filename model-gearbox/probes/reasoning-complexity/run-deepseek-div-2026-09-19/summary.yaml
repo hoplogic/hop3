@@ -1,0 +1,102 @@
+service: deepseek
+model_from_response:
+  - deepseek-flash
+date: '2026-09-19'
+seed: 20260918
+task: div
+维度: G1 推理复杂度——2N÷N 位除法阶梯,商 2N+1 位有效数字(迭代推理:每位商依赖上一步余数;禁工具纯推理;爬梯每档 n=5,候选最大档 confirm=20 发,正确率>=90% 定档)
+curve:
+  N2:
+    climb: 5/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+  N3:
+    climb: 5/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+  N4:
+    climb: 5/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+  N5:
+    climb: 5/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+  N6:
+    climb: 5/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+  N7:
+    climb: 5/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+  N8:
+    climb: 5/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+    confirm: 19/20
+    confirm_rate: 0.95
+最大N: 8

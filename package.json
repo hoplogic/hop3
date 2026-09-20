@@ -1,6 +1,6 @@
 {
   "name": "@hoplogic/hopjit",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "HopJIT execution engine for HopSpec v3 — structured execution runtime for LLM agents (CC / Codex reuse-mode drivers)",
   "type": "module",
   "license": "MPL-2.0",
@@ -46,11 +46,13 @@
     "examples/hop-deep-research/hop-deep-research.md",
     "examples/hop-deep-research/hop-deep-research-sample.md",
     "examples/hoptools-websearch.yaml",
-    "examples/hoptools-playwright.yaml"
+    "examples/hoptools-playwright.yaml",
+    "model-gearbox/profiles/",
+    "model-gearbox/README.md"
   ],
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
-    "build": "npm run clean && tsc && chmod +x dist/cli.js",
+    "build": "npm run clean && tsc && chmod +x dist/cli.js dist/mcp-server.js",
     "test": "npm run -s build && vitest run",
     "precommit": "./scripts/precommit.sh",
     "check:fast": "tsc --noEmit && node scripts/check-anchor-format.mjs && node scripts/check-text-integrity.mjs && node scripts/check-process-state.mjs && node scripts/check-driver-carriers.mjs && node scripts/check-layer-imports.mjs && node scripts/check-module-arch-audit.mjs && node scripts/check-threshold-sync.mjs && node scripts/check-teaching-sync.mjs && npm run -s check:scripts-syntax",
@@ -101,6 +103,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "commander": "^13.0.0",
     "js-yaml": "^5.2.1",
+    "jsonc-parser": "^3.3.1",
     "openai": "^7.4.0"
   },
   "devDependencies": {

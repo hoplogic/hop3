@@ -1,0 +1,9 @@
+task_name: 季度盘点
+priority: 2
+owner: 王芳
+est_hours: 6.5
+approved:
+note: |
+  先清点主仓
+  再对账系统库存
+  差异超 3% 上报

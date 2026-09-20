@@ -57,6 +57,57 @@ describe('loadStandaloneConfig', () => {
     expect(c.providers[0].service_id).toBe('deepseek');
   });
 
+  // @v: anc-config-standalone-schema —— auth 鉴权头档（bearer=Authorization: Bearer,只认此形态
+  // 的网关实测百炼 claude-code-proxy 对 x-api-key 报 InvalidApiKey）
+  it('正例：providers auth: bearer 合法加载;反例：非法枚举值 fail-fast 拒', () => {
+    const mk = (auth: string) => writeConfig([
+      'providers:',
+      '  - service_id: bailian_qwen',
+      '    protocol: anthropic',
+      '    base_url: https://dashscope.aliyuncs.com/api/v2/apps/claude-code-proxy',
+      '    model: qwen3.8-27b',
+      '    api_key_env: HOPJIT_TEST_KEY_ENV',
+      `    auth: ${auth}`,
+    ].join('\n'));
+    const ok = loadStandaloneConfig(mk('bearer'));
+    expect((ok.providers[0] as { auth?: string }).auth).toBe('bearer');
+    expect(() => loadStandaloneConfig(mk('token'))).toThrow(/auth 'token' 不支持/);
+  });
+
+  // @v: anc-exec-thinking-provider-default —— provider 级思考缺省（五级链第 4 级,0100 批:
+  // 逐模型矫正档——端点缺省互相相反且不可见,配置层显式化;env 键 {SID}_THINKING 随快照披发）
+  it('正例：providers thinking: disabled 合法加载且 env 快照披发 {SID}_THINKING;反例：非法枚举 fail-fast 拒', () => {
+    const mk = (v: string) => writeConfig([
+      'providers:',
+      '  - service_id: antchat',
+      '    protocol: anthropic',
+      '    base_url: https://antchat.alipay.com/api/anthropic',
+      '    model: Ling-3.0-Flash',
+      '    api_key_env: HOPJIT_TEST_KEY_ENV',
+      `    thinking: ${v}`,
+    ].join('\n'));
+    const ok = loadStandaloneConfig(mk('disabled'));
+    expect((ok.providers[0] as { thinking?: string }).thinking).toBe('disabled');
+    const keys = new Map([[ok.providers[0], 'k']]);
+    const snap = buildEnvSnapshot(ok, keys as never);
+    expect(snap['ANTCHAT_THINKING']).toBe('disabled');
+    expect(() => loadStandaloneConfig(mk('auto'))).toThrow(/thinking 'auto' 非法/);
+  });
+
+  it('反例：thinking 缺席时快照无 {SID}_THINKING 键（缺省落引擎内建第 5 级,不披发假值）', () => {
+    const p = writeConfig([
+      'providers:',
+      '  - service_id: antchat',
+      '    protocol: anthropic',
+      '    base_url: https://antchat.alipay.com/api/anthropic',
+      '    model: Ling-3.0-Flash',
+      '    api_key_env: HOPJIT_TEST_KEY_ENV',
+    ].join('\n'));
+    const c = loadStandaloneConfig(p);
+    const snap = buildEnvSnapshot(c, new Map([[c.providers[0], 'k']]) as never);
+    expect('ANTCHAT_THINKING' in snap).toBe(false);
+  });
+
   it('JSON 语法写进 config.yaml 仍可解析（YAML 超集——不构成第二格式）', () => {
     const p = writeConfig(JSON.stringify({ providers: [VALID_PROVIDER] }), 0o600, 'config.yaml');
     const c = loadStandaloneConfig(p);
@@ -197,6 +248,16 @@ describe('loadStandaloneConfig', () => {
     writeFileSync(join(dir, 's.md'), `# T\nId: t\n## Goal\ng\n## Outputs\n- out: text  # o\n## Steps\n1. [reason] r\n  + → out: text  # o\n  > t\n`);
     const r = await core.startRun(join(dir, 's.md'), undefined, mkdtempSync(join(tmpdir(), 'mcp-xlevel-state-')));
     expect((r['error'] as { code: string }).code).toBe('TOOLS_NAME_CONFLICT');
+  });
+
+  // @v: anc-exec-revision-short-weak —— mergeConfigs revision_prompt 项目级赢（0084 M2 自立纪律
+  // "新顶层键必须同步 mergeConfigs+补合并测试钉"——language 键补了本键没补,2026-09-18 review
+  // 面三抓违纪后真补;合并漏本键=项目级 short 档静默蒸发,弱模型修订轮回落标准态烧尽）
+  it('正例：revision_prompt 项目级赢;系统级单独在场也生效', () => {
+    const sys = { providers: [VALID_PROVIDER], revision_prompt: 'standard' } as StandaloneConfig;
+    const proj = { revision_prompt: 'short' } as StandaloneConfig;
+    expect(mergeConfigs(sys, proj).revision_prompt).toBe('short');
+    expect(mergeConfigs({ providers: [VALID_PROVIDER], revision_prompt: 'short' } as StandaloneConfig, {} as StandaloneConfig).revision_prompt).toBe('short');
   });
 
   // 0005 附带发现著文钉:server 同名=项目级整体替换（不判工具重——替换语义,byKey by name）
@@ -1461,6 +1522,17 @@ describe('buildEnvSnapshot 键集契约', () => {
       expect('RANDOM_BUSINESS_VAR' in snap).toBe(false);
     } finally { delete process.env['RANDOM_BUSINESS_VAR']; }
   });
+
+  // @v: anc-config-standalone-schema —— auth 鉴权头档快照透传（2026-09-18 review 面三变异 M2 实锤
+  // 该行删掉全绿零保护后真补:配置 bearer 而快照不透传=dispatcher 永走 x-api-key,真机对百炼即
+  // InvalidApiKey——静默失效正是本钉要锁的形态;卡原虚记两钉,本批改实）
+  it('正例：provider auth: bearer → 快照透传 {SID}_AUTH=bearer;反例：auth 缺省 → 不写 _AUTH 键', () => {
+    const bearerP = { ...VALID_PROVIDER, auth: 'bearer' as const };
+    const snapB = buildEnvSnapshot({ providers: [bearerP] }, new Map([[bearerP, 'sk-test-fake']]));
+    expect(snapB['DEEPSEEK_AUTH']).toBe('bearer');
+    const snapDefault = buildEnvSnapshot(cfg, keys());
+    expect('DEEPSEEK_AUTH' in snapDefault).toBe(false);
+  });
 });
 
 describe('v0.4.0 default_model 两形态与格式校验', () => {
@@ -1727,6 +1799,12 @@ describe('language 配置节（0084 M2 合并断线修复）', () => {
   it('反例：非法值（fr）加载期响亮拒,不静默当 en;正例：合法枚举过', () => {
     expect(() => loadStandaloneConfig(writeConfig(base + 'language: fr\n'))).toThrow(/language 须为 en\|zh/);
     expect(loadStandaloneConfig(writeConfig(base + 'language: zh\n')).language).toBe('zh');
+  });
+
+  // @v: anc-exec-revision-short-weak —— 修订供给档文法核（坏值静默当 standard=开关悄悄失效,响亮拒）
+  it('revision_prompt 正例：short 合法加载;反例：非法枚举值 fail-fast 拒', () => {
+    expect(loadStandaloneConfig(writeConfig(base + 'revision_prompt: short\n')).revision_prompt).toBe('short');
+    expect(() => loadStandaloneConfig(writeConfig(base + 'revision_prompt: brief\n'))).toThrow(/revision_prompt 须为 standard\|short/);
   });
 });
 
@@ -2084,6 +2162,42 @@ g
     expect(entry).toBeDefined();
     const hc = (entry!.dispatcher as { hostConfig: { tool_registry?: unknown[] } }).hostConfig;
     expect(hc.tool_registry?.length).toBe(1);   // 工具面跨重启在位——BUG-I 正判据
+  });
+
+  // @v: anc-exec-revision-short-weak —— restoreRun 修订供给档随恢复同装（2026-09-18 review 阅卷
+  // 抓"行为修零测试锁定"后补:原 restore 漏装,恢复的 short 档 run 静默回落 standard——0084 M3
+  // restore 漏装 model_engine 同型;env 覆盖档同组验,精度链 env>配置>缺省在恢复路径同构）
+  it('正例：restoreRun 从项目配置重装 revisionPromptMode(short 档跨重启不回落);env 覆盖优先', () => {
+    const projDir = mkdtempSync(join(tmpdir(), 'mcp-revp-proj-'));
+    writeFileSync(join(projDir, 'hopjit.yaml'), 'revision_prompt: short\n');
+    const ASK_SPEC = `# T\nId: revp-t\n## Goal\ng\n## Inputs\n- x: line\n## Outputs\n- r: line  # r\n## Steps\n1. [ask] 问\n  - ← x\n  + → r: line  # v\n`;
+    const stateDir = join(projDir, '.hopstate');
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(ASK_SPEC, {
+      workspace_dir: projDir,
+      sandbox: { filesystem: { workspace_dir: '.', read_access: { allowed: ['.'], denied: [], confirm_required: [] } }, network: { trusted_hosts: [] }, runtime: { available: [] } },
+      api_key: '',
+      config_project_dir: projDir,
+    }, { stateDir, params: { x: 'a' }, specPath: join(projDir, 't.md') });
+    let n = engine.nextStep();
+    expect(n.status).toBe('paused');
+    const runId = (init as { instance_id: string }).instance_id;
+
+    const core = new HopjitMcpCore(config);
+    const r = core.resumeRun(runId, '1', { value: 'go' }, stateDir);
+    expect(JSON.stringify((r as { error?: unknown }).error ?? null)).toBe('null');
+    const entry = (core as unknown as { runs: Map<string, { dispatcher: { engine: ExecutionEngine } }> }).runs.get(runId);
+    expect(entry!.dispatcher.engine.getRevisionPromptMode()).toBe('short');   // 恢复档位跟随盘上配置现值
+
+    // env 覆盖优先(精度链恢复路径同构):同一快照再恢复一次,env=standard 应盖过配置 short
+    process.env['HOPJIT_REVISION_PROMPT'] = 'standard';
+    try {
+      const core2 = new HopjitMcpCore(config);
+      const r2 = core2.resumeRun(runId, '1', { value: 'go2' }, stateDir);
+      void r2;   // 已终态恢复可能拒推进——只验装配面
+      const entry2 = (core2 as unknown as { runs: Map<string, { dispatcher: { engine: ExecutionEngine } }> }).runs.get(runId);
+      if (entry2) expect(entry2.dispatcher.engine.getRevisionPromptMode()).toBe('standard');
+    } finally { delete process.env['HOPJIT_REVISION_PROMPT']; }
   });
 
   it('正例（0084 M3/M4）：restore 装上 model_engine（路由随恢复在位）且 hop_env 取重读面含 language 打底', () => {

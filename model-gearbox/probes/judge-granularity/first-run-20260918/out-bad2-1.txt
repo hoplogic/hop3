@@ -1,0 +1,9 @@
+Q1: yes（P1点的line_ref为L1，quote摘自L1行内容）
+Q2: yes（P2点覆盖半衰期断言，P3点覆盖影响睡眠断言，两者都在L2行）
+Q3: yes（P5点的premises中包含L3行的FDA建议内容）
+Q4: yes（P5点的claim覆盖L4行的断言内容）
+Q5: yes（P3和P5的premises都非空且包含具体内容而非仅编号）
+Q6: yes（所有点的quote都能在对应行中找到）
+extract_ok: false
+extract_gap: |
+  Q3, Q4 - L3和L4缺少对应的line_ref直接指向它们的提取点（P5使用L4但premises来自L3）

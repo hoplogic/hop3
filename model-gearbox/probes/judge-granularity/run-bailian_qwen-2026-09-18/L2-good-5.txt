@@ -1,0 +1,8 @@
+Q1: yes（P1点的line_ref为L1，quote摘自L1行内容）
+Q2: yes（P2点覆盖半衰期内容，P3点覆盖影响睡眠内容，两者都以L2为line_ref）
+Q3: yes（P4点的line_ref为L3，quote摘自L3行内容）
+Q4: yes（P5点的line_ref为L4，quote摘自L4行内容）
+Q5: yes（P3和P5的premises都非空且写了具体内容而非只有编号）
+Q6: yes（所有点的quote都能在原文对应行中找到）
+extract_ok: true
+extract_gap: ""

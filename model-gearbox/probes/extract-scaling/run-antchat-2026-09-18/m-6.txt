@@ -1,0 +1,70 @@
+- id: P1
+  type: fact
+  line_ref: L1
+  claim: 文档标题为《咖啡与健康：你该喝几杯？》。
+  premises: ""
+- id: P2
+  type: fact
+  line_ref: L2
+  claim: 咖啡是全球消费量最大的饮品之一。
+  premises: ""
+- id: P3
+  type: fact
+  line_ref: L3
+  claim: 2023 年全球咖啡消费量约为 1.77 亿袋，每袋 60 公斤。
+  premises: ""
+- id: P4
+  type: fact
+  line_ref: L3
+  claim: 欧盟是全球最大的咖啡消费市场。
+  premises: ""
+- id: P5
+  type: fact
+  line_ref: L4
+  claim: 咖啡因在健康成人体内的半衰期约为 5 小时。
+  premises: ""
+- id: P6
+  type: fact
+  line_ref: L5
+  claim: 美国 FDA 建议健康成人每日咖啡因摄入量不超过 400 毫克。
+  premises: ""
+- id: P7
+  type: fact
+  line_ref: L5
+  claim: 每日不超过 400 毫克咖啡因约相当于四到五杯咖啡。
+  premises: ""
+- id: P8
+  type: fact
+  line_ref: L6
+  claim: 2015 年 IARC 曾将“非常热的饮品”（高于 65°C）列为 2A 类致癌物。
+  premises: ""
+- id: P9
+  type: fact
+  line_ref: L6
+  claim: 2016 年咖啡本身被 IARC 移出致癌物清单。
+  premises: ""
+- id: P10
+  type: inference
+  line_ref: L7
+  claim: 每日饮用不超过四杯咖啡对所有人都是安全的。
+  premises: "美国 FDA 建议健康成人每日咖啡因摄入量不超过 400 毫克（P6）；每日不超过 400 毫克咖啡因约相当于四到五杯咖啡（P7）。"
+- id: P11
+  type: inference
+  line_ref: L7
+  claim: 每日饮用不超过四杯咖啡对所有人都是有益的。
+  premises: "美国 FDA 建议健康成人每日咖啡因摄入量不超过 400 毫克（P6）；每日不超过 400 毫克咖啡因约相当于四到五杯咖啡（P7）。"
+- id: P12
+  type: inference
+  line_ref: L7
+  claim: 咖啡已被 IARC 正名，因此饮用咖啡是安全的。
+  premises: "2016 年咖啡本身被 IARC 移出致癌物清单（P9）。"
+- id: P13
+  type: inference
+  line_ref: L7
+  claim: 孕妇可以放心享用咖啡。
+  premises: "2016 年咖啡本身被 IARC 移出致癌物清单（P9）；美国 FDA 建议健康成人每日咖啡因摄入量不超过 400 毫克（P6）。"
+- id: P14
+  type: inference
+  line_ref: L7
+  claim: 心脏病患者可以放心享用咖啡。
+  premises: "2016 年咖啡本身被 IARC 移出致癌物清单（P9）；美国 FDA 建议健康成人每日咖啡因摄入量不超过 400 毫克（P6）。"

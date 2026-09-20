@@ -105,9 +105,14 @@ hopjit install-skill --carrier cfuse-cc
 
 # 裸终端预装给 cfuse 内置 Codex（装到 cfuse 内置 codex 读取的目录）
 hopjit install-skill --carrier cfuse-codex
+
+# 装给 opencode（装到 ~/.config/opencode/skills/,OPENCODE_CONFIG_DIR 在场则优先）
+hopjit install-skill --carrier opencode
 ```
 
-> **cfuse 用户**：cfuse 内置窗口表现为原生 Claude Code 或 Codex,按该载体的原生命令跑即可——环境变量自动装到 cfuse 目录;`--carrier cfuse-cc`/`cfuse-codex` 仅用于裸终端预装（目标 agent 未启动时显式指定 cfuse 目录）。
+> **cfuse 用户**：cfuse 内置窗口表现为原生 Claude Code 或 Codex,按该载体的原生命令跑即可——环境变量自动装到 cfuse 目录;`--carrier cfuse-cc`/`cfuse-codex` 仅用于裸终端预装（目标 agent 未启动时显式指定 cfuse 目录）。完整入门走 `docs/tutorials/01-第一次运行-cfuse.md`（三形态分辨/装对家/MCP 注册落点/排错）。
+>
+> **opencode 用户**：skill 隐式触发（直接说"用 hopspec 执行某某 spec"，无斜杠命令）；驱动件为 opencode 适配版（question 工具问人/subagent 外包执行段）。完整入门走 `docs/tutorials/01-第一次运行-opencode.md`。
 
 `install-skill` 装出的 skill（CC）：
 

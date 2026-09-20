@@ -9,7 +9,7 @@
 
 # 教程 1（Codex 版）· 第一次运行
 
-> 用 Claude Code 的读平行版 [[01-第一次运行-ClaudeCode]]。之后的教程 02-07 两个载体通用——凡涉载体命令处都并排给出"Claude Code 命令"与"Codex 命令"两个代码框，抄你自己那个。
+> 用 Claude Code 的读平行版 [[01-第一次运行-ClaudeCode]]，用 cfuse（CodeFuse）的读 [[01-第一次运行-cfuse]]，用 opencode 的读 [[01-第一次运行-opencode]]。之后的教程 02-07 各载体通用——凡涉载体命令处都并排给出"Claude Code 命令"与"Codex 命令"两个代码框，抄你自己那个（cfuse 用户按内置引擎选）。
 
 **目标**：在 Codex CLI 里从零装到跑通一个 spec。
 **前提**：装有 Node.js ≥ 18 和 Codex CLI。先 `npm install -g @hoplogic/hopjit` 装引擎、`git clone` 本仓库（同 CC 版第 1、4 步——那两步载体无关）。
