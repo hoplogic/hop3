@@ -107,7 +107,7 @@ NPMV=$(npm view "@hoplogic/hopjit@$PKGV" version 2>/dev/null || echo "")   # 精
 # 只枚举确认不影响发版产物的路径,名单外一切〔含未来新增未知路径〕缺省按影响发版拦。
 # scripts/release.sh 自身入名单：检查单不被 E2E 测,其验证=当次发版执行本身。契约 chain-enforcement §8）
 # @a: anc-release-boundary-guards —— 凭证差集闸:maintainers/ 恒在黑名单(被钉 tests/guard-scripts.test.ts)
-NONRELEASE_RE='^(todo/|docs/|hop_tasks/|audits/|maintainers/|tests/|scripts/audit/|\.playwright-mcp/|TRACEABILITY\.md|Doctree\.md|ARCHITECTURE\.md|AGENTS\.md|CLAUDE\.md|\.gitignore|scripts/release\.sh|vitest\.config\.ts)'
+NONRELEASE_RE='^(todo/|docs/|hop_tasks/|audits/|maintainers/|tests/|scripts/audit/|model-gearbox/|\.playwright-mcp/|TRACEABILITY\.md|Doctree\.md|ARCHITECTURE\.md|AGENTS\.md|CLAUDE\.md|\.gitignore|scripts/release\.sh|vitest\.config\.ts)'   # model-gearbox/ 2026-09-20 补员:不在 package.json files 白名单,不进 tarball,度量档案与探针产物对发版产物无影响(0.17.1 实拦后核实)
 
 echo "═══ 发版检查单（G5·快照制）═══"
 echo "快照 package.json: $PKGV / npm 上该版本: ${NPMV:-未发布} / 快照 $SNAP"

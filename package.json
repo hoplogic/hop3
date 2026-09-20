@@ -1,6 +1,6 @@
 {
   "name": "@hoplogic/hopjit",
-  "version": "0.17.0",
+  "version": "0.17.1",
   "description": "HopJIT execution engine for HopSpec v3 — structured execution runtime for LLM agents (CC / Codex reuse-mode drivers)",
   "type": "module",
   "license": "MPL-2.0",
