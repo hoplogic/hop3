@@ -3,7 +3,7 @@
 	source: [[codex-driver-carrier]], [[exec-engine]], [[hop-cli]]
 	source_id: hopjit-codex-driver-carrier, hopjit-exec-engine, hopjit-hop-cli
 	type: extract
-	last_sync: 2026-09-06T16:56+0800
+	last_sync: 2026-09-24T01:43+0800
 	note: Codex segment driver 与 parallel worker 共用的 step_ready 执行与提交规则。
 %%
 
@@ -99,6 +99,8 @@
 2. 先照抄 `call_protocol.child_advance` 领取子实例首个介入点（init 建的子实例是未推进态），再走标准循环（state-dir 照抄 `child_state_dir`、instance 照抄 `child_instance`）直到终态。
 3. 子实例 completed：照抄 `call_protocol.report_completed`（引擎按映射回填，你不搬数据）。
 4. 子实例 failed：照抄 `call_protocol.report_failed`（**禁止 `--failure` 自由文本转述**——引擎读子实例失败记录原封组装 CalleeFailure）。
+
+**命令怎么执行**（hopissues/0097）：引擎给的命令（`call_protocol` 各条与派发的 `launch_command`）里,参数表、打回意见这类数据值一律不在命令行上——引擎把它们写进父实例目录下的参数文件,命令里只放 `"@<文件绝对路径>"`。所以命令串本身只含路径与标识符,**整串原样交给 shell 执行即可**（用你的 bash 工具跑,或程序里 `execSync(整串)`）。🔴 不要自己二次加工命令：不要拆开重新加引号、不要把 `@` 路径换成文件内容内联、不要为"保险"再套一层引号——二次加工正是旧形态腐蚀子 spec 源码的来路（反引号与 `$` 在双引号里被 shell 解释,代码块被静默吞掉）。程序里想绕开 shell,就按 shell 规则把整串拆成参数数组再 `execFileSync`,拆出来的每个参数一字不改。
 
 （兼容注：旧引擎响应无 `call_protocol` 时按旧协议手拼——`init <子spec路径> --parent <INSTANCE> --step <step_id> --params '<子Inputs JSON>' --state-dir "<STATE>"`，循环用 `<STATE>/<INSTANCE>/calls` + 子 ID，回报命令形状同上。）
 

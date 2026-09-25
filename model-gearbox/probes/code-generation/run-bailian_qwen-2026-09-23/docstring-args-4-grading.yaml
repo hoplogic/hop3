@@ -1,0 +1,20 @@
+- round: 0
+  outcome: rejected
+  public_pass: false
+  hidden_pass: false
+  reject_head: >-
+    Python 语法沙箱审查未通过,脚本没有执行。逐条改完再跑: | - 第 57 行 `ast.NodeVisitor`:ast.NodeVisitor 不在模块符号白名单内。替代:可用的模块符号:ast.AsyncFunctionDef ast.ClassDef ast.FunctionDef ast.get_docstring ast.iter_child_nodes
+    ast.parse ast.walk re.escape re.findall re.match re.search re.split re.sub json.dumps json.loads sys.argv sys.ex
+- round: 1
+  outcome: rejected
+  public_pass: false
+  hidden_pass: false
+  reject_head: >-
+    Python 语法沙箱审查未通过,脚本没有执行。逐条改完再跑: | - 第 65 行 `_`:不许绑定下划线开头的名字。替代:换一个不以下划线开头的普通名字(如 unused、item);类里需要 __init__ 时改用 dict 或函数 | - 第 86 行 `_`:不许绑定下划线开头的名字。替代:换一个不以下划线开头的普通名字(如 unused、item);类里需要 __init__
+    时改用 dict 或函数
+- round: 2
+  outcome: ran
+  public_pass: true
+  hidden_pass: true
+  hidden_failed: []
+  crashed_files: 0

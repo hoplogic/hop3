@@ -33,7 +33,10 @@ Live E2E 固定验证四层事实：
 1. **宿主事实**：真实 `claude` / `codex exec` 进程能加载已安装 skill，并形成可解析事件流。
 2. **执行体事实**：delegated 场景确有正式 subagent，且 HopJIT 写命令归 subagent；inline 场景能力握手失败后不派生正式 segment，HopJIT 写命令只在 main 执行一次。
 3. **业务终态事实**：`examples/coffee-week.md` 完成，终态 YAML 为 `status: completed`，`weekly_report` 含 `周营业额：27600 元`。
-4. **执行过程事实**：读取真实 `.hoplog/*/main.yaml`，经 HopLog 的 `extractHopLogStepKeys` 单一格式解析器核验 `state.step_states` 中每个 done 步骤都有精确 YAMLL 块键记录。日志真实格式是 `execution:` 下的 `"1":`/`"1.1":` 块键，不存在 `step: '1'` 字段；fixture 必须由 `HopLog` 真写，禁止手捏另一套格式。步骤匹配须精确，`1` 不得命中 `10`。**深核（2026-08-09 补，块键在场≠过程真）**：①run 终态行 `status: completed` 入轨（执行走到 close）；②**LLM 交互步骤的产物入轨**——coffee-week 步骤 2 reason 的 `verdict:`、3.2 check 的 `report_ok:` 必须出现在 outputs 块（块键只证明 start 过；outputs 是"LLM 真跑且结果入轨"的唯一产物侧证据）。失败路径场景组的对应深核见 §4 场景表（轮次键/warn+failed 块/join 清单/confirm 无 hitl/CalleeFailure）。
+4. **执行过程事实**：读取真实 `.hoplog/*/main.yaml`，经 HopLog 的 `extractHopLogStepKeys` 单一格式解析器核验 `state.step_states` 中每个 done 步骤都有精确 YAMLL 块键记录。
+   - 日志真实格式是 `execution:` 下的 `"1":`/`"1.1":` 块键，不存在 `step: '1'` 字段；fixture 必须由 `HopLog` 真写，禁止手捏另一套格式。步骤匹配须精确，`1` 不得命中 `10`。
+   - **深核（2026-08-09 补，块键在场≠过程真）**：①run 终态行 `status: completed` 入轨（执行走到 close）；②**LLM 交互步骤的产物入轨**——coffee-week 步骤 2 reason 的 `verdict:`、3.2 check 的 `report_ok:` 必须出现在 outputs 块（块键只证明 start 过；outputs 是"LLM 真跑且结果入轨"的唯一产物侧证据）。
+   - 失败路径场景组的对应深核见 §4 场景表（轮次键/warn+failed 块/join 清单/confirm 无 hitl/CalleeFailure）。
 
 Live E2E 不替代：
 
@@ -53,10 +56,21 @@ Live E2E 不替代：
 工作区生命周期按结果分路（2026-08-08 增补——codex:inline 失败后现场被无差别焚毁，弃实例重跑的根因证据全失，实撞教训）：
 
 - **通过**：`finally` 删除临时工作区（跑完即焚，防真凭证调用残留）；
-- **失败（exit 1，carrier 已启动）**：删除前**必须先归档失败现场**到 `.e2e-evidence/failures/<scenario>-<UTC时间戳>/`——内容为 `.hopstate/`（全部实例 state/vars/params）、`.hoplog/`（全部 run 轨迹）、完整 stdout/stderr（不截断——诊断尾部 8000 字符窗口常滚掉早期根因）、归一事件 JSON。**归档前逐文件做 key 脱敏**（§凭证规则 4 同款判据：secret 原文替换为 `[REDACTED]`），脱敏失败的文件宁可不归档也不落原文。归档路径打到 stderr 供人直达；
+- **失败（exit 1，carrier 已启动）**：删除前**必须先归档失败现场**到 `.e2e-evidence/failures/<scenario>-<UTC时间戳>/`——内容为 `.hopstate/`（全部实例 state/vars/params）、`.hoplog/`（全部 run 轨迹）、完整 stdout/stderr（不截断——诊断尾部 8000 字符窗口常滚掉早期根因）、归一事件 JSON。
+  - **归档前逐文件做 key 脱敏**（§凭证规则 4 同款判据：secret 原文替换为 `[REDACTED]`），脱敏失败的文件宁可不归档也不落原文。归档路径打到 stderr 供人直达；
 - **前置缺失（exit 2）**：工作区尚未产生执行内容，直接删除，不归档。
 
-**codex 载体环境自包含（todo/0061,2026-09-02 补——2026-09-01 发版前实撞:宿主 curated 插件包默认全开,未登录 slack 插件令 codex 每次起动连 mcp.slack.com 撞 AuthRequired、rmcp worker 反复 fatal,codex:delegated 业务推进正常却在协作等待挂死、codex:demo 近乎冻结,双双超时——e2e 结论掺宿主环境噪声）**：起 codex（全场景）前构造临时 CODEX_HOME,spawn env 带 `CODEX_HOME` 指过去,宿主 `~/.codex` 真身全程零接触。构造=宿主 config.toml 按段过滤复制（`filterCodexConfigForIsolation` 纯函数——剔除 `[plugins.*]`/`[marketplaces.*]`/`[mcp_servers.*]` 三族段与顶层 `notify` 数组〔插件/外部 MCP/桌面通知是宿主噪声〕;model/model_providers/sandbox_mode/projects 信任等按段原样保留——过滤法优于白名单重建,保留面不逐键枚举漏项）+ 复制宿主 profile 文件族（`*.config.toml`,flash 档 `-p` 消费）+ auth.json 若在（codex 自身登录态保守带上）。**codex:standalone 的 hopjit MCP 注册块直写临时 home 的 config.toml**——原宿主文件四机制（append/remove 锚定块、用户 hopjit 段 mask/unmask 避让）随隔离退役:临时 config 已滤掉宿主 `[mcp_servers.*]`,无同名撞块可防,复用场景工具面天然干净（原 mask 防的正是常驻注册漏进工具面）。临时 home 随 run 在 finally 整目录删除（只有配置无执行产物,失败归档不含它;凭证扫描面照罩——auth.json 在内）。CC 侧不动:项目级 `.claude/skills` + `--strict-mcp-config` 钉工具面,配置面窄。真机 probe（宿主故意开未登录外连插件跑 codex:demo 应照常绿）待真机批复验。
+**codex 载体环境自包含（todo/0061,2026-09-02 补）**：起 codex（全场景）前构造临时 CODEX_HOME,spawn env 带 `CODEX_HOME` 指过去,宿主 `~/.codex` 真身全程零接触。
+
+- 实撞出处（2026-09-01 发版前）:宿主 curated 插件包默认全开,未登录 slack 插件令 codex 每次起动连 mcp.slack.com 撞 AuthRequired、rmcp worker 反复 fatal,codex:delegated 业务推进正常却在协作等待挂死、codex:demo 近乎冻结,双双超时——e2e 结论掺宿主环境噪声;
+- 构造分三件：
+  - 宿主 config.toml 按段过滤复制（`filterCodexConfigForIsolation` 纯函数——剔除 `[plugins.*]`/`[marketplaces.*]`/`[mcp_servers.*]` 三族段与顶层 `notify` 数组〔插件/外部 MCP/桌面通知是宿主噪声〕;model/model_providers/sandbox_mode/projects 信任等按段原样保留——过滤法优于白名单重建,保留面不逐键枚举漏项）;
+  - 复制宿主 profile 文件族（`*.config.toml`,flash 档 `-p` 消费）;
+  - auth.json 若在（codex 自身登录态保守带上）;
+- **codex:standalone 的 hopjit MCP 注册块直写临时 home 的 config.toml**——原宿主文件四机制（append/remove 锚定块、用户 hopjit 段 mask/unmask 避让）随隔离退役:临时 config 已滤掉宿主 `[mcp_servers.*]`,无同名撞块可防,复用场景工具面天然干净（原 mask 防的正是常驻注册漏进工具面）;
+- 临时 home 随 run 在 finally 整目录删除（只有配置无执行产物,失败归档不含它;凭证扫描面照罩——auth.json 在内）;
+- CC 侧不动:项目级 `.claude/skills` + `--strict-mcp-config` 钉工具面,配置面窄;
+- 真机 probe（宿主故意开未登录外连插件跑 codex:demo 应照常绿）待真机批复验。
 
 超时必须终止整个子进程组，不能留下 carrier 或 subagent 后台进程。
 
@@ -84,12 +98,15 @@ carrier_stop
 
 `actor` 只取 `main | subagent | unknown`。原始事件保留在内存用于诊断，断言只依赖归一事件，避免把 carrier 私有 JSON 字段扩散到测试主体。
 
-**终态文本断言统一吃 `mainText`（全部主消息聚合），不吃 `finalText`（最后一条）**：载体的 task-notification 补话会后到覆盖最后一条消息——主 agent 先报 completed YAML、补话垫底，看 finalText 即误红。语义断言（该说过什么）与顺序断言（最后说什么）分开。三撞成律：2026-08-10 failure 场景组、2026-08-12 parallel 冒烟（前次修复时该函数漏配）、2026-08-17 cc:delegated（0.4.0 发版档实撞——主 agent 先贴完整 YAML 块、又补发一条『终态 YAML 如上』的收尾消息把块挤出终位；红的两处 delegated 通用路径+anchor-audit 正是本律定形时漏迁移的存量直吃 finalText,本次销清,全部 8 场景归一）。新增场景断言一律 `mainText ?? finalText`。
+**终态文本断言统一吃 `mainText`（全部主消息聚合），不吃 `finalText`（最后一条）**：载体的 task-notification 补话会后到覆盖最后一条消息——主 agent 先报 completed YAML、补话垫底，看 finalText 即误红。语义断言（该说过什么）与顺序断言（最后说什么）分开。新增场景断言一律 `mainText ?? finalText`。
+
+- 三撞成律：2026-08-10 failure 场景组、2026-08-12 parallel 冒烟（前次修复时该函数漏配）、2026-08-17 cc:delegated（0.4.0 发版档实撞——主 agent 先贴完整 YAML 块、又补发一条『终态 YAML 如上』的收尾消息把块挤出终位；红的两处 delegated 通用路径+anchor-audit 正是本律定形时漏迁移的存量直吃 finalText,本次销清,全部 8 场景归一）。
 
 执行体证明采用**正反两组证据**。**main 写禁令统一豁免 `--answer`**（介入点注入按 skill 协议归 main 本职——paused 的 ask/confirm 应答，subagent 无权问真人；禁的是 main 抢执行链：run 与执行步 submit。豁免同时作用于直接判据与闭合证据两个消费点——只改一处的豁免会外溢/漏放）：
 
 - delegated：优先使用正式 segment start/stop + actor=subagent 的 HopJIT 写命令作直接证据。若 Codex `--json` 不转发 worker 内部事件，则允许等价的闭合证据：main 明确进入 segment wait、actor=main 的**非 `--answer`** HopJIT 写命令数量为 0、隔离工作区却产生且完成唯一 HopJIT instance。
-- Codex flash：断言模式自适应三分支——出现正式 segment 时按 delegated 判据验 main 零写命令（同一豁免）；无 segment 但有 wait+main 零非 answer 写命令=闭合证据 delegated（codex collab 流只转发 wait 不转发 spawn_agent 的转发缺口形态,2026-08-13 实撞——业务账面已由前置 readTerminalEvidence 核过,证据链完整）；两者皆无时验 inline 判据（actor=main 的 `hopjit run` 恰为 1）。实际演练模式随凭证 `exercised_mode` 上报（delegated/delegated-closed/inline）。
+- Codex flash：断言模式自适应三分支——出现正式 segment 时按 delegated 判据验 main 零写命令（同一豁免）；无 segment 但有 wait+main 零非 answer 写命令=闭合证据 delegated；两者皆无时验 inline 判据（actor=main 的 `hopjit run` 恰为 1）。实际演练模式随凭证 `exercised_mode` 上报（delegated/delegated-closed/inline）。
+  - 闭合证据分支的出处：codex collab 流只转发 wait 不转发 spawn_agent 的转发缺口形态,2026-08-13 实撞——业务账面已由前置 readTerminalEvidence 核过,证据链完整。
 - CC delegated：subagent 事件或带 `parent_tool_use_id` 的 forwarded subagent 内容可证明执行段存在；`hopjit run` 必须归 subagent。
 
 仅有最终业务输出不足以证明 delegated。直接证据和上述 Codex 闭合证据均不成立时，测试失败并报告“观测协议不足”。
@@ -146,7 +163,9 @@ HopSop:
 
 失败路径场景的凭证同样落 `.e2e-evidence/<scenario>.json`，但 release.sh 硬闸清单不含它们（硬闸仍只看 cc-delegated + codex-delegated 两份）。
 
-**复杂流程场景 `cc:anchor-audit`**（2026-08-09 作者定——coffee-week 太简单，LLM 交互深核需要真复杂度；载体选 anchor-audit 而非新造：真业务（G3 语义审计本体，跑坏是真损失）、9 步全类型覆盖（branch/loop+break/parallel collect/subtask retry×3/ask×2/commit/doc-ref 注入）、prompt 判据可从库内真实轨迹校准（.hoplog/anchor-audit-*）。**单列命令，不进 e2e:all 默认清单**（LLM 交互点 6-8 次，分钟级+费用高于快乐路径）：
+**复杂流程场景 `cc:anchor-audit`**（2026-08-09 作者定——coffee-week 太简单，LLM 交互深核需要真复杂度）。**单列命令，不进 e2e:all 默认清单**（LLM 交互点 6-8 次，分钟级+费用高于快乐路径）：
+
+  - 载体选 anchor-audit 而非新造的理由：真业务（G3 语义审计本体，跑坏是真损失）、9 步全类型覆盖（branch/loop+break/parallel collect/subtask retry×3/ask×2/commit/doc-ref 注入）、prompt 判据可从库内真实轨迹校准（.hoplog/anchor-audit-*）；
 
 - **审计对象 = 小 fixture 工程**（`examples/e2e-audit-fixture/`：2 模块 alpha/beta、十来个锚点），不审 hoplogic3 本身（14 模块全量太贵）。2 模块 → 并行恰 2 批。**fixture 埋确定性结构缺陷**（设计锚点无 @a 落点 + @a 引用不存在锚点各 ≥1），审计报告必须抓到——审计工具自身的召回率断言；
 - **被测 spec/脚本 = scripts/audit/ 活工具直用**（2026-08-09 作者纠正——"冻结拷贝"是对"避免工具变化影响测试基线"的错误解读，语法演进时工具与样例必须跟着变，双份拷贝只造成同步维护与旧语法豁免口子）：测试判据的稳定性靠**断言只锁不变量**（产物落点 fixture/.anchor-audit、批文件按模块名、埋设缺陷召回、hitl 数量、并行批隔离——全部由 spec 结构决定，工具文案怎么改都不动摇）；工具的结构性改动令 e2e 红了正是守卫在工作，修断言是显式动作；
@@ -158,7 +177,11 @@ HopSop:
   3. **数据流正确**：4.2 reason 的 prompt 含 cross_compare_results.yaml 路径（前序产物真传导）；
   4. ask 代答入轨：main.yaml 步骤 2 有 hitl 决策块（决策可审计）。
 
-**通过场景轨迹归档（passes/）**（2026-08-09 作者质疑"都没留档，谁核对的"——runner 焚毁前核过，但核对不可事后复核=审计链断最后一环）：**所有场景**通过时，焚毁 workspace 前把 `.hoplog/`+`state.json`（key 脱敏，同失败归档判据）归档到 `.e2e-evidence/passes/<scenario>-<UTC时间戳>/`，每场景保留最近 3 份（旧的删——兄弟判定=slug 后紧跟时间戳，不得裸前缀匹配：cc-call 裸匹配会把 cc-call-fail-* 算兄弟,数字排字母前,新归档被当最旧当场删除,凭证指向空目录;2026-08-12 真机实撞）；凭证 JSON 增 `evidence_archive` 字段指向归档路径。"通过"由此可抽查——人随时能看任何一次绿背后的真实轨迹。passes/ 入 .gitignore（同 failures/）。
+**通过场景轨迹归档（passes/）**（2026-08-09 作者质疑"都没留档，谁核对的"——runner 焚毁前核过，但核对不可事后复核=审计链断最后一环）：**所有场景**通过时，焚毁 workspace 前把 `.hoplog/`+`state.json`（key 脱敏，同失败归档判据）归档到 `.e2e-evidence/passes/<scenario>-<UTC时间戳>/`。
+
+- 每场景保留最近 3 份，旧的删——兄弟判定=slug 后紧跟时间戳，不得裸前缀匹配（实撞 2026-08-12 真机：cc-call 裸匹配会把 cc-call-fail-* 算兄弟,数字排字母前,新归档被当最旧当场删除,凭证指向空目录）；
+- 凭证 JSON 增 `evidence_archive` 字段指向归档路径。"通过"由此可抽查——人随时能看任何一次绿背后的真实轨迹；
+- passes/ 入 .gitignore（同 failures/）。
 
 退出码固定：
 
@@ -176,7 +199,12 @@ HopSop:
 
 ## 6. 自动化入口与 CI 时机【契约】 ^anc-driver-live-e2e-entry
 
-**真机覆盖率测量（2026-08-15 作者令"所有的真机测试应该度量总覆盖率"）**：三档 shell 统一开关 `HOPJIT_COVERAGE=1`——设 `NODE_V8_COVERAGE=$(mktemp -d …/hopjit-cov-<tier>.XXXXXX)`（V8 原生,零新依赖;**目录必须在系统临时区**——codex 沙箱内子进程写不了仓库路径,0.4.0 发版实撞:EPERM 写仓库内覆盖目录混进 stdout 污染 subtask 输出流,demo/delegated 双红——env 传播是特性,传进沙箱就要用沙箱可写面）,env 自动传播到该档拉起的**全部 node 进程**（CLI/mcp-server/parallel worker 子实例——真机档是多进程拓扑,逐进程各落一份覆盖 JSON）;档尾 `scripts/coverage-report.mjs` 合并报告 dist/*.js 行覆盖（任一进程触达即算,按覆盖率升序列文件）。**语义=「这一档真机跑触达了引擎多少行」,未触达行=该档测试面的盲区清单,不是质量分**——与 vitest 单测覆盖率（check:coverage 基线闸）测的面不同不可比,亦不设阈值闸（真机档场景驱动,钉阈值=逼人塞场景凑数;盲区消化按报告分诊）。缺省关闭零开销（不设 env 即原行为）。
+**真机覆盖率测量（2026-08-15 作者令"所有的真机测试应该度量总覆盖率"）**：三档 shell 统一开关 `HOPJIT_COVERAGE=1`——设 `NODE_V8_COVERAGE=$(mktemp -d …/hopjit-cov-<tier>.XXXXXX)`（V8 原生,零新依赖）,env 自动传播到该档拉起的**全部 node 进程**（CLI/mcp-server/parallel worker 子实例——真机档是多进程拓扑,逐进程各落一份覆盖 JSON）。
+档尾 `scripts/coverage-report.mjs` 合并报告 dist/*.js 行覆盖（任一进程触达即算,按覆盖率升序列文件）。
+
+- **覆盖目录必须在系统临时区**——codex 沙箱内子进程写不了仓库路径。实撞出处（0.4.0 发版）:EPERM 写仓库内覆盖目录混进 stdout 污染 subtask 输出流,demo/delegated 双红——env 传播是特性,传进沙箱就要用沙箱可写面;
+- **语义=「这一档真机跑触达了引擎多少行」,未触达行=该档测试面的盲区清单,不是质量分**——与 vitest 单测覆盖率（check:coverage 基线闸）测的面不同不可比,亦不设阈值闸（真机档场景驱动,钉阈值=逼人塞场景凑数;盲区消化按报告分诊）;
+- 缺省关闭零开销（不设 env 即原行为）。
 
 统一入口是 `scripts/carrier-live-e2e.mjs`。npm 提供命名场景与**三档批量**（2026-08-14 作者拍三档,对齐守卫规范 5c 成本分档 `^anc-guard-e2e-tiering`——原 e2e-all/failure/audit 按内容分批与 5c 成本维度打架,收敛为单一维度）：
 
@@ -188,7 +216,22 @@ HopSop:
 
 **分档判据**：smoke=引擎-工具-server 真机面（无载体进程）；core=载体协议与执行链**正确性**（含失败语义——failure 组并入 core:近期稳定性已与快乐路径持平,分居两入口造成"发版前跑了 all 忘了 failure"漏格面）；deep=**LLM 质量面**（深核判定/文档教学力/弱模型长程可靠性——不随引擎小改回归,按触发条款跑）。flash 从原 all 批迁 deep（它测的是 ds4flash 命题非协议正确性;不在硬闸,迁移零凭证影响）。
 
-**deep 档成员协议注记——hopbuild 自跑（buildtest,2026-08-18 作者定"替换"盲测）** ^anc-driver-live-e2e-primer：**被测物=hopbuild 全链**（spec.md 流程机器 × hopbuild-primer 统一知识源在**真实消费形态**下——引擎驱动、doc-ref 切片注入、validate 工具自校验、retry 闭环全在场）。前身 primer 盲测退役（scripts/primer-blindtest.mjs → docs/obsolete/；退役理由：盲测=零先验 agent 整包通读 primer 徒手翻译——该消费形态在单源汇聚后不存在〔41KB 知识库是切片消费件非自包含教程,真实执行链每步只经 doc-ref 锚取所需节〕,测法失真:超时与 error 分不清是教学缺陷还是整包灌造成;语法演进回归由自跑天然覆盖——primer 教错写法→构建循环产物就错→validate/对账红）。核心协议：①**驱动=无头 mcp**（scripts/hopbuild-selftest.mjs 直驱 HopjitMcpCore:startRun(skills/hopbuild/spec.md)→轮询 run_status→paused 逐个注入——skill_path 答样本路径/头部呈审答通过/终审 ask 答放行;require_human 在测试语境由 harness 作答,测翻译质量非人审环节;**模型分档路由**——routing_rules 只把 commit 路由快档 deepseek-chat,其余留强档 v4-pro（初版 act 也入快档,实撞收回:act 双形态——带 hop_python body 的引擎直执零 LLM 调用路由无关;无 body 的 act 是工具循环文本加工〔读原文/植锚/并入草稿/组装审阅件〕恰需能力,chat 档把说明散文塞进 draft_path 值→下游 read 报 Path traversal 毒值;真机械且走 LLM 的只有 commit 写盘。教训:『机械步』要按有无 body 分,不按步骤类型分）;②**样本=三例轻档并行**（作者定 2026-08-18——mini 遍历+不可逆〔for-each/commit〕/branch 分档+人审〔branch/case/confirm 把关链〕/verify 核验闭环+裁量〔check final/retry/ask〕:各覆盖一组要素,轻档单轮直达量级几分钟;并行=子进程隔离,每例 spawn 自身 --fixture 单跑——doc-ref 按 run 组合根 cwd 解析,进程内并行 chdir 必串台;ticket 三焦点全踩重档题留 --fixture 手动深跑,fixtures 全入 scripts/fixtures/;**短档入口 `test:buildtest:mini`**=单跑 mini 例 30min 上限——迭代修复期先验通不通再上三例,不替代三例档作触发凭证）;③**判分两件**（不采信 agent 自评;锚点对账判分随缓装退役 2026-08-20,见 [[hopbuild]] 锚点体系缓装条款）:产物 spec validate 零 error+source.md 纯副本真落盘（内容与 fixture 原文对得上）;④退出码服从 0/1/2 契约;⑤轮次历史归档沿用（.e2e-evidence/ 时间戳惯例）。触发条件不变：改 primer/spec.md/语法后跑。
+**deep 档成员协议注记——hopbuild 自跑（buildtest,2026-08-18 作者定"替换"盲测）** ^anc-driver-live-e2e-primer
+
+**被测物=hopbuild 全链**：spec.md 流程机器 × hopbuild-primer 统一知识源在**真实消费形态**下——引擎驱动、doc-ref 切片注入、validate 工具自校验、retry 闭环全在场。触发条件：改 primer/spec.md/语法后跑。
+
+前身 primer 盲测退役（scripts/primer-blindtest.mjs → docs/obsolete/）。退役理由：盲测=零先验 agent 整包通读 primer 徒手翻译——该消费形态在单源汇聚后不存在（41KB 知识库是切片消费件非自包含教程,真实执行链每步只经 doc-ref 锚取所需节）,测法失真:超时与 error 分不清是教学缺陷还是整包灌造成;语法演进回归由自跑天然覆盖——primer 教错写法→构建循环产物就错→validate/对账红。
+
+核心协议五条：
+1. **驱动=无头 mcp**：scripts/hopbuild-selftest.mjs 直驱 HopjitMcpCore——startRun(skills/hopbuild/spec.md)→轮询 run_status→paused 逐个注入（skill_path 答样本路径/头部呈审答通过/终审 ask 答放行;require_human 在测试语境由 harness 作答,测翻译质量非人审环节）。
+   - **模型分档路由**：routing_rules 只把 commit 路由快档 deepseek-chat,其余留强档 v4-pro;
+   - 实撞收回（初版 act 也入快档）:act 双形态——带 hop_python body 的引擎直执零 LLM 调用路由无关;无 body 的 act 是工具循环文本加工〔读原文/植锚/并入草稿/组装审阅件〕恰需能力,chat 档把说明散文塞进 draft_path 值→下游 read 报 Path traversal 毒值;真机械且走 LLM 的只有 commit 写盘。教训:"机械步"要按有无 body 分,不按步骤类型分;
+2. **样本=三例轻档并行**（作者定 2026-08-18）：mini 遍历+不可逆（for-each/commit）/branch 分档+人审（branch/case/confirm 把关链）/verify 核验闭环+裁量（check final/retry/ask）——各覆盖一组要素,轻档单轮直达量级几分钟。
+   - 并行=子进程隔离,每例 spawn 自身 --fixture 单跑（doc-ref 按 run 组合根 cwd 解析,进程内并行 chdir 必串台）;ticket 三焦点全踩重档题留 --fixture 手动深跑,fixtures 全入 scripts/fixtures/;
+   - **短档入口 `test:buildtest:mini`**=单跑 mini 例 30min 上限——迭代修复期先验通不通再上三例,不替代三例档作触发凭证;
+3. **判分两件**（不采信 agent 自评;锚点对账判分随缓装退役 2026-08-20,见 [[hopbuild]] 锚点体系缓装条款）：产物 spec validate 零 error + source.md 纯副本真落盘（内容与 fixture 原文对得上）;
+4. 退出码服从 0/1/2 契约;
+5. 轮次历史归档沿用（.e2e-evidence/ 时间戳惯例）。
 
 **旧入口处置**：`test:e2e:all` 转别名=live:core（发版场景批——flash 迁 deep 是明载语义变化,凭证面零影响）；`test:e2e:failure` **删除**（失败组已并入 core,保留假别名会把 6 场景语义骗成 16——文档指路 live:core）；`test:e2e:audit` 原样（=deep 的 audit 单项）。单场景入口全部不变。旧批量脚本 e2e-all.sh/e2e-failure.sh 删除,历史归 git。
 
@@ -219,7 +262,17 @@ test:e2e:audit             # 复杂流程场景 cc:anchor-audit（LLM 交互深�
 
 由 [[chain-enforcement#^anc-meta-guard-trust]] 推演，runner 自身必须有确定性测试，至少覆盖 JSONL 容错、事件归一、执行体断言、**真实 HopLog YAMLL 过程轨迹的正/负向核验**、缺 key exit 2、key 泄露红灯、超时清理和失败诊断脱敏。
 
-**批量并发（2026-08-14 作者定并发度 5）** ^anc-driver-live-e2e-concurrency：批量入口（e2e-all/e2e-failure）按**任务池并发 5** 跑场景——串行 14 场景 ~25min 是纯等待浪费,各场景隔离面已足：工作区独立 mkdtemp/凭证 JSON 与 pass 归档文件名带场景 slug 零撞/codex `--strict-mcp-config` 隔离全局配置。**共享面与约束**：①构建一次前置（各场景 runner 不再各自 build——并发重建 dist 互踩是唯一硬冲突源之一,批量脚本负责先 build,场景命令去 build 化）；②provider 限速共担（并发 5 是费用/限速的经验平衡,撞 429 时降并发重跑）；③屏幕输出改"完成即报"（并发下无稳定顺序,每场景完成时打一行,汇总不变）；④**发版硬闸凭证判据不变**（写盘原子,凭证 commit 核对与并发无关）；⑤**codex 全局配置面互斥波次（2026-08-14 并发首跑实撞）**——codex:standalone 系场景经锚定块**持久注册 hopjit MCP 到用户 ~/.codex/config.toml**（codex exec 不为 -c 注入 server 起进程,持久注册是唯一通路;跑完删块）,与其并发的 codex:delegated/flash 会看见邻居的临时注册,skill §0 第一判定'list_runs 调通=STANDALONE 锁定'**正确地**走薄协议→delegated 断言红（driver 零责任——全局配置就是 codex 场景绕不开的共享可变状态,codex 无 --strict-mcp-config 等价物）。修法=调度层互斥：批量脚本分两波,波 1=全部非 codex-standalone 场景并发,波 2=codex:standalone 系**串行**（两 standalone 场景的 register 先 remove 再 append 同一锚定块——同波并发时 A 的注册被 B 覆盖,HOPJIT_CONFIG 指向对方临时配置,同波也互斥）；cc 场景有 --strict-mcp-config 隔离不受影响。单场景入口不变仍串行语义。
+**批量并发（2026-08-14 作者定并发度 5）** ^anc-driver-live-e2e-concurrency
+
+批量入口（e2e-all/e2e-failure）按**任务池并发 5** 跑场景——串行 14 场景 ~25min 是纯等待浪费,各场景隔离面已足：工作区独立 mkdtemp/凭证 JSON 与 pass 归档文件名带场景 slug 零撞/codex `--strict-mcp-config` 隔离全局配置。**共享面与约束**：
+
+1. 构建一次前置（各场景 runner 不再各自 build——并发重建 dist 互踩是唯一硬冲突源之一,批量脚本负责先 build,场景命令去 build 化）；
+2. provider 限速共担（并发 5 是费用/限速的经验平衡,撞 429 时降并发重跑）；
+3. 屏幕输出改"完成即报"（并发下无稳定顺序,每场景完成时打一行,汇总不变）；
+4. **发版硬闸凭证判据不变**（写盘原子,凭证 commit 核对与并发无关）；
+5. **codex 全局配置面互斥波次（2026-08-14 并发首跑实撞）**——codex:standalone 系场景经锚定块**持久注册 hopjit MCP 到用户 ~/.codex/config.toml**（codex exec 不为 -c 注入 server 起进程,持久注册是唯一通路;跑完删块）。
+   - 实撞形态:与其并发的 codex:delegated/flash 会看见邻居的临时注册,skill §0 第一判定'list_runs 调通=STANDALONE 锁定'**正确地**走薄协议→delegated 断言红（driver 零责任——全局配置就是 codex 场景绕不开的共享可变状态,codex 无 --strict-mcp-config 等价物）。
+   - 修法=调度层互斥：批量脚本分两波,波 1=全部非 codex-standalone 场景并发,波 2=codex:standalone 系**串行**（两 standalone 场景的 register 先 remove 再 append 同一锚定块——同波并发时 A 的注册被 B 覆盖,HOPJIT_CONFIG 指向对方临时配置,同波也互斥）；cc 场景有 --strict-mcp-config 隔离不受影响。单场景入口不变仍串行语义。
 
 Live E2E 有外部网络、模型费用与 provider 波动，故不进入默认 `check`。它在以下时机显式运行：
 

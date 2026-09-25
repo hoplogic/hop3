@@ -1,0 +1,101 @@
+```python
+import ast
+import re
+import sys
+
+
+def get_all_params(func_node):
+    params = []
+    args = func_node.args
+    for arg in args.posonlyargs:
+        params.append(arg.arg)
+    for arg in args.args:
+        params.append(arg.arg)
+    if args.vararg is not None:
+        params.append(args.vararg.arg)
+    for arg in args.kwonlyargs:
+        params.append(arg.arg)
+    if args.kwarg is not None:
+        params.append(args.kwarg.arg)
+    return params
+
+
+def get_docstring_and_line(func_node):
+    body = func_node.body
+    if body:
+        first_stmt = body[0]
+        val = getattr(first_stmt, 'value', None)
+        if isinstance(val, ast.Constant) and isinstance(val.value, str):
+            return val.value, first_stmt.lineno
+    docstring = ast.get_docstring(func_node)
+    if docstring is not None:
+        return docstring, func_node.lineno
+    return None, None
+
+
+def check_doc_sources(sources, doc):
+    for source in sources:
+        pattern = re.escape(source)
+        if not re.search(r'(?<![a-zA-Z0-9_])' + pattern + r'(?![a-zA-Z0-9_])', doc):
+            return False
+    return True
+
+
+def is_defined_in_inline_function(func_node):
+    cur = getattr(func_node, '_parent', None)
+    while cur is not None:
+        if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return True
+        cur = getattr(cur, '_parent', None)
+    return False
+
+
+def attach_parents(node, parent):
+    setattr(node, '_parent', parent)
+    for child in ast.iter_child_nodes(node):
+        attach_parents(child, node)
+
+
+def main():
+    filepath = sys.argv[1]
+    with open(filepath, encoding="utf-8") as f:
+        content = f.read()
+    try:
+        tree = ast.parse(content)
+    except SyntaxError as err:
+        print(f"Line {err.lineno}: Syntax error - {err.msg}", file=sys.stderr)
+        sys.exit(1)
+    attach_parents(tree, None)
+    violations = []
+
+    for node in ast.walk(tree):
+        is_target = isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        if not is_target:
+            continue
+        name = node.name
+        if name.startswith("_"):
+            continue
+        if is_defined_in_inline_function(node):
+            continue
+        required_params = get_all_params(node)
+        required_params = [p for p in required_params if p not in ("self", "cls")]
+        if not required_params:
+            continue
+        docstring_text, docstring_line = get_docstring_and_line(node)
+        if docstring_text is None:
+            violations.append((node.lineno, f"Function {name} is missing a docstring"))
+            continue
+        for param in required_params:
+            if not check_doc_sources([param], docstring_text):
+                violations.append((docstring_line, f"Function {name} docstring does not mention parameter '{param}'"))
+
+    if violations:
+        for lineno, reason in violations:
+            print(f"Line {lineno}: {reason}")
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+
+main()
+```

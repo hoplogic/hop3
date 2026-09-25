@@ -1,0 +1,17 @@
+```python
+import sys
+
+path = sys.argv[1]
+with open(path, 'r', encoding='utf-8') as f:
+    lines = f.read().splitlines(keepends=False)
+
+found = False
+for i, line in enumerate(lines, start=1):
+    length = len(line)
+    if length > 100:
+        print(f"Line {i} exceeds 100 characters ({length} characters)", file=sys.stderr)
+        found = True
+
+if found:
+    sys.exit(1)
+```

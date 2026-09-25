@@ -329,6 +329,8 @@ reviewer_reports = {"status": "launched", "plan": round_plan}
 
 ## hop_python 文法速查（写 body 必读）
 
+
+**每条语句写在一行内**——解释器不支持跨行括号续行:字典/列表字面量整个压在一行写,一行装不下就拆成多个赋值语句逐行拼;写不出来就不写 body(留说明文字,body 写作归定向优化轮)。跨行的 `{` 换行逐键形态是合法 Python 但会被本解释器拒收("语句后期望换行"类报错即此病)。
 hop_python 是 act/commit/check 步骤 body 的语言——受限 Python 子集,引擎直接解释执行,**执行期零 LLM**。本节是它的完整能力面：能做什么、能调什么、什么活该写 body。
 
 ### 能做四类事（白名单即能力边界）

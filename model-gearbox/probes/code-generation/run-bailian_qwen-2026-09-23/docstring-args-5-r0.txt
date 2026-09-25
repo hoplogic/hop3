@@ -1,0 +1,113 @@
+```python
+import ast
+import re
+import sys
+
+def extract_function_args(func_node):
+    args = []
+    # Regular arguments
+    for arg in func_node.args.args:
+        if arg.arg not in ['self', 'cls']:
+            args.append(arg.arg)
+    
+    # Arguments after * (keyword-only args)
+    for arg in func_node.args.kwonlyargs:
+        if arg.arg not in ['self', 'cls']:
+            args.append(arg.arg)
+    
+    # vararg (*args)
+    if func_node.args.vararg:
+        if func_node.args.vararg.arg not in ['self', 'cls']:
+            args.append(func_node.args.vararg.arg)
+    
+    # kwarg (**kwargs)
+    if func_node.args.kwarg:
+        if func_node.args.kwarg.arg not in ['self', 'cls']:
+            args.append(func_node.args.kwarg.arg)
+            
+    return args
+
+def is_mentioned(param_name, docstring):
+    # Create a regex pattern that matches param_name as a complete word
+    # using word boundaries to ensure it's a complete match
+    pattern = r'\b' + re.escape(param_name) + r'\b'
+    return bool(re.search(pattern, docstring))
+
+def check_file(file_path):
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+        
+    if not content.strip():
+        return []  # Empty file is compliant
+        
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        print(f"Syntax error in {file_path}")
+        sys.exit(1)
+    
+    violations = []
+    
+    # Stack to track current class context - we'll use a simple list
+    class_stack = []
+    
+    def analyze_node(node, parent_is_class=False):
+        if isinstance(node, ast.ClassDef):
+            class_stack.append(node.name)
+            for child in ast.iter_child_nodes(node):
+                analyze_node(child, parent_is_class=True)
+            class_stack.pop()
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # Check if function name starts with underscore
+            if node.name.startswith('_'):
+                return
+            
+            # Only check if we're at module level or inside a class
+            if not parent_is_class and class_stack:
+                # This is a nested function inside another function, skip it
+                return
+                
+            docstring = ast.get_docstring(node)
+            
+            # Get function arguments
+            args = extract_function_args(node)
+            
+            if docstring is None:
+                violations.append(f"{node.lineno}: Function '{node.name}' has no docstring")
+            else:
+                missing_params = []
+                for arg in args:
+                    if not is_mentioned(arg, docstring):
+                        missing_params.append(arg)
+                
+                if missing_params:
+                    violations.append(f"{node.lineno}: Function '{node.name}' docstring does not mention parameter(s): {', '.join(missing_params)}")
+                    
+        else:
+            # For other nodes, recursively process children
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, ast.ClassDef):
+                    analyze_node(child, parent_is_class=True)
+                elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    # If this child is inside a class, it's a method
+                    analyze_node(child, parent_is_class=True)
+                else:
+                    analyze_node(child, parent_is_class)
+
+    # Process the AST tree starting from root
+    for node in ast.iter_child_nodes(tree):
+        analyze_node(node)
+    
+    return violations
+
+# Main execution
+file_path = sys.argv[1]
+violations = check_file(file_path)
+
+if violations:
+    for violation in violations:
+        print(violation)
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

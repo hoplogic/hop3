@@ -16,9 +16,12 @@ export default defineConfig({
     // 仍被单个 timeout 拦发版。20s 只兜子进程启动抖动，真死锁类用例仍会红（原 5s 下它们
     // 本就毫秒级完成，放宽不掩真病）。
     testTimeout: 20000,
-    // vitest worker 进度汇报 IPC 同线放宽（同日实撞：2732 全绿仍因 onTaskUpdate 超时
-    // 计 1 error → exit 1 拦发版——测试本体零失败，纯 IPC 抖动）。
+    // 收尾钩子超时同线放宽。注意它管不到工作进程回报进度的通信超时（vitest 内置 60 秒,不可配）——
+    // 那个报错的真因是同步起子进程的用例把事件循环占住,由下面的 setupFiles 治。
     teardownTimeout: 20000,
+    // 每个用例后让出一次事件循环,防 onTaskUpdate 回报排队超时（测试全过却退出码 1）。
+    // 设计权威 docs/design/chain-enforcement.md ^anc-meta-guard-trust 第 5 条。
+    setupFiles: ['tests/setup/yield-event-loop.ts'],
     // 覆盖率分母同排 editors/——插件源在自己目录内测（node:test），根 vitest 不跑它，
     // 留在分母=以 0% 计入拉低引擎覆盖率（0.4.0 发版实撞:基线闸误红,引擎本体实际在基线上）
     coverage: {

@@ -5,6 +5,7 @@
 import { readFileSync, writeFileSync, appendFileSync, realpathSync, readdirSync, statSync, mkdirSync, renameSync, unlinkSync, existsSync } from 'node:fs';
 import { resolve, isAbsolute } from 'node:path';
 import type { ToolProvider, ToolDef, ToolResult, HostConfig, SandboxConfig, WriteScope } from './provider-types.js';
+import { runSandboxedPython } from './py-sandbox.js';   // Python 语法沙箱（.py 脚本一律先审后跑——^anc-pysb-exec） // @a: anc-exec-builtin-run-script
 import { parseSpec, parseFragment, serializeFragment } from './parser.js';
 import { insertNodeAt, replaceNodeAt, replaceChildrenAt, renumberSteps, syncWorkItems } from './spec-tree-edit.js';
 import type { StepNode } from './ast-types.js';
@@ -286,6 +287,34 @@ const DELETE_TOOL: ToolDef = {
   category: 'basic',   // 文件读写族恒 basic（0054——零声明可用）
   returns: "删除回执一句话（文本）;目标不存在则失败",
 };
+
+// run_script 受控脚本执行（2026-09-22 作者拍 todo/0110 候选 B——实撞:standalone 的 [act free]
+// 工具面此前没有任何一件能让进程跑起来,而 sdc 规约步骤要求"实跑校验脚本",三家模型在同一步各
+// 死一种死法、其中一家被逼出伪造执行来源。本件不给引擎添新物理能力:同一份 spawn 能力 body 面的
+// subprocess.run 早已发布,增量只是"决定跑什么的人从规约作者变成执行模型"——故 category='special'
+// 须节点显式声明才下发。契约 [[tools/run-script#^anc-exec-builtin-run-script]]。
+// 工具说明必须写明工作目录=脚本所在目录（2026-09-23 T9 复跑实撞:模型照其余文件工具的习惯给 args 传
+// 工作区相对路径,脚本找不到文件——契约同锚点"工作目录这条约定必须写进给执行 LLM 看的工具说明"）。
+// @a: anc-exec-builtin-run-script
+const RUN_SCRIPT_TOOL: ToolDef = {
+  name: 'run_script',
+  description: 'Run a script file and return its stdout/stderr/exit code. You choose the script and its arguments; the engine picks the interpreter from the file extension (.py → python3) — you cannot pass a command. Shell scripts (.sh) are refused. Every .py script is first checked by the Python syntax sandbox: only `import ast`/`re`/`json`/`sys` (used as module.symbol), a fixed set of builtins, and read-only open() are allowed. A rejected script is not run; the failure message lists each offending line with a replacement — fix them and call again. The script runs with its own directory as the working directory, and args reach it verbatim (the engine does not resolve them): pass sample files that sit next to the script by bare filename (e.g. args: ["sample.ts"]), not by a workspace-relative path.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: 'Path of the script file to run (.py), resolved like the other file tools. Must already exist — write it first.' },
+      args: { type: 'array', items: { type: 'string' }, description: 'Optional command-line arguments passed to the script, one list item per argument. Passed as-is; relative paths are resolved by the script against its own directory, so a file next to the script is just its filename' },
+    },
+    required: ['path'],
+  },
+  requires_commit: false,   // 与 body 面的 subprocess.run 同档（同一份能力同一个曝露面）
+  category: 'special',      // 第一个 special 内置件——须节点写 `- 工具: run_script` 才下发（三条理由见契约）
+  returns: "JSON 文本 {returncode, stdout, stderr, defense}。**非零退出码是脚本自己的判定结果,不是工具失败**（校验脚本对违规样例返回 1 是正常行为,照常读 stdout 用它的结论）;defense 是本次执行的防护等级（syntax+os-sandbox=语法审查加系统沙箱 / syntax-only=只有语法审查）。工具报失败只在脚本没能跑起来时（语法沙箱审查未通过——报文逐条列出违规行与替代写法,照改后重调/扩展名不支持/命令白名单未放行/文件不存在/超时/输出过大）",
+};
+
+// 脚本扩展名 → 解释器（模型不选命令,引擎按扩展名定——^anc-exec-run-script-no-command-choice）。
+// v1 只此一行:sdc 类任务的校验脚本恒是 Python。加一行的成本是本表 + 操作者白名单放行同名解释器。
+const SCRIPT_INTERPRETERS: Record<string, string> = { '.py': 'python3' };
 
 /** ToolProvider 契约的默认实现：无宿主注入时提供 Read/Write 两个受控工具（均 requires_commit=false，不含 bash），执行受 SandboxConfig 约束。见 [[tools#^anc-struct-tools]] */
 // 内置 spec 验证工具（2026-08-16 作者定:hopbuild 验证 in-process 化）：纯函数零文件访问,
@@ -682,7 +711,7 @@ export function executeValidateSpec(args: Record<string, unknown>): ToolResult {
   };
 }
 
-/** ToolProvider 默认实现——内置十六件工具（十件文件/目录+validate_spec+树编辑四件+read_spec_tree）,写侧按步骤语境分域（act/check 限 work_zone、commit 限 workspace）+读侧三级权限链。见 [[tools/file-tools#^anc-exec-builtin-file-tools]] */
+/** ToolProvider 默认实现——内置十八件工具（十一件文件/目录+validate_spec+树编辑四件+read_spec_tree+run_script）,写侧按步骤语境分域（act/check 限 work_zone、commit 限 workspace）+读侧三级权限链。见 [[tools/file-tools#^anc-exec-builtin-file-tools]] */
 export class DefaultToolProvider implements ToolProvider { // @a: anc-exec-tool-permission
   private workspaceDir: string;
   private sandbox: SandboxConfig;
@@ -695,7 +724,7 @@ export class DefaultToolProvider implements ToolProvider { // @a: anc-exec-tool-
   }
 
   list(): ToolDef[] {
-    return [READ_TOOL, WRITE_TOOL, LIST_DIR_TOOL, FILE_EXISTS_TOOL, CREATE_TOOL, APPEND_TOOL, EDIT_FILE_TOOL, SEARCH_FILE_TOOL, MKDIR_TOOL, MOVE_TOOL, DELETE_TOOL, VALIDATE_SPEC_TOOL, INSERT_NODE_TOOL, REPLACE_NODE_TOOL, REPLACE_CHILDREN_TOOL, RENUMBER_STEPS_TOOL, READ_SPEC_TREE_TOOL];
+    return [READ_TOOL, WRITE_TOOL, LIST_DIR_TOOL, FILE_EXISTS_TOOL, CREATE_TOOL, APPEND_TOOL, EDIT_FILE_TOOL, SEARCH_FILE_TOOL, MKDIR_TOOL, MOVE_TOOL, DELETE_TOOL, VALIDATE_SPEC_TOOL, INSERT_NODE_TOOL, REPLACE_NODE_TOOL, REPLACE_CHILDREN_TOOL, RENUMBER_STEPS_TOOL, READ_SPEC_TREE_TOOL, RUN_SCRIPT_TOOL];
   }
 
   // write_scope 缺省 'work_zone'——信号缺席按窄域拒,不静默放宽（分域条款 ^anc-exec-write-scope）
@@ -736,6 +765,7 @@ export class DefaultToolProvider implements ToolProvider { // @a: anc-exec-tool-
         case 'replace_children': return executeReplaceChildren(tool_args);
         case 'renumber_steps': return executeRenumberSteps(tool_args);
         case 'read_spec_tree': return executeReadSpecTree(tool_args, this.language);   // 纯函数,读面对偶:骨干/子树两档;node/skeleton 档按项目语言出词（^anc-i18n-language-config） // @a: anc-exec-builtin-read-tree-tool
+        case 'run_script': return this.executeRunScript(tool_args.path as string, tool_args.args);   // 受控脚本执行（^anc-exec-builtin-run-script） // @a: anc-exec-builtin-run-script
         default: return { result: `Unknown tool: ${tool_name}`, success: false, content_type: 'text' };
       }
     } catch (err: unknown) {
@@ -901,6 +931,58 @@ export class DefaultToolProvider implements ToolProvider { // @a: anc-exec-tool-
     this.validateFileAccess(resolved, 'write', scope);
     unlinkSync(resolved);   // 不存在即 ENOENT（显式失败不静默）；仅文件——目录不删（最重操作不进 v1）
     return { result: `Deleted ${filePath}`, success: true, content_type: 'text' };
+  }
+
+  // run_script 受控脚本执行（HopSop 六步在 [[tools/run-script#关键逻辑]]）：扩展名定解释器 →
+  // 读权限链 → 文件在场 → args 归一 → Python 语法沙箱审查并执行 → 结果归一。
+  // **非零退出码照样 success: true**——校验脚本对违规样例本就该返回 1,报成工具失败会把模型
+  // 重新推回"找别的执行入口"的死路（0110 缘起实撞形态,契约点名这是最要命的实现错误）。
+  // @a: anc-exec-builtin-run-script
+  private executeRunScript(scriptPath: string, rawArgs: unknown): ToolResult {
+    const fail = (msg: string): ToolResult => ({ result: msg, success: false, content_type: 'text' });
+    // ① 扩展名定解释器——模型不供给命令（^anc-exec-run-script-no-command-choice）
+    const dot = scriptPath.lastIndexOf('.');
+    const ext = dot > 0 ? scriptPath.slice(dot).toLowerCase() : '';
+    const supported = Object.keys(SCRIPT_INTERPRETERS).join('/');
+    if (ext === '.sh') {
+      // .sh 专项报文:它是最可能被试的那个,给理由而不是干巴巴一句不支持
+      return fail(`run_script 不支持 shell 脚本——shell 语义下脚本内容就是任意命令,命令白名单形同虚设。把要做的事写成 .py 脚本再跑（当前支持: ${supported}）`);
+    }
+    const cmd = SCRIPT_INTERPRETERS[ext];
+    if (!cmd) {
+      return fail(`run_script 不支持的脚本类型 "${ext || '(无扩展名)'}"——当前支持: ${supported}`);
+    }
+    // ② 路径解析与读权限（与 read 同链同序——"能执行"的前提是"能读到"）
+    const resolved = this.resolvePath(scriptPath);
+    this.validateFileAccess(resolved, 'read');
+    // ③ 文件在场——执行语义预设脚本已写好（与 edit_file"目标不存在即报错"同款,不静默当空脚本跑）
+    if (!existsSync(resolved)) {
+      return fail(`run_script: 脚本文件不存在: ${scriptPath}——先把脚本写出来再跑`);
+    }
+    // ④ args 归一:必须是列表,元素逐个 String() 归一
+    let args: string[] = [];
+    if (rawArgs !== undefined) {
+      if (!Array.isArray(rawArgs)) {
+        return fail('run_script: args 须是字符串列表（每项一个参数,不是一整串待拆的命令行）');
+      }
+      args = rawArgs.map(v => String(v));
+    }
+    // ⑤ Python 语法沙箱——审的字节就是跑的字节,审过才执行,系统沙箱在场即套上（^anc-pysb-exec）。
+    // 检查器与产物都经命令执行原语发出:白名单核在检查器 spawn 之前,白名单两拒报文不变。
+    // 原语抛出的指路报文经工具结果通道回执行方（execute 的 catch 折 ToolResult），不炸步。
+    const r = runSandboxedPython(resolved, args, {
+      interpreter: cmd,
+      whitelist: this.sandbox.runtime?.available,
+      timeoutSec: 60,
+      maxBuffer: 64 * 1024,     // 工具面消费者是模型的上下文窗口（body 面 10MB 的理由见契约"输出限额"）
+    });   // 工作目录=脚本所在目录（工具面拿不到本实例 work_zone,理由见契约"工作目录为什么是脚本所在目录"）
+    // ⑥ 结果归一——被拒是模型可改的失败,报文逐条带替代写法;跑起来了就是 success,退出码是值
+    if (r.status === 'rejected') return fail(r.message);
+    return {
+      result: JSON.stringify({ returncode: r.returncode, stdout: r.stdout, stderr: r.stderr, defense: r.defense }),
+      success: true,
+      content_type: 'json',
+    };
   }
 
   private resolvePath(filePath: string): string {

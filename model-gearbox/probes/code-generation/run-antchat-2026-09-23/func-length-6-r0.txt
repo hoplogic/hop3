@@ -1,0 +1,40 @@
+```python
+import ast
+import sys
+
+MAX_LINES = 40
+
+def examine(source):
+    tree = ast.parse(source)
+    violations = []
+
+    def process_function(node):
+        end_line = node.end_lineno
+        length = end_line - node.lineno + 1
+        if length > MAX_LINES:
+            violations.append((node.lineno, length))
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                process_function(child)
+            elif isinstance(child, ast.ClassDef):
+                for item in child.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        process_function(item)
+
+    for item in tree.body:
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            process_function(item)
+    return violations
+
+def main():
+    path = sys.argv[1]
+    text = open(path).read()
+    violations = examine(text)
+    if violations:
+        for line_no, length in violations:
+            print("Line %d: function is %d lines (exceeds %d)" % (line_no, length, MAX_LINES), file=sys.stderr)
+        sys.exit(1)
+    sys.exit(0)
+
+main()
+```

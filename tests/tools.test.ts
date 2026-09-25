@@ -9,7 +9,8 @@ import { parseFragment as parseFragForCore } from '../src/parser.js';
 import type { HostConfig } from '../src/provider-types.js';
 import { B2_BUILTIN_FILE_TOOLS, B2_BUILTIN_NOTIFY_TOOLS, B2_BUILTIN_TOOL_SIGS, B9_WRITE_TOOLS, B10_READ_TOOLS } from '../src/validator.js';
 import { fileURLToPath } from 'node:url';
-import { readFileSync, mkdtempSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
+import { readFileSync, mkdtempSync, writeFileSync, mkdirSync, symlinkSync, existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';   // run_script 组:解释器真身探测（不静默假绿）
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -30,12 +31,13 @@ function makeProvider(workDir?: string): DefaultToolProvider {
 // @v: anc-provider-tool, anc-exec-requires-commit, anc-config-sandbox
 describe('DefaultToolProvider', () => {
   describe('list()', () => {
-    it('returns the seventeen builtin tools (eleven file/dir + validate_spec + four tree-edit + read_spec_tree), all requires_commit=false (no bash)', () => {
+    it('returns the eighteen builtin tools (eleven file/dir + validate_spec + four tree-edit + read_spec_tree + run_script), all requires_commit=false (no bash)', () => {
       const provider = makeProvider();
       const tools = provider.list();
       expect(tools.map(t => t.name)).toEqual(
-        ['read', 'write', 'listdir', 'exists', 'create', 'append', 'edit_file', 'search_file', 'makedirs', 'move', 'remove', 'validate_spec', 'insert_node', 'replace_node', 'replace_children', 'renumber_steps', 'read_spec_tree']);
-      // 不可逆分界=是否出沙箱，非操作类型（作者定 2026-08-10）——箱内全 false（validate_spec 纯函数同理）
+        ['read', 'write', 'listdir', 'exists', 'create', 'append', 'edit_file', 'search_file', 'makedirs', 'move', 'remove', 'validate_spec', 'insert_node', 'replace_node', 'replace_children', 'renumber_steps', 'read_spec_tree', 'run_script']);
+      // 不可逆分界=是否出沙箱，非操作类型（作者定 2026-08-10）——箱内全 false（validate_spec 纯函数同理;
+      // run_script 与 body 面的 subprocess.run 同档=同一份 spawn 能力的同一个曝露面,见 tools/run-script.md）
       for (const tool of tools) expect(tool.requires_commit).toBe(false);
     });
 
@@ -60,7 +62,10 @@ describe('DefaultToolProvider', () => {
     const READ_SIDE = ['read', 'exists', 'listdir', 'search_file'];
     const WRITE_SIDE = ['write', 'append', 'create', 'edit_file', 'makedirs', 'move', 'remove'];
 
-    it('B2 名单 = 注册面全量（文件件+spec 内容族,17 员逐员）', () => {
+    // 名单收的是注册面全员（2026-09-22 run_script 入列时把这条隐含口径写明,权威=spec-parser
+    // ^anc-rule-b2）——不是"恒可用的那些件":category='special' 只管无 body act 的下发面,
+    // 而 B2 校验的是有 body 的步骤,body 调用走解释器 ToolProvider 通路不看 category
+    it('B2 名单 = 注册面全量（文件件+spec 内容族+run_script,18 员逐员）', () => {
       expect([...B2_BUILTIN_FILE_TOOLS].sort()).toEqual([...FILE_TOOL_NAMES].sort());
     });
 
@@ -137,6 +142,221 @@ describe('DefaultToolProvider', () => {
       const result = await provider.execute('bash', { command: 'echo hello' });
       expect(result.success).toBe(false);
       expect(String(result.result)).toContain('Unknown tool');
+    });
+  });
+
+  // @v: anc-exec-builtin-run-script, anc-exec-run-script-no-command-choice
+  // 受控脚本执行（设计权威 docs/design/tools/run-script.md,2026-09-22 作者拍 todo/0110 候选 B）。
+  // 病灶:standalone 的 [act free] 工具面此前没有任何一件能让进程跑起来,而 sdc 规约步骤要求
+  // "实跑校验脚本"——三家模型在同一步各死一种死法,其中一家被逼出伪造执行来源（写下"以 shell
+  // 运行 python3…退出码 0"而那一轮它只发了 makedirs 与 write）。
+  describe('execute run_script（受控脚本执行）', () => {
+    /** 带命令白名单的 provider——缺省 makeProvider 的 runtime.available 是空的（=能力关死） */
+    function makeProviderWithCommands(dir: string, commands: string[]): DefaultToolProvider {
+      return new DefaultToolProvider({
+        workspace_dir: dir,
+        sandbox: {
+          filesystem: { workspace_dir: dir, read_access: { allowed: [dir], denied: [], confirm_required: [] } },
+          network: { trusted_hosts: [] },
+          runtime: { available: commands },
+        },
+        api_key: 'test',
+      } as unknown as HostConfig);
+    }
+
+    // 解释器真身探测（anchor-scan.test.ts 同款纪律:不能只试裸 `python3`——shell alias 在子进程
+    // 里不存在;全不可用时让用例显式失败而不是静默假绿）
+    function findPython(): string | null {
+      for (const py of [process.env.HOPJIT_TEST_PYTHON, 'python3', 'python'].filter((c): c is string => Boolean(c))) {
+        try {
+          execFileSync(py, ['-c', 'print(1)'], { stdio: 'ignore', timeout: 10000 });
+          return py;
+        } catch { /* 试下一个 */ }
+      }
+      return null;
+    }
+
+    it('正例：脚本跑起来,stdout 与退出码 0 逐字回传（JSON 三键）', async () => {
+      const py = findPython();
+      expect(py, '本机没有可用的 python3——run_script 的真跑用例无法验证（设 HOPJIT_TEST_PYTHON 指定解释器）').toBeTruthy();
+      const dir = mkdtempSync(join(tmpdir(), 'hoprun-'));
+      writeFileSync(join(dir, 'ok.py'), 'print("hello from script")\n');
+      const provider = makeProviderWithCommands(dir, [py!.split('/').pop()!, 'python3', 'python']);
+      const r = await provider.execute('run_script', { path: 'ok.py' });
+      expect(r.success).toBe(true);
+      expect(r.content_type).toBe('json');
+      const out = JSON.parse(String(r.result)) as { returncode: number; stdout: string; stderr: string };
+      expect(out.returncode).toBe(0);
+      expect(out.stdout).toContain('hello from script');
+    });
+
+    // 本组最要命的一种实现错误（契约正反例末条）——校验脚本对违规样例返回 1 是它的判定结果,
+    // 工具若回 success:false,模型读成"执行工具也不好用",转头去找别的执行入口(0110 实撞的死法)
+    it('正例（退出码是值不是失败）：脚本返回 1 → success 仍为 true,returncode 如实是 1', async () => {
+      const py = findPython();
+      expect(py, '本机没有可用的 python3').toBeTruthy();
+      const dir = mkdtempSync(join(tmpdir(), 'hoprun-'));
+      writeFileSync(join(dir, 'guard.py'), 'import sys\nprint("VIOLATIONS FOUND: 2")\nsys.exit(1)\n');
+      const provider = makeProviderWithCommands(dir, [py!.split('/').pop()!, 'python3', 'python']);
+      const r = await provider.execute('run_script', { path: 'guard.py' });
+      expect(r.success).toBe(true);
+      const out = JSON.parse(String(r.result)) as { returncode: number; stdout: string };
+      expect(out.returncode).toBe(1);
+      expect(out.stdout).toContain('VIOLATIONS FOUND: 2');
+    });
+
+    it('正例：args 逐项当参数传给脚本（一项一个参数,不是一整串待拆的命令行）', async () => {
+      const py = findPython();
+      expect(py, '本机没有可用的 python3').toBeTruthy();
+      const dir = mkdtempSync(join(tmpdir(), 'hoprun-'));
+      writeFileSync(join(dir, 'echo_args.py'), 'import sys\nprint("|".join(sys.argv[1:]))\n');
+      const provider = makeProviderWithCommands(dir, [py!.split('/').pop()!, 'python3', 'python']);
+      const r = await provider.execute('run_script', { path: 'echo_args.py', args: ['a b', 'c'] });
+      const out = JSON.parse(String(r.result)) as { stdout: string };
+      expect(out.stdout.trim()).toBe('a b|c');   // 'a b' 整项是一个参数——经 shell 会被拆成两个
+    });
+
+    // 工作目录约定（契约"工作目录这条约定必须写进给执行 LLM 看的工具说明"）——2026-09-23 T9 复跑实撞:
+    // 模型照其余文件工具的习惯给 args 传工作区相对路径,脚本在自己的目录下找不到文件。行为与说明成对钉:
+    it('正例（工作目录=脚本所在目录）：脚本在子目录里,同目录样例传裸文件名即可读到', async () => {
+      const py = findPython();
+      expect(py, '本机没有可用的 python3').toBeTruthy();
+      const dir = mkdtempSync(join(tmpdir(), 'hoprun-'));
+      mkdirSync(join(dir, 'wz'));
+      writeFileSync(join(dir, 'wz', 'sample.txt'), 'SAMPLE-CONTENT\n');
+      writeFileSync(join(dir, 'wz', 'readit.py'), 'import sys\nprint(open(sys.argv[1]).read().strip())\n');
+      const provider = makeProviderWithCommands(dir, [py!.split('/').pop()!, 'python3', 'python']);
+      const r = await provider.execute('run_script', { path: 'wz/readit.py', args: ['sample.txt'] });
+      expect(r.success).toBe(true);
+      const out = JSON.parse(String(r.result)) as { returncode: number; stdout: string };
+      expect(out.returncode).toBe(0);
+      expect(out.stdout.trim()).toBe('SAMPLE-CONTENT');
+    });
+
+    it('工具说明写明工作目录=脚本所在目录、同目录样例传裸文件名（缺这句模型会传工作区相对路径）', () => {
+      const def = makeProvider().list().find(t => t.name === 'run_script')!;
+      expect(def.description).toContain('its own directory as the working directory');
+      expect(def.description).toContain('bare filename');
+      const argsDesc = (def.input_schema.properties as Record<string, { description: string }>).args.description;
+      expect(argsDesc).toContain('against its own directory');
+    });
+
+    it('反例：.sh 脚本被拒,报文给理由并指出改写成 .py（不是干巴巴一句不支持）', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'hoprun-'));
+      writeFileSync(join(dir, 'check.sh'), 'echo hi\n');
+      const provider = makeProviderWithCommands(dir, ['python3']);
+      const r = await provider.execute('run_script', { path: 'check.sh' });
+      expect(r.success).toBe(false);
+      expect(String(r.result)).toContain('命令白名单形同虚设');   // 理由:shell 语义下脚本内容就是任意命令
+      expect(String(r.result)).toContain('.py');                  // 出路
+    });
+
+    it('反例：不支持的扩展名/无扩展名 → 拒收并列出当前支持的类型', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'hoprun-'));
+      writeFileSync(join(dir, 'tool.js'), 'console.log(1)\n');
+      writeFileSync(join(dir, 'noext'), 'x\n');
+      const provider = makeProviderWithCommands(dir, ['python3', 'node']);
+      const js = await provider.execute('run_script', { path: 'tool.js' });
+      expect(js.success).toBe(false);
+      expect(String(js.result)).toContain('.py');   // 支持清单
+      const noext = await provider.execute('run_script', { path: 'noext' });
+      expect(noext.success).toBe(false);
+      expect(String(noext.result)).toContain('无扩展名');
+    });
+
+    it('反例：脚本文件不存在 → 拒收并指路"先把脚本写出来"（不静默当空脚本跑）', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'hoprun-'));
+      const provider = makeProviderWithCommands(dir, ['python3']);
+      const r = await provider.execute('run_script', { path: 'nope.py' });
+      expect(r.success).toBe(false);
+      expect(String(r.result)).toContain('不存在');
+      expect(String(r.result)).toContain('先把脚本写出来');
+    });
+
+    it('反例：args 不是列表（模型塞了一整串命令行）→ 拒收并说清该给什么形态', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'hoprun-'));
+      writeFileSync(join(dir, 'x.py'), 'print(1)\n');
+      const provider = makeProviderWithCommands(dir, ['python3']);
+      const r = await provider.execute('run_script', { path: 'x.py', args: '--flag v' });
+      expect(r.success).toBe(false);
+      expect(String(r.result)).toContain('args 须是字符串列表');
+      expect(String(r.result)).toContain('不是一整串待拆的命令行');
+    });
+
+    // 白名单两拒的配置指路（hopissues/0090:用户 1.5 小时废跑才摸到 hopjit.yaml——空名单报
+    // "不可用"不点名命令、缺命令报"不在白名单"不提配置载体,两种报文都断在同一处）。
+    // 这两钉核的是共用原语本身（^anc-exec-command-primitive）——同一份实现此前只有 body 面的
+    // subprocess.run 一个消费口在核,这里从新消费口再核一遍:抽出后两边拿到的是同一套报文。
+    // @v: anc-exec-command-primitive
+    it('反例：命令白名单为空（缺省安全=能力关死）→ 报文点名命令并指路 hopjit.yaml 的 commands', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'hoprun-'));
+      writeFileSync(join(dir, 'x.py'), 'print(1)\n');
+      const provider = makeProvider(dir);   // 缺省 runtime.available = []
+      const r = await provider.execute('run_script', { path: 'x.py' });
+      expect(r.success).toBe(false);
+      expect(String(r.result)).toContain('python3');    // 点名是哪个命令没放行
+      expect(String(r.result)).toContain('hopjit.yaml');
+      expect(String(r.result)).toContain('commands');
+    });
+
+    it('反例：白名单在场但没放行解释器 → 同样点名命令+指路配置,并列出当前放行了什么', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'hoprun-'));
+      writeFileSync(join(dir, 'x.py'), 'print(1)\n');
+      const provider = makeProviderWithCommands(dir, ['git', 'uv']);
+      const r = await provider.execute('run_script', { path: 'x.py' });
+      expect(r.success).toBe(false);
+      expect(String(r.result)).toContain('python3');
+      expect(String(r.result)).toContain('git, uv');   // 当前放行清单,让人看出差在哪
+      expect(String(r.result)).toContain('hopjit.yaml');
+    });
+
+    it('反例：workspace 外的绝对路径 → 走 read 同款权限链被拒（"能执行"的前提是"能读到"）', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'hoprun-'));
+      const outside = mkdtempSync(join(tmpdir(), 'hopout-'));
+      writeFileSync(join(outside, 'evil.py'), 'print(1)\n');
+      const provider = makeProviderWithCommands(dir, ['python3']);
+      const r = await provider.execute('run_script', { path: join(outside, 'evil.py') });
+      expect(r.success).toBe(false);
+    });
+
+    // 语法沙箱接入（py-sandbox 设计"与 run_script 的关系收窄"）:.py 一律先审,审不过不执行,
+    // 拒绝报文作为 success:false 的 result 回给模型,同一个工具循环里照报文改写再调
+    // @v: anc-pysb-exec
+    it('反例（语法沙箱）：脚本 import os → 不执行,success:false 且报文点名行号与替代写法', async () => {
+      const py = findPython();
+      expect(py, '本机没有可用的 python3').toBeTruthy();
+      const dir = mkdtempSync(join(tmpdir(), 'hoprun-'));
+      writeFileSync(join(dir, 'bad.py'), 'import os\nprint(os.getcwd())\n');
+      const provider = makeProviderWithCommands(dir, [py!.split('/').pop()!, 'python3', 'python']);
+      const r = await provider.execute('run_script', { path: 'bad.py' });
+      expect(r.success).toBe(false);
+      expect(String(r.result)).toContain('脚本没有执行');
+      expect(String(r.result)).toContain('第 1 行 `os`');
+      expect(String(r.result)).toContain('可用的模块符号:');
+    });
+
+    it('反例（语法沙箱）：写模式 open → 不执行（目标文件不出现）,报文给 print(…, file=sys.stderr) 替代', async () => {
+      const py = findPython();
+      expect(py, '本机没有可用的 python3').toBeTruthy();
+      const dir = mkdtempSync(join(tmpdir(), 'hoprun-'));
+      writeFileSync(join(dir, 'w.py'), 'open("out.txt", "w")\n');
+      const provider = makeProviderWithCommands(dir, [py!.split('/').pop()!, 'python3', 'python']);
+      const r = await provider.execute('run_script', { path: 'w.py' });
+      expect(r.success).toBe(false);
+      expect(String(r.result)).toContain('file=sys.stderr');
+      expect(existsSync(join(dir, 'out.txt'))).toBe(false);
+    });
+
+    it('正例（语法沙箱）：回执 JSON 带 defense 字段,取值是两档之一', async () => {
+      const py = findPython();
+      expect(py, '本机没有可用的 python3').toBeTruthy();
+      const dir = mkdtempSync(join(tmpdir(), 'hoprun-'));
+      writeFileSync(join(dir, 'ok.py'), 'print(1)\n');
+      const provider = makeProviderWithCommands(dir, [py!.split('/').pop()!, 'python3', 'python']);
+      const r = await provider.execute('run_script', { path: 'ok.py' });
+      expect(r.success).toBe(true);
+      const out = JSON.parse(String(r.result)) as { defense: string };
+      expect(['syntax+os-sandbox', 'syntax-only']).toContain(out.defense);
     });
   });
 
@@ -1572,15 +1792,27 @@ describe('composeRunCard 运行状态卡片', () => {
   });
 });
 
-// @v: anc-exec-tool-manifest-source —— 内建特殊族名单常量与注册面同源（名单住 provider-types
-// 共享层〔prompt 层1 消费,不得反向 import 层2 tools〕,同源性靠本钉:注册面的 special 件恰
-// 等于名单——内建族扩员漏改任一处即红）
-describe('ENGINE_BUILTIN_SPECIAL_TOOL_NAMES 与 DefaultToolProvider 注册面同源', () => {
-  it('正例：注册面上非 basic（即 special 档,缺省 special）的内建件名集合 == 名单常量', async () => {
-    const { ENGINE_BUILTIN_SPECIAL_TOOL_NAMES } = await import('../src/provider-types.js');
+// @v: anc-exec-tool-manifest-source —— 复用模式指引档分族名单与注册面同源（两份名单都住
+// provider-types 共享层〔prompt 层1 消费,不得反向 import 层2 tools〕,同源性靠本钉:两族
+// 并起来恰等于注册面的 special 件全集——新增 special 内建件不登记任一族即红）。
+// 为什么钉"并集"而不只钉唯一语义源族（2026-09-22 随 run_script 落地改判据）:
+// buildToolManifest 的 else 分支本就把名单外的件当原生优先件渲染,所以第二份名单在功能上
+// 不必要——它存在是为了守卫的牙。旧钉判"注册面 special 全集 == 唯一语义源族",run_script
+// 这种该走原生优先的新件必然让它红,于是加件的人必须停下来想"这件走哪一族";若改成
+// 单名单+隐式兜底,加件的人什么都不做就全绿,分族决定被静默替他做了。
+describe('复用模式指引档两族名单与 DefaultToolProvider 注册面同源', () => {
+  it('正例：注册面上非 basic（即 special 档,缺省 special）的内建件名集合 == 唯一语义源族 ∪ 原生优先族', async () => {
+    const { ENGINE_BUILTIN_SPECIAL_TOOL_NAMES, NATIVE_FIRST_BUILTIN_SPECIAL_TOOL_NAMES } = await import('../src/provider-types.js');
     const host: HostConfig = { workspace_dir: tmpdir(), sandbox: { allowed_paths: [], denied_paths: [] } } as unknown as HostConfig;
     const provider = new DefaultToolProvider(host);
     const specialOnRegistry = provider.list().filter(t => (t.category ?? 'special') === 'special').map(t => t.name).sort();
-    expect(specialOnRegistry).toEqual([...ENGINE_BUILTIN_SPECIAL_TOOL_NAMES].sort());
+    const bothFamilies = [...ENGINE_BUILTIN_SPECIAL_TOOL_NAMES, ...NATIVE_FIRST_BUILTIN_SPECIAL_TOOL_NAMES].sort();
+    expect(specialOnRegistry).toEqual(bothFamilies);
+  });
+
+  it('反例：两族不许有交集（同一件工具分进两族=渲染分道判据自相矛盾）', async () => {
+    const { ENGINE_BUILTIN_SPECIAL_TOOL_NAMES, NATIVE_FIRST_BUILTIN_SPECIAL_TOOL_NAMES } = await import('../src/provider-types.js');
+    const overlap = [...NATIVE_FIRST_BUILTIN_SPECIAL_TOOL_NAMES].filter(n => ENGINE_BUILTIN_SPECIAL_TOOL_NAMES.has(n));
+    expect(overlap).toEqual([]);
   });
 });

@@ -360,6 +360,84 @@ describe('McpBindingMember 终态闸', () => {
   });
 });
 
+// 并发首调共用同一次连接（design tool-interface HopSop 连接第 5、6 步——todo/0112 写并行测试时撞出:
+// 共享成员被三个并行子任务同时首调,各起一个进程,被覆盖的 client 无人关=泄漏）
+// @v: anc-exec-mcp-binding, anc-exec-tool-server-lifecycle
+describe('McpBindingMember 并发首调', () => {
+  // 真 stdio 夹具:启动即在目录里落 pid-<进程号> 文件;initialize 延迟 delayMs 应答（拉宽"连接进行中"窗口）;
+  // tools/call 返回自身进程号;stdin 关闭即退出
+  async function makeSlowServer(delayMs: number) {
+    const { mkdtempSync, writeFileSync, readdirSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-concurrent-'));
+    const script = join(dir, 'slow-server.cjs');
+    writeFileSync(script, [
+      "const fs = require('node:fs'); const path = require('node:path');",
+      `fs.writeFileSync(path.join(${JSON.stringify(dir)}, 'pid-' + process.pid), '');`,
+      "let buf = '';",
+      "const reply = o => process.stdout.write(JSON.stringify(o) + '\\n');",
+      "process.stdin.on('data', d => {",
+      "  buf += d; let i;",
+      "  while ((i = buf.indexOf('\\n')) >= 0) {",
+      "    const line = buf.slice(0, i); buf = buf.slice(i + 1);",
+      "    if (!line.trim()) continue;",
+      "    let m; try { m = JSON.parse(line); } catch { continue; }",
+      "    if (m.id === undefined) continue;",
+      `    if (m.method === 'initialize') setTimeout(() => reply({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 's', version: '0' } } }), ${delayMs});`,
+      "    else if (m.method === 'tools/list') reply({ jsonrpc: '2.0', id: m.id, result: { tools: [{ name: 'whoami', inputSchema: { type: 'object' } }] } });",
+      "    else if (m.method === 'tools/call') reply({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: String(process.pid) }] } });",
+      "    else reply({ jsonrpc: '2.0', id: m.id, result: {} });",
+      "  }",
+      "});",
+      "process.stdin.on('end', () => process.exit(0));",
+    ].join('\n'));
+    const entry: ToolServerEntry = {
+      name: 'slow',
+      binding: { kind: 'mcp', transport: 'stdio', command: process.execPath, args: [script] },
+      tools: [{ name: 'whoami', requires_commit: false }],
+    };
+    const pidsOnDisk = () => readdirSync(dir).filter(f => f.startsWith('pid-')).map(f => Number(f.slice(4)));
+    return { entry, pidsOnDisk };
+  }
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  async function waitDead(pids: number[], ms = 5000) {
+    const until = Date.now() + ms;
+    while (Date.now() < until && pids.some(alive)) await new Promise(r => setTimeout(r, 50));
+  }
+
+  it('正例：同一成员三个调用同时首调 → 只起一个进程,三次调用都由它应答', async () => {
+    const { entry, pidsOnDisk } = await makeSlowServer(300);
+    const m = new McpBindingMember(entry);
+    try {
+      const rs = await Promise.all([1, 2, 3].map(() => m.execute('whoami', {})));
+      expect(rs.every(r => r.success)).toBe(true);
+      const pids = new Set(rs.map(r => Number(r.result)));
+      expect(pids.size).toBe(1);                     // 修前:三个调用各起一个进程,拿到三个进程号
+      expect(pidsOnDisk()).toEqual([...pids]);       // 盘上也只有一个进程起过——无被覆盖的泄漏进程
+    } finally {
+      await m.close();
+    }
+    await waitDead(pidsOnDisk());
+    expect(pidsOnDisk().filter(alive)).toEqual([]);
+  }, 30000);
+
+  it('反例：连接进行中被 close → 该次调用失败,刚连好的进程被关掉不泄漏', async () => {
+    const { entry, pidsOnDisk } = await makeSlowServer(800);
+    const m = new McpBindingMember(entry);
+    const pending = m.execute('whoami', {});
+    // 等进程起来（盘上出现 pid 文件）再在 initialize 应答前关闭
+    const until = Date.now() + 5000;
+    while (pidsOnDisk().length === 0 && Date.now() < until) await new Promise(r => setTimeout(r, 20));
+    expect(pidsOnDisk().length).toBe(1);
+    await m.close();
+    const r = await pending;
+    expect(r.success).toBe(false);                   // 修前:连接完成后照存 client 并调用成功,进程无人再关
+    await waitDead(pidsOnDisk());
+    expect(pidsOnDisk().filter(alive)).toEqual([]);
+  }, 30000);
+});
+
 // @v: anc-config-tool-registry, anc-exec-mcp-binding —— tool_servers 节经 mcp-server 全链（原 tools_file 指针 2026-08-13 退役收编统一配置）
 //（review 缝隙:config→startRun→装配→body 调用此前零覆盖——批次一"接缝测试"教训同型预防）
 describe('tool_servers 节经 standalone 全链（HopjitMcpCore）', () => {

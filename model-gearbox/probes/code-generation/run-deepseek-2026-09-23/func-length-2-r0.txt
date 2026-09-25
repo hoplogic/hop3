@@ -1,0 +1,45 @@
+```python
+import ast
+import sys
+
+if len(sys.argv) < 2:
+    print("用法: python script.py <file>")
+    sys.exit(1)
+
+path = sys.argv[1]
+
+try:
+    handle = open(path, 'r', encoding='utf-8')
+    source = handle.read()
+    handle.close()
+except OSError:
+    print("无法读取文件: " + path)
+    sys.exit(1)
+except ValueError:
+    print("无法以 UTF-8 读取文件: " + path)
+    sys.exit(1)
+
+try:
+    tree = ast.parse(source)
+except SyntaxError:
+    print("语法错误，无法解析文件: " + path)
+    sys.exit(1)
+except ValueError:
+    print("无法解析文件: " + path)
+    sys.exit(1)
+
+violations = []
+for node in ast.walk(tree):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        length = node.end_lineno - node.lineno + 1
+        if length > 40:
+            message = path + ":" + str(node.lineno) + ": 函数 " + node.name + " 长度为 " + str(length) + " 行，超过 40 行"
+            violations.append((node.lineno, message))
+
+for item in sorted(violations):
+    print(item[1])
+
+if len(violations) > 0:
+    sys.exit(1)
+sys.exit(0)
+```

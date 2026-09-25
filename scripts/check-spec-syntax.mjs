@@ -375,6 +375,40 @@ for (const file of targets) {
   }
 }
 
+// ③f-6 人裁接受现状分支给 sensible_note 赋值（D101,todo/0104——本路径上合理关每轮判 false,
+// 引擎不写它的说明槽;accept 分支不赋值则 5.1.4 审阅文件修检遗留节渲染出字面 undefined,
+// 终审人拿不到剩余缺陷清单）。母本与 qwen3.8-27b 变体都查:变体手工同步,漏同步即回退。
+// 提取不到 accept 分支=响亮红。 // @a: anc-build-main-flow
+{
+  const hb2Dir = join(ROOT, 'skills', 'hopbuild2');
+  if (process.env['HOPJIT_CHECK_ROOT'] && !existsSync(join(hb2Dir, 'spec.md'))) {
+    // fixture 替身仓库无 hopbuild2——豁免跳过(真库缺席走 readFileSync 响亮炸)
+  } else {
+    for (const name of ['spec.md', 'spec.qwen3.8-27b.md']) {
+      const lines = readFileSync(join(hb2Dir, name), 'utf-8').split('\n');
+      const start = lines.findIndex(l => /^#+ /.test(l) && l.includes('[case(exhaust_decision == "accept")]'));
+      const rel = start < 0 ? -1 : lines.slice(start + 1).findIndex(l => /^#+ /.test(l) && l.includes('[case('));
+      if (start < 0 || rel < 0) {
+        console.error(`❌ hopbuild2 专项: ${name} 找不到修检烧尽兜底的 accept 分支（[case(exhaust_decision == "accept")] 到下一个 case 行）——分支被移除或改形态,须先改设计 D101 再同步本断言`);
+        failed++;
+        continue;
+      }
+      const block = lines.slice(start + 1, start + 1 + rel);
+      const inLine = block.find(l => l.startsWith('- ←'));
+      const outLine = block.find(l => l.startsWith('+ → sensible_note'));
+      const assign = block.find(l => /^>\s*sensible_note\s*=/.test(l));
+      const miss = [];
+      if (!inLine || !inLine.includes('exhaust_brief') || !inLine.includes('exhaust_path')) miss.push('← 行须含 exhaust_brief 与 exhaust_path');
+      if (!outLine) miss.push('须声明 + → sensible_note');
+      if (!assign || !assign.includes('exhaust_brief') || !assign.includes('exhaust_path')) miss.push('body 须给 sensible_note 赋值且同时含 exhaust_brief 与 exhaust_path');
+      if (miss.length) {
+        console.error(`❌ hopbuild2 专项: ${name} accept 分支形态漂移（${miss.join(';')}）——不赋值则审阅文件修检遗留节渲染出字面 undefined（todo/0104 实撞）,先改设计 D101 再同步`);
+        failed++;
+      }
+    }
+  }
+}
+
 // ④ hopfix 专项断言（工程链review-hopfix批 2026-09-02 补——面三变异实证:层一闸重放比对蒸发/
 // commit 快照守卫删行,validate 双双纹丝不动,两处语义零回归锁全靠人眼。从 spec 正文机械提取
 // 判定行核形态在场,提取失败响亮红不静默跳过）。 // @a: anc-build-main-flow

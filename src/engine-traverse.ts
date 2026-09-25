@@ -52,6 +52,10 @@ export interface TraversalState {
   // 串行下钻=退化窗口零专门代码。见 [[parallel-execution#^anc-exec-parallel-reap-drain]]。
   // @a: anc-exec-parallel-dispatch-model
   unifiedDispatch?: boolean;
+  // 轮次起点回收通道（todo/0107）：loopCounters 的四个写点（两类 loop 入口置 1、两类轮进 +1）
+  // push {loopId, iter},engine 消费后记 loop_iter 执行事件——重试反馈受众判据据此只数本轮。
+  // @a: anc-exec-retry-feedback-iter-scope
+  loopIters?: { loopId: string; iter: number }[];
 }
 
 /** DFS 遍历结果——executable（命中可执行步骤）/exit（触发提前退出）/retry（控制流后重新遍历）/none（无可执行节点）四态之一。见 [[exec-engine#^anc-exec-dfs-traversal]] */
@@ -184,18 +188,25 @@ export function dfsNextStep(steps: StepNode[], state: TraversalState, spec: Spec
               }
               state.stepStates.set(step.step_id, 'done');
               skipAllChildren(step, state);
-              continue;
+              // 静默终态一律级联（hopissues/0105）：只 continue 时,本 loop 是外层 loop 最后一个
+              // child 就无人推进外层下一轮,dfs 越过 running 外层直达 exit——剩余轮次静默没跑。
+              // 与 branch 静默跳过同一写法:级联 + 重遍历。// @a: anc-exec-foreach-serial
+              propagateCompletion(step.step_id, state, spec);
+              return { kind: 'retry' };
             }
             state.loopCounters.set(step.step_id, 1);
+            state.loopIters?.push({ loopId: step.step_id, iter: 1 });   // @a: anc-exec-retry-feedback-iter-scope
             state.variables.write(fe.itemVar, items[0], 'root');
           } else {
             const maxIter = loop.max_iterations ?? DEFAULT_MAX_ITERATIONS;
             if (maxIter === 0) {
               state.stepStates.set(step.step_id, 'done');
               skipAllChildren(step, state);
-              continue;
+              propagateCompletion(step.step_id, state, spec);   // 同上:静默终态一律级联（0105）
+              return { kind: 'retry' };
             }
             state.loopCounters.set(step.step_id, 1);
+            state.loopIters?.push({ loopId: step.step_id, iter: 1 });   // @a: anc-exec-retry-feedback-iter-scope
           }
         }
 
@@ -341,6 +352,7 @@ export function propagateCompletion(stepId: string, state: TraversalState, spec:
         }
         if (currentIter < items.length) {
           state.loopCounters.set(parentId, currentIter + 1);
+          state.loopIters?.push({ loopId: parentId, iter: currentIter + 1 });   // @a: anc-exec-retry-feedback-iter-scope
           state.variables.write(fe.itemVar, items[currentIter], 'root');
           resetChildrenToPending(children, state);
           return;
@@ -361,6 +373,7 @@ export function propagateCompletion(stepId: string, state: TraversalState, spec:
       if (currentIter < maxIter) {
         if (allChildrenDoneOrSkipped) {
           state.loopCounters.set(parent.step_id, currentIter + 1);
+          state.loopIters?.push({ loopId: parent.step_id, iter: currentIter + 1 });   // @a: anc-exec-retry-feedback-iter-scope
           resetChildrenToPending(children, state);
           // Python 语义：变量跨迭代自然保留，引擎不清当轮变量。
           // 需每轮重置的量由作者在子步骤显式 `+ → x = Null`（叶子每轮执行即重置）。

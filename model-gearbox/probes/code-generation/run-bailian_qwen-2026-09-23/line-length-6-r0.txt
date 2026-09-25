@@ -1,0 +1,28 @@
+```python
+import sys
+
+file_path = sys.argv[1]
+
+try:
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+        
+    lines = content.splitlines()
+    
+    violations = []
+    
+    for idx, line in enumerate(lines):
+        if len(line) > 100:
+            line_num = idx + 1
+            violations.append(f"Line {line_num}: too long ({len(line)} characters, limit is 100)")
+    
+    if violations:
+        for violation in violations:
+            print(violation)
+        sys.exit(1)
+    else:
+        sys.exit(0)
+        
+except Exception as e:
+    sys.exit(1)
+```

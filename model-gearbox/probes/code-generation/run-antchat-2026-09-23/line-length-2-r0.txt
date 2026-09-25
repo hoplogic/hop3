@@ -1,0 +1,17 @@
+```python
+import sys
+
+with open(sys.argv[1], 'r', encoding='utf-8') as f:
+    lines = f.read().splitlines(keepends=False)
+
+violations = []
+for i, line in enumerate(lines, start=1):
+    length = len(line)
+    if length > 100:
+        violations.append(f"Line {i}: length {length} exceeds 100 characters")
+
+if violations:
+    for v in violations:
+        print(v, file=sys.stderr)
+    sys.exit(1)
+```

@@ -1,0 +1,10 @@
+data: |
+  INSERT INTO customers VALUES (1, 'A', 'east'), (2, 'B', 'east'), (3, 'C', 'west'), (4, 'D', 'north');
+  INSERT INTO orders VALUES (1, 1, 100, 'paid', '2026-03-01 09:00:00');
+  INSERT INTO orders VALUES (2, 1, 50, 'paid', '2026-03-02 09:00:00');
+  INSERT INTO orders VALUES (3, 2, 70, 'refunded', '2026-03-03 09:00:00');
+  INSERT INTO orders VALUES (4, 3, 200, 'paid', '2026-03-04 09:00:00');
+expect:
+  - [west, 1, 1, 200]
+  - [east, 2, 2, 150]
+  - [north, 1, 0, 0]

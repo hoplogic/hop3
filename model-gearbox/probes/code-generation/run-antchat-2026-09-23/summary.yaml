@@ -1,0 +1,367 @@
+service: antchat
+model_from_response:
+  - Ling-3.0-Flash
+date: '2026-09-23'
+维度: G6 代码生成——Python 档(规范条款→校验脚本,Python 语法沙箱内执行,判分=隐藏测试文件退出码全对)与 SQL 档(取数需求→SQLite 查询,判分=隐藏测试数据上结果集全等);每题 n=6,自愈回路最多 2 轮只反馈公开样例与沙箱/执行报文
+指标说明: 一次写对=第 1 轮的解在全部隐藏测试上全对(Python 退出码全对,SQL 结果集全等);首轮崩溃在 SQL 题=查询执行报错;自愈后通过=回路结束时最后一版脚本全对;公开过隐藏挂=模型看得见的样例都过了但隐藏测试有挂(自验通过的校验在真实文件上失效)
+tasks:
+  line-length:
+    语言: python
+    档: 简单
+    一次写对: 6/6
+    自愈后通过: 6/6
+    首轮沙箱拒绝: 0/6
+    首轮截断: 0/6
+    首轮崩溃: 0/6
+    公开过隐藏挂: 0/6
+    隐藏测试文件数: 8
+    shots:
+      - i: 1
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 2
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 3
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 4
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 5
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 6
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+  func-length:
+    语言: python
+    档: 普通
+    一次写对: 2/6
+    自愈后通过: 4/6
+    首轮沙箱拒绝: 3/6
+    首轮截断: 0/6
+    首轮崩溃: 0/6
+    公开过隐藏挂: 2/6
+    隐藏测试文件数: 8
+    shots:
+      - i: 1
+        first_try_pass: false
+        first_try_outcome: rejected
+        first_try_crashed: false
+        final_pass: false
+        rounds_used: 3
+        public_pass_hidden_fail: true
+        final_hidden_failed:
+          - bad_method.py(应1实0)
+      - i: 2
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 3
+        first_try_pass: false
+        first_try_outcome: rejected
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 3
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 4
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 5
+        first_try_pass: false
+        first_try_outcome: rejected
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 2
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 6
+        first_try_pass: false
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: false
+        rounds_used: 1
+        public_pass_hidden_fail: true
+        final_hidden_failed:
+          - bad_method.py(应1实0)
+  docstring-args:
+    语言: python
+    档: 复杂
+    一次写对: 1/6
+    自愈后通过: 2/6
+    首轮沙箱拒绝: 5/6
+    首轮截断: 0/6
+    首轮崩溃: 0/6
+    公开过隐藏挂: 2/6
+    隐藏测试文件数: 14
+    shots:
+      - i: 1
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 2
+        first_try_pass: false
+        first_try_outcome: rejected
+        first_try_crashed: false
+        final_pass: false
+        rounds_used: 3
+        public_pass_hidden_fail: true
+        final_hidden_failed:
+          - ok_private_nested.py(应0实1)
+      - i: 3
+        first_try_pass: false
+        first_try_outcome: rejected
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 3
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 4
+        first_try_pass: false
+        first_try_outcome: rejected
+        first_try_crashed: false
+        final_pass: false
+        rounds_used: 2
+        public_pass_hidden_fail: true
+        final_hidden_failed:
+          - ok_private_nested.py(应0实1)
+      - i: 5
+        first_try_pass: false
+        first_try_outcome: rejected
+        first_try_crashed: false
+        final_pass: false
+        rounds_used: 3
+        public_pass_hidden_fail: false
+        final_hidden_failed: (沙箱拒绝)
+      - i: 6
+        first_try_pass: false
+        first_try_outcome: rejected
+        first_try_crashed: false
+        final_pass: false
+        rounds_used: 3
+        public_pass_hidden_fail: false
+        final_hidden_failed: (沙箱拒绝)
+  sql-filter:
+    语言: sql
+    档: 简单
+    一次写对: 6/6
+    自愈后通过: 6/6
+    首轮沙箱拒绝: 0/6
+    首轮截断: 0/6
+    首轮崩溃: 0/6
+    公开过隐藏挂: 0/6
+    隐藏测试文件数: 5
+    shots:
+      - i: 1
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 2
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 3
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 4
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 5
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 6
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+  sql-join:
+    语言: sql
+    档: 普通
+    一次写对: 5/6
+    自愈后通过: 5/6
+    首轮沙箱拒绝: 0/6
+    首轮截断: 0/6
+    首轮崩溃: 0/6
+    公开过隐藏挂: 1/6
+    隐藏测试文件数: 4
+    shots:
+      - i: 1
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 2
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 3
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 4
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 5
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 6
+        first_try_pass: false
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: false
+        rounds_used: 1
+        public_pass_hidden_fail: true
+        final_hidden_failed:
+          - orphan-null.yaml(结果不对)
+  sql-streak:
+    语言: sql
+    档: 复杂
+    一次写对: 5/6
+    自愈后通过: 5/6
+    首轮沙箱拒绝: 0/6
+    首轮截断: 0/6
+    首轮崩溃: 0/6
+    公开过隐藏挂: 1/6
+    隐藏测试文件数: 4
+    shots:
+      - i: 1
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 2
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 3
+        first_try_pass: false
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: false
+        rounds_used: 1
+        public_pass_hidden_fail: true
+        final_hidden_failed:
+          - ties.yaml(结果不对)
+      - i: 4
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 5
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []
+      - i: 6
+        first_try_pass: true
+        first_try_outcome: ran
+        first_try_crashed: false
+        final_pass: true
+        rounds_used: 1
+        public_pass_hidden_fail: false
+        final_hidden_failed: []

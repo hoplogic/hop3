@@ -1,0 +1,29 @@
+```python
+import ast
+import sys
+
+source = open(sys.argv[1], encoding='utf-8').read()
+try:
+    tree = ast.parse(source)
+except SyntaxError as err:
+    print(f"1:{err}")
+    sys.exit(1)
+
+lines = source.splitlines()
+violations = []
+
+for node in ast.walk(tree):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        func_start_line = node.lineno
+        func_end_line = node.end_lineno
+        func_len = func_end_line - func_start_line + 1
+        if func_len > 40:
+            violations.append(f"{func_start_line}:function '{node.name}' is {func_len} lines (limit 40)")
+
+if violations:
+    for v in violations:
+        print(v)
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

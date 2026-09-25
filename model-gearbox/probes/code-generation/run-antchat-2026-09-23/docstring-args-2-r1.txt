@@ -1,0 +1,68 @@
+```python
+import ast
+import re
+import sys
+
+source = open(sys.argv[1], 'r', encoding='utf-8').read()
+tree = ast.parse(source)
+lines = source.splitlines()
+
+def extract_params(node):
+    args = node.args
+    param_names = []
+    for arg in args.posonlyargs:
+        param_names.append(arg.arg)
+    for arg in args.args:
+        param_names.append(arg.arg)
+    if args.vararg:
+        param_names.append(args.vararg.arg)
+    for arg in args.kwonlyargs:
+        param_names.append(arg.arg)
+    if args.kwarg:
+        param_names.append(args.kwarg.arg)
+    return param_names
+
+def get_docstring_and_line(body):
+    if not body:
+        return None, None
+    first = body[0]
+    if isinstance(first, ast.expr):
+        if isinstance(first.value, ast.Str):
+            return first.value.s, first.lineno
+    doc = ast.get_docstring(first)
+    if doc is not None:
+        return doc, first.lineno
+    return None, None
+
+violations = []
+
+for node in ast.walk(tree):
+    check = False
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if not node.name.startswith('_'):
+            check = True
+
+    if not check:
+        continue
+
+    params = extract_params(node)
+    required = [p for p in params if p not in ('self', 'cls')]
+
+    docstring, doc_line = get_docstring_and_line(node.body)
+
+    if docstring is None:
+        violations.append((node.lineno, "missing docstring"))
+        continue
+
+    for param in required:
+        pattern = r'(?<![a-zA-Z0-9_])' + re.escape(param) + r'(?![a-zA-Z0-9_])'
+        if not re.search(pattern, docstring):
+            violations.append((node.lineno, "parameter '" + param + "' not mentioned in docstring"))
+
+if violations:
+    for lineno, reason in violations:
+        print(str(lineno) + ": " + reason)
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

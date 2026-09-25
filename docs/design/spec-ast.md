@@ -34,11 +34,15 @@ SpecParser 的输出类型，也是 ExecutionEngine、PromptAssembler、StepDisp
 | `errors.ts` | ErrorCode/SpecError/ParseError/ValidationError/ValidationSeverity | 中稳 | shared |
 > 拆分动机：原 `types.ts` 把 5 类稳定性截然不同的契约塞一处（AST 最稳 vs AssembledContext 天天变），违反「模块=单一稳定性的封闭子域」（`^anc-meta-module-spec`）。拆分后各子文件稳定性内聚。
 >
-> **barrel 已删除**（原 `types.ts` = `export *` 全库 barrel，已于依赖显形改造中删除）：barrel 把 5 模块类型混在一个转发点、掩盖真实跨模块依赖（所有 `from './types.js'` 被误算依赖 spec-ast）。现各文件从真实定义子文件直接 import。上表中 cli-types/provider-types/runtime-types/errors **物理在 src/ 但归属别的模块**（hop-cli/shared-providers/exec-engine/shared-errors），仅 ast-types + ast-helpers 属 spec-ast。
+> **barrel 已删除**（原 `types.ts` = `export *` 全库 barrel，已于依赖显形改造中删除）：barrel 把 5 模块类型混在一个转发点、掩盖真实跨模块依赖（所有 `from './types.js'` 被误算依赖 spec-ast）。现各文件从真实定义子文件直接 import。
+>
+> 上表中 cli-types/provider-types/runtime-types/errors **物理在 src/ 但归属别的模块**（hop-cli/shared-providers/exec-engine/shared-errors），仅 ast-types + ast-helpers 属 spec-ast。
 
 **对外接口清单【封闭】** ^anc-struct-spec-ast-exports：
 
-> 本表是 spec-ast 对外依赖面的封闭集，表外符号即内部实现。出口文件 = `ast-types.ts`（AST 类型契约）/ `ast-helpers.ts`（谓词 + 常量）/ `ast-runtime.ts`（语言运行时基础能力：变量存储/作用域定位/真值语义）/ `spec-tree-edit.ts`（AST 级树编辑核心——2026-08-30 函数化批归属定 spec-ast〔纯 AST 操作与 ast-helpers 同性质〕,出口面 2026-08-31 补登:归属改定时漏登出口清单,tools/dispatcher 的合法深入 import 被边界守卫误报）。spec-ast 是全库"公共词汇表 + 语言运行时基础"，被 parser/engine/prompt/dispatcher/cli 全员依赖，故对外面大且稳定。校验见 [[anchor-audit-knowledge#模块边界接口校验]]。
+> 本表是 spec-ast 对外依赖面的封闭集，表外符号即内部实现。出口文件 = `ast-types.ts`（AST 类型契约）/ `ast-helpers.ts`（谓词 + 常量）/ `ast-runtime.ts`（语言运行时基础能力：变量存储/作用域定位/真值语义）/ `spec-tree-edit.ts`（AST 级树编辑核心——2026-08-30 函数化批归属定 spec-ast〔纯 AST 操作与 ast-helpers 同性质〕,出口面 2026-08-31 补登:归属改定时漏登出口清单,tools/dispatcher 的合法深入 import 被边界守卫误报）。
+>
+> spec-ast 是全库"公共词汇表 + 语言运行时基础"，被 parser/engine/prompt/dispatcher/cli 全员依赖，故对外面大且稳定。校验见 [[anchor-audit-knowledge#模块边界接口校验]]。
 
 | 符号 | 种类 | 出口文件 | 用途 | 稳定性 |
 |---|---|---|---|---|
@@ -55,7 +59,7 @@ SpecParser 的输出类型，也是 ExecutionEngine、PromptAssembler、StepDisp
 | `isUpdateModeOutput` | 函数 | ast-helpers.ts | 判某输出是否"更新模式"（步骤同时 `← X` 且 `+ → X`，读入即输出更新既有变量）——engine failStep 跳过 null 化 / check 失败写回 / validator V3 放行遮蔽共用同一判据，抽此消重（^anc-exec-failstep-skip-update / ^anc-rule-v3） | stable |
 | `EXECUTABLE_STEP_TYPES` / `STRUCTURAL_STEP_TYPES` / `CONTAINER_STEP_TYPES` / `ALL_STEP_TYPES` | 常量 | ast-helpers.ts | 步骤类型集合（parser/validator/engine 判类） | stable |
 | `formatTypeDecl` / `collectTypeDeclClosure` | 函数 | ast-helpers.ts | TypeDecl 字段级序列化+闭包收集（prompt L1 Types 段与 SCHEMA_MISMATCH 反馈两消费点单源——0017:生成/反馈/校验三面同一份契约） | provisional |
-| `DEFLATE_THRESHOLD` / `HUMAN_PREVIEW_THRESHOLD` / `INLINE_PREVIEW_MAX` | 常量 | ast-helpers.ts | 大内容阈值（engine/prompt deflate 判定;INLINE_PREVIEW_MAX=inline 通道预览限额,^anc-exec-llm-inline-context v2 三消费点 prompt/doc-ref 共用） | stable |
+| `DEFLATE_THRESHOLD` / `HUMAN_PREVIEW_THRESHOLD` / `INLINE_PREVIEW_MAX` | 常量 | ast-helpers.ts | 大内容阈值（engine/prompt deflate 判定;INLINE_PREVIEW_MAX=inline 通道预览限额,^anc-exec-llm-inline-context 两个使用点 prompt/doc-ref 共用;v3 起只对下发面含 read 的步骤生效） | stable |
 | `DEFAULT_EXPANSION_MAX` | 常量 | ast-types.ts | subtask free 展开熔断缺省（engine/validator 双侧同源——dff2cb7 批迁入与 SpecConfig 同居,清单漏登 0830 review 补） | stable |
 | `VariableStore` / `VariableScope` / `StepStatus` | 类/类型 | ast-runtime.ts | 变量存储（扁平命名空间语义;scope 树仅作 for-each 收集缓冲与 vars.json v2 存储基质）+ 步骤状态（engine/prompt 消费） | stable |
 | `buildStepMap` | 函数 | ast-runtime.ts | step_id→StepNode 反查表构建（**纯函数,2026-08-14 随 run 隔离不变量去缓存**——原模块顶层 `let _stepMapCache` 是"run 级缓存住进程级槽"的违反面〔权威 [[../ARCHITECTURE#^anc-run-isolation]]〕:多 run 互踢命中率归零,且是全库唯一可变模块全局、被仿写即正确性 bug;缓存归属改引擎实例持有） | stable |
@@ -68,7 +72,9 @@ SpecParser 的输出类型，也是 ExecutionEngine、PromptAssembler、StepDisp
 
 > **内部（表外即内部）**：`ValueTypeString`（值类型字符串字面量，暂无跨模块 import）、`LiteralExpr`/`VarRefExpr`/`FieldAccessExpr`/`UnaryExpr` 等表达式子类型（经 ActExpr 联合暴露，不单独 import）。
 >
-> **迁移注（2026-07-02）**：`VariableStore`/`StepStatus`/`getWriteScope`/`isTruthy`/`buildStepMap`/`SCOPE_CREATING_TYPES` 原在 exec-engine 的 engine-vars.ts/engine-traverse.ts,因被 prompt/act-body 多方跨模块调用(非引擎私有)、且只依赖 spec-ast 自身,归位到 spec-ast 的 ast-runtime.ts。engine-vars.ts 已删除,engine-traverse.ts 瘦身为纯引擎私有遍历(对 exec-engine 外零符号)。
+> **迁移注（2026-07-02）**：`VariableStore`/`StepStatus`/`getWriteScope`/`isTruthy`/`buildStepMap`/`SCOPE_CREATING_TYPES` 原在 exec-engine 的 engine-vars.ts/engine-traverse.ts,因被 prompt/act-body 多方跨模块调用(非引擎私有)、且只依赖 spec-ast 自身,归位到 spec-ast 的 ast-runtime.ts。
+>
+> engine-vars.ts 已删除,engine-traverse.ts 瘦身为纯引擎私有遍历(对 exec-engine 外零符号)。
 
 ## 文档结构与内容分级
 
@@ -205,7 +211,10 @@ struct: SpecConfig
 **引擎消费键清单同源【契约】**（2026-09-15 作者抓工程链脱节后立——expansion_max/engine_min_version/requires_commands 三个键先后落到设计+代码+测试三层而概念层零条款,半个多月无人发现;病根:Config 扩展键经索引签名消费,加键零编译约束,概念层是否记载纯靠人自觉）：
 
 - **单一事实源**：`src/ast-types.ts` 导出常量 `ENGINE_CONFIG_KEYS`——引擎真消费的 Config 键全清单（新增引擎消费键必须入列;声明在场但零消费的键〔max_depth/max_retries〕不入列不入教学面）;
-- **守卫双向核**（tests/config-keys-doc-sync.test.ts,npm test 内常驻）：①清单→文档:清单每键在概念层语法参考的记载面在场——判据是**名字边界正则**（键名前后都不是标识符字符才算在场,防 model 被 models 的记载子串吞并假绿——立守卫批阅卷实锤裸子串判在 model 键上实质失效后改定;从宽面保留:不限定出现位置与包裹形态,记载质量归语义审计）,缺即红点名键与文件;②代码→清单:扫 src/*.ts 的 `config?.['键']`/`specConfig?.['键']` 索引消费形态（键名限 ASCII 标识符——注释里的中文示例字样不是真键）,提取键不在清单即红——经索引通道加新消费键,不登清单+不写概念层就过不了机检。**扫描面边界如实记**:具名字段属性访问（如 `specConfig?.model`）不在扫描面——具名字段有 tsc 管类型,概念层记载靠"入清单三件同批"纪律与本条①兜（新键若加成 SpecConfig 具名字段走属性访问,②的机检承诺不覆盖它）;上方 struct 把五消费键都列成具名字段是**文档视图**,TS 接口实况是 model/max_depth/max_retries/expansion_max 四个具名+其余走索引签名——struct 按语义完整列,TS 按消费通道选形态,两者不同步是设计使然;
+- **守卫双向核**（tests/config-keys-doc-sync.test.ts,npm test 内常驻）：
+  - ①清单→文档:清单每键在概念层语法参考的记载面在场——判据是**名字边界正则**（键名前后都不是标识符字符才算在场,防 model 被 models 的记载子串吞并假绿——立守卫批阅卷实锤裸子串判在 model 键上实质失效后改定;从宽面保留:不限定出现位置与包裹形态,记载质量归语义审计）,缺即红点名键与文件;
+  - ②代码→清单:扫 src/*.ts 的 `config?.['键']`/`specConfig?.['键']` 索引消费形态（键名限 ASCII 标识符——注释里的中文示例字样不是真键）,提取键不在清单即红——经索引通道加新消费键,不登清单+不写概念层就过不了机检;
+  - **扫描面边界如实记**:具名字段属性访问（如 `specConfig?.model`）不在扫描面——具名字段有 tsc 管类型,概念层记载靠"入清单三件同批"纪律与本条①兜（新键若加成 SpecConfig 具名字段走属性访问,②的机检承诺不覆盖它）;上方 struct 把五消费键都列成具名字段是**文档视图**,TS 接口实况是 model/max_depth/max_retries/expansion_max 四个具名+其余走索引签名——struct 按语义完整列,TS 按消费通道选形态,两者不同步是设计使然;
 - **为什么钉概念层不钉设计层**：设计先行有 check-design-first 机检守,历次批次设计层从未漏;脱节恒发生在概念层（受控快照,误解为"只有 vault 演进才动"）——守卫对准实际出血点。 ^anc-ast-config-keys-doc-sync
 
 TypeDecl 的 v1 output_schema 校验策略（见关键决策四）：基础类型（text/bool/line/number/[line]）做值类型检查；enum(...) 做值属于枚举成员检查；自定义 TypeDecl 仅验证字段名存在性（fields 键子集检查），不做递归类型匹配。v1 不支持嵌套 TypeDecl 引用校验：fields 值为自定义类型名时（如 "AddressType"），v1 不递归解析，视同 any。v2+ 可引入完整的递归类型校验。
@@ -347,7 +356,13 @@ struct: ParamMapping
 
 ParamMapping 的双向映射语法对称（目标: 来源，同名省略），引擎在父子变量空间间自动搬运。v1 不做 from/to 的类型匹配校验（见关键决策四；validator V6 仅检查 from/to 非空）。跨类型传递（如 caller number → callee text）静默通过——JSON 序列化可透传任意类型，callee 侧 LLM 收到的值可能与预期类型不符，但不会崩溃。v2+ 可加类型兼容性检查。
 
-**字面量映射项【契约】（2026-08-27 作者拍板 A，hopissues/hoplogic3/0044——原实装只映射父变量，`split_kind: "seq"` 的 `"seq"` 被当作不存在的父变量静默丢弃，子实例拿 None）**：param_mapping 值位（`from` 位）写字面量时，命中即在映射项上落 `literal_value`（解析后的运行时值）并保留 `from` 原文（序列化回写作者写法）。**判定面 = 封闭枚举**：同型引号成对字符串（`"seq"`/`'seq'`）、数字（`-?\d+(\.\d+)?`）、严格小写 `true`/`false`/`null`——三正则在 parser（paramMappingEntry）与 V6 output 闸两处逐字同，不许漂移；命中项的**值解析**复用 parseInitValue 单点（判定与解析分工：判定面是映射位自己的封闭枚举，比 `= 初值` 窄——对象/列表 `{}`/`[]` 与大写 `True`/`None` 不入映射字面量，前者前置步骤装配后传变量，后者按裸词=变量名走缺失语义。review 实抓初版判定用 /i 宽容：`True` 过判定但 parseInitValue 只认小写跌字符串分支，literal_value 得字符串 `"True"`——静默转字符串正是本条款禁止的病形）。**裸词恒为变量名**——`mode: seq` 是变量映射，永不猜成字符串（静默转字符串=另一种静默错误：变量名打错本该按缺失语义拒，转字符串会带病通过）。映射串切分引号感知且**双入口**（`[call id(...)]` 行内与旧形态 `- ←` 行同经 splitMappingSegments，`"a, b"` 不被逗号切碎；旧形态行的 `#` 注释剥离同为引号感知）。仅 param_mapping 有字面量语义；output_mapping 值位是子输出名，字面量无意义（V6 拦截见 [[spec-parser#^anc-rule-v6]]）。消费面全部同源（resolveCallParams 单点，见 [[exec-engine#^anc-exec-call-auto-map]]）。 ^anc-step-call-literal
+**字面量映射项【契约】（2026-08-27 作者拍板 A，hopissues/hoplogic3/0044——原实装只映射父变量，`split_kind: "seq"` 的 `"seq"` 被当作不存在的父变量静默丢弃，子实例拿 None）**：param_mapping 值位（`from` 位）写字面量时，命中即在映射项上落 `literal_value`（解析后的运行时值）并保留 `from` 原文（序列化回写作者写法）。
+
+- **判定面 = 封闭枚举**：同型引号成对字符串（`"seq"`/`'seq'`）、数字（`-?\d+(\.\d+)?`）、严格小写 `true`/`false`/`null`——三正则在 parser（paramMappingEntry）与 V6 output 闸两处逐字同，不许漂移；
+- 命中项的**值解析**复用 parseInitValue 单点（判定与解析分工：判定面是映射位自己的封闭枚举，比 `= 初值` 窄——对象/列表 `{}`/`[]` 与大写 `True`/`None` 不入映射字面量，前者前置步骤装配后传变量，后者按裸词=变量名走缺失语义。review 实抓初版判定用 /i 宽容：`True` 过判定但 parseInitValue 只认小写跌字符串分支，literal_value 得字符串 `"True"`——静默转字符串正是本条款禁止的病形）；
+- **裸词恒为变量名**——`mode: seq` 是变量映射，永不猜成字符串（静默转字符串=另一种静默错误：变量名打错本该按缺失语义拒，转字符串会带病通过）；
+- 映射串切分引号感知且**双入口**（`[call id(...)]` 行内与旧形态 `- ←` 行同经 splitMappingSegments，`"a, b"` 不被逗号切碎；旧形态行的 `#` 注释剥离同为引号感知）；
+- 仅 param_mapping 有字面量语义；output_mapping 值位是子输出名，字面量无意义（V6 拦截见 [[spec-parser#^anc-rule-v6]]）。消费面全部同源（resolveCallParams 单点，见 [[exec-engine#^anc-exec-call-auto-map]]）。 ^anc-step-call-literal
 
 ActStep 的沙箱约束：无不可逆副作用，操作范围限于 SandboxConfig 四维度边界（filesystem/network/runtime/database，见 [[sandbox]]） ^anc-step-act-sandbox-constraint
 
@@ -358,7 +373,8 @@ act/commit 的结构化 body——`> ```hop_python` 围栏内的「无推理编�
 两个联合类型（不是 struct）：
 
 - **ActStatement** = AssignStmt ∪ CallStmt ∪ IfStmt（按 type 字段判别）
-- **ActExpr** = LiteralExpr ∪ VarRefExpr ∪ FieldAccessExpr ∪ IndexExpr ∪ SliceExpr ∪ BinaryExpr ∪ UnaryExpr ∪ CallExpr ∪ ListLiteralExpr ∪ DictLiteralExpr ∪ FStringExpr ∪ TernaryExpr ∪ ComprehensionExpr（按 type 字段判别；ListLiteral/DictLiteral/FString 2026-08-10 A 档实装，TernaryExpr 2026-08-17 作者改判转正式支持，ComprehensionExpr 2026-08-19 列表推导批，SliceExpr 2026-09-05 切片批〔后两员补登 2026-09-05 review 抓漏——权威并集漏员即对新消费者说谎〕——均 Python 对齐）
+- **ActExpr** = LiteralExpr ∪ VarRefExpr ∪ FieldAccessExpr ∪ IndexExpr ∪ SliceExpr ∪ BinaryExpr ∪ UnaryExpr ∪ CallExpr ∪ ListLiteralExpr ∪ DictLiteralExpr ∪ FStringExpr ∪ TernaryExpr ∪ ComprehensionExpr（按 type 字段判别）。
+  - 成员沿革：ListLiteral/DictLiteral/FString 2026-08-10 A 档实装，TernaryExpr 2026-08-17 作者改判转正式支持，ComprehensionExpr 2026-08-19 列表推导批，SliceExpr 2026-09-05 切片批〔后两员补登 2026-09-05 review 抓漏——权威并集漏员即对新消费者说谎〕——均 Python 对齐
 - **BinaryOp** 枚举：`+` `-` `*` `/` `%` `//` `**` `==` `!=` `<` `>` `<=` `>=` `and` `or` `in` `not in`——% // ** 2026-08-10 补齐（** 右结合、-2**2==-4 Python 优先级）；in/not in 成员测试（数组查元素/字符串查子串/对象查键）
 
 ```
@@ -491,7 +507,10 @@ struct: CallArg
     - value: ActExpr                 # 实参值表达式
 ```
 
-**可调用项 = 白名单**（[[sandbox#^anc-exec-sandbox-principle]]）：`CallExpr.callee` 必须 ∈ 内置函数白名单（`ACT_BUILTINS`，26 件 pure 函数全表见 [[../concepts/HopSpec V3核心规范#^anc-step-act-body-lang]]）∪ `ToolProvider.list()` 工具名。调白名单外 = 失败。白名单即 act 能力边界，天然实现"无任意代码执行"。`+` 按操作数类型分派（数加 / 串接）；`*` 对（string, int）为字符串重复。**表达式 walker 五处同步义务**：新增 ActExpr 节点类型时 serialize/exprHasToolCall/exprHasCall/findNonPureCallWith/checkActExpr 必须同批补 case——TS exhaustive switch 保静态漏检。
+**可调用项 = 白名单**（[[sandbox#^anc-exec-sandbox-principle]]）：`CallExpr.callee` 必须 ∈ 内置函数白名单（`ACT_BUILTINS`，26 件 pure 函数全表见 [[../concepts/HopSpec V3核心规范#^anc-step-act-body-lang]]）∪ `ToolProvider.list()` 工具名。调白名单外 = 失败。白名单即 act 能力边界，天然实现"无任意代码执行"。
+
+- `+` 按操作数类型分派（数加 / 串接）；`*` 对（string, int）为字符串重复；
+- **表达式 walker 五处同步义务**：新增 ActExpr 节点类型时 serialize/exprHasToolCall/exprHasCall/findNonPureCallWith/checkActExpr 必须同批补 case——TS exhaustive switch 保静态漏检。
 
 
 
@@ -517,7 +536,10 @@ struct: SubtaskStep ^anc-step-subtask
 
 **parallel 属性（原 ParallelStep 退役，2026-08-07 语言重构）** ^anc-step-parallel
 
-ParallelStep 独立步骤类型退役——静态并行=SubtaskStep.parallel，动态并行=LoopStep.forEach+parallel（两字段即本锚点的设计落点）。旧 `+ → item : for-each list` 伪输出行文法废除。`@a: anc-step-parallel` 的代码落点=两容器 parallel 字段的解析（parser）与 `isParallelContainer()`/`getForEach()` 谓词（ast-helpers）。ParallelStep 保留为类型别名 `SubtaskStep & {parallel:true}` 仅供引擎路径类型收窄（P0.5 收窄：LoopStep.parallel 已随 loop 头文法废除删除，宿主只剩 subtask/call）。
+ParallelStep 独立步骤类型退役——静态并行=SubtaskStep.parallel，动态并行=LoopStep.forEach+parallel（两字段即本锚点的设计落点）。旧 `+ → item : for-each list` 伪输出行文法废除。
+
+- `@a: anc-step-parallel` 的代码落点=两容器 parallel 字段的解析（parser）与 `isParallelContainer()`/`getForEach()` 谓词（ast-helpers）；
+- ParallelStep 保留为类型别名 `SubtaskStep & {parallel:true}` 仅供引擎路径类型收窄（P0.5 收窄：LoopStep.parallel 已随 loop 头文法废除删除，宿主只剩 subtask/call）。
 
 ```
 struct: LoopStep ^anc-step-loop

@@ -1,0 +1,65 @@
+```python
+import ast
+import re
+import sys
+
+violations = []
+
+
+def check_function(node):
+    if node.name.startswith('_'):
+        return
+    doc = ast.get_docstring(node)
+    if doc is None:
+        violations.append("line " + str(node.lineno) + ": function '" + node.name + "' missing docstring")
+        return
+    params = []
+    for a in node.args.posonlyargs:
+        params.append(a.arg)
+    for a in node.args.args:
+        params.append(a.arg)
+    if node.args.vararg is not None:
+        params.append(node.args.vararg.arg)
+    for a in node.args.kwonlyargs:
+        params.append(a.arg)
+    if node.args.kwarg is not None:
+        params.append(node.args.kwarg.arg)
+    for p in params:
+        if p == 'self' or p == 'cls':
+            continue
+        pattern = r'(?<!\w)' + re.escape(p) + r'(?!\w)'
+        if re.search(pattern, doc) is None:
+            violations.append("line " + str(node.lineno) + ": function '" + node.name + "' docstring missing argument '" + p + "'")
+
+
+def process_body(body):
+    for stmt in body:
+        if isinstance(stmt, ast.FunctionDef) or isinstance(stmt, ast.AsyncFunctionDef):
+            check_function(stmt)
+        elif isinstance(stmt, ast.ClassDef):
+            process_body(stmt.body)
+
+
+source_file = sys.argv[1]
+try:
+    file_obj = open(source_file, 'r', encoding='utf-8')
+    source = file_obj.read()
+    file_obj.close()
+except OSError:
+    print("cannot read file")
+    sys.exit(1)
+
+try:
+    tree = ast.parse(source)
+except SyntaxError:
+    print("syntax error")
+    sys.exit(1)
+
+process_body(tree.body)
+
+if len(violations) > 0:
+    for v in violations:
+        print(v)
+    sys.exit(1)
+sys.exit(0)
+```

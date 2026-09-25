@@ -1,0 +1,31 @@
+```python
+import sys
+
+if len(sys.argv) < 2:
+    print("用法: python 校验脚本 文件路径")
+    sys.exit(1)
+
+path = sys.argv[1]
+f = open(path, "r", encoding="utf-8")
+
+line_no = 0
+has_error = 0
+line = f.readline()
+
+while line:
+    line_no = line_no + 1
+    if line.endswith("\n"):
+        line = line[:-1]
+    length = len(line)
+    if length > 100:
+        print("第", line_no, "行长度", length, "超过 100")
+        has_error = 1
+    line = f.readline()
+
+f.close()
+
+if has_error:
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

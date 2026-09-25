@@ -1,0 +1,26 @@
+```python
+import sys
+
+if len(sys.argv) < 2:
+    print("请提供文件路径作为参数")
+    sys.exit(1)
+
+filepath = sys.argv[1]
+fileobj = open(filepath, 'r', encoding='utf-8')
+lines = fileobj.readlines()
+fileobj.close()
+
+haserror = False
+for lineno, line in enumerate(lines, 1):
+    if line.endswith('\n'):
+        line = line[:-1]
+    length = len(line)
+    if length > 100:
+        print("第 " + str(lineno) + " 行: 长度为 " + str(length) + "，超过 100")
+        haserror = True
+
+if haserror:
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

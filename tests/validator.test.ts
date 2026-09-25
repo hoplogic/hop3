@@ -4,7 +4,8 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parseSpec, parseFragment, serializeSpec } from '../src/parser.js';
-import { validateSpec, repairQuotedPrefixScalars, recoverOutputValues, coerceOutputValues } from '../src/validator.js';
+import { validateSpec, repairQuotedPrefixScalars, recoverOutputValues, coerceOutputValues, normalizeOutputsToFixpoint } from '../src/validator.js';
+import { isTruthy } from '../src/ast-runtime.js';   // 下游真值语义用引擎本体,不在测试里重实现
 import type { SpecAST, StepNode, SubtaskStep, ParallelStep, LoopStep, BranchStep, CaseStep, CallStep, CommitStep, ExitStep, ConfirmStep } from '../src/ast-types.js';
 
 function validate(md: string) {
@@ -5729,6 +5730,96 @@ describe('repairQuotedPrefixScalars（值内前置引号片段修复）', () => 
         { check_result: clean },
       );
       expect(out.check_result).toBe(clean);
+    });
+
+    // 三形态扩面 + 按壳自带类型词还原（2026-09-22,todo/0108 T8 实撞:合同评审 9 个条款的
+    // policy_mismatch 真值全为 false,模型回声成 "bool = false";只剥壳不还原会留字符串
+    // "false",hop_python 的 isTruthy 按设计判非空字符串为真,9 个 false 被数成 9 个 true,
+    // 交付结论从"可签"翻成"不可签",而两道 check 闸全绿、run 报 completed）
+    it('正例：形态② `名 % 类型 = 值` 整条回声——名位一并剥掉（% 形态名位可判）', () => {
+      const out = recoverOutputValues(
+        [{ name: 'clause_id', type: 'line', description: '' }],
+        { clause_id: 'clause_id % line = 1' },
+      );
+      expect(out.clause_id).toBe('1');
+    });
+
+    it('正例：形态③ `=|` 同行块式回声——渲染器教"值恒在下方缩进块",写同行即回声', () => {
+      const out = recoverOutputValues(
+        [{ name: 'clause_id', type: 'line', description: '' }, { name: 'quote', type: 'text', description: '' }],
+        { clause_id: 'line =| 1', quote: 'quote % text =| abc' },
+      );
+      expect(out.clause_id).toBe('1');
+      expect(out.quote).toBe('abc');
+    });
+
+    it('正例：剥完按壳自带类型词还原——bool/int/float 不留字符串', () => {
+      const out = recoverOutputValues(
+        [
+          { name: 'flag', type: 'bool', description: '' },
+          { name: 'n', type: 'int', description: '' },
+          { name: 'ratio', type: 'float', description: '' },
+        ],
+        { flag: 'bool = false', n: 'int = 9', ratio: 'float = 1.5' },
+      );
+      expect(out.flag).toBe(false);          // 不是字符串 "false"
+      expect(out.n).toBe(9);
+      expect(out.ratio).toBe(1.5);
+    });
+
+    it('正例：T8 实撞回放——[yaml] 无字段级声明的槽位同样治住,9 个 false 不再翻成 9 个 true', () => {
+      // 毒值取自 T8（examples/contract-review/dpa-review.md × Ling）的真实 vars.json
+      const poisoned = Array.from({ length: 9 }, (_, i) => ({
+        id: `line = 't${i + 1}'`,
+        blocking: 'bool = false',
+        policy_mismatch: 'bool = false',
+      }));
+      const out = normalizeOutputsToFixpoint(
+        [{ name: 'term_facts', type: '[yaml]', description: '' }],
+        { term_facts: poisoned },
+      );
+      const facts = out.term_facts as Array<Record<string, unknown>>;
+      expect(facts).toHaveLength(9);
+      for (const f of facts) {
+        expect(f.policy_mismatch).toBe(false);   // 布尔,不是字符串
+        expect(f.blocking).toBe(false);
+      }
+      // 下游 act 步的列表推导语义（len([t for t in facts if t.policy_mismatch])）
+      expect(facts.filter(f => isTruthy(f.policy_mismatch)).length).toBe(0);
+      expect(facts[0].id).toBe('t1');
+    });
+
+    it('反例：冒号形态不剥名位——`clause_id: line = 1` 是合法 YAML,真值可能就是它', () => {
+      const out = recoverOutputValues(
+        [{ name: 'note', type: 'line', description: '' }],
+        { note: 'clause_id: line = 1' },
+      );
+      expect(out.note).toBe('clause_id: line = 1');
+    });
+
+    it('反例：引号在场不按类型词还原——值显式为字符串', () => {
+      const out = recoverOutputValues(
+        [{ name: 'flag', type: 'line', description: '' }],
+        { flag: "bool = 'false'" },
+      );
+      expect(out.flag).toBe('false');   // 字符串 "false",不是布尔
+    });
+
+    it('反例：类型词还原不动非法字面——bool 收到非 true/false、int 收到非数字,原样留字符串', () => {
+      const out = recoverOutputValues(
+        [{ name: 'a', type: 'line', description: '' }, { name: 'b', type: 'line', description: '' }],
+        { a: 'bool = maybe', b: 'int = N/A' },
+      );
+      expect(out.a).toBe('maybe');
+      expect(out.b).toBe('N/A');
+    });
+
+    it('反例：词表外的类型词不剥——只认内建类型词', () => {
+      const out = recoverOutputValues(
+        [{ name: 'v', type: 'line', description: '' }],
+        { v: 'mytype = false' },
+      );
+      expect(out.v).toBe('mytype = false');
     });
   });
 

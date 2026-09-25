@@ -3,12 +3,12 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 // @module: step-dispatcher ^anc-struct-step-dispatcher
 import Anthropic from '@anthropic-ai/sdk';
-import { wrapAnthropicClient, makeOpenAiClient, type ProtocolClient } from './protocol-openai.js';
-import { load as yamlLoad } from 'js-yaml';
+import { wrapAnthropicClient, makeOpenAiClient, makeOpenAiResponsesClient, type ProtocolClient } from './protocol-openai.js';
+import { load as yamlLoad, dump as yamlDump } from 'js-yaml';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ExecutionEngine } from './engine.js';
-import { PromptAssembler, injectKnowledgeContext, actRoleKind, roleGuideText, renderPromptParts, SCHEMA_KICK_MARKER } from './prompt.js';
+import { PromptAssembler, injectKnowledgeContext, actRoleKind, roleGuideText, renderPromptParts, SCHEMA_KICK_MARKER, buildTextToolCallHint } from './prompt.js';
 import { DefaultToolProvider } from './tools.js';
 import { CompositeToolProvider } from './tools-composite.js';
 import { BodyInterpreter, evalExprSync } from './act-body-interpreter.js';
@@ -143,6 +143,13 @@ const EMPTY_RETRY_MAX = 2;
 // API 输出 token 上限缺省值（env / resource_limits 都未指定时）。
 const DEFAULT_MAX_OUTPUT_TOKENS = 32768;   // 2026-08-27 从 16384 抬升（^anc-exec-output-budget——推理型模型 thinking+正文共池,旧值两头紧;上限是物理防线非产出配额,产出归 spec 输出声明约束）
 
+/** CHILD_NOT_IN_QUEUE 拒因文字（队列 miss 且在飞账无该 child 的 paused 项）——单一来源:dispatcher.resume
+ * 异步拒收与 mcp-server resume_run 同步核对共用,防两处文字漂移（todo/0105）。
+ * // @a: anc-exec-parallel-hitl-queue */
+export function childNotInQueueMessage(childInstance: string): string {
+  return `子实例 '${childInstance}' 不在待答队列（已答过/已终态/杀活清场;或这是串行 call 停点——其应答走 call_path 路由,去掉 child_instance 参数重答。run_status 的 paused_queue 是现存卡权威）`;
+}
+
 /** 独立模式的驱动适配层：跑调度循环（init→next→execute→done）并直调 Anthropic API 完成单步推理与工具调用。见 [[step-dispatcher#^anc-struct-step-dispatcher]] */
 export class StepDispatcher { // @a: anc-struct-step-dispatcher
   private clients = new Map<string, ProtocolClient>(); // @a: anc-exec-model-routing
@@ -154,6 +161,10 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
   private ctxWatermark = 0;
   private ctxWarnedTier = 0;   // 已告警档位（1=越 75%,2=越 100%）——每档只告警一次,水位单调重复告警是噪声
   private replanAttempts = new Map<string, number>();
+  // 每步最近一次模型终轮响应记录（step_id → 正文+实际下发工具名;单发 reason/check 工具名为空）。
+  // 只供 SCHEMA_MISMATCH 算子级重试判"正文疑似工具调用"后追加提示;执行入口先删、handleStepReady
+  // 收尾删——不拿上一次的正文判这一次。// @a: anc-exec-text-toolcall-hint
+  private lastFinalTurn = new Map<string, { text: string; tool_names: string[] }>();
   private maxToolIterations: number;
   private tokenBudget: number | undefined;
   private timeoutSeconds: number | undefined;
@@ -211,8 +222,26 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
     for (const d of this.inflightDispatchers.values()) d.requestAbortCascade();
     for (const f of this.callFrames.values()) f.dispatcher.requestAbortCascade();
     for (const c of this.activeCallChildren.values()) c.requestAbortCascade();
-    for (const pc of this.pausedChildren.values()) { pc.dispatcher.requestAbortCascade(); pc.engine.removePausedCard(); }
+    for (const pc of this.pausedChildren.values()) { pc.dispatcher.requestAbortCascade(); pc.engine.removePausedCard(); void this.releaseChildToolView(pc.dispatcher); }
     this.pausedChildren.clear();
+  }
+
+  /** 并行子任务的工具面（todo/0112,^anc-exec-standalone-parallel 例外条款）：父工具面的派生视图——
+   * per_parallel_child 打开的 server 在子任务里独占进程;没有打开的 server 时就是父的同一个对象
+   * （0021 共享形态不变）。只在三个并行注入点用;串行 call 注入点照旧传 this.toolProvider。
+   * // @a: anc-exec-tool-composite */
+  private childToolView(): import('./provider-types.js').ToolProvider {
+    const tp = this.toolProvider as { forkForParallelChild?: () => import('./provider-types.js').ToolProvider };
+    return typeof tp.forkForParallelChild === 'function' ? tp.forkForParallelChild() : this.toolProvider;
+  }
+
+  /** 并行子任务收场关派生视图的自有成员（父的成员不碰;子任务用的就是父对象时什么也不做）。
+   * 暂停的子任务不调本函数——进程留到恢复后收场。清理尽力而为不抛。 // @a: anc-exec-tool-composite */
+  private async releaseChildToolView(child: StepDispatcher | undefined): Promise<void> {
+    const view = child?.getToolProvider();
+    if (!view || view === this.toolProvider) return;
+    const c = (view as { closeOwned?: () => Promise<void> }).closeOwned;
+    if (typeof c === 'function') { try { await c.call(view); } catch { /* 尽力而为 */ } }
   }
 
   // call 边界上游反馈组装（D41）：父层对本 call 步的重试反馈 + 本实例自己收到的上游反馈
@@ -253,9 +282,12 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
     // authToken: null 切断 SDK 隐式读 env.ANTHROPIC_AUTH_TOKEN——SDK 的 authToken(Bearer 头)
     // 优先于显式 apiKey 发出,宿主 token 会盖掉解析出的配对凭证(2026-08-10 真机实抓 401)。
     // 见 design ^anc-exec-model-resolve 加载顺序"SDK 隐式 env 读取必须切断"。
-    // 协议分派（^anc-exec-protocol-adapter）：openai 走适配器（IR 双向转换）；anthropic 直通包装
-    if ((hostConfig.protocol ?? 'anthropic') === 'openai-chat') {
+    // 协议分派：openai 两形态走适配器（IR 双向转换）；anthropic 直通包装 // @a: anc-exec-protocol-adapter
+    const proto = hostConfig.protocol ?? 'anthropic';
+    if (proto === 'openai-chat') {
       this.defaultClient = makeOpenAiClient({ apiKey, ...(baseURL ? { baseURL } : {}) });
+    } else if (proto === 'openai-responses') {
+      this.defaultClient = makeOpenAiResponsesClient({ apiKey, ...(baseURL ? { baseURL } : {}) });
     } else {
       // client 级 timeout 显式给——SDK 非流式预检只看 _options.timeout,未设且 max_tokens
       // 换算超 10min 即拒发"Streaming is required"（per-request 第二参不进预检,首修修错层实证）。
@@ -353,7 +385,7 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
           // call_path/child_instance 字段对此形态均空,caller 无从判别〕,一次可修正参数错毁掉
           // 可恢复 run。三 miss 形态同拒同指引:已答过/已终态清场/串行停点误带参。）
           // @a: anc-exec-parallel-hitl-queue
-          return { status: 'paused', rejected: { code: 'CHILD_NOT_IN_QUEUE', message: `子实例 '${childInstance}' 不在待答队列（已答过/已终态/杀活清场;或这是串行 call 停点——其应答走 call_path 路由,去掉 child_instance 参数重答。run_status 的 paused_queue 是现存卡权威）` } } as RunResult;
+          return { status: 'paused', rejected: { code: 'CHILD_NOT_IN_QUEUE', message: childNotInQueueMessage(childInstance) } } as RunResult;
         }
       }
       this.pausedChildren.delete(childInstance);
@@ -370,6 +402,7 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
       const reap = pc.kind === 'call' ? this.engine.reapParallelCall.bind(this.engine) : this.engine.reapParallelSubtask.bind(this.engine);
       if (childResult.status === 'completed') {
         reap(childInstance, { vars: pc.engine.getVars().variables, committed });
+        await this.releaseChildToolView(pc.dispatcher);   // 恢复后收场关（todo/0112）// @a: anc-exec-tool-composite
       } else if (childResult.status === 'paused') {
         // 子内下一个暂停点——回队列（新载荷),账回 paused
         this.pausedChildren.set(childInstance, { ...pc, pause: { ...childResult.pause!, child_instance: childInstance } });
@@ -377,6 +410,7 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
         return this.executionLoop();
       } else {
         reap(childInstance, { failure: pc.engine.exportFailState(), committed });
+        await this.releaseChildToolView(pc.dispatcher);   // 恢复后收场关（todo/0112）// @a: anc-exec-tool-composite
       }
       return this.executionLoop();
     }
@@ -477,14 +511,16 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
       const isCall = node?.step_type === 'call';
       const childDir = join(instDir, isCall ? 'calls' : 'parallel', childInstance);
       const p = (async () => {
+        let worker: StepDispatcher | undefined;
+        let keepToolView = false;   // 停在暂停点=保留派生视图的进程到恢复后收场（todo/0112）
         try {
           const childEngine = ExecutionEngine.load(childDir);
           // 复位悬空态（0830 review 实锤:盘上暂停中的 ask/confirm 是 running 态,不复位则
           // runSpec 撞 WAITING_WRITEBACK 防线直接 failed——下方 paused 分支成死代码,子实例
           // 被失败收割,恰是本批要修的洞没通电）。// @a: anc-exec-call-child-persist
           childEngine.recoverDanglingRunning();
-          const worker = new StepDispatcher(childEngine, this.hostConfig, {
-            sharedToolProvider: this.toolProvider,
+          worker = new StepDispatcher(childEngine, this.hostConfig, {
+            sharedToolProvider: this.childToolView(),   // 派生视图（todo/0112）// @a: anc-exec-tool-composite
             worker: true,
             callDepth: this.callDepth,
             maxToolIterations: this.maxToolIterations,
@@ -504,12 +540,14 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
             // paused 分支同款。// @a: anc-exec-parallel-hitl-queue, anc-exec-call-child-persist
             this.engine.markInflightPaused(childInstance);
             this.pausedChildren.set(childInstance, { pause: { ...r.pause!, child_instance: childInstance }, dispatcher: worker, engine: childEngine, kind: isCall ? 'call' : 'subtask' });
+            keepToolView = true;
           }
           else reap(childInstance, { failure: childEngine.exportFailState(), committed });
         } catch (err: unknown) {
           const reap = isCall ? this.engine.reapParallelCall.bind(this.engine) : this.engine.reapParallelSubtask.bind(this.engine);
           reap(childInstance, { failure: { specId: 'child', childInstanceId: childInstance, stepFailReasons: { rebuild: { reason: err instanceof Error ? err.message : String(err), fail_kind: 'error' } }, stepStates: { rebuild: 'failed' } } });
         } finally {
+          if (!keepToolView) await this.releaseChildToolView(worker);   // 非暂停收场关（todo/0112）// @a: anc-exec-tool-composite
           this.inflightPromises.delete(childInstance);
         }
       })();
@@ -684,15 +722,20 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
       while (true) {
         const resp = this.engine.completeStep(step.step_id, result);
         if (resp.code !== ErrorCode.SCHEMA_MISMATCH) break;  // 通过或其他响应 → 交回主循环
+        // 产出已被拒:正文疑似把工具调用写成了文字 → 在校验报文后追加条件式提示（原报文一字不动;
+        // body 步骤无模型文字不查）。// @a: anc-exec-text-toolcall-hint
+        const turn = isBodyStep ? undefined : this.lastFinalTurn.get(step.step_id);
+        const hint = turn ? buildTextToolCallHint(turn.text, turn.tool_names) : '';
+        const hintTail = hint ? `\n\n${hint}` : '';
         if (isBodyStep || attempt >= SCHEMA_RETRY_MAX) {
           this.engine.failStep(step.step_id, isBodyStep
             ? `${resp.message}（act body 确定性，schema 不匹配不改 prompt 重做，转容器级 retry）`
-            : `${resp.message} (after ${SCHEMA_RETRY_MAX} attempts)`);
+            : `${resp.message} (after ${SCHEMA_RETRY_MAX} attempts)${hintTail}`);
           return;
         }
         attempt++;
         // 把校验反馈拼回 instruction，重做该算子
-        step.context.instruction = `${baseInstruction}\n\n${SCHEMA_KICK_MARKER}\n${resp.message}`;
+        step.context.instruction = `${baseInstruction}\n\n${SCHEMA_KICK_MARKER}\n${resp.message}${hintTail}`;
         const retry = await this.execWithEmptyRetry(step);   // 全口径罩:SCHEMA 重做口同享空响应自救（计数每口独立） // @a: anc-exec-output-empty-loud
         if (retry === 'paused') return;
         result = retry;
@@ -721,7 +764,16 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
         };
         return;
       }
+      // 超窗二次仍溢出（reason/check 单发与工具循环三个抛出点）：产生点记确定性类别——引擎判档次
+      // 只看失败原因开头,类别随失败记录走不靠文字识别（todo/0116,新错误产生点用枚举）
+      // @a: anc-exec-toolloop-ctx-degrade
+      if (reason.startsWith('CONTEXT_OVERFLOW:')) {
+        this.engine.failStep(step.step_id, reason, 'deterministic');
+        return;
+      }
       this.engine.failStep(step.step_id, reason);
+    } finally {
+      this.lastFinalTurn.delete(step.step_id);   // 成功/失败/暂停都清本步终轮记录 // @a: anc-exec-text-toolcall-hint
     }
   }
 
@@ -771,7 +823,7 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
       return;
     }
     const worker = new StepDispatcher(childEngine, this.hostConfig, {
-            sharedToolProvider: this.toolProvider,
+      sharedToolProvider: this.childToolView(),   // 派生视图（todo/0112）// @a: anc-exec-tool-composite
       worker: true,
       callDepth: this.callDepth,
       maxToolIterations: this.maxToolIterations,
@@ -779,6 +831,7 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
     });
     this.inflightDispatchers.set(d.child_instance, worker);   // 协作中断句柄 // @a: anc-exec-parallel-abort
     const p = (async () => {
+      let keepToolView = false;   // 停在暂停点=保留派生视图的进程到恢复后收场（todo/0112）
       try {
         const r = await worker.runSpec();
         this.cumulativeTokens += worker.getCumulativeTokens();
@@ -794,12 +847,14 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
           // @a: anc-exec-parallel-hitl-queue, anc-exec-parallel-hitl-queue-dispatch
           this.engine.markInflightPaused(d.child_instance);
           this.pausedChildren.set(d.child_instance, { pause: { ...r.pause!, child_instance: d.child_instance }, dispatcher: worker, engine: childEngine, kind: 'subtask' });
+          keepToolView = true;
         } else {
           this.engine.reapParallelSubtask(d.child_instance, { failure: childEngine.exportFailState(), committed });
         }
       } catch (err: unknown) {
         this.engine.reapParallelSubtask(d.child_instance, { failure: { specId: 'self', childInstanceId: d.child_instance, stepFailReasons: { run: { reason: err instanceof Error ? err.message : String(err), fail_kind: 'error' } }, stepStates: { run: 'failed' }, }, committed: childEngine.hasCommittedSteps() });
       } finally {
+        if (!keepToolView) await this.releaseChildToolView(worker);   // 非暂停收场关（todo/0112）// @a: anc-exec-tool-composite
         this.inflightPromises.delete(d.child_instance);
         this.inflightDispatchers.delete(d.child_instance);
       }
@@ -865,13 +920,14 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
       return;
     }
     const childDispatcher = new StepDispatcher(childEngine, this.hostConfig, {
-            sharedToolProvider: this.toolProvider,
+      sharedToolProvider: this.childToolView(),   // 派生视图（todo/0112）// @a: anc-exec-tool-composite
       callDepth: this.callDepth + 1,
       maxToolIterations: this.maxToolIterations,
       ...(this.timeoutSeconds !== undefined ? { timeoutSeconds: this.timeoutSeconds } : {}),
     });
     this.inflightDispatchers.set(d.child_instance, childDispatcher);   // 协作中断句柄 // @a: anc-exec-parallel-abort
     const p = (async () => {
+      let keepToolView = false;   // 停在暂停点=保留派生视图的进程到恢复后收场（todo/0112）
       try {
         const r = await childDispatcher.runSpec();
         this.cumulativeTokens += childDispatcher.getCumulativeTokens();
@@ -885,12 +941,14 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
           // 同 subtask 侧——U4b 入队（0013）。// @a: anc-exec-parallel-hitl-queue
           this.engine.markInflightPaused(d.child_instance);
           this.pausedChildren.set(d.child_instance, { pause: { ...r.pause!, child_instance: d.child_instance }, dispatcher: childDispatcher, engine: childEngine, kind: 'call', calleeId });
+          keepToolView = true;
         } else {
           this.engine.reapParallelCall(d.child_instance, { failure: childEngine.exportFailState(), committed });
         }
       } catch (err: unknown) {
         this.engine.reapParallelCall(d.child_instance, { failure: { specId: calleeId, childInstanceId: d.child_instance, stepFailReasons: { run: { reason: err instanceof Error ? err.message : String(err), fail_kind: 'error' } }, stepStates: { run: 'failed' } }, committed: childEngine.hasCommittedSteps() });
       } finally {
+        if (!keepToolView) await this.releaseChildToolView(childDispatcher);   // 非暂停收场关（todo/0112）// @a: anc-exec-tool-composite
         this.inflightPromises.delete(d.child_instance);
         this.inflightDispatchers.delete(d.child_instance);
       }
@@ -1032,10 +1090,12 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
     // @a: anc-exec-l2c-retry-feedback
     const upstream = this.buildCallUpstreamFeedback(step.step_id);
     const calleeSpecPathC = this.resolveCalleeSpecPath(specSource.spec_id);
+    // 子实例 ID 与复用模式同一取名法（loop 里带轮次,各轮目录互不删除）;帧表仍按步骤号为键 // @a: anc-exec-call-child-iter-id
+    const childInstanceC = this.engine.serialCallChildInstance(step.step_id);
     const initResp = childEngine.initExecution(specSource.source, this.hostConfig, {
       params,
       parentInstanceId: this.engine.getInstanceId(),
-      callStepId: step.step_id,
+      callStepId: childInstanceC,
       traceId: this.engine.getInstanceId(),
       ...(calleeSpecPathC ? { specPath: calleeSpecPathC } : {}),   // doc-ref 基准继承 // @a: anc-exec-doc-ref-resolve
       ...(parentDirC ? { stateDir: join(parentDirC, 'calls') } : {}),
@@ -1043,7 +1103,7 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
       // 卫星目录：父 run 目录下 calls/<step>/log（与 parallel/<cid>/log 同构）;级别继承父
       //（作者定缺省全 debug 同批——原不传则子实例落缺省,父显式降级时子不跟,两向都要继承）
       // @a: anc-obs-log-levels
-      ...(parentRunDir ? { logDir: join(parentRunDir, 'calls', step.step_id, 'log'), logLevel: this.engine.getHopLog()?.getLevel() } : {}),
+      ...(parentRunDir ? { logDir: join(parentRunDir, 'calls', childInstanceC, 'log'), logLevel: this.engine.getHopLog()?.getLevel() } : {}),
     });
     if (initResp.status === 'error') {
       this.engine.failStep(step.step_id, `callee '${calleeId}' 解析/校验失败: ${initResp.errors.map(e => e.message).join('; ')}`);
@@ -1502,14 +1562,15 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
 
   /** reason 步执行入口（^anc-exec-reason-tools 2026-09-01 作者拍"所以应该给 reason 提供文件工具"
    * "等同于 act 的能力，不能 commit 写"）——协议分派（HopSop 第 2 步）：
-   * anthropic 协议走工具循环（与 act 共用 executeActWithTools 循环体,不复制第二份循环）;
-   * openai 协议无工具循环（^todo-openai-tool-loop 既有账）退回单发零工具形态——与改造前
-   * 行为逐字节一致,不 fail-fast（reason 不同于 act:它总能纯推理产出,工具只是增强）。 */
+   * supportsToolLoop 协议走工具循环（anthropic/openai-responses——与 act 共用
+   * executeActWithTools 循环体,不复制第二份循环）;无工具循环能力的协议（openai-chat）
+   * 退回单发零工具形态,不 fail-fast（reason 不同于 act:它总能纯推理产出,工具只是增强）。 */
   // @a: anc-exec-reason-tools
   private async executeReason(step: StepReady): Promise<Record<string, unknown>> {
     const resolved = this.resolveModel('reason', step);
     const client = this.getClientForService(resolved.service_id);
-    if (client.protocol === 'openai-chat') return this.executeReasonOrCheck(step);
+    // 能力谓词分道（0020 批——不比对协议枚举名）:无工具循环能力的协议退回单发零工具
+    if (!client.supportsToolLoop) return this.executeReasonOrCheck(step);
     // reason 工具面全按声明下发（^anc-exec-reason-tools 2026-09-18 修订——原 basic 恒下发
     // 废除:救"少数 reason 要读盘"的决策给了全部 reason 无条件十一件,弱模型实撞七轮全灭
     // 20 轮工具空转,闲置工具面是行为吸引子。零声明=零工具面走单发纯推理——弱模型物理
@@ -1520,6 +1581,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
   }
 
   private async executeReasonOrCheck(step: StepReady): Promise<Record<string, unknown>> {
+    this.lastFinalTurn.delete(step.step_id);   // 先删旧记录——不拿上一次的正文判这一次 // @a: anc-exec-text-toolcall-hint
     const { request, client } = this.buildApiRequest(step.context, step.step_type, step);
 
     let response: Anthropic.Message;
@@ -1601,6 +1663,8 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
       const tfValue = this.extractSelfReportKey(this.extractTextContent(response), 'tool_failure', '（未说明故障）');
       if (tfValue !== undefined) return { tool_failure: tfValue };
     }
+    // 单发零工具:记下终轮正文,产出被拒时判"正文疑似工具调用"用 // @a: anc-exec-text-toolcall-hint
+    this.lastFinalTurn.set(step.step_id, { text: this.extractTextContent(response), tool_names: [] });
     return this.parseStepOutput(response, step.context.output_schema, step.step_id);
   }
 
@@ -1636,6 +1700,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
 
   // act 步骤中 LLM 仅能从预注册工具列表选择调用——无任意代码执行 // @a: anc-exec-sandbox-principle, anc-config-sandbox-step-mapping
   private async executeActWithTools(step: StepReady, allowCommit = false): Promise<Record<string, unknown>> {
+    this.lastFinalTurn.delete(step.step_id);   // 先删旧记录——不拿上一次的正文判这一次 // @a: anc-exec-text-toolcall-hint
     // 工具分档下发（0054 ^anc-step-tool-grant——basic 恒下发;special 须节点 `- 工具:` 声明:
     // 声明 * 全量,具名逐件,零声明零 special。缺省 category=special 收紧安全默认）。
     const nodeForGrants = this.findStepInSpec(step.step_id) as (StepNode & { tool_grants?: { name: string; note?: string }[]; tool_denies?: { name: string; note?: string }[] }) | null;
@@ -1673,7 +1738,10 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     const systemPrompt = this.buildSystemPrompt(step.context);
     // 角色档 system 尾块注入线保持（^anc-exec-act-free-role 两线同源契约——review 实抓:角色
     // 前缀原只进 hoplog 记录线,standalone 真实请求零角色指引;注入易变尾块,不碰稳定块缓存前缀）。
-    systemPrompt.push({ type: 'text', text: roleGuideText(roleKind) });
+    // 第二参=Bash 纪律句条件化信号（^anc-exec-l0-worldview-impl 第 6 条）——从组装期算好的
+    // ctx 字段取,不在本线另判:两线（L4 就地渲染 + 本处 system 尾块）必须吃同一个布尔,
+    // 否则同一步的两处角色档文字会分叉。standalone 走本路径时它恒 false（注册面在场）。
+    systemPrompt.push({ type: 'text', text: roleGuideText(roleKind, !!step.context.shell_commands_available) }); // @a: anc-exec-l0-worldview-impl
     // 调用点类别忠实（^anc-exec-model-resolve,0003）：commit 步按 'commit' 解析——原硬编码 'act'
     // 让 Config.models.commit/routing_rules[commit] 永不生效静默降配;共档回落在解析函数内。
     // reason 步同理按 'reason' 解析（^anc-exec-reason-tools——models.reason/routing_rules[reason]
@@ -1682,11 +1750,11 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     const resolved = this.resolveModel(category, step);
     const actClient = this.getClientForService(resolved.service_id);
     const maxOutputBudget = this.resolveMaxOutputTokens(resolved.service_id);   // 循环外解析一次（^anc-exec-output-budget）
-    // openai 协议当下不支持 LLM 工具循环（作者定 2026-08-12，^todo-openai-tool-loop 观察账）——
-    // 入口 fail-fast 指路，不带病进循环。带 body 的 act 不经此路径（body 工具走引擎白名单通道）。
-    // @a: anc-exec-protocol-adapter
-    if (actClient.protocol === 'openai-chat' && tools.length > 0) {
-      throw new Error('PROTOCOL_TOOL_LOOP_UNSUPPORTED: openai-chat 协议 provider 不支持无 body 的 act 工具循环——给 act 写 hop_python body（工具走引擎白名单通道），或该步 @model 路由到 anthropic 协议 provider');
+    // 工具循环按 supportsToolLoop 能力谓词分道（0020 批,原 openai 全拒翻案——anthropic/
+    // openai-responses 承载,openai-chat 维持 fail-fast 指路,不带病进循环。带 body 的 act
+    // 不经此路径〔body 工具走引擎白名单通道〕）。// @a: anc-exec-protocol-adapter
+    if (!actClient.supportsToolLoop && tools.length > 0) {
+      throw new Error(`PROTOCOL_TOOL_LOOP_UNSUPPORTED: ${actClient.protocol} 协议 provider 不支持无 body 的 act 工具循环——给 act 写 hop_python body（工具走引擎白名单通道），或该步 @model 路由到 anthropic 协议 provider，或端点有 /v1/responses 面时 provider 改配 protocol: openai-responses`);
     }
     const toolCallLog: Array<{ name: string; result: 'success' | 'failure'; at: string; args_preview?: string; result_preview?: string }> = [];
     let lastSignature = '';   // 同签名断路器状态（^anc-exec-toolloop-repeat-break） // @a: anc-exec-toolloop-repeat-break
@@ -1797,6 +1865,22 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
           this.engine.getHopLog()?.recordWarn(step.step_id,
             `本步全部 ${toolCallLog.length} 次工具调用均失败,产出可能建立在零工具成果上（tool 块可对账）`);
         }
+        // 执行证据机核（^anc-exec-act-evidence-gate——27b 修错步十轮零工具虚构完成实撞:
+        // 读完修复工单直接编"修了 N 处"交卷,判官点破十轮无效,零成本谎言反复烧最贵的判官全审。
+        // 四与门:重试轮+工具面在场+零调用+无 no_change 自报 → 拒收重做不送判官;首轮恒不核
+        // 〔零工具合法形态多〕。第二出口=顶格 `no_change: 原因` 自报键(与 tool_failure/lack_of_info
+        // 同族文法,行首键匹配机械可判非语义猜测)——自报即放行+warn 留痕审计可对账,不循环拒收。
+        // 与上方全败 warn/断路器三者正交。拒收 throw 上浮 handleStepReady catch 走容器级重试
+        // （吃 subtask retry 预算——非算子级 SCHEMA 环,阅卷抓陈述失实后从实注明）。
+        // @a: anc-exec-act-evidence-gate
+        if (step.context.retry_feedback && tools.length > 0 && toolCallLog.length === 0) {
+          const noChange = this.extractSelfReportKey(this.extractTextContent(response), 'no_change', '（未说明原因）');
+          if (noChange === undefined) {
+            throw new Error('SCHEMA_MISMATCH: 带着修复反馈重做本步却一次工具都没调——要么真调工具修改盘面,要么在产出顶格写一行 `no_change: 原因` 如实声明未做修改;复述工单不算修复');
+          }
+          this.engine.getHopLog()?.recordWarn(step.step_id,
+            `执行证据机核放行:零工具重做轮携 no_change 自报（${noChange}）——审计面可对账真伪`);
+        }
         // lack_of_info 终轮前置探测（^anc-exec-reason-tools HopSop 第 3 步——reason 走工具循环后
         // 自报出口位置不变:仅 reason 消费,act 无此语义通道〔0053 承接面裁定〕）。
         // @a: anc-exec-reason-tools, anc-exec-lack-of-info-chain
@@ -1809,6 +1893,9 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
         // 无 body act 与 reason 经本循环;commit 同经但 B7 error 后不可达）。// @a: anc-exec-tool-failure-report
         const tfValue = this.extractSelfReportKey(this.extractTextContent(response), 'tool_failure', '（未说明故障）');
         if (tfValue !== undefined) return { tool_failure: tfValue };
+        // 终轮无 tool_use:记下正文与本步实际下发的工具名,产出被拒时判"正文疑似工具调用"用
+        // @a: anc-exec-text-toolcall-hint
+        this.lastFinalTurn.set(step.step_id, { text: this.extractTextContent(response), tool_names: tools.map(t => t.name) });
         return this.parseStepOutput(response, step.context.output_schema, step.step_id);
       }
 
@@ -1865,8 +1952,9 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
       // 前缀由 API 最长前缀匹配自然接续）。滚动=移动不是累加:打新断点前先清 messages 内
       // 既有 tool_result 块上的 cache_control（system 稳定块断点在 system 数组不在此,不动）,
       // 保证 messages 内恒最多 1 个断点——初版只打不清,5 轮循环累积 6 断点超 Anthropic 官方
-      // 上限 4,API 400 拒收长循环必死（2026-09-04 review 面二 D1 实锤）。openai 协议不走
-      // 本循环（入口已拦）。// @a: anc-exec-cache-control
+      // 上限 4,API 400 拒收长循环必死（2026-09-04 review 面二 D1 实锤）。openai-responses 协议
+      // 也走本循环（0020 批）——其适配器转换时静默剥 cache_control 不出网,断点无害;
+      // openai-chat 不走（入口已拦）。// @a: anc-exec-cache-control
       for (const m of messages) {
         if (m.role !== 'user' || typeof m.content === 'string') continue;
         for (const b of m.content) {
@@ -2465,6 +2553,22 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
           const common = indents.length ? Math.min(...indents) : 0;
           return rest.map(l => l.slice(common)).join('\n');
         }
+        // 第四形态:空值键行+顶格列表(0106——27b 照"思考不进产出从键行收"教学交『散文+顶格
+        // clauses:+顶格 - 条目』,顶格列表恰是最标准 YAML 写法,上方"全缩进"判据不认→散文全文
+        // 进值 SCHEMA 误拒合规产出重试必同死。从标签行起截到文末 yamlLoad 单解,解出含输出键
+        // 的对象即收该键值——教学承诺"机器从键行开始收"的字面兑现。散文段自身含合法 YAML 清
+        // 单行时整包解析炸不到这里:本收窄只吃标签行之后的文本）。// @a: anc-exec-output-parse-self-labeled
+        if (rest.length && rest.some(l => /^- /.test(l))) {
+          try {
+            const doc4 = StepDispatcher.yamlLoadWithRepairImpl(sub.join('\n'));
+            if (doc4 !== null && typeof doc4 === 'object' && !Array.isArray(doc4) && name in (doc4 as Record<string, unknown>)) {
+              const v = (doc4 as Record<string, unknown>)[name];
+              // 收窄产物是结构值:序列化回 YAML 文本交下游 coerce(单输出契约恒返回 string,
+              // coerce 层按声明类型 yamlLoad 成结构——与第三形态"字符串交 coerce 成结构"同径)
+              if (v !== null && v !== undefined) return yamlDump(v).trimEnd();
+            }
+          } catch { /* 标签行起也非法 → 照旧含糊原样 */ }
+        }
       }
     }
     const head = lines[0].match(new RegExp(`^${name}:\\s*(.*)$`));
@@ -2757,9 +2861,11 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
         : { apiKey: envKey, authToken: null, timeout };
       const client: ProtocolClient = envProto === 'openai-chat'
         ? makeOpenAiClient({ apiKey: envKey, ...(envUrl ? { baseURL: envUrl } : {}) })
-        : wrapAnthropicClient(
-            envUrl ? new Anthropic({ ...anthropicOpts, baseURL: envUrl }) : new Anthropic(anthropicOpts),
-            Anthropic);
+        : envProto === 'openai-responses'
+          ? makeOpenAiResponsesClient({ apiKey: envKey, ...(envUrl ? { baseURL: envUrl } : {}) })
+          : wrapAnthropicClient(
+              envUrl ? new Anthropic({ ...anthropicOpts, baseURL: envUrl }) : new Anthropic(anthropicOpts),
+              Anthropic);
       this.clients.set(service_id, client);
       return client;
     }

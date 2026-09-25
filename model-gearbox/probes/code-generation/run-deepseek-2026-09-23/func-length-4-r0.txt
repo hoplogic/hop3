@@ -1,0 +1,44 @@
+```python
+import ast
+import sys
+
+if len(sys.argv) < 2:
+    print("用法: python script.py 文件路径")
+    sys.exit(1)
+
+path = sys.argv[1]
+
+try:
+    source = open(path, "r", encoding="utf-8").read()
+except OSError:
+    print(path + ": 无法读取文件")
+    sys.exit(1)
+except ValueError:
+    print(path + ": 文件不是有效 UTF-8")
+    sys.exit(1)
+
+try:
+    tree = ast.parse(source)
+except SyntaxError:
+    print(path + ": 语法错误")
+    sys.exit(1)
+
+problems = []
+for node in ast.walk(tree):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        length = node.end_lineno - node.lineno + 1
+        if length > 40:
+            problems.append((node.lineno, node.name, length))
+
+problems.sort()
+for item in problems:
+    line = item[0]
+    name = item[1]
+    length = item[2]
+    print(path + ":" + str(line) + ": 函数 '" + name + "' 长度为 " + str(length) + " 行，超过 40 行")
+
+if len(problems) > 0:
+    sys.exit(1)
+
+sys.exit(0)
+```

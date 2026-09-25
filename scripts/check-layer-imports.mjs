@@ -23,6 +23,9 @@ const LAYER = {
   'engine': 1, 'engine-traverse': 1, 'runtime-types': 1,
   'prompt': 1, 'doc-ref': 1, 'hoplog': 1,
   'act-body-parser': 1, 'act-body-interpreter': 1, 'act-builtins': 1,
+  'command-exec': 1,   // 命令执行原语属 act-body 模块（两消费口:本模块 subprocess.run + tools 的 run_script;仅依赖 node 内置,按依赖事实定核心层）
+  'py-sandbox': 1,     // Python 语法沙箱（py-sandbox 模块;仅依赖 node 内置与同层 command-exec,被适配层 tools 的 run_script 调——module-principles §2）
+
   // 驱动适配层（2）
   'cli': 2, 'cli-types': 2, 'dispatcher': 2, 'protocol-openai': 2, 'tools': 2, 'tools-registry': 2, 'tools-composite': 2, 'tools-mcp-binding': 2, 'tools-inprocess-binding': 2, 'tools-notify': 2, 'persistence': 2,   // protocol-openai 属 step-dispatcher；tools-registry/composite 属 tools 模块
   'mcp-server': 2,   // standalone MCP 协议壳（薄壳包 dispatcher，见 design/mcp-server.md）

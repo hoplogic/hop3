@@ -23,7 +23,9 @@
 | Codex 侧开发规约 | 契约 | `anc-driver-codex-dev-rules` |
 | 静态验证载体 | 决策+契约 | `anc-driver-codex-static-lint` |
 
-> **⚠️ 本文档锚点的落点性质（2026-08-01 anchor-audit 澄清）**：`^anc-driver-codex-*` 契约约束的是 **driver 载体产物**——落点在 `driver/codex/**`（SKILL.md / agents / references）与 `scripts/check-driver-carriers.mjs`（静态纪律机检），**不在 `src/*.ts`**。唯一有引擎侧落点的是 `^anc-driver-codex-install-layout`（`cli.ts` 的 install-skill codex 分支，已追溯）。故除安装布局外，其余 carrier 锚点在“设计→`src/` 代码覆盖”维度报缺失属**预期**，非追溯断链。
+> **⚠️ 本文档锚点的落点性质（2026-08-01 anchor-audit 澄清）**：`^anc-driver-codex-*` 契约约束的是 **driver 载体产物**——落点在 `driver/codex/**`（SKILL.md / agents / references）与 `scripts/check-driver-carriers.mjs`（静态纪律机检），**不在 `src/*.ts`**。
+>
+> 唯一有引擎侧落点的是 `^anc-driver-codex-install-layout`（`cli.ts` 的 install-skill codex 分支，已追溯）。故除安装布局外，其余 carrier 锚点在“设计→`src/` 代码覆盖”维度报缺失属**预期**，非追溯断链。
 
 ## 定位与边界【契约】 ^anc-driver-codex-carrier
 
@@ -121,17 +123,25 @@ Main 禁止：
 
 - **双名双壳**：`/hopspec`（纯复用壳,hopspec-skill.md）与 `/hopspec-mcp`（纯 MCP 薄壳,hopspec-skill-mcp.md）**不同名并存安装**——用户敲哪个就是哪个,"指定"=调用动作本身,零判定零配置零 LLM 分发。8-16"两模式同名同用户面"反转:同名的代价是模式要靠第二信号选,双名把模式编码进名字。Codex 同构（`$hopspec`/`$hopspec-mcp`,SKILL.md/SKILL-mcp.md）;
 - **description 分工=裸说时的缺省**：用户不敲斜杠命令、裸说"跑这个 spec"时,载体按 description 挑 skill——复用壳 description 写明"缺省用这个",MCP 壳写明"仅当用户明说走 MCP/standalone 时用"——裸说恒落复用,等价缺省 reuse（作者拍板不变）。这是仅存的 NL 参与面,且只在用户自己不指定时兜底;
-- **三改的配置半边退役**：`driver_mode` 配置字段与 `hopjit driver-mode` 命令删除（唯一消费方是单壳 §0.5 分发,双名下无消费方=死机制,0.x 干净删——`^anc-cli-driver-mode` 锚废止）;"按项目设缺省"能力随之消失（作者确认可弃——敲命令名比记配置优先级直观）。**引擎侧双执行硬闸保留**（run 落账 `driver_channel: cli|mcp`,跨通道驱动响亮拒,权威 [[exec-engine#^anc-exec-driver-channel]]）——它与壳形态无关,双壳并存下防串台更需要它;两壳各留一行**跨通道报错指路**（收到 DRIVER_CHANNEL_MISMATCH=该 run 属另一形态,指路对应命令,不强行重试）。`install-skill` 恒装两壳,`--mcp` 语义不变（配置自举+注册 server,非模式选定）。
+- **三改的配置半边退役**：`driver_mode` 配置字段与 `hopjit driver-mode` 命令删除（唯一消费方是单壳 §0.5 分发,双名下无消费方=死机制,0.x 干净删——`^anc-cli-driver-mode` 锚废止）;"按项目设缺省"能力随之消失（作者确认可弃——敲命令名比记配置优先级直观）。
+  - **引擎侧双执行硬闸保留**（run 落账 `driver_channel: cli|mcp`,跨通道驱动响亮拒,权威 [[exec-engine#^anc-exec-driver-channel]]）——它与壳形态无关,双壳并存下防串台更需要它;两壳各留一行**跨通道报错指路**（收到 DRIVER_CHANNEL_MISMATCH=该 run 属另一形态,指路对应命令,不强行重试）;
+  - `install-skill` 恒装两壳,`--mcp` 语义不变（配置自举+注册 server,非模式选定）。
 
 **历史（2026-08-27 三改,当日退役,背景保留）**：配置声明（driver_mode: reuse|mcp 两级合并）+ CLI 顾问（hopjit driver-mode 机械读出）+ 单壳双协议段（§0.5 照答案分发）。判定下沉方向正确（NL 零推断由四改继承）,但引入了配置字段、CLI 命令、双段壳三件机制去承载一个"用户敲个名字就能表达"的决定——四改用命名消解了整条判定链。
 
 **历史（2026-08-16 装配时选定,背景保留）**：两模式壳一对一、装配时二选一（`install-skill` 复用缺省 / `--mcp` MCP 变体+注册）,运行时判定退役。该形态消除了串台的物理条件,但把"模式"钉死为装配时全局属性,无法表达"并存但缺省复用"。其核心洞察（运行时多源信号判定必然静默滑轨）由三改继承——判定仍不在 NL 运行时,只是从"装配动作"换成"配置声明+机械读出"。
 
-**历史（2026-08-10 作者拍板,背景保留）：standalone 从降级链上拆下，独立成薄协议。** 原三层运行时分派（delegated→standalone→inline，双信号判定）作废——e2e 两次实红证明：把"查工具面可见性 + 读配置文件字段"这类环境判定放进 NL skill 运行时，main 的执行路径取决于它对多源信号的读取与判断，任何一侧信号注入不全（实撞：临时 config 只进 server env、main 查全局文件缺 `fallback_mode`）就静默滑向另一条路径——错得合规、难以觉察。复用模式（CLI 驱动）与 standalone（MCP 工具面）是**两种执行形态**，不是同一 skill 内的两个分支。
+**历史（2026-08-10 作者拍板,背景保留）：standalone 从降级链上拆下，独立成薄协议。** 原三层运行时分派（delegated→standalone→inline，双信号判定）作废。
+
+- 作废理由（e2e 两次实红证明）：把"查工具面可见性 + 读配置文件字段"这类环境判定放进 NL skill 运行时，main 的执行路径取决于它对多源信号的读取与判断，任何一侧信号注入不全（实撞：临时 config 只进 server env、main 查全局文件缺 `fallback_mode`）就静默滑向另一条路径——错得合规、难以觉察；
+- 定性：复用模式（CLI 驱动）与 standalone（MCP 工具面）是**两种执行形态**，不是同一 skill 内的两个分支。
 
 **历史（2026-08-10/16 间现役,三改后退役）：选定即静态——hopjit MCP server 已注册 = 用户 opt-in = standalone 已选定。** 注册动作即 opt-in 与费用授权的读法在"注册常驻但缺省想复用"的真实用况下失效（三改动因）,选定信号改为 driver_mode 配置声明。`fallback_mode` 字段废除的结论不变（该字段正是三改要避免的"NL 读配置字段判分支"形态——现在读配置的是 CLI 命令,不是 NL）。
 
-**历史（2026-08-10 两轮真机实撞,判定手法背景保留）**：Codex 0.146 起 MCP 工具延迟加载（`tool_search_always_defer_mcp_tools` 固化开）,注册成功的工具也不出现在会话工具面——"工具面可见性"自查必然误判;探测型替代（list_mcp_resources 资源面恒空/`codex mcp list` 看不到 `-c` 注入）全部失效;当时的解法=`mcp__hopjit__list_runs` 试调用（只读零费用,让运行时解析）。三改后该判定整个退役——模式不再从"server 在不在场"推断;但此段实撞记录保留:MCP 壳协议段的**防误配报错**仍靠"工具调用被运行时拒绝"这一信号（driver-mode 说走 mcp 而调用被拒 = 配置与注册脱节,报错指路注册,不静默转 CLI）。
+**历史（2026-08-10 两轮真机实撞,判定手法背景保留）**：Codex 0.146 起 MCP 工具延迟加载（`tool_search_always_defer_mcp_tools` 固化开）,注册成功的工具也不出现在会话工具面——"工具面可见性"自查必然误判。
+
+- 探测型替代（list_mcp_resources 资源面恒空/`codex mcp list` 看不到 `-c` 注入）全部失效;当时的解法=`mcp__hopjit__list_runs` 试调用（只读零费用,让运行时解析）;
+- 三改后该判定整个退役——模式不再从"server 在不在场"推断;但此段实撞记录保留:MCP 壳协议段的**防误配报错**仍靠"工具调用被运行时拒绝"这一信号（driver-mode 说走 mcp 而调用被拒 = 配置与注册脱节,报错指路注册,不静默转 CLI）。
 
 **能力契约**（Hop契约）：
 
@@ -168,11 +178,20 @@ standalone 驱动（四步薄壳）:
    防线同一条铁律;看护 subagent 只读状态+代注指定应答点,不属重跑）
 ```
 
-**看护 subagent 范式（作者定 2026-08-22"这个 watch subagent 应该成为标准范式"）**：`run_status` 是拉模式、MCP 无推送——run 完成不会主动唤醒主 agent。三种等待形态实测排序：前台 sleep 扛等待=把整个会话锁死用户插不上话（❌ 禁用）;后台裸脚本 watcher=能通知但无判断力,收到通知还得自己挖状态;**后台看护 subagent=既有完成通知（subagent 终态自动通知主 agent）又有判断力（区分 paused/终态/异常,终态 outputs 整理好带回）**——与复用模式"主 agent 只管介入点,执行段外包 driver subagent"同一架构哲学在 standalone 面的对偶。载体前提：载体有后台 subagent 能力（CC Agent 工具);无此能力的载体退化为主循环适度轮询（Codex exec 单线程形态）,但不得用长 sleep 阻塞交互。**观测隔离纪律（2026-08-27 随 #47 立,dr16 实锤:走查进度文件写在 run cwd 下,修错轮 act free 步骤 read 到它"恢复了全部 6 项缺陷"——观测材料混进被观测系统,验证结论不再纯净）**：看护/走查的进度文件与终报一律放 run 工作目录之外的独立观测目录（惯例 `/tmp/claude-502/observer-<run名>/`）,派活 prompt 写死路径并注明"严禁写 run 工作目录"。 ^anc-driver-standalone-watch
+**看护 subagent 范式（作者定 2026-08-22"这个 watch subagent 应该成为标准范式"）**：`run_status` 是拉模式、MCP 无推送——run 完成不会主动唤醒主 agent。
+
+- 三种等待形态实测排序：前台 sleep 扛等待=把整个会话锁死用户插不上话（❌ 禁用）;后台裸脚本 watcher=能通知但无判断力,收到通知还得自己挖状态;**后台看护 subagent=既有完成通知（subagent 终态自动通知主 agent）又有判断力（区分 paused/终态/异常,终态 outputs 整理好带回）**——与复用模式"主 agent 只管介入点,执行段外包 driver subagent"同一架构哲学在 standalone 面的对偶;
+- 载体前提：载体有后台 subagent 能力（CC Agent 工具);无此能力的载体退化为主循环适度轮询（Codex exec 单线程形态）,但不得用长 sleep 阻塞交互;
+- **观测隔离纪律**（2026-08-27 随 #47 立。dr16 实锤:走查进度文件写在 run cwd 下,修错轮 act free 步骤 read 到它"恢复了全部 6 项缺陷"——观测材料混进被观测系统,验证结论不再纯净）：看护/走查的进度文件与终报一律放 run 工作目录之外的独立观测目录（惯例 `/tmp/claude-502/observer-<run名>/`）,派活 prompt 写死路径并注明"严禁写 run 工作目录"。 ^anc-driver-standalone-watch
 
 **与 delegated/inline 的关系**：spawn 能力门（上节）只在 **MCP 工具面不可见**时适用——delegated→inline 两层，回到 2026-08-08 原形态。两种形态互斥于会话工具面这一个静态事实，无运行时交叉。假死判定（首步心跳）只属 delegated 路径，不变。
 
-**载体中立**：薄协议只消费 MCP 五工具，与载体无关——CC 载体同构适用（第一判定+四步壳+锁定纪律逐字同一套；CC 注册通道 = `.mcp.json` 或 `claude --mcp-config`，Codex = **持久注册**（config.toml `[mcp_servers]`）——两条实撞判定（2026-08-10）：⚠️① `-c mcp_servers.*` 命令行注入对 exec 运行时无效（`codex mcp list` 认它、exec 不为它起 stdio 进程，调用报 not a function）；⚠️② codex 以**干净环境**启动 stdio server（只带注册块 `env` 表内的显式值，不继承 shell 环境）——server 的凭证 fail-fast 预检会 STANDALONE_KEY_MISSING 即死（报 'was not ready for this step'），注册块必须带 **`env_vars = ["<KEY_ENV_NAME>"]`** 按名透传凭证变量（值不落盘，只写名字，key 安全红线不破；`codex mcp add` 无此 flag，需直接写 config.toml）。CC 侧落点：hopspec SKILL §0.5 形态选定（先于复用模式编排姿态）；e2e 场景 `cc:standalone` 与 `codex:standalone` 同一断言（正判据 start_run 可观测+零 CLI 写命令+零 subagent+同构 envelope）。
+**载体中立**：薄协议只消费 MCP 五工具，与载体无关——CC 载体同构适用（第一判定+四步壳+锁定纪律逐字同一套；CC 注册通道 = `.mcp.json` 或 `claude --mcp-config`，Codex = **持久注册**（config.toml `[mcp_servers]`））。
+
+- 两条实撞判定（2026-08-10）：
+  - ⚠️① `-c mcp_servers.*` 命令行注入对 exec 运行时无效（`codex mcp list` 认它、exec 不为它起 stdio 进程，调用报 not a function）；
+  - ⚠️② codex 以**干净环境**启动 stdio server（只带注册块 `env` 表内的显式值，不继承 shell 环境）——server 的凭证 fail-fast 预检会 STANDALONE_KEY_MISSING 即死（报 'was not ready for this step'），注册块必须带 **`env_vars = ["<KEY_ENV_NAME>"]`** 按名透传凭证变量（值不落盘，只写名字，key 安全红线不破；`codex mcp add` 无此 flag，需直接写 config.toml）；
+- CC 侧落点：hopspec SKILL §0.5 形态选定（先于复用模式编排姿态）；e2e 场景 `cc:standalone` 与 `codex:standalone` 同一断言（正判据 start_run 可观测+零 CLI 写命令+零 subagent+同构 envelope）。
 
 1. `run` 在 params 确认后直接尝试派生 start-segment driver；`list/validate/status` 不涉执行 agent。级 1/2 命中即 `INLINE_FALLBACK`，Main 按角色文件 inline 执行——此时**尚无任何 HopJIT 写命令**，降级零风险。
 2. delegated segment/worker 固定 `fork_turns="none"`，以自包含 envelope 为唯一任务来源；但**不再假设隔离必然生效**（实撞已证可失效）——envelope 自包含是充分供给，隔离失效不影响正确性（agent 多看到父历史不改变其任务）。
@@ -184,7 +203,8 @@ spawn 成功 ≠ agent 真在干活（挂死/静默/黑洞派发仍可能）。�
 
 1. 派生 start-segment 后**首次 wait 用分钟级 timeout（建议 300000ms）**，不用 segment 的 3600000 长等待——这是首步心跳期限。
 2. 首次 wait 返回而 agent 未完成 → 查 `<STATE>` 产物（读目录与 state.json 是观测不是执行，Main 有权）：
-   - **无任何新实例** → agent 拿到任务后毫无引擎动作 = 假死。close/确认其终止后进入 `INLINE_FALLBACK`。此时零实例在场，inline 直跑无双执行风险。**判死即行动（2026-08-14 补定,flash 两轮实撞）**：判死条件成立后必须立即降级——禁止再 wait、禁止只查目录不行动（实撞形态:flash 未发 spawn 却声称"segment 已启动"进 wait,心跳返回查得空目录后干等到 480s 被掐;弱模型对"如有 close 能力…"条件从句推理失败=卡死点,指令按"spawn 从未成功→双前置天然满足零动作直降"/"spawn 成功过→close+确认再降"两情况显式短路）；
+   - **无任何新实例** → agent 拿到任务后毫无引擎动作 = 假死。close/确认其终止后进入 `INLINE_FALLBACK`。此时零实例在场，inline 直跑无双执行风险。
+     - **判死即行动（2026-08-14 补定,flash 两轮实撞）**：判死条件成立后必须立即降级——禁止再 wait、禁止只查目录不行动。实撞形态:flash 未发 spawn 却声称"segment 已启动"进 wait,心跳返回查得空目录后干等到 480s 被掐;弱模型对"如有 close 能力…"条件从句推理失败=卡死点,指令按"spawn 从未成功→双前置天然满足零动作直降"/"spawn 成功过→close+确认再降"两情况显式短路；
    - **已有新实例** → agent 已开工。切回 3600000 长等待。此后通信丢失/返回中取不出引擎 JSON 仍按既有不变量 `AGENT_PROTOCOL_ERROR` 停止——**首个 HopJIT 写命令之后永远禁止切 inline 重跑、禁止读 state 猜终态**（该不变量不因本次重构放松）。
 3. **接管唯一性铁律**：`INLINE_FALLBACK` 只允许在「已 close/确认 agent 终止 **且** `<STATE>` 零新实例」双条件同时成立后启动。缺一不可——这是从双执行实撞直接推演的收链条款。**spawn 从未成功的退化形态**：不存在 agent 可关,第一条件空真,双条件即"零新实例"单条件——skill 指令须把这个空真显式写出（弱模型不做空真推理）。**言行自检条款**：只有真实看到 spawn 调用成功返回才允许宣称"segment 已启动"并 wait——未 spawn 即 wait 是在等不存在的人。
 
@@ -256,7 +276,11 @@ Parallel worker 只处理一个 child：
 
 **返回值 = 执行 agent 最后一条引擎 NextResponse JSON 原样**。可在 JSON 之前带一行人读摘要（"执行了 N 步：..."），但 JSON 本体必须原文完整、不改写不包裹。
 
-**为什么废除信封**（2026-08-09 flash 实撞，归档 `codex-flash-2026-08-08T16-51-31-166Z`）：旧信封 `{role, instance_id, status, response, summary}` 的逐字段信息量审计——`role`=main 自己 spawn 的天然知道；`instance_id`=`response.instance_id` 已有（引擎写的）；`status`=`response.status` 的人工复读（校验还要查"两者一致"，凭空制造誊抄不一致这种新错误）；唯一载荷是 `response`（引擎 JSON 原文）。**四个装饰字段全要 LLM 手工誊抄，而 main 的校验恰恰全盯着装饰验**——flash 把任务完整跑完（引擎 completed、outputs 齐全），只因信封没包对被判 `AGENT_PROTOCOL_ERROR`，聊天格式错误一票否决了引擎里的事实。数据是 jit 的机器真值，一路机器传递，最后一米要求 LLM 重新组装 JSON——违背"哑应答体、零加工搬运"原则，且把出错面精确压在弱模型最弱的动作上。
+**为什么废除信封**（2026-08-09 flash 实撞，归档 `codex-flash-2026-08-08T16-51-31-166Z`）：
+
+- 旧信封 `{role, instance_id, status, response, summary}` 的逐字段信息量审计——`role`=main 自己 spawn 的天然知道；`instance_id`=`response.instance_id` 已有（引擎写的）；`status`=`response.status` 的人工复读（校验还要查"两者一致"，凭空制造誊抄不一致这种新错误）；唯一载荷是 `response`（引擎 JSON 原文）；
+- **四个装饰字段全要 LLM 手工誊抄，而 main 的校验恰恰全盯着装饰验**——flash 把任务完整跑完（引擎 completed、outputs 齐全），只因信封没包对被判 `AGENT_PROTOCOL_ERROR`，聊天格式错误一票否决了引擎里的事实；
+- 数据是 jit 的机器真值，一路机器传递，最后一米要求 LLM 重新组装 JSON——违背"哑应答体、零加工搬运"原则，且把出错面精确压在弱模型最弱的动作上。
 
 **main 侧消费与校验（全部对引擎真值验，不对 LLM 誊抄验）**：
 
@@ -331,7 +355,9 @@ driver/codex/
     └── execution-rules.md
 ```
 
-安装结果（**2026-08-27 作者定"codex 和 cc 看齐"+"只有 demo 是项目级"——正式件缺省用户级 `~/.codex/skills/`**，与 CC 的 `~/.claude/skills` 对称;Codex 官方四层扫描里 user 级=`$CODEX_HOME/skills`,同名 project>user,故文档须提示清理旧项目级残留防旧盖新。**2026-09-02 cfuse 适配**:目标 home 按 [[hop-cli#^anc-cli-carrier-home-resolution]] 解析——`--carrier codex` 读 `CODEX_HOME`(cfuse 内置 codex 会话内自动装到 `~/.codefuse/engine/codex/skills`);`--carrier cfuse-codex` 固定 `~/.codefuse/engine/codex/skills`(裸终端显式指定)）：
+安装结果（**2026-08-27 作者定"codex 和 cc 看齐"+"只有 demo 是项目级"——正式件缺省用户级 `~/.codex/skills/`**，与 CC 的 `~/.claude/skills` 对称;Codex 官方四层扫描里 user 级=`$CODEX_HOME/skills`,同名 project>user,故文档须提示清理旧项目级残留防旧盖新）：
+
+> **2026-09-02 cfuse 适配**:目标 home 按 [[hop-cli#^anc-cli-carrier-home-resolution]] 解析——`--carrier codex` 读 `CODEX_HOME`(cfuse 内置 codex 会话内自动装到 `~/.codefuse/engine/codex/skills`);`--carrier cfuse-codex` 固定 `~/.codefuse/engine/codex/skills`(裸终端显式指定)。
 
 ```text
 ~/.codex/skills/hopspec/      ← 用户级缺省（--dir 覆盖,语义=skills 根目录,不再拼 .agents/skills 中间层）
@@ -346,7 +372,10 @@ driver/codex/
 └── SKILL.md              ← driver/codex/hop-skill.md 拷入（同 CC 的 hop 装配形态:单文件+版本戳）
 ```
 
-**hop 件条款（2026-08-26 作者定"补"）**：`$hop` 与 `$hopspec` 分工同 CC 载体（成品 spec 用 hopspec、日常活用 hop）；驱动件是 CC 版 `driver/hop-skill.md` 的 Codex 适配（同语义分载体——协议 token 与 CC 版对齐，载体差异仅三处：触发形态 `$hop`、问人走对话直接问答〔规约 C9 同款〕、2b 外包按 spawn 能力降级〔无 spawn 则全自驱，无 INLINE_FALLBACK 仪式——/hop 本就缺省自驱，外包只是可选优化〕）；单文件自足，不引用 hopspec 的 agents/references。
+**hop 件条款（2026-08-26 作者定"补"）**：`$hop` 与 `$hopspec` 分工同 CC 载体（成品 spec 用 hopspec、日常活用 hop）。
+
+- 驱动件是 CC 版 `driver/hop-skill.md` 的 Codex 适配（同语义分载体——协议 token 与 CC 版对齐，载体差异仅三处：触发形态 `$hop`、问人走对话直接问答〔规约 C9 同款〕、2b 外包按 spawn 能力降级〔无 spawn 则全自驱，无 INLINE_FALLBACK 仪式——/hop 本就缺省自驱，外包只是可选优化〕）；
+- 单文件自足，不引用 hopspec 的 agents/references。
 
 带 `--demo` 时额外安装（**demo 恒项目级**——2026-08-27 作者定"只有 demo 是项目级":演示材料跟项目走,落 cwd 的 `.agents/skills/`,不随正式件进用户级）：
 
@@ -422,11 +451,17 @@ Codex 安装分支只从公共 references 复用 `cli-discovery.md`。不删除�
 scripts/check-driver-carriers.mjs
 ```
 
-**依赖驱动来源**：HopJIT 工程是 Node ESM（`package.json type=module`、Node >=20），已有工程检查工具使用 `.mjs`。因此本检查使用 `node:fs` / `node:path`，不引入 Bash、`rg`、`grep` 依赖。**git 命令例外（2026-08-14 放宽,last_sync 机检依赖驱动）**：`last_sync 与实改脱节`检查本质是"声明时间 vs 变更历史"比对——文件 mtime 在 fresh clone/checkout 重置不可靠,唯 git log 是变更时间权威;本库本就是 git 仓库（release.sh 等已依赖）,放宽不引入新环境要求。仅此一检用 git,其余检查维持零外部命令。
+**依赖驱动来源**：HopJIT 工程是 Node ESM（`package.json type=module`、Node >=20），已有工程检查工具使用 `.mjs`。因此本检查使用 `node:fs` / `node:path`，不引入 Bash、`rg`、`grep` 依赖。
+
+- **git 命令例外（2026-08-14 放宽,last_sync 机检依赖驱动）**：`last_sync 与实改脱节`检查本质是"声明时间 vs 变更历史"比对——文件 mtime 在 fresh clone/checkout 重置不可靠,唯 git log 是变更时间权威;本库本就是 git 仓库（release.sh 等已依赖）,放宽不引入新环境要求。仅此一检用 git,其余检查维持零外部命令。
 
 **last_sync 一致性机检**【契约】 ^anc-driver-lint-last-sync
 
-driver/ 下带 `@trace last_sync` 头的文件,**实改必须同步刷 last_sync**——手工纪律三撞（2026-08-12 SKILL.md 改收割铁律未刷/2026-08-13 又撞/2026-08-14 execution-rules.md 改 call_protocol 未刷,均事后人查才见）,按"行为纪律必须有产物侧信号"升守卫。判据（日粒度,YYYY-MM-DD 比对）：①已提交面=文件最后 commit 日期 > last_sync 日期 → 红;②未提交面=文件在 git status 脏区且 last_sync ≠ 今天 → 红（正在改的文件应随手刷）。git 不可用（非仓库/CI 浅克隆无历史）→ 显式跳过明说,不静默装绿（^anc-meta-guard-trust）。正反例:实改未刷红/改+刷绿/脏区未刷红/干净区旧 last_sync 不红（没改就不必刷）。
+driver/ 下带 `@trace last_sync` 头的文件,**实改必须同步刷 last_sync**——手工纪律三撞（2026-08-12 SKILL.md 改收割铁律未刷/2026-08-13 又撞/2026-08-14 execution-rules.md 改 call_protocol 未刷,均事后人查才见）,按"行为纪律必须有产物侧信号"升守卫。
+
+- 判据（日粒度,YYYY-MM-DD 比对）：①已提交面=文件最后 commit 日期 > last_sync 日期 → 红;②未提交面=文件在 git status 脏区且 last_sync ≠ 今天 → 红（正在改的文件应随手刷）;
+- git 不可用（非仓库/CI 浅克隆无历史）→ 显式跳过明说,不静默装绿（^anc-meta-guard-trust）;
+- 正反例:实改未刷红/改+刷绿/脏区未刷红/干净区旧 last_sync 不红（没改就不必刷）。
 
 **路径契约**：脚本从 `import.meta.dirname` 推导仓库根目录，不依赖调用者 cwd；从仓库根、包根或 CI 中调用结果一致。
 

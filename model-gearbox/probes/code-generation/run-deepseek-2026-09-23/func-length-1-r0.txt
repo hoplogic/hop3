@@ -1,0 +1,38 @@
+```python
+import ast
+import sys
+
+if len(sys.argv) < 2:
+    print("usage: python check_func_length.py <file>")
+    sys.exit(1)
+
+path = sys.argv[1]
+try:
+    handle = open(path, 'r', encoding='utf-8')
+    source = handle.read()
+    handle.close()
+except OSError:
+    print("无法读取文件: " + path)
+    sys.exit(1)
+
+try:
+    tree = ast.parse(source)
+except Exception:
+    print("无法解析 Python 源文件: " + path)
+    sys.exit(1)
+
+bad = []
+for node in ast.walk(tree):
+    if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+        length = node.end_lineno - node.lineno + 1
+        if length > 40:
+            bad.append((node.lineno, "函数 " + node.name + " 长度为 " + str(length) + " 行，超过 40 行"))
+
+if len(bad) > 0:
+    bad.sort()
+    for item in bad:
+        print("第 " + str(item[0]) + " 行: " + item[1])
+    sys.exit(1)
+
+sys.exit(0)
+```

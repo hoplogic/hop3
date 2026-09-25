@@ -1,0 +1,118 @@
+```python
+import ast
+import re
+import sys
+
+def extract_function_args(func_node):
+    args = []
+    # Positional only arguments (before /)
+    for arg in func_node.args.posonlyargs:
+        if arg.arg not in ['self', 'cls']:
+            args.append(arg.arg)
+    
+    # Regular arguments
+    for arg in func_node.args.args:
+        if arg.arg not in ['self', 'cls']:
+            args.append(arg.arg)
+            
+    # *args argument
+    if func_node.args.vararg:
+        if func_node.args.vararg.arg not in ['self', 'cls']:
+            args.append(func_node.args.vararg.arg)
+    
+    # Keyword-only arguments after *
+    for arg in func_node.args.kwonlyargs:
+        if arg.arg not in ['self', 'cls']:
+            args.append(arg.arg)
+            
+    # **kwargs argument
+    if func_node.args.kwarg:
+        if func_node.args.kwarg.arg not in ['self', 'cls']:
+            args.append(func_node.args.kwarg.arg)
+            
+    return args
+
+def is_mentioned(param_name, docstring):
+    # Create a pattern to match the parameter as a whole word
+    # This includes cases like "param.", "`param`", "(param)", etc.
+    pattern = r'\b' + re.escape(param_name) + r'\b'
+    return bool(re.search(pattern, docstring))
+
+def check_file(filepath):
+    with open(filepath, 'r', encoding='utf-8') as f:
+        content = f.read()
+        
+    if not content.strip():
+        # Empty file is compliant
+        return []
+
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        # If syntax error, return compliance (as it's not about docstring)
+        return []
+
+    violations = []
+    
+    # Use a stack to track current scope (top-level, class level, etc.)
+    # We'll use a visitor approach to track nesting level
+    
+    def visit_node(node, in_class=False):
+        violations_local = []
+        
+        if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+            # Check if function name starts with underscore
+            if node.name.startswith('_'):
+                # Skip private functions/methods
+                pass
+            else:
+                # Get docstring
+                docstring = ast.get_docstring(node)
+                
+                # Extract parameters
+                params = extract_function_args(node)
+                
+                # Check if there's no docstring and there are parameters
+                if not docstring and params:
+                    violations_local.append((node.lineno, f"Function '{node.name}' has parameters but no docstring"))
+                elif docstring and params:
+                    # Check if all parameters are mentioned in docstring
+                    for param in params:
+                        if not is_mentioned(param, docstring):
+                            violations_local.append((node.lineno, f"Function '{node.name}' docstring does not mention parameter '{param}'"))
+                elif docstring and not params:
+                    # Function has docstring but no parameters - this is OK
+                    pass
+        elif isinstance(node, ast.ClassDef):
+            # Process class methods recursively
+            in_class = True
+            
+        # Recursively visit child nodes
+        for child in ast.iter_child_nodes(node):
+            if isinstance(node, ast.ClassDef):
+                violations_local.extend(visit_node(child, in_class=True))
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                # Don't recurse into nested functions
+                continue
+            else:
+                violations_local.extend(visit_node(child, in_class=in_class))
+        
+        return violations_local
+    
+    # Start from top level of AST
+    for node in ast.iter_child_nodes(tree):
+        violations.extend(visit_node(node))
+        
+    return violations
+
+# Main execution
+filepath = sys.argv[1]
+violations = check_file(filepath)
+
+if violations:
+    for line_no, reason in violations:
+        print(f"Line {line_no}: {reason}")
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

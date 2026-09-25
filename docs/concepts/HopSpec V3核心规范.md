@@ -329,7 +329,9 @@ repair_summary = fix_strategy.actions
 - **约束只管产出面,输入侧不拦**——Inputs 声明 `line(非空)` 合法但引擎不对传入参数做空判（输入是 caller 给的,把关归 caller 或用 ask 步向人要;约束的执行力落在"执行 LLM 的产出被打回重答"这一环,对已经给定的输入打回没有重答方）;
 - **列表元素形 `[line(非空)]`/`[line(nonempty)]` 同享约束**——元素逐个过非空核（双语同归一,与单值形一致）。
 
-**HopSchema**：HopSpec 的结构化声明语法——`字段名 → 值` 的条目式映射，凡"用一张结构声明数据形状或配置"处统一用它（使用处：Outputs 复合类型展开、HopType struct Fields、工具 output_schema、spec Config 段——Config 就是一个 HopSchema 字段，作者定 2026-08-13）。**逻辑形状=映射**（键唯一）；**表面体例随宿主**——spec 内条目用 `-` 分项（与 Inputs/Outputs 同款，全篇一种分项心智），配置文件内为纯 YAML 映射。**值位语义由使用处定**：类型声明三处（Outputs/Fields/output_schema）值位=本节类型词汇（原子 + `[原子]`，可收窄不可扩）；Config 处值位=配置值（模型引用等）。 ^anc-type-hopschema
+**HopSchema**：HopSpec 的结构化声明语法——`字段名 → 值` 的条目式映射，凡"用一张结构声明数据形状或配置"处统一用它（使用处：Outputs 复合类型展开、HopType struct Fields、工具 output_schema、spec Config 段——Config 就是一个 HopSchema 字段，作者定 2026-08-13）。**逻辑形状=映射**（键唯一）；**表面体例随宿主**——spec 内条目用 `-` 分项（与 Inputs/Outputs 同款，全篇一种分项心智），配置文件内为纯 YAML 映射。**值位语义由使用处定**：类型声明三处（Outputs/Fields/output_schema）值位=本节类型词汇（原子 + `[原子]`，可收窄不可扩）；Config 处值位=配置值（模型引用等）。
+
+**名与值之间的分隔符：`%` 是正字，`:` 走向 deprecated**（作者定 2026-09-22）。原因是冒号与宿主 YAML 撞车：一条 `字段名: 类型` 同时是合法 YAML 的键值对和一条 HopSchema 条目，字符流里没有记号标明哪套文法在生效。这个二义性在"把 HopSchema 渲染给 LLM 看、再让 LLM 产出 YAML"的场景里会让模型把类型记号回抄进值位，而 YAML 解析器静默收下（实撞见 todo/0108：值位毒成字符串 `"bool = false"`，下游 Python 按非空字符串恒真计数，把合同评审结论整个翻转而没有任何机械信号报警）。落地分两批：**引擎的 prompt 渲染面已换 `%`**（`名 % 类型 = 值`，2026-09-22，见 [[HopSpec V3 Prompt组装参考#^anc-exec-inputs-render]]）；**spec 源文件面的类型声明此刻仍是 `:`**——那里冒号是解析器的切分字符，改动要文法双支持（`%` 为正字、`:` 仍收并告警）加存量迁移工具，另批排期。两面最终统一到 `%`。 ^anc-type-hopschema
 
 **复合类型用 YAML 展开**（HopSchema 使用处之一）：结构在节点体中用 YAML 缩进 + `#` 注释展开：
 

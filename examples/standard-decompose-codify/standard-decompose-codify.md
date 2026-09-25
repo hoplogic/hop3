@@ -23,7 +23,7 @@ Types:
   - clause_id: line  # 对应条款编号
   - guard_path: line  # 生成的校验文件路径（降档时为空）
   - status: enum(已码,降档需人裁)  # 已码=跑通；降档需人裁=反复跑不通
-  - verify_outcome: text  # 实跑验证留痕（能跑/区分合规违规样例/确实在查该条款）
+  - verify_outcome: text  # 实跑验证留痕（能跑/区分合规违规样例/确实在查该条款;逐次写明作为参数传入的样例文件名与 returncode）
   - note: text  # 说明（降档时记 why）
 - NoncodeNote:  # 非可码条款标注
   - clause_id: line  # 对应条款编号
@@ -74,11 +74,12 @@ Outputs:
     - ← cg
     + → guard_result: GuardResult  # 本条校验结果
 
-    5.1.1. [act free] 生成直接查该条款的可执行校验（脚本或规则文件，形态按目标环境定），实跑验证（用执行环境 shell 跑生成的校验脚本）：① 能跑不报错 ② 对该条款合规/违规样例能区分 ③ 确实在查该条款（不是查了别的）；跑不通就修，反复跑不通则降档为"需人裁"并记 why，不交付跑不通的校验
+    5.1.1. [act free] 生成直接查该条款的可执行校验，并**实跑验证**。形态定死为一个 Python 脚本（`.py`）：先用 write 把脚本写出来，再用 run_script 真跑它——校验脚本不许只写不跑，也不许凭推理声称跑过。三条验证判据：① 能跑不报错（run_script 回执的 returncode 与 stderr 是唯一证据，不是你的推断）② 对该条款的合规样例与违规样例能区分（两个样例都要真写出来真跑一遍，合规样例应判过、违规样例应判不过）③ 确实在查该条款本身（不是查了别的）。**校验脚本的形态要求**：脚本必须从命令行参数（`sys.argv[1]`）接收待检查文件的路径，读该文件的内容来判——交付出去的校验要拿去查真实项目里的文件，只会检查写死在脚本自身里的示例代码的脚本查不了任何真实文件，等于没有交付校验。所以合规样例与违规样例必须各写成一个独立的样例文件，两次 run_script 分别把样例文件作为参数传给同一个脚本（样例文件与脚本放同一目录时，参数传裸文件名即可），合规样例那次 returncode 应为 0、违规样例那次应非 0；verify_outcome 里逐次写明传的是哪个样例文件、回执的 returncode 是多少。跑不通就改脚本再跑；反复跑不通则降档为"需人裁"并把 why 记清楚，不交付跑不通的校验
       - ← cg
       + → guard_result: GuardResult  # 本条校验结果（已码或降档）
+      - 工具: run_script  # 跑刚写出来的 .py 校验脚本与样例——本步"实跑验证"的执行手段,不声明则本步无法执行任何脚本
 
-    5.1.2. [check final] 核验 guard_result 如实记录：status=已码则 guard_path 非空且 verify_outcome 体现实跑通过（能跑/区分/在查该条款），status=降档需人裁则 note 含 why；两个取值都合法，核验点=如实记录即 verdict true
+    5.1.2. [check final] 核验 guard_result 如实记录：status=已码则 guard_path 非空且 verify_outcome 体现实跑通过（能跑/区分/在查该条款），并且 verify_outcome 必须写明两次实跑各把哪个样例文件作为命令行参数传给了脚本、各自的 returncode——合规样例文件那次为 0、违规样例文件那次非 0；verify_outcome 若显示脚本只检查写死在脚本内部的示例（没有把样例文件作为参数传入），或两次实跑没有各自对应一个独立的样例文件，则 status=已码 不成立，判 false。status=降档需人裁则 note 含 why。已码与降档两个取值都合法，满足对应条件即 verdict true
       - ← guard_result
       + → recorded_ok: bool  # 如实记录与否
       + → record_note: text  # 未如实时的缺口

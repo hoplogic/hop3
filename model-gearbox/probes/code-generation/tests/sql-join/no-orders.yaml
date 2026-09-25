@@ -1,0 +1,5 @@
+data: |
+  INSERT INTO customers VALUES (1, 'A', 'west'), (2, 'B', 'east');
+expect:
+  - [east, 1, 0, 0]
+  - [west, 1, 0, 0]

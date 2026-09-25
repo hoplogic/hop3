@@ -1,0 +1,50 @@
+```python
+import ast
+import re
+import sys
+
+source = open(sys.argv[1], 'r', encoding='utf-8').read()
+tree = ast.parse(source)
+
+def extract_params(node):
+    args = node.args
+    param_names = []
+    for arg in args.posonlyargs:
+        param_names.append(arg.arg)
+    for arg in args.args:
+        param_names.append(arg.arg)
+    if args.vararg:
+        param_names.append(args.vararg.arg)
+    for arg in args.kwonlyargs:
+        param_names.append(arg.arg)
+    if args.kwarg:
+        param_names.append(args.kwarg.arg)
+    return param_names
+
+violations = []
+
+for node in ast.walk(tree):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if node.name.startswith('_'):
+            continue
+
+        params = extract_params(node)
+        required = [p for p in params if p not in ('self', 'cls')]
+
+        docstring = ast.get_docstring(node)
+        if docstring is None:
+            violations.append((node.lineno, "missing docstring"))
+            continue
+
+        for param in required:
+            pattern = r'(?<![a-zA-Z0-9_])' + re.escape(param) + r'(?![a-zA-Z0-9_])'
+            if not re.search(pattern, docstring):
+                violations.append((node.lineno, "parameter '" + param + "' not mentioned in docstring"))
+
+if violations:
+    for lineno, reason in violations:
+        print(str(lineno) + ": " + reason)
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

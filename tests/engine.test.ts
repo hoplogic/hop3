@@ -1,7 +1,7 @@
 // @module: exec-engine ^anc-struct-exec-engine
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { ExecutionEngine, splitInstanceDir } from '../src/engine.js';
-import { formatPromptText } from '../src/prompt.js';
+import { ExecutionEngine, splitInstanceDir, classifyFailReason } from '../src/engine.js';
+import { formatPromptText, TEXT_TOOLCALL_HINT_MARKER } from '../src/prompt.js';
 import { subtreeContainsPausePoint } from '../src/engine-traverse.js';
 import { VariableStore } from '../src/ast-runtime.js';
 import type { HostConfig } from '../src/provider-types.js';
@@ -375,6 +375,237 @@ G
     expect(st.execution_status).toBe('paused');   // 修前=running(纯内存无卡,escalate 非 confirm/ask 步型,源②也探不到——唯源①能判)
     expect(st.pause_reason).toBe('escalate');
     expect(st.paused_step_id).toBe('1.1');
+  });
+
+  // @v: anc-cli-status-nested-pause （todo/0105 缺陷 A——0081 三源之后追加的源④网络暂停与源⑤嵌套串行
+  // 调用下钻,正反例成对。子实例快照按 dispatcher.executeCall 同一布局造：父实例目录 calls/<serialCallChildInstance>/。
+  // 修前这几处 getStatus 全报 running——2026-09-21 T5 观察方 30 多分钟看不到停点的形态本体）
+  describe('status 看得见网络暂停与嵌套串行调用停点（0105）', () => {
+    const NET_SPEC = `# NetTop
+Id: net-top-0105
+## Goal
+g
+## Outputs
+- r: text  # r
+## Steps
+1. [reason] 想
+  + → r: text  # r
+2. [exit] 交付
+  + → r
+`;
+    const LEAF_NET = `# Leaf
+Id: leaf
+## Goal
+g
+## Inputs
+- x: int  # 入
+## Outputs
+- y: text  # 出
+## Steps
+1. [reason] 想
+  - ← x
+  + → y: text  # 出
+2. [exit] 交付
+  + → y
+`;
+    const LEAF_ASK = `# LeafAsk
+Id: leaf-ask
+## Goal
+g
+## Inputs
+- x: int  # 入
+## Outputs
+- y: text  # 出
+## Steps
+1. [ask require_human] 请给值
+  - ← x
+  + → y: text  # 出
+2. [exit] 交付
+  + → y
+`;
+    const CALLER = `# Caller
+Id: caller-0105
+## Goal
+g
+## Inputs
+- x: int  # 入
+## Outputs
+- y: text  # 出
+## Steps
+1. [call leaf(x)] 串行调子
+  + → y: y  # 收
+2. [exit] 交付
+  + → y
+`;
+    // 在父实例当前 running 的调用步下建子实例快照（与 dispatcher.executeCall 同参:parentInstanceId + callStepId=取名法结果 + stateDir=<父目录>/calls）
+    const spawnChild = (parent: ExecutionEngine, callStepId: string, source: string): ExecutionEngine => {
+      const child = new ExecutionEngine();
+      const init = child.initExecution(source, MINIMAL_HOST_CONFIG, {
+        params: { x: 1 }, parentInstanceId: parent.getInstanceId(),
+        callStepId: parent.serialCallChildInstance(callStepId),
+        stateDir: join(parent.getInstanceDir()!, 'calls'),
+      });
+      expect(init.status).toBe('ok');
+      return child;
+    };
+    const startParent = (spec: string, params: Record<string, unknown> = { x: 1 }): ExecutionEngine => {
+      const parent = new ExecutionEngine();
+      parent.initExecution(spec, MINIMAL_HOST_CONFIG, { stateDir: mkdtempSync(join(tmpdir(), 'nest-0105-')), params });
+      expect(parent.nextStep().status).toBe('step_ready');   // 调用步进 running（复用模式交 caller 执行 call）
+      return parent;
+    };
+
+    it('源④正例：顶层网络暂停 → paused/network/该步,无 call_path;反例：该步重新开始后、完成后都不再报 paused', () => {
+      const engine = new ExecutionEngine();
+      engine.initExecution(NET_SPEC, MINIMAL_HOST_CONFIG);   // 纯内存也判得出——源④只读步骤账与事件流
+      expect(engine.nextStep().status).toBe('step_ready');
+      engine.resetStepForNetworkPause('1');
+      const st = engine.getStatus();
+      expect(st.execution_status).toBe('paused');   // 修前=running（网络暂停不落卡,0081 三源都探不到）
+      expect(st.pause_reason).toBe('network');
+      expect(st.paused_step_id).toBe('1');
+      expect(st.call_path).toBeUndefined();
+      // 反例:恢复后重新开始（记 step_start,最后一条事件不再是 network_pause）
+      expect(engine.nextStep().status).toBe('step_ready');
+      expect(engine.getStatus().execution_status).not.toBe('paused');
+      // 反例:再暂停一次后直接完成,也不粘滞
+      engine.resetStepForNetworkPause('1');
+      expect(engine.getStatus().execution_status).toBe('paused');
+      engine.nextStep();
+      engine.completeStep('1', { r: 'ok' });
+      const st2 = engine.getStatus();
+      expect(st2.execution_status).not.toBe('paused');
+      expect(st2.pause_reason).toBeUndefined();
+    });
+
+    it('源⑤正例：串行调用子流程网络暂停 → 父 status 报 paused/network/子步号 + call_path;跨进程 load 父目录同口径;反例：子步重新开始后回 running', () => {
+      const parent = startParent(CALLER);
+      const child = spawnChild(parent, '1', LEAF_NET);
+      expect(child.nextStep().status).toBe('step_ready');
+      child.resetStepForNetworkPause('1');
+      const st = parent.getStatus();
+      expect(st.execution_status).toBe('paused');   // 修前=running（父快照里调用步只是 running,不下钻）
+      expect(st.pause_reason).toBe('network');
+      expect(st.paused_step_id).toBe('1');          // 最深层实例里的步号
+      expect(st.call_path).toEqual(['1']);
+      const loaded = ExecutionEngine.load(parent.getInstanceDir()!).getStatus();   // 命令行 status 走的就是这条
+      expect(loaded.execution_status).toBe('paused');
+      expect(loaded.pause_reason).toBe('network');
+      expect(loaded.call_path).toEqual(['1']);
+      // 反例:子步重新开始 → 父不再报 paused
+      expect(child.nextStep().status).toBe('step_ready');
+      const st2 = parent.getStatus();
+      expect(st2.execution_status).toBe('running');
+      expect(st2.call_path).toBeUndefined();
+    });
+
+    it('源⑤正例：串行调用子流程 ask 停点 → 父报 paused/ask + call_path;反例：答完后不再报 paused', () => {
+      const parent = startParent(CALLER);
+      const child = spawnChild(parent, '1', LEAF_ASK);
+      expect(child.nextStep().status).toBe('paused');   // 子实例落卡
+      const st = parent.getStatus();
+      expect(st.execution_status).toBe('paused');   // 修前=running（卡在子目录,父不下钻）
+      expect(st.pause_reason).toBe('ask');
+      expect(st.paused_step_id).toBe('1');
+      expect(st.call_path).toEqual(['1']);
+      expect(child.completeStep('1', { y: 'v' }).status).toBe('ok');
+      const st2 = parent.getStatus();
+      expect(st2.execution_status).not.toBe('paused');
+      expect(st2.pause_reason).toBeUndefined();
+    });
+
+    it('源⑤正例：两层嵌套 → call_path 由外到内逐层头插（父调用步在前,中间层调用步在后）', () => {
+      const MID = `# Mid
+Id: mid
+## Goal
+g
+## Inputs
+- x: int  # 入
+## Outputs
+- y: text  # 出
+## Steps
+1. [subtask] 容器
+  + → y: text  # 出
+  1.1. [call leaf(x)] 再调一层
+    + → y: y  # 收
+2. [exit] 交付
+  + → y
+`;
+      const parent = startParent(CALLER);
+      const mid = spawnChild(parent, '1', MID);
+      expect(mid.nextStep().status).toBe('step_ready');   // mid 的 1.1 调用步 running
+      const leaf = spawnChild(mid, '1.1', LEAF_NET);
+      expect(leaf.nextStep().status).toBe('step_ready');
+      leaf.resetStepForNetworkPause('1');
+      const st = parent.getStatus();
+      expect(st.execution_status).toBe('paused');
+      expect(st.call_path).toEqual(['1', '1.1']);   // 顺序颠倒即错——与 MCP 暂停载荷 call_path 同语义
+      expect(st.paused_step_id).toBe('1');
+    });
+
+    it('源⑤正例：循环里的串行调用（子实例名带轮次后缀 calls/1.1.1/）也能下钻命中', () => {
+      const LOOPER = `# Looper
+Id: looper-0105
+## Goal
+g
+## Inputs
+- xs: [int]  # 入
+## Outputs
+- ys: [text]  # 出
+## Steps
+1. [loop for-each x in xs, collect y into ys] 逐项
+  + → ys: [text]  # 出
+  1.1. [call leaf(x)] 串行调子
+    + → y: y  # 收
+2. [exit] 交付
+  + → ys
+`;
+      const parent = startParent(LOOPER, { xs: [1, 2] });
+      expect(parent.serialCallChildInstance('1.1')).toBe('1.1.1');   // 前提:目录名带轮次,不是裸步号
+      const child = spawnChild(parent, '1.1', LEAF_NET);
+      expect(child.nextStep().status).toBe('step_ready');
+      child.resetStepForNetworkPause('1');
+      const st = parent.getStatus();
+      expect(st.execution_status).toBe('paused');   // 用裸步号找 calls/1.1/ 找不到——报 running
+      expect(st.pause_reason).toBe('network');
+      expect(st.call_path).toEqual(['1.1']);
+    });
+
+    it('反例：终态凌驾——子目录残留网络暂停痕迹,父实例已 failed → 报 failed 不报 paused', () => {
+      const parent = startParent(CALLER);
+      const child = spawnChild(parent, '1', LEAF_NET);
+      child.nextStep();
+      child.resetStepForNetworkPause('1');
+      expect(parent.getStatus().execution_status).toBe('paused');
+      parent.failStep('1', '模拟调用失败');
+      expect(parent.nextStep().status).toBe('failed');
+      const st = parent.getStatus();
+      expect(st.execution_status).toBe('failed');
+      expect(st.pause_reason).toBeUndefined();
+      expect(st.call_path).toBeUndefined();
+    });
+
+    it('反例：子实例已落终态标记（completed）→ 不下钻,父报 running', () => {
+      const parent = startParent(CALLER);
+      const child = spawnChild(parent, '1', LEAF_NET);
+      child.nextStep();
+      child.completeStep('1', { y: 'v' });
+      child.nextStep();   // exit → completed 终态标记落盘
+      expect(child.getStatus().execution_status).toBe('completed');
+      expect(parent.getStatus().execution_status).toBe('running');   // 调用步待 caller 回写——running 合法持久态
+    });
+
+    it('反例：子实例网络暂停后被 abort（终态标记在场,暂停痕迹残留）→ 不下钻,父报 running', () => {
+      const parent = startParent(CALLER);
+      const child = spawnChild(parent, '1', LEAF_NET);
+      child.nextStep();
+      child.resetStepForNetworkPause('1');
+      expect(parent.getStatus().execution_status).toBe('paused');
+      child.abort('放弃子流程');   // abort 事件不挂步号——该步末事件仍是 network_pause,只靠终态标记挡住
+      const st = parent.getStatus();
+      expect(st.execution_status).toBe('running');
+      expect(st.call_path).toBeUndefined();
+    });
   });
 
   // @v: anc-exec-state-persistence （0043 终局有据:completed/failed 随快照落盘——原四出口零
@@ -3555,6 +3786,160 @@ g
     if (r.status === 'completed') expect(r.outputs?.['outs']).toEqual(['兜底a', '兜底b']);
   });
 
+  // 激活动作第五样：失败点到容器之间的中间容器终态化（hopissues/0104——失败点嵌在 branch>case
+  // 下,兜底走完 branch 仍 running,级联在 subtask 层判"子步全终态"不成立返回,宿主循环断轮）
+  describe('失败点嵌在中间容器下——兜底走完宿主循环照常推进（hopissues/0104）', () => {
+    const BRANCH_SPEC = `# NB
+Id: nb
+## Goal
+g
+## Inputs
+- xs: [line]  # 列表
+## Outputs
+- outs: [text]  # 收集
+## Steps
+1. [loop for-each x in xs, collect o into outs] 遍历
+  + → outs: [text]  # 收集
+  1.1. [subtask retry=0] 单项事务
+    + → o: text  # 单项
+    1.1.1. [reason] 分诊
+      - ← x
+      + → t: line  # 分诊
+    1.1.2. [branch] 路由
+      1.1.2.1. [case(t == "go")] 继续
+        + → o: text  # 产出
+        1.1.2.1.1. [act] 干活
+          - ← x
+          + → o: text  # 产出
+        1.1.2.1.2. [act] 收尾
+          + → o: text  # 产出
+      1.1.2.2. [case(else)] 弃
+        1.1.2.2.1. [act] 弃点
+          + → o: text  # 弃
+    1.1.3. [on fail] 兜底
+      1.1.3.1. [act] 记档
+        + → o: text  # 兜底
+2. [exit]
+`;
+    const LOOP_SPEC = `# NL
+Id: nl
+## Goal
+g
+## Inputs
+- xs: [line]  # 列表
+## Outputs
+- outs: [text]  # 收集
+## Steps
+1. [loop for-each x in xs, collect o into outs] 遍历
+  + → outs: [text]  # 收集
+  1.1. [subtask retry=0] 单项事务
+    + → o: text  # 单项
+    1.1.1. [loop max=2] 内层轮询
+      1.1.1.1. [act] 探一次
+        - ← x
+        + → o: text  # 产出
+      1.1.1.2. [act] 记一次
+        + → o: text  # 产出
+    1.1.2. [on fail] 兜底
+      1.1.2.1. [act] 记档
+        + → o: text  # 兜底
+2. [exit]
+`;
+    const states = (e: ExecutionEngine) => (e as unknown as { stepStates: Map<string, string> }).stepStates;
+
+    it('正例：branch>case 下深层失败走兜底 → 中间 branch 标 failed、case 内后位 pending 子步标 skipped,宿主循环推进下一轮并收集兜底值', () => {
+      const engine = new ExecutionEngine();
+      engine.initExecution(BRANCH_SPEC, MINIMAL_HOST_CONFIG, { params: { xs: ['a', 'b', 'c'] } });
+      // 轮1 正常
+      engine.nextStep(); engine.completeStep('1.1.1', { t: 'go' });
+      engine.nextStep(); engine.completeStep('1.1.2.1.1', { o: 'x' });
+      engine.nextStep(); engine.completeStep('1.1.2.1.2', { o: 'A' });
+      // 轮2 深层失败 → case 预算缺省 3 轮重试后耗尽,升级到 subtask(retry=0) 激活兜底
+      engine.nextStep(); engine.completeStep('1.1.1', { t: 'go' });
+      let s = engine.nextStep() as { status: string; step_id?: string };
+      let guard = 0;
+      while (s.status === 'step_ready' && s.step_id === '1.1.2.1.1' && guard++ < 10) {
+        engine.failStep('1.1.2.1.1', 'boom');
+        s = engine.nextStep() as { status: string; step_id?: string };
+      }
+      expect(s.step_id).toBe('1.1.3.1');
+      const st = states(engine);
+      expect(st.get('1.1.2')).toBe('failed');      // 中间容器终态化（修前停在 running）
+      expect(st.get('1.1.2.1')).toBe('failed');
+      expect(st.get('1.1.2.1.2')).toBe('skipped'); // 失败点后位 pending 兄弟
+      expect(st.get('1.1.2.2')).toBe('skipped');
+      engine.completeStep('1.1.3.1', { o: '兜底b' });
+      // 兜底消化失败 → 容器收场 → 级联推宿主 loop 进轮3（1.1 随轮进复位 pending）
+      expect((engine as unknown as { loopCounters: Map<string, number> }).loopCounters.get('1')).toBe(3);
+      // 轮3 照常推进（修前执行流越过循环直达 exit,完备性闸报 outs never assigned）
+      s = engine.nextStep() as { status: string; step_id?: string };
+      expect(s.step_id).toBe('1.1.1');
+      engine.completeStep('1.1.1', { t: 'go' });
+      engine.nextStep(); engine.completeStep('1.1.2.1.1', { o: 'x' });
+      engine.nextStep(); engine.completeStep('1.1.2.1.2', { o: 'C' });
+      const r = engine.nextStep();
+      expect(r.status).toBe('completed');
+      if (r.status === 'completed') expect(r.outputs?.['outs']).toEqual(['A', '兜底b', 'C']);
+    });
+
+    it('正例：条件 loop 下失败走兜底 → 中间 loop 标 failed、loop 内后位 pending 子步标 skipped,宿主循环照常推进', () => {
+      const engine = new ExecutionEngine();
+      engine.initExecution(LOOP_SPEC, MINIMAL_HOST_CONFIG, { params: { xs: ['a', 'b'] } });
+      engine.nextStep(); engine.failStep('1.1.1.1', 'boom');   // retry=0 首败即激活兜底
+      const fb = engine.nextStep() as { status: string; step_id?: string };
+      expect(fb.step_id).toBe('1.1.2.1');
+      const st = states(engine);
+      expect(st.get('1.1.1')).toBe('failed');
+      expect(st.get('1.1.1.2')).toBe('skipped');
+      engine.completeStep('1.1.2.1', { o: '兜底a' });
+      const s = engine.nextStep() as { status: string; step_id?: string };
+      expect(s.step_id).toBe('1.1.1.1');   // 轮2 从头开始（内层 loop 随宿主轮进复活）
+      engine.completeStep('1.1.1.1', { o: 'x' });
+      engine.nextStep(); engine.completeStep('1.1.1.2', { o: 'y1' });
+      engine.nextStep(); engine.completeStep('1.1.1.1', { o: 'x' });
+      engine.nextStep(); engine.completeStep('1.1.1.2', { o: 'B' });
+      const r = engine.nextStep();
+      expect(r.status).toBe('completed');
+      if (r.status === 'completed') expect(r.outputs?.['outs']).toEqual(['兜底a', 'B']);
+    });
+
+    it('反例：失败点是容器直接子步时祖先链为空——不动任何中间状态,行为与修前一致', () => {
+      const FLAT = `# NF
+Id: nf
+## Goal
+g
+## Outputs
+- out: text  # o
+## Steps
+1. [subtask retry=0] 主活
+  + → out: text  # o
+  1.1. [act] 干活
+    + → out: text  # 产出
+  1.2. [branch] 后续路由
+    1.2.1. [case(out == "x")] 走这边
+      1.2.1.1. [act] 后续
+        + → out: text  # 产出
+  1.3. [on fail] 兜底
+    1.3.1. [act] 记档
+      + → out: text  # 兜底
+2. [exit]
+`;
+      const engine = new ExecutionEngine();
+      engine.initExecution(FLAT, MINIMAL_HOST_CONFIG);
+      engine.nextStep(); engine.failStep('1.1', 'boom');
+      const fb = engine.nextStep() as { status: string; step_id?: string };
+      expect(fb.step_id).toBe('1.3.1');
+      const st = states(engine);
+      expect(st.get('1.1')).toBe('failed');
+      expect(st.get('1')).toBe('running');     // 容器本身不被第五样动（保持 running 等兜底）
+      expect(st.get('1.2')).toBe('skipped');   // 后位兄弟走第四样,不是 failed
+      engine.completeStep('1.3.1', { out: '兜底' });
+      const r = engine.nextStep();
+      expect(r.status).toBe('completed');
+      if (r.status === 'completed') expect(r.outputs?.['out']).toBe('兜底');
+    });
+  });
+
   it('正例：check final 反复不过耗尽 → 转入兜底（验收失败的善后路径——兜底非 check final 旁路:正常成功路径仍必经验收）', () => {
     const CF_SPEC = `# CF
 Id: cf
@@ -3724,6 +4109,67 @@ g
     const rt = engine.nextStep();
     expect(rt.status).toBe('step_ready');
     if (rt.status === 'step_ready') expect(rt.step_id).toBe('1.1');   // 正常带反馈重跑
+  });
+
+  // 档次判定只看失败原因的开头（todo/0116——0107 收尾实例 5e5e3afc:判定打回意见引用了代码里的
+  // 超窗前缀字符串,修前子串匹配把这次打回当事务级确定性失败,retry=2 一次没用直接失败。
+  // 修前红:①在基线 b99231fb 上 1.1 不重跑而是直达兜底 1.2.1;②在基线上出现免扣事件、没有 attempt 事件）
+  const retryEvents = (engine: ExecutionEngine) =>
+    engine.getExecEvents().filter(e => e.step_id === '1' && e.event === 'retry').map(e => e.detail ?? '');
+
+  it('反例①：判定打回意见原文里引用了超窗前缀字样 → 普通档照扣预算重跑（不是事务级直达兜底）', () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(DET_SPEC, MINIMAL_HOST_CONFIG);
+    engine.nextStep();
+    engine.failStep('1.1', "CHECK_FAILED: 第 3 条未落实——engine.ts 里仍是 reason.includes('CONTEXT_OVERFLOW:') 整段匹配");
+    const rt = engine.nextStep();
+    expect(rt.status).toBe('step_ready');
+    if (rt.status === 'step_ready') expect(rt.step_id).toBe('1.1');   // 重跑本步,不是兜底 1.2.1
+    const ev = retryEvents(engine);
+    expect(ev).toContain('attempt 1/3');   // 扣了一次预算
+    expect(ev.some(d => d.includes('事务级'))).toBe(false);
+    expect((engine as any).retryCounters.get('1')).toBe(2);
+  });
+
+  it('反例②：判定打回意见原文里引用了输出截断前缀字样 → 普通档照扣预算（不白送免扣）', () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(DET_SPEC, MINIMAL_HOST_CONFIG);
+    engine.nextStep();
+    engine.failStep('1.1', 'CHECK_FAILED: 报告里把 OUTPUT_TRUNCATED: 当成了网络错误,归类写错');
+    const rt = engine.nextStep();
+    expect(rt.status).toBe('step_ready');
+    if (rt.status === 'step_ready') expect(rt.step_id).toBe('1.1');
+    const ev = retryEvents(engine);
+    expect(ev).toContain('attempt 1/3');
+    expect(ev.some(d => d.includes('免扣预算'))).toBe(false);
+    expect((engine as any).retryCounters.get('1')).toBe(2);
+  });
+
+  it('正例③：首次计划包装里的推理烧满 → 剥掉包装后仍按步级瞬态免扣（包装前缀封闭清单第 2 条）', () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(DET_SPEC, MINIMAL_HOST_CONFIG);
+    engine.nextStep();
+    engine.failStep('1.1', 'Initial plan generation failed: THINKING_EXHAUSTED: 推理通道烧满输出上限且正文为空');
+    const rt = engine.nextStep();
+    expect(rt.status).toBe('step_ready');
+    if (rt.status === 'step_ready') expect(rt.step_id).toBe('1.1');
+    const ev = retryEvents(engine);
+    expect(ev.some(d => d.includes('免扣预算') && d.includes('THINKING_EXHAUSTED'))).toBe(true);
+    expect(ev.some(d => d.startsWith('attempt'))).toBe(false);   // 没扣预算
+  });
+
+  it('classifyFailReason 直测：设计条款四个例子 + 失败记录类别优先 + 包装里的事务级前缀照判事务级', () => {
+    expect(classifyFailReason("CHECK_FAILED: 引用了 'CONTEXT_OVERFLOW:' 字样").fail_class).toBe('normal');
+    expect(classifyFailReason('CHECK_FAILED: 引用了 OUTPUT_TRUNCATED: 字样').fail_class).toBe('normal');
+    expect(classifyFailReason('需要的数据缺 TOOL_LOOP_REPEAT: 说明 (lack_of_info)').fail_class).toBe('normal');
+    expect(classifyFailReason('Replan API error after 3 attempts: OUTPUT_TRUNCATED: 被掐断'))
+      .toEqual({ fail_class: 'transient', transient_prefix: 'OUTPUT_TRUNCATED' });
+    expect(classifyFailReason('Initial plan generation failed: Replan API error after 2 attempts: TOOL_LOOP_REPEAT: 复读'))
+      .toEqual({ fail_class: 'transient', transient_prefix: 'TOOL_LOOP_REPEAT' });   // 反复剥
+    expect(classifyFailReason('任意文字', 'deterministic').fail_class).toBe('transactional');
+    expect(classifyFailReason('CONTEXT_OVERFLOW: 压缩后仍超窗').fail_class).toBe('transactional');
+    expect(classifyFailReason('Replan API error after 3 attempts: CONTEXT_OVERFLOW: 超窗').fail_class).toBe('transactional');
+    expect(classifyFailReason('前面有字 Replan API error after 3 attempts: OUTPUT_TRUNCATED: x').fail_class).toBe('normal');   // 包装只认开头
   });
 });
 
@@ -7568,6 +8014,92 @@ describe('串行 for-each（无 parallel 属性）', () => {
     expect(r.status).toBe('completed');
   });
 
+  // hopissues/0105:静默终态一律级联——空列表 loop 置 done 后原直接 continue,不闭合父容器。
+  // 内层 loop 是外层最后一个 child 时,外层停在 running 不推进,dfs 越过直达后续步骤,
+  // 剩余轮次静默没跑且报 completed。
+  // @v: anc-exec-foreach-serial
+  describe('内层 loop 静默终态级联外层（hopissues/0105）', () => {
+    const NESTED_SPEC = `# 外层累加内层遍历
+## Goal
+G
+## Inputs
+- ocs: [yaml]
+## Outputs
+- n: int
+## Steps
+1. [loop for-each oc in ocs] 外层
+  + → n: int = 0
+  1.1. [act] 展开
+    - ← oc
+    + → items: [yaml]
+  1.2. [loop for-each it in items] 内层
+    1.2.1. [act] 计
+      - ← it
+      - ← n
+      + → n
+2. [exit]
+`;
+    const runNested = (sizes: number[]) => {
+      let round = 0;
+      let n = 0;
+      const { r, seen, engine } = drive(NESTED_SPEC, { ocs: sizes.map(k => ({ k })) }, (id) => {
+        if (id === '1.1') return { items: Array.from({ length: sizes[round++] }, (_, i) => ({ i })) };
+        n += 1;
+        return { n };
+      });
+      return { r, seen, engine };
+    };
+
+    it('正例：外层首轮内层列表为空 → 外层照常跑完剩余两轮,n=3', () => {
+      const { r, seen, engine } = runNested([0, 1, 2]);
+      expect(seen.filter(s => s.id === '1.1')).toHaveLength(3);
+      expect(seen.filter(s => s.id === '1.2.1')).toHaveLength(3);
+      expect(r.status).toBe('completed');
+      if (r.status === 'completed') expect(r.outputs.n).toBe(3);
+      expect(engine.getStepStates().get('1')).toBe('done');
+    });
+
+    it('正例：外层中间轮内层列表为空 → 后续轮次不中断', () => {
+      const { r, seen } = runNested([1, 0, 2]);
+      expect(seen.filter(s => s.id === '1.1')).toHaveLength(3);
+      if (r.status === 'completed') expect(r.outputs.n).toBe(3);
+    });
+
+    it('正例：内层条件循环 max=0 是外层最后一个 child → 外层照常跑满', () => {
+      const spec = `# 外层遍历内层零轮
+## Goal
+G
+## Inputs
+- xs: [text]
+## Outputs
+- seen: [text]
+## Steps
+1. [loop for-each x in xs, collect y into seen] 外层
+  + → seen: [text]
+  1.1. [act] 取
+    - ← x
+    + → y: text
+  1.2. [loop max=0] 零轮
+    1.2.1. [act] 不跑
+      + → never: text
+2. [exit]
+`;
+      const { r, seen } = drive(spec, { xs: ['a', 'b', 'c'] }, (_id, inputs) => ({ y: `Y(${inputs.x})` }));
+      expect(seen.filter(s => s.id === '1.1').map(s => s.inputs.x)).toEqual(['a', 'b', 'c']);
+      expect(seen.filter(s => s.id === '1.2.1')).toHaveLength(0);
+      expect(r.status).toBe('completed');
+      if (r.status === 'completed') expect(r.outputs.seen).toEqual(['Y(a)', 'Y(b)', 'Y(c)']);
+    });
+
+    it('对照：空列表排在最后一轮（修前计数也对,只是外层 loop 停在 running 没闭合）→ 计数不变且外层 loop 闭合为 done', () => {
+      const { r, seen, engine } = runNested([1, 2, 0]);
+      expect(seen.filter(s => s.id === '1.1')).toHaveLength(3);
+      expect(r.status).toBe('completed');
+      if (r.status === 'completed') expect(r.outputs.n).toBe(3);
+      expect(engine.getStepStates().get('1')).toBe('done');
+    });
+  });
+
   it('break 中断 → 部分列表（概念 ^anc-step-loop：已完成迭代的部分列表）', () => {
     const BREAK_SPEC = `# 串行遍历带break
 ## Goal
@@ -10103,8 +10635,11 @@ G
     engine.setUnifiedDispatch(true);   // 复用模式 CLI run 同款开门（dispatch_ready 由此门产生）
     const next = engine.nextStep() as { status: string; launch_command?: string };
     expect(next.status).toBe('dispatch_ready');
-    expect(next.launch_command).toContain('hop_env_kb_root');
-    expect(next.launch_command).toContain('/kb');
+    // 参数表走参数文件（^anc-exec-cmd-args-file）：命令里只有 "@<路径>",hop_env 键在文件里
+    const m = /--params "@([^"]+)"/.exec(next.launch_command!);
+    expect(m).not.toBeNull();
+    const sent = JSON.parse(readFileSync(m![1], 'utf-8'));
+    expect(sent.hop_env_kb_root).toBe('/kb');
   });
 });
 
@@ -10323,6 +10858,30 @@ g
       expect(r2.context.retry_feedback).toContain('请补充路径布局');
     }
   });
+
+  // @v: anc-exec-text-toolcall-hint —— L6 渲染半边:失败原因带附加提示标记时,形态指引用去掉提示的原因,提示段在末尾
+  it('正例：机械错误原因带正文疑似工具调用提示 → 形态指引原句套标记前的原因,提示整段追加在末尾', () => {
+    const base = 'SCHEMA_MISMATCH: 字段 "v"（声明 int）：期望整数 (after 3 attempts)';
+    const hint = `${TEXT_TOOLCALL_HINT_MARKER}\n如果你本意是调用工具 bash：写在正文里的调用引擎收不到，工具要通过工具调用功能发起，不能写成文字；bash 不在你这一步的可用工具清单里，可用的有：write、listdir。如果这段是产出内容本身，忽略本提示。`;
+    const e = new ExecutionEngine();
+    e.initExecution(SPEC2, MINIMAL_HOST_CONFIG);
+    e.nextStep();
+    e.failStep('1.1', `${base}\n\n${hint}`);
+    const r = e.nextStep();
+    expect(r.status).toBe('step_ready');
+    if (r.status !== 'step_ready') return;
+    const fb = r.context.retry_feedback as string;
+    expect(fb).toContain(`（引擎错误：${base}）。\n这通常说明产出的形态不符合输出声明`);
+    expect(fb.endsWith(`重点检查形态。\n\n${hint}`)).toBe(true);
+    // 反例:同一原因去掉提示 → 与改前逐字相同（无标记段）
+    const e2 = new ExecutionEngine();
+    e2.initExecution(SPEC2, MINIMAL_HOST_CONFIG);
+    e2.nextStep();
+    e2.failStep('1.1', base);
+    const r2 = e2.nextStep();
+    if (r2.status !== 'step_ready') throw new Error('expected step_ready');
+    expect(r2.context.retry_feedback).toBe(`你上一轮的产出导致后续机械步骤处理失败（引擎错误：${base}）。\n这通常说明产出的形态不符合输出声明——请严格按 L4 输出声明的名字与类型产出：声明什么类型就直接给什么类型的值，不要包裹在字符串/JSON/代码围栏里，不要在值外再套变量名键。内容本身可能没有问题，重点检查形态。`);
+  });
 });
 
 
@@ -10479,6 +11038,56 @@ g
     expect(cp2).toBeDefined();
     expect(cp2.init_command).toContain('--upstream-feedback');
     expect(cp2.init_command).toContain('SENTINEL_H2');   // 打回意见真在命令里
+  });
+
+  // @v: anc-exec-cmd-args-file — 内存实例（无实例目录）退回 POSIX 单引号内联:经真 shell 回显,
+  // 参数原文逐字节不变（反引号/$()/${}/单引号都不被解释）;反例:有实例目录时命令里零原文
+  it('正例：内存实例 --params/--upstream-feedback 单引号内联经 sh 回显逐字节不变;反例：有实例目录时命令零原文、值在 cmd_args 文件', () => {
+    const NASTY = "a `echo INJ` $(echo SUB) ${HOME} 'q' \\ \"d\"";
+    const PARENT_IN = `# P
+Id: p-cmdargs
+## Goal
+g
+## Inputs
+- 原料: text  # 带元字符
+## Outputs
+- r: text  # x
+## Steps
+1. [subtask retry=2] 外包组
+  + → r: text
+  1.1. [call sub(材料: 原料)] 外包
+    + → r
+  1.2. [check] 核验
+    - ← r
+    + → ok: bool  # k
+    + → note: text  # n
+`;
+    const engine = new ExecutionEngine();
+    engine.initExecution(PARENT_IN, MINIMAL_HOST_CONFIG, { params: { 原料: NASTY } } as any);
+    (engine as any).cliAbsPath = '/abs/cli.js';
+    (engine as any).specPath = '/abs/p.md';
+    engine.nextStep();
+    engine.completeStep('1.1', { r: 'bad' });
+    engine.nextStep();
+    engine.failStep('1.2', `CHECK_FAILED: ${NASTY}`);
+    const cp = (engine.nextStep() as any).call_protocol;
+    const { execSync } = require('node:child_process');
+    const argOf = (flag: string) => new RegExp(`${flag} ('(?:[^']|'\\\\'')*')`).exec(cp.init_command)![1];
+    expect(cp).toBeDefined();
+    const params = JSON.parse(execSync(`printf '%s' ${argOf('--params')}`, { encoding: 'utf-8' }));
+    expect(params.材料).toBe(NASTY);
+    expect(execSync(`printf '%s' ${argOf('--upstream-feedback')}`, { encoding: 'utf-8' })).toContain(NASTY);
+
+    const dir = mkdtempSync(join(tmpdir(), 'cmdargs-'));
+    const e2 = new ExecutionEngine();
+    e2.initExecution(PARENT_IN, MINIMAL_HOST_CONFIG, { params: { 原料: NASTY }, stateDir: join(dir, '.hopstate') } as any);
+    (e2 as any).cliAbsPath = '/abs/cli.js';
+    (e2 as any).specPath = '/abs/p.md';
+    const cp2 = (e2.nextStep() as any).call_protocol;
+    expect(cp2.init_command).not.toContain('INJ');
+    const m = /--params "@([^"]+)"/.exec(cp2.init_command)!;
+    expect(m[1].endsWith(join('cmd_args', 'calls-1.1.params.json'))).toBe(true);
+    expect(JSON.parse(readFileSync(m[1], 'utf-8')).材料).toBe(NASTY);
   });
 
   it('全链：CLI init 收 --upstream-feedback → 子实例 reason 步 L5 有上游条目、check 步零供给', () => {
@@ -12222,6 +12831,98 @@ g
   });
 });
 
+// hopissues/0098:loop 里的串行 call 子实例按轮次命名（旧形态各轮共用 calls/<步骤号>/,re-init 净室
+// 删掉前面轮次的产出,父层按路径读 ENOENT）。本组锁取名规则与 call_protocol 三处同值。
+// @v: anc-exec-call-child-iter-id
+describe('loop 里的串行 call 子实例按轮次命名（hopissues/0098）', () => {
+  const withCli = (e: ExecutionEngine) => { (e as any).cliAbsPath = '/abs/cli.js'; (e as any).specPath = '/abs/p.md'; };
+  const protoOf = (r: any) => { expect(r.status).toBe('step_ready'); expect(r.step_type).toBe('call'); return r.call_protocol; };
+
+  it('正例：一层 for-each 两轮 → 子实例 ID 1.1.1 / 1.1.2,init_command 带 --step 1.1 --child-instance <ID>,回报与起步命令同值', () => {
+    const spec = `# L
+Id: l-0098
+## Goal
+g
+## Inputs
+- xs: [int]  # 列表
+## Outputs
+- outs: [int]  # 收集
+## Steps
+1. [loop for-each x in xs, collect v into outs] 逐项
+  + → outs: [int]
+  1.1. [call child(n: x)] 调子
+    + → v: r
+2. [exit] 交付
+`;
+    const e = new ExecutionEngine();
+    e.initExecution(spec, MINIMAL_HOST_CONFIG, { params: { xs: [5, 6] } });
+    withCli(e);
+    const cp1 = protoOf(e.nextStep());
+    expect(cp1.child_instance).toBe('1.1.1');
+    expect(cp1.init_command).toContain('--step 1.1 --child-instance 1.1.1 ');
+    expect(cp1.child_advance).toContain('--instance 1.1.1');
+    expect(cp1.report_completed).toContain('submit_and_fetch_next 1.1 --child-instance 1.1.1');
+    expect(cp1.report_failed).toContain('--failure-child 1.1.1');
+    e.completeCallStep('1.1', { r: 50 });
+    const cp2 = protoOf(e.nextStep());
+    expect(cp2.child_instance).toBe('1.1.2');
+    expect(cp2.init_command).toContain('--step 1.1 --child-instance 1.1.2 ');
+    e.completeCallStep('1.1', { r: 60 });
+    const end = e.nextStep();
+    expect(end.status).toBe('completed');
+    if (end.status === 'completed') expect(end.outputs['outs']).toEqual([50, 60]);   // 回填仍按步骤号,loop 收集照旧
+  });
+
+  it('正例：两层嵌套 loop → ID 带外层到内层两段轮次,内层复位不致跨外层轮碰撞（只取最近一层时 1.1.1.1 会出现两次）', () => {
+    const spec = `# N
+Id: n-0098
+## Goal
+g
+## Inputs
+- xs: [int]  # 外
+- ys: [int]  # 内
+## Steps
+1. [loop for-each x in xs] 外层
+  1.1. [loop for-each y in ys] 内层
+    1.1.1. [call child(a: x, b: y)] 调子
+      + → z: r
+2. [exit] 交付
+`;
+    const e = new ExecutionEngine();
+    e.initExecution(spec, MINIMAL_HOST_CONFIG, { params: { xs: [1, 2], ys: [7, 8] } });
+    withCli(e);
+    const ids: string[] = [];
+    for (let k = 0; k < 4; k++) {
+      ids.push(protoOf(e.nextStep()).child_instance);
+      e.completeCallStep('1.1.1', { r: k });
+    }
+    expect(ids).toEqual(['1.1.1.1.1', '1.1.1.1.2', '1.1.1.2.1', '1.1.1.2.2']);
+    expect(new Set(ids).size).toBe(4);
+  });
+
+  it('反例：不在任何 loop 里的 call → 子实例 ID 仍是裸步骤号（旧形态零变化）', () => {
+    const spec = `# S
+Id: s-0098
+## Goal
+g
+## Inputs
+- x: int  # 入
+## Outputs
+- v: int  # 出
+## Steps
+1. [call child(n: x)] 调子
+  + → v: r
+`;
+    const e = new ExecutionEngine();
+    e.initExecution(spec, MINIMAL_HOST_CONFIG, { params: { x: 1 } });
+    withCli(e);
+    const cp = protoOf(e.nextStep());
+    expect(cp.child_instance).toBe('1');
+    expect(cp.init_command).toContain('--step 1 --child-instance 1 ');
+    expect(e.serialCallChildInstance('1')).toBe('1');
+  });
+});
+
 // hopissues/0047:call 子实例 re-init 净室（原 init 不清 calls/ 嵌套残留,串行 for-each 迭代互相污染）
 // @v: anc-exec-call-reinit-clean
 describe('call 子实例 re-init 净室（hopissues/0047）', () => {
@@ -13042,6 +13743,482 @@ G
     // failed 容器的失败史仍在账(exportFailState 读得到——不许被成功清账逻辑波及)
     const st = engine.exportFailState();
     expect(JSON.stringify(st.retryHistory ?? {})).toContain('致命缺口');
+  });
+});
+
+// todo/0107——loop 新一轮=新迭代全新事务,前几轮的重试反馈不属于本轮。实撞:意见轮 loop 第 1~3 轮
+// 分诊容器留下的重试记录与跨轮累计的开始事件,让第 4~8 轮的分诊步吃到旧"机械失败"反馈与上轮旧意见
+// 基准,照抄回去形成 revise 死循环。修=记录打位置戳、只取容器本轮起点（祖先 loop 最晚一条轮进事件）之后的
+// 记录 + 受众闸只数起点之后的事件;记录本身不删。循环入口不划界线——外层容器重试重建时旧意见照旧可见;
+// 同批次的配套:烧尽原因带最后一次失败原文、prompt 剥记账外壳、输入被容器外重做时不给基准（K~P 例）。
+// @v: anc-exec-l2c-retry-feedback
+// @v: anc-exec-retry-feedback-iter-scope
+describe('重试反馈按轮生效(0107)', () => {
+  const SPEC107 = `# RI
+## Goal
+G
+## Steps
+1. [loop max=3] 意见轮
+  1.1. [subtask retry=2] 分诊事务
+    + → b: text
+    1.1.1. [check] 分诊判
+      + → a_ok: bool
+      + → a_note: text
+      > judge
+    1.1.2. [reason] 后排步骤
+      + → b: text
+      > later
+`;
+  // 第 1 轮:1.1.1 先判负(原因A)触发容器重试,重跑判正,1.1.2 收尾 → loop 进第 2 轮
+  function runRound1(engine: ExecutionEngine) {
+    let r: any = engine.nextStep();
+    expect(r.step_id).toBe('1.1.1');
+    engine.completeStep('1.1.1', { a_ok: false, a_note: '第一轮原因A' });
+    r = engine.nextStep();
+    expect(r.step_id).toBe('1.1.1');
+    expect(engine.getActiveRetryFeedback('1.1.1')?.reason).toContain('第一轮原因A');   // 同轮重跑照常吃
+    engine.completeStep('1.1.1', { a_ok: true, a_note: '' });
+    r = engine.nextStep();
+    expect(r.step_id).toBe('1.1.2');
+    engine.completeStep('1.1.2', { b: 'x1' });
+  }
+
+  it('正例A(0107 原形态)：上一轮留下的重试记录不注入下一轮——第 2 轮两个子步反馈通道都干净', () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC107, MINIMAL_HOST_CONFIG);
+    runRound1(engine);
+    const r: any = engine.nextStep();
+    expect(r.step_id).toBe('1.1.1');
+    // 修前:1.1.1 跨轮累计开始事件 3 次过受众闸,又拿到第 1 轮记录 → 注入"第一轮原因A"
+    expect(engine.getActiveRetryFeedback('1.1.1')).toBeUndefined();
+    engine.completeStep('1.1.1', { a_ok: true, a_note: '' });
+    expect((engine.nextStep() as any).step_id).toBe('1.1.2');
+    expect(engine.getActiveRetryFeedback('1.1.2')).toBeUndefined();
+    // 账不删:第 1 轮记录仍在,只是不注入
+    expect(engine.exportFailState().retryHistory?.['1.1']?.[0]?.failure_reason).toContain('第一轮原因A');
+  });
+
+  it('正例B(同轮照注入)：第 2 轮容器再失败,重跑步只吃本轮原因,prior 里没有第 1 轮旧原因', () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC107, MINIMAL_HOST_CONFIG);
+    runRound1(engine);
+    engine.nextStep();
+    engine.completeStep('1.1.1', { a_ok: false, a_note: '第二轮原因B' });
+    expect((engine.nextStep() as any).step_id).toBe('1.1.1');
+    const fb = engine.getActiveRetryFeedback('1.1.1');
+    expect(fb?.reason).toContain('第二轮原因B');
+    expect(JSON.stringify(fb?.prior ?? [])).not.toContain('第一轮原因A');
+  });
+
+  it('正例C(受众闸只数本轮)：第 2 轮容器重试后,本轮首次执行的后排步骤(第 1 轮执行过)不带反馈', () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC107, MINIMAL_HOST_CONFIG);
+    runRound1(engine);
+    engine.nextStep();
+    engine.completeStep('1.1.1', { a_ok: false, a_note: '第二轮原因B' });
+    engine.nextStep();
+    engine.completeStep('1.1.1', { a_ok: true, a_note: '' });
+    expect((engine.nextStep() as any).step_id).toBe('1.1.2');
+    // 修前:1.1.2 跨轮累计开始事件 2 次被当成重跑参与者,吃到本轮 1.1.1 的打回原因
+    expect(engine.getActiveRetryFeedback('1.1.2')).toBeUndefined();
+  });
+
+  it('正例D：loop_iter 事件在 loop 进入与每次轮进各记一条,detail 是新轮次号', () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC107, MINIMAL_HOST_CONFIG);
+    runRound1(engine);
+    engine.nextStep();
+    const iters = engine.getExecEvents().filter(e => e.event === 'loop_iter');
+    expect(iters.map(e => [e.step_id, e.detail])).toEqual([['1', '1'], ['1', '2']]);
+    // 第 1 轮记录带位置戳,位置在第 2 轮轮进事件之前
+    const seq = engine.exportFailState().retryHistory?.['1.1']?.[0]?.event_seq;
+    expect(typeof seq).toBe('number');
+    const advanceIdx = engine.getExecEvents().findIndex(e => e.event === 'loop_iter' && e.detail === '2');
+    expect(seq!).toBeLessThanOrEqual(advanceIdx);
+  });
+
+  it('反例(无祖先 loop 不受影响)：容器不在任何 loop 里时事件流无轮次起点,记录照常打位置戳,按原判据照旧注入', () => {
+    const SPEC_NL = `# RN
+## Goal
+G
+## Steps
+1. [subtask retry=2] 事务
+  + → a_ok: bool
+  1.1. [check] 判
+    + → a_ok: bool
+    + → a_note: text
+    > judge
+`;
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC_NL, MINIMAL_HOST_CONFIG);
+    engine.nextStep();
+    engine.completeStep('1.1', { a_ok: false, a_note: '无循环原因' });
+    engine.nextStep();
+    const rec = engine.exportFailState().retryHistory?.['1']?.[0];
+    expect(typeof rec?.event_seq).toBe('number');
+    expect(engine.getExecEvents().some(e => e.event === 'loop_iter')).toBe(false);
+    expect(engine.getActiveRetryFeedback('1.1')?.reason).toContain('无循环原因');
+  });
+
+  it('正例E(起点按容器的祖先 loop 取)：容器内嵌 loop,容器重试后内层 loop 重新进入记了新起点,重跑步照吃反馈', () => {
+    // 若按步骤自身最内层 loop 取起点,重试后内层 loop 的 loop_iter 落在重跑步开始事件之前,
+    // 窗口里重跑步只开始 1 次且失败事件在窗口外 → 被误判为首跑,漏掉该吃的反馈
+    const SPEC_E = `# RE
+## Goal
+G
+## Steps
+1. [subtask retry=2] 事务
+  + → a_ok: bool
+  1.1. [loop max=2] 内层循环
+    1.1.1. [check] 判
+      + → a_ok: bool
+      + → a_note: text
+      > judge
+`;
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC_E, MINIMAL_HOST_CONFIG);
+    expect((engine.nextStep() as any).step_id).toBe('1.1.1');
+    engine.completeStep('1.1.1', { a_ok: false, a_note: '内层原因' });
+    expect((engine.nextStep() as any).step_id).toBe('1.1.1');
+    // 前提:容器重试后内层 loop 确实重新进入、记了第二条入口事件
+    expect(engine.getExecEvents().filter(e => e.event === 'loop_iter' && e.step_id === '1.1').length).toBe(2);
+    expect(engine.getActiveRetryFeedback('1.1.1')?.reason).toContain('内层原因');
+  });
+
+  it('正例F(缺戳按本轮)：旧状态文件里没有位置戳的记录照旧注入——引擎升级后恢复的在飞实例行为不变', () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC107, MINIMAL_HOST_CONFIG);
+    engine.nextStep();
+    engine.completeStep('1.1.1', { a_ok: false, a_note: '旧格式原因' });
+    expect((engine.nextStep() as any).step_id).toBe('1.1.1');
+    // 模拟旧状态文件:抹掉记录上的位置戳
+    const rh = (engine as unknown as { retryHistory: Map<string, { event_seq?: number }[]> }).retryHistory;
+    for (const r of rh.get('1.1') ?? []) delete r.event_seq;
+    expect(engine.getActiveRetryFeedback('1.1.1')?.reason).toContain('旧格式原因');
+  });
+
+  it('正例G(升层指引回注记录带位置戳)：loop 第 2 轮里升层问路,指引记录打戳且靠本轮升层事件过闸', () => {
+    const SPEC_G = `# RG
+Id: rg-t
+## Goal
+g
+## Inputs
+- x: int  # 入
+## Outputs
+- r: text  # 出
+## Steps
+1. [loop max=2] 意见轮
+  1.1. [subtask retry=2] 探索
+    + → r: text  # 出
+    1.1.1. [check escalatable] 收敛判定
+      - ← x
+      + → ok: bool  # 判定槽
+      + → gap: yaml  # 缺口槽
+      > 判收敛
+    1.1.2. [act] 出结果
+      + → r: text  # 出
+      > \`\`\`hop_python
+      > r = "done"
+      > \`\`\`
+`;
+    const HOST_G = {
+      workspace_dir: '/tmp/test',
+      sandbox: { filesystem: { workspace_dir: '.', read_access: { allowed: ['.'], denied: [], confirm_required: [] } }, network: { trusted_hosts: [] }, runtime: { available: [] } },
+      api_key: 'x',
+    } as HostConfig;
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC_G, HOST_G, { stateDir: mkdtempSync(join(tmpdir(), 'rg-')), params: { x: 1 } });
+    // 第 1 轮正常走完,进第 2 轮——升层发生在有轮进界线的本轮窗口里(第 1 轮没有界线,走的是 0073 原判据)
+    let r = engine.nextStep() as any;
+    expect(r.step_id).toBe('1.1.1');
+    engine.completeStep('1.1.1', { ok: true, gap: {} });
+    r = engine.nextStep() as any;
+    for (let k = 0; k < 5 && r.step_id !== '1.1.1'; k++) { if (r.step_id) engine.completeStep(r.step_id, { r: 'done' }); r = engine.nextStep() as any; }
+    expect(r.step_id).toBe('1.1.1');
+    expect(engine.getExecEvents().filter(e => e.event === 'loop_iter').map(e => e.detail)).toContain('2');
+    const resp = engine.completeStep('1.1.1', { ok: false, gap: { escalate: true, need: '要方向' } });
+    expect((resp as { pause_reason?: string }).pause_reason).toBe('escalate');
+    expect(engine.resumeFromEscalation('1.1.1', '按方案B').status).toBe('ok');
+    const rec = engine.exportFailState().retryHistory?.['1.1']?.[0];
+    expect(rec?.failure_reason).toContain('升层指引');
+    expect(typeof rec?.event_seq).toBe('number');
+    // 本轮窗口里的升层判据:此刻 1.1.1 本轮只开始过 1 次、没有失败事件,只有本轮的升层事件让它过闸
+    expect(engine.getActiveRetryFeedback('1.1.1')?.reason).toContain('按方案B');
+  });
+
+  it('正例H(loop 内失败判据)：第 2 轮本步判负后、重跑轮开始之前取反馈——本轮只开始过 1 次,靠本轮失败事件过闸', () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC107, MINIMAL_HOST_CONFIG);
+    runRound1(engine);
+    expect((engine.nextStep() as any).step_id).toBe('1.1.1');
+    engine.completeStep('1.1.1', { a_ok: false, a_note: '第二轮原因B' });
+    const fb = engine.getActiveRetryFeedback('1.1.1');
+    expect(fb?.reason).toContain('第二轮原因B');
+    expect(JSON.stringify(fb?.prior ?? [])).not.toContain('第一轮原因A');
+  });
+
+  // 整树重建场景（仿 hopbuild2 步骤 5,与实验记录 hop_tasks/0107迭代边界重试反馈泄漏/实验-重建轮旧工单去留.md 同一场景）:
+  // 意见轮事务(外层重试容器) > 终检修错循环 > 修检事务(机械体检→定向修错→合理关)。
+  // 修检两次被合理关打回烧尽 → 外层事务整体重试、草稿整份重建 → 重建后走到定向修错步。
+  describe('外层容器重试重建：保留旧意见、清掉过期材料', () => {
+    const SPEC_RB = `# RB
+## Goal
+G
+## Steps
+1. [loop max=3] 意见轮循环
+  1.1. [subtask retry=3] 意见轮事务
+    + → spec_text: text  # 草稿全文
+    1.1.1. [reason] 构建草稿
+      + → spec_text: text  # 草稿全文
+      > build
+    1.1.2. [loop max=2] 终检修错循环
+      1.1.2.1. [subtask retry=1] 修检事务
+        + → spec_text: text  # 终稿全文
+        1.1.2.1.1. [act] 机械体检
+          - ← spec_text
+          + → health_report: text  # 体检单
+          > lint
+        1.1.2.1.2. [reason] 定向修错
+          - ← spec_text, health_report
+          + → spec_text: text  # 修后草稿全文
+          + → fix_note: line  # 修错记录
+          > fix
+        1.1.2.1.3. [check] 整体合理关
+          - ← spec_text
+          + → ok: bool  # 判定
+          + → note: text  # 问题清单
+          > judge
+      1.1.2.2. [break]
+    1.1.3. [reason] 意见分诊
+      - ← spec_text
+      + → verdict: line  # 分诊结论
+      > triage
+`;
+    const OP1 = '合理关问题:第3步是发送动作,应改为 [commit]';
+    const OP2 = '合理关问题:第3步仍标 [act],必须改为 [commit]';
+    function toRebuild(engine: ExecutionEngine) {
+      const go = (id: string, out: Record<string, unknown>) => {
+        const r: any = engine.nextStep();
+        expect(r.step_id).toBe(id);
+        engine.completeStep(id, out);
+      };
+      go('1.1.1', { spec_text: 'V1' });
+      go('1.1.2.1.1', { health_report: 'ok' });
+      go('1.1.2.1.2', { spec_text: 'V1', fix_note: '无错未动' });
+      go('1.1.2.1.3', { ok: false, note: OP1 });
+      go('1.1.2.1.1', { health_report: 'ok' });
+      const r: any = engine.nextStep();
+      expect(r.step_id).toBe('1.1.2.1.2');
+      const within = r.context;   // 同一修检事务内的重跑:体检步在容器内重做,基准照给
+      engine.completeStep('1.1.2.1.2', { spec_text: 'V1B', fix_note: '修了 1 处:第3步加人工确认' });
+      go('1.1.2.1.3', { ok: false, note: OP2 });   // 修检第二次打回 → 烧尽上浮 → 意见轮事务整体重试
+      go('1.1.1', { spec_text: 'V2' });            // 整树重建
+      go('1.1.2.1.1', { health_report: 'ok' });
+      const after: any = engine.nextStep();
+      expect(after.step_id).toBe('1.1.2.1.2');
+      return { within, after: after.context };
+    }
+
+    it('正例K：重建后定向修错步照旧看到重建前两条打回意见,每条一行,没有容器记账外壳', () => {
+      const engine = new ExecutionEngine();
+      engine.initExecution(SPEC_RB, MINIMAL_HOST_CONFIG);
+      const { after } = toRebuild(engine);
+      // 前提:重建确实让内层 loop 重新进入(第二条入口事件),而入口不划界线
+      expect(engine.getExecEvents().filter(e => e.event === 'loop_iter' && e.step_id === '1.1.2').map(e => e.detail)).toEqual(['1', '1']);
+      const out = formatPromptText(after, 'reason');
+      expect(out).toContain(`此前已被打回过的意见（都要保持落实，不许改好又改回去）：\n    - ${OP1}\n    - ${OP2}`);
+      expect(out).not.toContain('外围容器');
+      expect(out).not.toContain('retry exhausted');
+      expect(out).not.toContain('机械步骤处理失败');   // 烧尽原因不走形态指引
+    });
+
+    it('正例L(基准看输入有没有被外面重做)：重建后不给上一轮产出基准;同一修检事务内的重跑照给', () => {
+      const engine = new ExecutionEngine();
+      engine.initExecution(SPEC_RB, MINIMAL_HOST_CONFIG);
+      const { within, after } = toRebuild(engine);
+      expect(within.retry_context?.prior_outputs?.map((p: any) => p.name)).toEqual(['spec_text', 'fix_note']);
+      expect(after.retry_context?.prior_outputs).toBeUndefined();
+      expect(formatPromptText(after, 'reason')).not.toContain('- 上一轮产出.');
+    });
+
+    it('正例M(烧尽原因带最后一次失败原文)：外层记账与上浮原因里有内层最后一次打回的原文', () => {
+      const engine = new ExecutionEngine();
+      engine.initExecution(SPEC_RB, MINIMAL_HOST_CONFIG);
+      toRebuild(engine);
+      const outer = engine.exportFailState().retryHistory?.['1.1'] ?? [];
+      expect(outer[outer.length - 1]?.failure_reason).toBe(`subtask '1.1.2.1' retry exhausted（最后一次失败：CHECK_FAILED: ${OP2}）`);
+    });
+  });
+
+  it('反例N(过期的内层轮进不当界线)：外层轮进后,内层 loop 在外层上一轮的轮进不能把外层上一轮的记录放进来', () => {
+    // 内层 loop 在外层第 1 轮里轮进到第 2 轮,内层事务在那一轮失败重试过;外层进第 2 轮后内层只记入口事件,
+    // 内层最后一条轮进事件停在外层上一轮——只看最内层 loop 取界线会把那条旧记录当本轮注入
+    const SPEC_N = `# RN2
+## Goal
+G
+## Steps
+1. [loop max=2] 外层
+  1.1. [loop max=2] 内层
+    1.1.1. [subtask retry=2] 内事务
+      + → a_ok: bool
+      1.1.1.1. [check] 判
+        + → a_ok: bool
+        + → a_note: text
+        > judge
+`;
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC_N, MINIMAL_HOST_CONFIG);
+    const go = (out: Record<string, unknown>) => {
+      const r: any = engine.nextStep();
+      expect(r.step_id).toBe('1.1.1.1');
+      engine.completeStep('1.1.1.1', out);
+    };
+    go({ a_ok: true, a_note: '' });                 // 外 1 内 1
+    go({ a_ok: false, a_note: '外一内二的原因' });   // 外 1 内 2 失败
+    go({ a_ok: true, a_note: '' });                 // 外 1 内 2 重跑过
+    expect((engine.nextStep() as any).step_id).toBe('1.1.1.1');   // 外 2 内 1
+    expect(engine.getExecEvents().filter(e => e.event === 'loop_iter').map(e => [e.step_id, e.detail]))
+      .toEqual([['1', '1'], ['1.1', '1'], ['1.1', '2'], ['1', '2'], ['1.1', '1']]);
+    expect(engine.getActiveRetryFeedback('1.1.1.1')).toBeUndefined();
+  });
+
+  it('正例O(档次判定只看烧尽那句)：内层带上来的原文含 CONTEXT_OVERFLOW,外层仍按普通失败重试,不当事务级确定性失败直接放弃', () => {
+    const SPEC_O = `# RO
+## Goal
+G
+## Steps
+1. [subtask retry=2] 外
+  + → a: text
+  1.1. [subtask retry=1] 内
+    + → a: text
+    1.1.1. [reason] 产
+      + → a: text
+      > make
+`;
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC_O, MINIMAL_HOST_CONFIG);
+    expect((engine.nextStep() as any).step_id).toBe('1.1.1');
+    engine.failStep('1.1.1', 'CONTEXT_OVERFLOW: 材料超窗');   // 内层:事务级确定性 → 直接烧尽上浮
+    const r: any = engine.nextStep();
+    expect(r.status).toBe('step_ready');   // 外层按普通失败扣预算重试
+    expect(r.step_id).toBe('1.1.1');
+    expect(engine.exportFailState().retryHistory?.['1']?.[0]?.failure_reason)
+      .toBe(`subtask '1.1' retry exhausted（最后一次失败：CONTEXT_OVERFLOW: 材料超窗）`);
+  });
+
+  it('正例P(非判定打回的烧尽如实说)：内层最后一次是执行错误 → 说"内层重试用完、整段从头重做",不给形态指引', () => {
+    const SPEC_P = `# RP
+## Goal
+G
+## Steps
+1. [subtask retry=2] 外
+  + → a: text
+  1.1. [subtask retry=1] 内
+    + → a: text
+    1.1.1. [reason] 产
+      + → a: text
+      > make
+`;
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC_P, MINIMAL_HOST_CONFIG);
+    engine.nextStep();
+    engine.failStep('1.1.1', 'EXEC_ERROR: 第一次坏');
+    expect((engine.nextStep() as any).step_id).toBe('1.1.1');
+    engine.failStep('1.1.1', 'EXEC_ERROR: 第二次坏');   // 内层烧尽 → 外层重试
+    const r: any = engine.nextStep();
+    expect(r.step_id).toBe('1.1.1');
+    const out = formatPromptText(r.context, 'reason');
+    expect(out).toContain('上一轮这一段没做成：内层步骤 1.1 重试次数用完仍没通过（最后一次失败：EXEC_ERROR: 第二次坏），整段已从头重做。');
+    expect(out).not.toContain('机械步骤处理失败');
+    expect(out).not.toContain('以核验要求为准');   // 烧尽原因不算判定打回起因,行动框架段不渲染
+  });
+
+  it('正例Q(D39 跨层反馈在 loop 嵌套下照旧)：外层容器 > loop > 内层容器,外层意见闸打回重跑时内层旧打回史仍进反馈', () => {
+    // 外层重试让内层 loop 重新进入,只记入口事件、不划界线;内层记录在界线之后,内层步骤仍是重跑参与者
+    const SPEC_Q = `# RQ
+## Goal
+G
+## Steps
+1. [subtask retry=2] 外层事务
+  + → ok2: bool
+  1.1. [loop max=1] 内层循环
+    1.1.1. [subtask retry=2] 内层容器
+      + → a_ok: bool
+      1.1.1.1. [check] 内层判
+        + → a_ok: bool
+        + → a_note: text
+        > judge
+  1.2. [check] 外层意见闸
+    + → ok2: bool
+    + → note2: text
+    > judge2
+`;
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC_Q, MINIMAL_HOST_CONFIG);
+    expect((engine.nextStep() as any).step_id).toBe('1.1.1.1');
+    engine.completeStep('1.1.1.1', { a_ok: false, a_note: '内层原因A' });
+    expect((engine.nextStep() as any).step_id).toBe('1.1.1.1');
+    engine.completeStep('1.1.1.1', { a_ok: true, a_note: '' });
+    expect((engine.nextStep() as any).step_id).toBe('1.2');
+    engine.completeStep('1.2', { ok2: false, note2: '外层意见X' });
+    expect((engine.nextStep() as any).step_id).toBe('1.1.1.1');
+    const fb = engine.getActiveRetryFeedback('1.1.1.1');
+    expect(fb?.reason).toContain('外层意见X');
+    expect(JSON.stringify(fb?.prior ?? [])).toContain('内层原因A');
+  });
+
+  describe('for-each 循环同样按轮生效', () => {
+    const SPEC_FE = `# RF
+## Goal
+G
+## Inputs
+- xs: [int]  # 列表
+## Steps
+1. [loop for-each x in xs] 逐项
+  - ← xs
+  1.1. [subtask retry=2] 分诊事务
+    + → b: text
+    1.1.1. [check] 分诊判
+      - ← x
+      + → a_ok: bool
+      + → a_note: text
+      > judge
+    1.1.2. [reason] 后排步骤
+      + → b: text
+      > later
+`;
+    function runItem1(engine: ExecutionEngine) {
+      expect((engine.nextStep() as any).step_id).toBe('1.1.1');
+      engine.completeStep('1.1.1', { a_ok: false, a_note: '第一项原因A' });
+      expect((engine.nextStep() as any).step_id).toBe('1.1.1');
+      engine.completeStep('1.1.1', { a_ok: true, a_note: '' });
+      expect((engine.nextStep() as any).step_id).toBe('1.1.2');
+      engine.completeStep('1.1.2', { b: 'x1' });
+    }
+
+    it('正例I：for-each 第 2 项首步不吃第 1 项的反馈;loop_iter 在入口与轮进各记一条', () => {
+      const engine = new ExecutionEngine();
+      engine.initExecution(SPEC_FE, MINIMAL_HOST_CONFIG, { params: { xs: [1, 2] } });
+      runItem1(engine);
+      expect((engine.nextStep() as any).step_id).toBe('1.1.1');
+      expect(engine.getActiveRetryFeedback('1.1.1')).toBeUndefined();
+      expect(engine.getExecEvents().filter(e => e.event === 'loop_iter').map(e => [e.step_id, e.detail]))
+        .toEqual([['1', '1'], ['1', '2']]);
+    });
+
+    it('正例J：for-each 第 2 项容器重试后,本轮首次执行的后排步骤不带反馈', () => {
+      const engine = new ExecutionEngine();
+      engine.initExecution(SPEC_FE, MINIMAL_HOST_CONFIG, { params: { xs: [1, 2] } });
+      runItem1(engine);
+      engine.nextStep();
+      engine.completeStep('1.1.1', { a_ok: false, a_note: '第二项原因B' });
+      expect((engine.nextStep() as any).step_id).toBe('1.1.1');
+      expect(engine.getActiveRetryFeedback('1.1.1')?.reason).toContain('第二项原因B');
+      engine.completeStep('1.1.1', { a_ok: true, a_note: '' });
+      expect((engine.nextStep() as any).step_id).toBe('1.1.2');
+      // 轮次事件缺失时:1.1.2 跨项累计开始 2 次,会被当成重跑参与者吃到"第二项原因B"
+      expect(engine.getActiveRetryFeedback('1.1.2')).toBeUndefined();
+    });
   });
 });
 

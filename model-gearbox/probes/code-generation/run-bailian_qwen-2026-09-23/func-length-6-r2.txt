@@ -1,0 +1,147 @@
+```python
+import ast
+import sys
+
+def check_function_lengths(file_path):
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        # If syntax error, we just won't find functions, which is fine
+        return []
+    
+    violations = []
+    
+    # Helper function to safely get end_lineno if available
+    def get_end_lineno(node):
+        try:
+            return node.end_lineno
+        except:
+            return None
+    
+    # Helper function to get lineno if available
+    def get_lineno(node):
+        try:
+            return node.lineno
+        except:
+            return None
+    
+    # Use a stack to track nested function contexts
+    def analyze_node(node, parent_line_no=None):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # Calculate the function length based on AST node information
+            start_line = node.lineno
+            
+            # Find the end line of this function by looking at its children and its own end_lineno
+            end_line = get_end_lineno(node)
+            
+            # If end_lineno is not available, we need to find it differently
+            if end_line is None:
+                # Get all child nodes to determine the actual end of function
+                child_lines = []
+                for child in ast.walk(node):  # Includes the node itself
+                    lineno = get_lineno(child)
+                    if lineno is not None:
+                        child_end_lineno = get_end_lineno(child)
+                        if child_end_lineno is not None:
+                            child_lines.append(child_end_lineno)
+                        else:
+                            child_lines.append(lineno)
+                end_line = max(child_lines) if child_lines else start_line
+            
+            # Function length is inclusive of both start and end lines
+            func_length = end_line - start_line + 1
+            
+            if func_length > 40:
+                violations.append((start_line, f"Function '{node.name}' is too long ({func_length} lines, maximum allowed is 40)"))
+            
+            # Analyze nested functions
+            for child in ast.iter_child_nodes(node):
+                analyze_node(child, start_line)
+        elif isinstance(node, ast.ClassDef):
+            # For class definitions, analyze their methods
+            for child in ast.iter_child_nodes(node):
+                analyze_node(child, parent_line_no)
+        else:
+            # For other nodes, just traverse their children
+            for child in ast.iter_child_nodes(node):
+                analyze_node(child, parent_line_no)
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # Calculate the function length based on AST node information
+            start_line = node.lineno
+            
+            # Try to get the end line using the end_lineno attribute if available
+            end_line = get_end_lineno(node)
+            
+            if end_line is None:
+                # Fallback: find end line by checking all child nodes
+                child_lines = []
+                for child in ast.walk(node):  # Includes the node itself
+                    lineno = get_lineno(child)
+                    if lineno is not None:
+                        child_end_lineno = get_end_lineno(child)
+                        if child_end_lineno is not None:
+                            child_lines.append(child_end_lineno)
+                        else:
+                            child_lines.append(lineno)
+                end_line = max(child_lines) if child_lines else start_line
+            
+            # Function length is inclusive of both start and end lines
+            func_length = end_line - start_line + 1
+            
+            if func_length > 40:
+                violations.append((start_line, f"Function '{node.name}' is too long ({func_length} lines, maximum allowed is 40)"))
+            
+            # Analyze nested functions inside this function
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    analyze_node(child, start_line)
+        elif isinstance(node, ast.ClassDef):
+            # For class definitions, analyze their methods
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    start_line = child.lineno
+                    
+                    # Try to get the end line for methods
+                    end_line = get_end_lineno(child)
+                    
+                    if end_line is None:
+                        # Fallback: find end line by checking all child nodes
+                        child_lines = []
+                        for subchild in ast.walk(child):  # Includes the node itself
+                            lineno = get_lineno(subchild)
+                            if lineno is not None:
+                                subchild_end_lineno = get_end_lineno(subchild)
+                                if subchild_end_lineno is not None:
+                                    child_lines.append(subchild_end_lineno)
+                                else:
+                                    child_lines.append(lineno)
+                        end_line = max(child_lines) if child_lines else start_line
+                    
+                    # Method length is inclusive of both start and end lines
+                    func_length = end_line - start_line + 1
+                    
+                    if func_length > 40:
+                        violations.append((start_line, f"Method '{child.name}' is too long ({func_length} lines, maximum allowed is 40)"))
+                    
+                    # Analyze nested functions inside this method
+                    for subchild in ast.iter_child_nodes(child):
+                        if isinstance(subchild, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            analyze_node(subchild, start_line)
+
+    return violations
+
+file_path = sys.argv[1]
+violations = check_function_lengths(file_path)
+
+if violations:
+    for line_no, reason in violations:
+        print(f"Line {line_no}: {reason}")
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

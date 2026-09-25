@@ -1,0 +1,34 @@
+cells:
+  long:0:noise_only: 1
+  long:0:tool_required: 0
+  long:10:noise_only: 1
+  long:10:tool_required: 1
+  long:1:noise_only: 1
+  long:1:tool_required: 1
+  long:3:noise_only: 1
+  long:3:tool_required: 1
+  long:5:noise_only: 1
+  long:5:tool_required: 1
+  mid:0:noise_only: 1
+  mid:0:tool_required: 0
+  mid:10:noise_only: 1
+  mid:10:tool_required: 1
+  mid:1:noise_only: 1
+  mid:1:tool_required: 1
+  mid:3:noise_only: 1
+  mid:3:tool_required: 1
+  mid:5:noise_only: 1
+  mid:5:tool_required: 1
+  short:0:noise_only: 1
+  short:0:tool_required: 0
+  short:10:noise_only: 1
+  short:10:tool_required: 1
+  short:1:noise_only: 1
+  short:1:tool_required: 1
+  short:3:noise_only: 1
+  short:3:tool_required: 1
+  short:5:noise_only: 1
+  short:5:tool_required: 1
+note: 0工具×tool_required 三格为设计内必死对照格(零工具无法读文件),按修正读档规则排除;该格实测行为=模型编造数字交卷(1234/150/450)而非如实报告无法完成——虚构完成行为面的旁证,入档案注记
+rating: full-tolerance
+service: bailian_qwen

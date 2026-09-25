@@ -16,7 +16,7 @@ import { resolve, isAbsolute, join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { ExecutionEngine } from './engine.js';
-import { StepDispatcher, DirSpecProvider, parseModelRef, type RunResult } from './dispatcher.js';
+import { StepDispatcher, DirSpecProvider, parseModelRef, childNotInQueueMessage, type RunResult } from './dispatcher.js';
 import { parseSpec } from './parser.js';
 import { validateSpec } from './validator.js';
 import { CompositeToolProvider, makeEngineToolProviderFactory } from './tools-composite.js';
@@ -343,11 +343,9 @@ function parseConfigFile(path: string, required: boolean): StandaloneConfig {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(p['service_id'] as string)) {
       throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}].service_id '${String(p['service_id'])}' 非法——须匹配 [A-Za-z_][A-Za-z0-9_]*`);
     }
-    if (p['protocol'] === 'openai-responses') {
-      throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}].protocol 'openai-responses' 枚举已预留但适配器未实装——当下 OpenAI 系端点用 'openai-chat'（chat/completions 兼容）`);
-    }
-    if (p['protocol'] !== 'anthropic' && p['protocol'] !== 'openai-chat') {
-      throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}].protocol '${String(p['protocol'])}' 不支持（anthropic | openai-chat;openai-responses 预留未实装）`);
+    // protocol 三枚举校验（^anc-exec-protocol-adapter 配置准入面）// @a: anc-exec-protocol-adapter
+    if (p['protocol'] !== 'anthropic' && p['protocol'] !== 'openai-chat' && p['protocol'] !== 'openai-responses') {
+      throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}].protocol '${String(p['protocol'])}' 不支持（anthropic | openai-chat | openai-responses）`);
     }
     if (typeof p['api_key_env'] !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(p['api_key_env'])) {
       throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}].api_key_env '${String(p['api_key_env'] ?? '')}' 非法——须匹配 [A-Za-z_][A-Za-z0-9_]*`);
@@ -1112,6 +1110,17 @@ export class HopjitMcpCore {
       // U4b:主线还在跑（running）但队列有待答卡时,child_instance 路由照答——等主线停下
       // 才能答=队列白建。非 child 路由维持原判。// @a: anc-exec-parallel-hitl-queue
       return { error: { code: 'INVALID_STATE', message: `run '${runId}' 状态 ${entry.state}，非 paused${childInstance ? ' 且待答队列无此卡' : ''}——不能 resume` } };
+    }
+    // child_instance 同步核对在状态翻转之前（todo/0105 缺陷 B,兑现 hopissues/0094 期望行为第 ② 条）：
+    // 待答队列无此卡、在飞账上也无该 child 的 paused 项（跨进程恢复路）→ 当场拒,run 原样 paused。
+    // 此前先置 running 同步回 {status:'running'},dispatcher 异步拒收后才复原——调用方只见假 running。
+    // 拒因文字与 dispatcher 异步拒收分支同源（childNotInQueueMessage）。// @a: anc-exec-parallel-hitl-queue
+    if (childInstance) {
+      const inQueue = entry.dispatcher?.getPausedChildren?.()?.has(childInstance) ?? false;
+      const inAcct = (entry.dispatcher?.getEngine?.()?.getInflight?.() ?? []).some(f => f.child_instance === childInstance && f.status === 'paused');
+      if (!inQueue && !inAcct) {
+        return { error: { code: 'CHILD_NOT_IN_QUEUE', message: childNotInQueueMessage(childInstance) } };
+      }
     }
     // step_id 校验在状态变更前（design v0.3.1 review P1）：不一致即拒且保持 paused——
     // 坏输入不毁可恢复态（实撞：错误 step_id 曾先回 running 随后永久 failed）。

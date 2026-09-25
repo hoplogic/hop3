@@ -50,7 +50,10 @@ Constraints:
 | `move`             | `from, to`                                                       | 移动确认                                                  | 源与目标都限 workspace 内                                                 |
 | `remove`           | `path`                                                           | 删除确认                                                  | 仅文件（目录不删——最重操作不进 v1）；不存在即失败                                        |
 
-**条目类型字段正名 type、kind 留作兼容（2026-09-07 作者拍"乙,kind 留作兼容"）**：listdir 条目与 exists 返回的"文件还是目录"字段,正名为 `type`——跨生态主流用词是 type/file_type（VS Code FileType/LSP type/Go DirEntry.Type/Rust file_type）,原 `kind` 属少数派命名,执行 LLM 按行业直觉写 `e.type` 必踩缺键坑（R9 实撞:demo-rename 步 1 过滤器 e.type 缺键恒假,文件清单恒空,真机产出必坏而 validate 全绿——deep-validate 抓获）。两字段同值并存:文档与教学只教 `type`,`kind` 不再出现在示例里但引擎照发（存量 spec 消费 kind 的零破坏,不设移除时间表——兼容别名是承诺不是过渡）。
+**条目类型字段正名 type、kind 留作兼容（2026-09-07 作者拍"乙,kind 留作兼容"）**：listdir 条目与 exists 返回的"文件还是目录"字段,正名为 `type`——跨生态主流用词是 type/file_type（VS Code FileType/LSP type/Go DirEntry.Type/Rust file_type）,原 `kind` 属少数派命名,执行 LLM 按行业直觉写 `e.type` 必踩缺键坑。
+R9 实撞:demo-rename 步 1 过滤器 e.type 缺键恒假,文件清单恒空,真机产出必坏而 validate 全绿——deep-validate 抓获。
+
+两字段同值并存:文档与教学只教 `type`,`kind` 不再出现在示例里但引擎照发（存量 spec 消费 kind 的零破坏,不设移除时间表——兼容别名是承诺不是过渡）。
 
 > spec 内容族六件（validate_spec/树编辑四件/read_spec_tree）**不属本组**——同住 `DefaultToolProvider` 承载（HopSop 的纯函数分支路由它们）,但入参/返回/语义契约**全部归 [[spec-tree-tools]]**,本文不复表（双表=双权威漂移面——2026-08-31 作者抓归类错误后收口:一件工具的契约恒只在一份文档）。
 
@@ -76,7 +79,10 @@ execute(tool_name, args):
 
 ## edit_file 局部精确替换【契约】 ^anc-exec-builtin-edit-file-tool
 
-**缘起（2026-09-05 作者拍甲案）**：0038b 轮（2026-09-04,run 468463d7）hoplog 逐条定量：hopbuild2 修错步每轮用 write 把 37KB 草稿全文回写——7 轮约 17 万 output tokens、约 20 分钟墙钟，占顶层输出量 58%；铁证是某轮 thinking 自述"三处微编辑，把全文写回"，另一轮用 create+8 次 append+move 分块重建全文。"禁止整篇重写"教学禁令（[[../hopbuild2]] D68）管住了内容（确实只做定向改动）没管住传输（改 3 处也要整文件吐一遍）——**根因是工具面缺口：文件工具组只有 write（整文件覆盖）与 append，没有局部替换原语**。作者呈报甲（补工具）/乙（只改 spec 引导）两案后拍"甲，而且是不是可以在指定节点禁止 write tool?"——工具与禁用半边（[[../step-dispatcher]] ^anc-step-tool-deny 消费面）同批落地。
+**缘起（2026-09-05 作者拍甲案）**：0038b 轮（2026-09-04,run 468463d7）hoplog 逐条定量：hopbuild2 修错步每轮用 write 把 37KB 草稿全文回写——7 轮约 17 万 output tokens、约 20 分钟墙钟，占顶层输出量 58%；铁证是某轮 thinking 自述"三处微编辑，把全文写回"，另一轮用 create+8 次 append+move 分块重建全文。
+
+- "禁止整篇重写"教学禁令（[[../hopbuild2]] D68）管住了内容（确实只做定向改动）没管住传输（改 3 处也要整文件吐一遍）——**根因是工具面缺口：文件工具组只有 write（整文件覆盖）与 append，没有局部替换原语**;
+- 作者呈报甲（补工具）/乙（只改 spec 引导）两案后拍"甲，而且是不是可以在指定节点禁止 write tool?"——工具与禁用半边（[[../step-dispatcher]] ^anc-step-tool-deny 消费面）同批落地。
 
 **能力契约（HopSpec 契约）**：
 
@@ -119,7 +125,13 @@ executeEditFile(path, old_text, new_text, write_scope):
 
 ## search_file 单文件搜索与 read 行号段【契约】 ^anc-exec-builtin-search-file
 
-**缘起（2026-09-05 作者问"是否要提供 rg 或类似 tool"后拍"rg 类工具两件立todo",todo/0070）**：D81 供给瘦身教了"按工单定向读盘",但读侧工具面只有整文件 read——0039 轮实测三处打折：①"按工单 L 行号读 source.md 对应段"实际只能整读 35KB 再自己找（实账:单块 16,154 output tokens 的"定向读原文"就是整读形态）;②"按关键词定位"同样整读后人肉扫;③edit_file 动手前无工具自证 old_text 唯一性,只能靠报错重试（零/多匹配报错带计数是兜底不是正路）。两件落地后 D81 的定向读盘正路才足额兑现。
+**缘起（2026-09-05 作者问"是否要提供 rg 或类似 tool"后拍"rg 类工具两件立todo",todo/0070）**：D81 供给瘦身教了"按工单定向读盘",但读侧工具面只有整文件 read——0039 轮实测三处打折：
+
+- ①"按工单 L 行号读 source.md 对应段"实际只能整读 35KB 再自己找（实账:单块 16,154 output tokens 的"定向读原文"就是整读形态）;
+- ②"按关键词定位"同样整读后人肉扫;
+- ③edit_file 动手前无工具自证 old_text 唯一性,只能靠报错重试（零/多匹配报错带计数是兜底不是正路）。
+
+两件落地后 D81 的定向读盘正路才足额兑现。
 
 **能力契约（HopSpec 契约）**：
 

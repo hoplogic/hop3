@@ -8,7 +8,7 @@ description: Drive HopSpec specs via the hopjit MCP server (standalone mode — 
 	source: [[opencode-driver-carrier]]
 	source_id: hopjit-opencode-driver-carrier
 	type: extract
-	last_sync: 2026-09-19T15:40+0800
+	last_sync: 2026-09-21T22:06+0800
 	note: opencode MCP 装配薄壳——派生自 driver/hopspec-skill-mcp.md（CC 源）,原语映射:AskUserQuestion→question 工具/后台看护 subagent→opencode subagent 或主对话适度轮询（opencode 无后台任务完成通知机制,轮询间隔放宽）。五 MCP 工具协议与 HITL 纪律与 CC 版逐条同构。
 %%
 
@@ -16,7 +16,7 @@ description: Drive HopSpec specs via the hopjit MCP server (standalone mode — 
 
 本壳为 **MCP 装配**：执行全在 hopjit MCP server 进程内（server 自己调 LLM 推理），你只负责把用户意图翻译成五个 MCP 工具调用（`hopjit_start_run` / `hopjit_run_status` / `hopjit_resume_run` / `hopjit_list_runs` / `hopjit_stop_run`——opencode 的 MCP 工具名形态是 `<server>_<tool>`），并在需要真人决策时问人。
 
-> **注册缺失**：若 hopjit 的 MCP 工具不可用，说明 MCP server 未注册——提示用户跑 `hopjit install-skill --mcp --carrier opencode`（配置自举+注册一次完成）或检查 `~/.config/opencode/opencode.jsonc` 的 `mcp.hopjit` 条目，**不要**改用 hopjit CLI 驱动（那是 hopspec 复用壳的协议——用户点名的是本壳，静默换协议=绕过用户的模式指定）。
+> **MCP 工具不可用**：第一排查是 opencode 配置里 `mcp.hopjit.enabled` 是否为 `false`——install-skill 装出的条目**缺省就是 false**（防复用模式下模型误调独立模式工具），让用户把 `~/.config/opencode/opencode.jsonc` 里该值改 `true` 后重启会话。确认从未装过（配置里根本没有 `mcp.hopjit` 条目）才提示跑 `hopjit install-skill --mcp --carrier opencode`（配置自举+注册一次完成）——注意对已有条目重跑此命令无效：检测到条目即跳过，不会把 enabled 翻成 true。**不要**改用 hopjit CLI 驱动（那是 hopspec 复用壳的协议——用户点名的是本壳，静默换协议=绕过用户的模式指定）。
 >
 > **跨通道防线**：`resume_run`/`stop_run` 返回 `DRIVER_CHANNEL_MISMATCH` = 该 run 由 CLI（复用模式）建立——提示用户用 hopspec skill 继续那个 run，不要强行重试（双执行是最高危事故，引擎硬闸拒绝即防线生效）。
 
@@ -35,10 +35,10 @@ description: Drive HopSpec specs via the hopjit MCP server (standalone mode — 
 
 paused 是 spec 作者显式声明的介入点。按 `pause_reason` 分派：
 
-- **confirm（审批）**：用 question 工具展示 `presented_data.question` + `response_options`，等用户选，`resume_run` 注入所选值。**禁止**自己判断该不该批；
+- **confirm（审批）**：用 question 工具展示 `presented_data.question` + `response_options`，等用户选，`resume_run` 注入所选值（question 工具不可用时——如服务端拒收该工具——降级用普通文本消息呈现问题与选项，等用户下条消息回答后再注入）。**禁止**自己判断该不该批；
 - **ask（数据收集）**：
   - 🔴 **呈交硬约束（present_inputs）**：`presented_data.present_inputs` 非空时，先用普通文本消息把 `context` 里这些字段**原文完整 dump**（长内容用围栏；`{$file, preview}` 复合形态完整给 preview 并注明完整文件路径），**禁止**只给标签或摘要后就问——缩略=让用户没看清就拍板；
-  - 再用 question 工具展示问题 + `output_schema` + `default_value` + 候选；用户给的**业务值**经 `resume_run` 注入（不是 approve 信号）；
+  - 再用 question 工具展示问题 + `output_schema` + `default_value` + 候选（question 工具不可用时——如服务端拒收该工具——降级用普通文本消息呈现问题与选项，等用户下条消息回答后再注入）；用户给的**业务值**经 `resume_run` 注入（不是 approve 信号）；
 - 例外：仅 `require_human: false`（未强制真人）且问题确实可由上下文无歧义推断时才允许代答——判断参考 `presented_data.instruction`（spec 作者写给驱动侧的作业指引；question 是给人的纯问题面不含指引）。默认倾向问人，拿不准就问；
 - `require_human: true` 时**绝对必须**真人回答，零例外。
 

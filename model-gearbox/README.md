@@ -32,7 +32,7 @@ probes/ 跑探针产数据 → profiles/ 存档案 → 引擎与 hopbuild2 消�
 
 每模型一份 yaml，三段结构：
 
-- **`dims:`**——能力面粗档（D12 层三通识组 G1-G5：G1 推理复杂度〔正确性与稳定性是同一复杂度轴的两种坍塌形态,记坍塌点〕/G2 任务复杂度〔一次做正确的能力,记首轮通过率坍塌点,hopbuild2 按此切每步任务尺寸——数值曲线在 `extract_scaling:` 段〕/G3 分解与规划〔subtask free 到步展开的直接消费维度〕/G4 工具使用〔本质=inline 工具使用 loop,与 P2 同一循环的正用/抗噪两半边〕/G5 结构化交付；指令遵从=层二冒烟项不占 dims 位;旧第七维反馈修正已收窄为实践维度 P3 修订落实），值域 `strong | mid | weak | unproven`。人读与路由参考。另有阶梯型维度**不用四档值域、按坍塌点记档**：`check_judge`（D12 实践维度 P1 核验能力，值域 `open-ok | checklist-only | closed-questions-only | unusable`——把关步能以什么形态路由给它：开放式核验/按清单核验/单点核验(微判定展开)/禁路由。三档阶梯每升一档多扛一种协调负担〔建框架跨轮一致→多题自洽→仅原子判断〕，坍塌点在协调负担不在判断本身——"仅单点核验可用"是完全可工作的形态不是残废档；与推理正确性两维分开测不许互推）；
+- **`dims:`**——能力面粗档（D12 层三通识组 G1-G6：G1 推理复杂度〔正确性与稳定性是同一复杂度轴的两种坍塌形态,记坍塌点〕/G2 任务复杂度〔一次做正确的能力,记首轮通过率坍塌点,hopbuild2 按此切每步任务尺寸——数值曲线在 `extract_scaling:` 段〕/G3 分解与规划〔subtask free 到步展开的直接消费维度〕/G4 工具使用〔本质=inline 工具使用 loop,与 P2 同一循环的正用/抗噪两半边〕/G5 结构化交付/G6 代码生成〔键名 `code_generation`,按语言分档记——现有 Python 与 SQL 两档（`{python: X, sql: Y}`）:各三档复杂度的一次写对率与自愈后通过率,仪器=probes/code-generation/;HopSpec 写作归 hopbuild2 构建卷〕；指令遵从=层二冒烟项不占 dims 位;旧第七维反馈修正已收窄为实践维度 P3 修订落实），值域 `strong | mid | weak | unproven`。人读与路由参考。另有阶梯型维度**不用四档值域、按坍塌点记档**：`check_judge`（D12 实践维度 P1 核验能力，值域 `open-ok | checklist-only | closed-questions-only | unusable`——把关步能以什么形态路由给它：开放式核验/按清单核验/单点核验(微判定展开)/禁路由。三档阶梯每升一档多扛一种协调负担〔建框架跨轮一致→多题自洽→仅原子判断〕，坍塌点在协调负担不在判断本身——"仅单点核验可用"是完全可工作的形态不是残废档；与推理正确性两维分开测不许互推）；
 - **`act_free:`**——act free 步工具面稳定性**数值曲线**（不是定性枚举）：`reliability_curve` 按 {供给长度 × 工具数 × 任务是否真需要工具} 网格记完成率，`rating` 从曲线机械读出。`subtask_free:` 独立记档（规划自由与执行自由是两种能力，不合并）；
 - **`adapt:`**——引擎与构建器直接消费的适配开关：`max_inline_tools`（dispatcher 下发上限）/ `thinking`（档位建议）/ `build_target_profile`（hopbuild2 给该模型出产物时的缺省档）。
 

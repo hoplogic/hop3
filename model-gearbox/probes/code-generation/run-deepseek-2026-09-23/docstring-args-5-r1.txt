@@ -1,0 +1,88 @@
+```python
+import ast
+import re
+import sys
+
+
+def collect_params(node):
+    result = []
+    arguments = node.args
+    for arg in arguments.posonlyargs:
+        result.append(arg.arg)
+    for arg in arguments.args:
+        result.append(arg.arg)
+    if arguments.vararg is not None:
+        result.append(arguments.vararg.arg)
+    for arg in arguments.kwonlyargs:
+        result.append(arg.arg)
+    if arguments.kwarg is not None:
+        result.append(arguments.kwarg.arg)
+    return result
+
+
+def check_function(node, violations):
+    if node.name.startswith('_'):
+        return
+
+    doc = ast.get_docstring(node)
+    if doc is None:
+        violations.append((node.lineno, "函数 '" + node.name + "' 缺少文档字符串"))
+        return
+
+    params = collect_params(node)
+    for name in params:
+        if name == 'self' or name == 'cls':
+            continue
+        pattern = r'\b' + re.escape(name) + r'\b'
+        if re.search(pattern, doc) is None:
+            violations.append((
+                node.lineno,
+                "函数 '" + node.name + "' 的文档字符串未提到参数 '" + name + "'"
+            ))
+
+
+def process_node(node, violations):
+    if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+        check_function(node, violations)
+        return
+    if isinstance(node, ast.ClassDef):
+        for child in node.body:
+            process_node(child, violations)
+        return
+    for child in ast.iter_child_nodes(node):
+        process_node(child, violations)
+
+
+if len(sys.argv) < 2:
+    print("用法: python script.py <file>")
+    sys.exit(1)
+
+try:
+    f = open(sys.argv[1], 'r', encoding='utf-8')
+    source = f.read()
+    f.close()
+except OSError:
+    print("无法读取文件: " + sys.argv[1])
+    sys.exit(1)
+except ValueError:
+    print("文件不是有效的 UTF-8 文本")
+    sys.exit(1)
+
+try:
+    tree = ast.parse(source)
+except SyntaxError:
+    print("语法错误，无法解析文件")
+    sys.exit(1)
+
+violations = []
+process_node(tree, violations)
+violations.sort()
+
+if len(violations) == 0:
+    sys.exit(0)
+
+for item in violations:
+    print("第 " + str(item[0]) + " 行: " + item[1])
+
+sys.exit(1)
+```

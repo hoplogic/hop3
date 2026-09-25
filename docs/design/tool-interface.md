@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-08-18T00:08+0800
+	last_sync: 2026-09-25T21:19+0800
 	note: 工具接口标准（typed request-response 第一层）与绑定机制（第二层）的正式设计——概念上游=核心规范工具签名契约（^anc-step-act-body-lang 段）；推演与实测证据链在 rounds/atomic-io-tools-草案 + rounds/mcp-调研。归 tools 模块（tools.md 是内置实现层，本文是接口标准层）
 %%
 
@@ -33,7 +33,12 @@
 | InProcessBinding 实装      | 契约  | `anc-exec-inprocess-binding`     |
 | 工具 server 生命周期总图         | 契约  | `anc-exec-tool-server-lifecycle` |
 
-> **模块版本**：tool-interface `v0.6.2`（2026-09-02）。本版回填算法重写为 params 节窗口+序位配对（review 批四缺陷:错配/防线失效/池污染/引号数组丢弃）。上版补装 params 短形态行尾 # 说明回填（todo/0050,enrichParamsComments 三读入口）并修 PARAM_TYPES 词表漂移（number 除名与 output_schema 同表）。0.x 未承诺稳定。上版新增**工具分档字段 `category: basic | special`**（0054,作者定——基础文件读写族恒 basic 零声明可用;spec 树编辑族与外挂注册件恒 special 须节点 `- 工具:` 声明才对无 body 的 act 可用;缺省=special——收紧安全默认,新注册件不声明分档即须授权;in-process 内建九件文件工具在代码内标 basic,机械判据不靠名字猜）。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
+> **模块版本**：tool-interface `v0.7.0`（2026-09-25）。本版新增 server 级可选字段 `per_parallel_child`（todo/0112——打开后该 server 在每个并行子任务里各起一个独立进程，子任务收场即关；串行步骤与串行 call 照旧共用顶层进程），Composite 随之新增"为并行子任务派生视图"与"只关自有成员"两项能力，生命周期总图加⑥分支。同批次补一处 McpBinding 旧缺陷：并发首调原来各起一个进程（没有"连接进行中"状态，被覆盖的进程无人关），现在共用同一次连接；连接期间被关闭时刚连好的进程立即关掉（McpBinding HopSop 连接第 5、6 步）。
+>
+> - 上版回填算法重写为 params 节窗口+序位配对（review 批四缺陷:错配/防线失效/池污染/引号数组丢弃）；
+> - 上版补装 params 短形态行尾 # 说明回填（todo/0050,enrichParamsComments 三读入口）并修 PARAM_TYPES 词表漂移（number 除名与 output_schema 同表）。0.x 未承诺稳定；
+> - 上版新增**工具分档字段 `category: basic | special`**（0054,作者定——基础文件读写族恒 basic 零声明可用;spec 树编辑族与外挂注册件恒 special 须节点 `- 工具:` 声明才对无 body 的 act 可用;缺省=special——收紧安全默认,新注册件不声明分档即须授权;in-process 内建九件文件工具在代码内标 basic,机械判据不靠名字猜）；
+> - **逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
 
 ## 定位与分层【契约】 ^anc-struct-tool-interface
 
@@ -53,7 +58,8 @@
 
 ## 工具声明两面（设计承接总纲）【契约】 ^anc-tool-two-faces
 
-概念权威 [[../concepts/HopSpec V3核心规范#^anc-tool-two-faces]]。设计层四件承接：**注册面语义**=本文 params/notes（^anc-tool-params-notes）;**spec Tools 段文法**=[[spec-parser#^anc-rule-tools-section]];**init 对账**=[[exec-engine#^anc-exec-tools-reconcile]];**call 工具决议**=[[step-dispatcher#^anc-exec-call-tool]]。权威关系：环境注册面=实现权威（安全语义 requires_commit 钉此),spec Tools 段=需求声明（init 对账两面,不兼容当场报错）。
+概念权威 [[../concepts/HopSpec V3核心规范#^anc-tool-two-faces]]。设计层四件承接：**注册面语义**=本文 params/notes（^anc-tool-params-notes）;**spec Tools 段文法**=[[spec-parser#^anc-rule-tools-section]];**init 对账**=[[exec-engine#^anc-exec-tools-reconcile]];**call 工具决议**=[[step-dispatcher#^anc-exec-call-tool]]。
+权威关系：环境注册面=实现权威（安全语义 requires_commit 钉此),spec Tools 段=需求声明（init 对账两面,不兼容当场报错）。
 
 ## ToolSpec（第一层类型面）【契约】 ^anc-type-tool-spec
 
@@ -90,11 +96,16 @@ tools:
       网络失败可安全重发（平台按内容摘要幂等,重放不加害）。
 ```
 
-- **params 条目形态**：`- 参数名: 类型` 行 + 行尾 `# 说明`——parser 收说明入结构（与 spec Inputs 的 `#` 说明同款处理,YAML 裸注释会丢故须 tools-registry 自行按行解析 params 节）。实现形态=注释回填（v0.6.1 todo/0050 补装;v0.6.2 review 批算法重写——首版全文候选池按名+型顺序消费四处实证缺陷:同名同型无注释条目偷说明/工具名恰为词表词错配/notes 自由文本污染池/带引号数组类型静默丢弃）：`enrichParamsComments` 在各读入口（tools 独立文件/standalone 两级配置/CLI tool-call 的 hopjit.yaml）yamlLoad 之后拿原始文本回填,算法=**params 节窗口定位+节内序位配对**——只扫每个 `params:` 行下方的连续列表项行块（tools 数组行/notes 块天然在窗口外）,窗口内第 i 行配 params 数组第 i 条目（YAML 保序）;配对安全门=短形态核行键行值一致（值剥缠绕引号——`"[line]"` 数组类型形态照常配）、长形态核行键为 name,任一不合弃整窗口（宁漏勿错配——错说明比丢说明更害）;类型词汇=HopSpec 原子类型 + `[原子]`（与 output_schema 同词汇表——int/float 唯二数字型,number 已随全库除名,v0.6.1 同批修词表漂移）;
+- **params 条目形态**：`- 参数名: 类型` 行 + 行尾 `# 说明`——parser 收说明入结构（与 spec Inputs 的 `#` 说明同款处理,YAML 裸注释会丢故须 tools-registry 自行按行解析 params 节）。
+  - 实现形态=注释回填（v0.6.1 todo/0050 补装;v0.6.2 review 批算法重写——首版全文候选池按名+型顺序消费四处实证缺陷:同名同型无注释条目偷说明/工具名恰为词表词错配/notes 自由文本污染池/带引号数组类型静默丢弃）：`enrichParamsComments` 在各读入口（tools 独立文件/standalone 两级配置/CLI tool-call 的 hopjit.yaml）yamlLoad 之后拿原始文本回填;
+  - 算法=**params 节窗口定位+节内序位配对**——只扫每个 `params:` 行下方的连续列表项行块（tools 数组行/notes 块天然在窗口外）,窗口内第 i 行配 params 数组第 i 条目（YAML 保序）;
+  - 配对安全门=短形态核行键行值一致（值剥缠绕引号——`"[line]"` 数组类型形态照常配）、长形态核行键为 name,任一不合弃整窗口（宁漏勿错配——错说明比丢说明更害）;
+  - 类型词汇=HopSpec 原子类型 + `[原子]`（与 output_schema 同词汇表——int/float 唯二数字型,number 已随全库除名,v0.6.1 同批修词表漂移）;
 - **消费面三处**：①prompt 工具语义供给（执行 LLM 每参数拿到"是什么/怎么取值/错了什么后果"——act free 工具循环与 body 生成期都吃）;②spec Tools 段 init 对账的实现侧对照物;③人读注册文件即知全貌;
 - **params 缺席向后兼容**：既有注册文件（只有 input_schema）照常工作,params 是增量语义面非破坏性改动。
 
-binding 挂在 ToolServerEntry 层（一个 server 一个绑定，其下工具共享——见注册文件节），不在单工具上。ToolDef（shared-providers 既有契约）与 ToolSpec 的关系：ToolDef 是 ToolProvider 接口的运行时投影（name/description/input_schema/requires_commit），ToolSpec 是其声明态超集（+tool_id/output_schema/unwrap）。既有 ToolProvider 消费方零改动。tool_id 独立成 list() 清单条目（body 解释器按名单查名与 requires_commit 拦截——语言面 ID 不豁免安全闸）。
+binding 挂在 ToolServerEntry 层（一个 server 一个绑定，其下工具共享——见注册文件节），不在单工具上。
+ToolDef（shared-providers 既有契约）与 ToolSpec 的关系：ToolDef 是 ToolProvider 接口的运行时投影（name/description/input_schema/requires_commit），ToolSpec 是其声明态超集（+tool_id/output_schema/unwrap）。既有 ToolProvider 消费方零改动。tool_id 独立成 list() 清单条目（body 解释器按名单查名与 requires_commit 拦截——语言面 ID 不豁免安全闸）。
 
 ## output_schema 语法【契约】 ^anc-type-output-schema-syntax
 
@@ -113,7 +124,10 @@ output_schema:          # HopSchema：字段名 → HopSpec 类型名
 
 ## 外部工具注册（统一配置 tool_servers 节）【契约】 ^anc-config-tool-registry
 
-外部工具的环境配置级注册。**宿主文件=统一配置的 `tool_servers:` 节**（作者定 2026-08-13——原独立 hoptools.yaml 文件形态退役）。**对外文法权威已迁 [[../reference/配置参考#^anc-ref-tool-servers]]**（对外契约的权威属对外文档）;本节管实现行为契约（加载 fail-fast/装配/双端校验语义）：系统级 `~/.hopjit/config.yaml` 与项目级 `<项目根>/hopjit.yaml` 均可声明,两级并集、工具名跨级判重 fail-fast（合并语义权威 [[shared-providers#^anc-config-standalone-schema]]）。工具面通常放项目级（跟项目走可进仓库;in-process `module:` 相对**所在配置文件**目录解析）。复用模式外部工具经 caller 自身工具面已可达（tool-channels ③）;引擎侧注册件已入直执面（0076 批实装——注册件经 loadProjectToolRegistry 进 CompositeToolProvider,body 内直执;原"CLI 入口待真需求再加"句 0084 批三销账）。
+外部工具的环境配置级注册。**宿主文件=统一配置的 `tool_servers:` 节**（作者定 2026-08-13——原独立 hoptools.yaml 文件形态退役）。**对外文法权威已迁 [[../reference/配置参考#^anc-ref-tool-servers]]**（对外契约的权威属对外文档）;本节管实现行为契约（加载 fail-fast/装配/双端校验语义）：
+
+- 系统级 `~/.hopjit/config.yaml` 与项目级 `<项目根>/hopjit.yaml` 均可声明,两级并集、工具名跨级判重 fail-fast（合并语义权威 [[shared-providers#^anc-config-standalone-schema]]）。工具面通常放项目级（跟项目走可进仓库;in-process `module:` 相对**所在配置文件**目录解析）;
+- 复用模式外部工具经 caller 自身工具面已可达（tool-channels ③）;引擎侧注册件已入直执面（0076 批实装——注册件经 loadProjectToolRegistry 进 CompositeToolProvider,body 内直执;原"CLI 入口待真需求再加"句 0084 批三销账）。
 
 三种绑定形态各一例（云端 mcp / 本地 mcp / in-process 扩展模块——`tool_servers:` 节,写在系统级或项目级配置皆可）：
 
@@ -144,6 +158,7 @@ tool_servers:
       args: ["--kb", "./kb"]
       env_passthrough: [HOPKB_HOME]   # 白名单透传的环境变量——不整包漏环境
     call_timeout_ms: 120000    # 可选:该 server 单调用硬闸覆盖（缺省 60s）
+    # per_parallel_child: true # 可选:每个并行子任务独占一个该 server 进程（缺省 false=全 run 共用一个;见下方条目与生命周期总图⑥）
     tools:
       - name: kb_search
         requires_commit: false
@@ -180,7 +195,26 @@ tool_servers:
 - **白名单语义**：`tools` 子表声明即启用，未声明的工具不进引擎工具面（server 的工具面我们不整包背书）；
 - **凭证纪律**：`auth_env` 只写环境变量名（api_key_env 同纪律，文件不含秘密——standalone 整体约束第 1 条）；
 - **单调用超时**：server 条目可选 `call_timeout_ms`（缺省 60000）——该 server 全部工具的单调用硬闸（超时语义见 McpBinding HopSop 第 2 步）；
-- **加载 fail-fast**：文件语法错/字段缺失/name 或 tool_id 冲突（含与内置工具冲突）→ **startRun/resume 装配期即拒**（判重发生在装配期非 server 启动期——serve 只加载配置不装配工具面,2026-08-17 hopissues/0005 时点措辞校准），报字段与冲突名（loadStandaloneConfig 同先例）。拒的形态=startRun/resume 返回结构化 `error: { code: TOOLS_FILE_INVALID | TOOLS_NAME_CONFLICT, message }`（与 TOOLS_UNAVAILABLE 同约定）——不裸抛到 MCP handler、不崩 server（0005 实抓:CompositeToolProvider 构造点 throw 未包裹,SDK 兜成无 code 的 isError 文本,调用方无法程序化识别——mcp-server 两构造点〔startRun 预检/restore 预检〕补 try 包裹转结构化,与 TOOLS_FILE_INVALID 同款）。
+- **并行子任务独占进程**：server 条目可选 `per_parallel_child`（布尔，缺省 false）。
+  - 为什么要有：有些 server 的进程本身带"当前会话"状态，多个调用方同时用一个进程会互相踩。实撞=todo/0112：playwright MCP 一个进程只有一个"当前页面"，deep research 的 5 个并行子任务共用一个进程，页面串台、报"Browser is already in use"，多数子任务工具调用全失败。实验证实加 `--isolated` 也救不了共用一个进程的串台，只有一个子任务一个进程才各自拿到正确页面；
+  - 语义：false（缺省）= 整个 run 共用一个该 server 进程（hopissues/0021 的共享形态，持续登录这类要跨步骤保持状态的任务靠它）；true = 每个并行子任务（subtask parallel 子实例、call parallel 子实例）第一次调用该 server 的工具时各自起一个进程，子任务收场即关。顶层与串行步骤、串行 call 照旧共用顶层那一个进程；并行子任务内部嵌套的串行 call 用该子任务自己的进程。派生与关闭规则见 [[#^anc-exec-tool-composite]] HopSop，生命线见 [[#^anc-exec-tool-server-lifecycle]] ⑥；
+  - 适用绑定：只许 `kind: mcp`（stdio 与 http 两种传输都可——stdio 各起一个子进程，http 各开一条连接与会话）。`kind: in-process` 写了即 TOOLS_FILE_INVALID——扩展模块装载进引擎进程，模块缓存全进程只有一份，"每个子任务一份"无从兑现，写了等于假承诺；
+  - 校验：值不是布尔 → TOOLS_FILE_INVALID（与 `call_timeout_ms` 同款 fail-fast）；
+  - 类型约定（HopType——server 条目解析产物,代码 `ToolServerEntry`）：
+
+    ```
+    struct: ToolServerEntry
+      Id: tool-server-entry
+      Fields:
+        - name: line                  # server 逻辑名（HopLog 记账用;两级配置同名整体替换的键）
+        - binding: ToolBinding        # 绑定形态（kind + 传输参数）
+        - tools: [ToolSpec]           # 白名单——声明即启用
+        - call_timeout_ms: int        # 可选,正整数毫秒;缺省 60000
+        - per_parallel_child: bool    # 可选;缺省 false（解析产物里缺席即 false,只在写了 true 时携带）;只许 kind: mcp
+    ```
+- **加载 fail-fast**：文件语法错/字段缺失/name 或 tool_id 冲突（含与内置工具冲突）→ **startRun/resume 装配期即拒**（判重发生在装配期非 server 启动期——serve 只加载配置不装配工具面,2026-08-17 hopissues/0005 时点措辞校准），报字段与冲突名（loadStandaloneConfig 同先例）。
+  - 拒的形态=startRun/resume 返回结构化 `error: { code: TOOLS_FILE_INVALID | TOOLS_NAME_CONFLICT, message }`（与 TOOLS_UNAVAILABLE 同约定）——不裸抛到 MCP handler、不崩 server;
+  - 0005 实抓:CompositeToolProvider 构造点 throw 未包裹,SDK 兜成无 code 的 isError 文本,调用方无法程序化识别——mcp-server 两构造点〔startRun 预检/restore 预检〕补 try 包裹转结构化,与 TOOLS_FILE_INVALID 同款。
 - **server 同名=整体替换（0005 附带发现补著文）**：项目级与系统级 `tool_servers` 条目 **server name 同名**时按合并规则整体替换（项目级赢——byKey by name,与 providers 同律）,同名 server 下的工具集随之整体换掉、**不做工具级判重**（替换语义:项目级声明就是该 server 的完整意图）;跨级判重只作用于**不同名 server 之间**的工具名撞车。
 
 ## 双端校验【契约】 ^anc-exec-tool-shape-check
@@ -262,6 +296,7 @@ struct: McpBindingMember
   Fields:
     - entry: ToolServerEntry   # 注册条目（binding+tools 白名单）
     - client: yaml             # SDK Client 句柄——惰性连接（首次调用时 connect,失败=该次调用 fail 不重试——下次调用再试即自然重连面）
+    - connecting: yaml         # 连接进行中的等待句柄（没有连接在进行时为空）——并发首调共用同一次连接,见 HopSop 连接第 5 步
     - discovered: yaml         # tools/list 发现结果缓存（连接时一次）——input_schema 补全源与一致性比对
 ```
 
@@ -286,6 +321,15 @@ struct: McpBindingMember
    抛错后不 close 即泄漏:僵尸 server 存活持锁〔实录 4 个 uv 中间层进程占 .venv/.lock,后续
    连接全部排队超时,一次失败滚成永久失败〕）：connect 抛错路径 close client（尽力而为——
    close 自身出错吞掉,主报文仍是连接失败）
+5. [act] **并发首调共用同一次连接**（2026-09-25 todo/0112 测试撞出——原实装没有"连接进行中"
+   状态:共享成员被三个并行子任务同时首调,各自 spawn 一个进程,最后只有一个留在 client 句柄里,
+   其余被覆盖的 client 无人关闭=泄漏进程;这违反了"后续调用复用连接",属代码未照设计做）:
+   连接进行中时记下这次连接的等待句柄,其他调用等同一个句柄,不另起连接;连接成功后句柄清空、
+   client 生效;连接失败时句柄清空,等它的调用全部同得该次失败,下一次调用重新连接（失败=该次
+   fail、下次自然重连的语义不变）
+6. [act] **连接期间被关闭**：连接完成时若终态闸已落下（close() 在连接进行中被调用——派生视图
+   收场或中止级联恰逢子任务首调时可发生）,立即关掉刚连好的 client 并让该次调用 fail,不把它
+   存为句柄（否则 close 已返回、新进程无人再收=复活泄漏,与下文终态闸同一病）
 
 execute(name, args) 经 mcp 成员:
 1. [act] 发端校验：args vs input_schema（声明或发现所得）——必填缺失/类型不合=fail 不发（批次二兑现批次一范围注）
@@ -311,6 +355,10 @@ run 终态收（引擎/mcp-server 生命周期钩子——**含 failed-via-throw
 4. [act] **终态闸**（四十九审——close 后惰性重连会 spawn 新进程且 run 已终态无人再收=复活泄漏;
    共享 provider〔0021〕下被杀 worker 的末次工具调用可踩此竞态〔协作杀不打断执行中单步〕）:
    close() 先置 closed 位再关停;此后 execute 一律拒(响亮 fail 指明"终态后拒绝重连",不 ensureConnected)
+
+并行子任务收场收（per_parallel_child 打开的 server 专属——该子任务独占的成员实例）:
+5. [act] 子任务收场时由派生视图 closeOwned() 调本成员 close()——三段收与终态闸完全同上 1-4 步;
+   时机与兜底见 ^anc-exec-tool-composite HopSop"派生视图的关闭"
 ```
 
 **发端校验语义**（兑现双端校验 HopSop 第 1 步）：JSON Schema 的 required+type 浅检（复用既有校验哲学:声明写多深查多深,不做 $ref/组合子——外部 schema 常残缺,过度实现校验器反而拒真）；无 schema（声明与发现都无）→ 放行（与收端"无声明放行"对称）。
@@ -379,6 +427,7 @@ run（状态机，真身在 .hopstate 盘上）───────────
    │    └─ http： 连接 url（Authorization: Bearer <auth_env 解引用>）┘ 生命线：见④
    │    连接后一次 tools/list 发现：白名单缺席→warn 漂移；无 schema 声明→补全（发端校验源）
    │    连接失败=该次调用 fail（错误带原始信息+未开通指路）——不重试，下次调用自然重连
+   │    多个调用同时首调同一 server：共用同一次连接，只起一个进程（HopSop 连接第 5 步）
    │
    │ ③调用期（每次工具调用）：
    │    发端校验（required+type 浅检，不合不发）→ tools/call → isError 截断进错误
@@ -395,8 +444,17 @@ run（状态机，真身在 .hopstate 盘上）───────────
    │    - 工具 server 死：下次调用 MCP_CALL_FAILED=步骤 fail 走升级链（不做健康检查/自动重启）
    │    - run 状态不受任何工具 server 死活影响——工具结果已入 journal 的照常重放，
    │      未入的重跑该步（run 真身在盘上，工具 server 是无状态代理的哲学延伸）
+   │ ⑥并行子任务独占分支（仅 per_parallel_child: true 的 server；缺省 false 的 server 没有这条分支）：
+   │    子任务起跑时：Composite 为它派生一个视图——别的成员照旧是顶层那个实例，只有本 server 换成
+   │      新成员实例（还没连接、没进程）
+   │    子任务第一次调本 server 的工具：新成员走②惰性连接——spawn 一个只属于这个子任务的进程
+   │    子任务收场（完成/失败/异常/被杀后自身跑完）：派生视图 closeOwned()——只关这个进程，
+   │      顶层那个不动；暂停等人回答的子任务不关，恢复后收场时再关
+   │    run 终态：顶层 close() 顺带关掉还没关的派生视图（兜底——主线失败时暂停中的子任务走不到
+   │      自己的收场点）
    ▼
-（下一个 run：从①重新开始——工具 server 状态是 run 级的，跨 run 不保留）
+（下一个 run：从①重新开始——工具 server 状态是 run 级的，跨 run 不保留;per_parallel_child 的进程
+  更短，是子任务级的）
 ```
 
 **stdio 与 http 的差别一句话**：stdio 的工具 server 进程**在我们手里**（spawn 起、三段收、白名单喂环境——监护全套是我们的责任与能力）；http 的进程**在别人手里**（我们只管连接与断开，"未开通/服务下线"等生死问题只能作为调用失败感知）。**net 内置组（批次三 http_get）沿同一骨架**：无连接态（每调用独立请求），生命周期图退化为只有③——注册期声明、调用期校验、无②④⑤（这正是"内置组 in-process"与"外部 server"的生命线差异：内置组根本没有独立生命线）。
@@ -426,15 +484,20 @@ Goal: 三来源工具（内置组/外部注册/宿主注入）合成一张工具
 Outputs:
 - list(): 全成员并集清单（tool_id 独立成条目,继承声明 requires_commit——语言面 ID 不豁免安全闸）
 - execute(): 按名路由到成员 → 双端校验包住 → 带 audit 元信息（外部成员记 server 归属+耗时）的结果
+- forkForParallelChild(): 给一个并行子任务用的派生视图——per_parallel_child 打开的 server 换成新成员实例,其余成员与父视图是同一个实例;没有任何打开的 server 时返回父视图自身
+- closeOwned(): 派生视图收场——只关它自己新建的成员（及它再派生出去的视图）,父视图的成员一个不碰
 Constraints:
 - 同名即拒: 装配期全体 name/tool_id 判重,冲突=配置错误 fail-fast——不覆盖不遮蔽
-- 装配期零连接: 构造只做声明与判重,外部 server 零感知（惰性连接归成员）
-- close 传导: run 终态逐成员收,失败不拦终态
+- 装配期零连接: 构造只做声明与判重,外部 server 零感知（惰性连接归成员）;派生同样零连接
+- close 传导: run 终态逐成员收,失败不拦终态;并连带关掉尚未关闭的派生视图（兜底）
+- 派生不扩权不改名: 派生视图的工具清单、路由、声明面与父视图逐项相同,差别只在"哪个成员实例在干活"
 
 struct: CompositeToolProvider
   Id: tool-composite
   Fields:
-    - members: [yaml]  # 成员清单：file 内置组（恒在）+ tool_servers 各 server + 宿主注入 ToolProvider（并入成员，不再整体替换）
+    - members: [yaml]  # 成员清单：file 内置组（恒在）+ tool_servers 各 server + 宿主注入 ToolProvider（并入成员，不再整体替换）。每个成员记着自己是否来自 per_parallel_child 打开的注册条目（派生时据此判断换不换实例）
+    - owned: [yaml]    # 本视图自己新建、归自己关的成员（顶层视图=全部成员;派生视图=只有换过实例的那几个）
+    - forks: [yaml]    # 从本视图派生出去、还没关闭的视图（close 兜底用;子视图 closeOwned 时把自己摘掉）
 ```
 
 **关键逻辑（HopSop）**：
@@ -448,6 +511,35 @@ struct: CompositeToolProvider
 execute(name, args)（运行期逐调用）:
 1. [act] 按 name（或 tool_id 反查 name）路由到成员
 2. [act] 双端校验流程（见 ^anc-exec-tool-shape-check）包住成员的真实调用
+
+forkForParallelChild()（Dispatcher 构造并行子任务的子 Dispatcher 前调一次——todo/0112）:
+1. [branch] 成员里没有任何一个来自 per_parallel_child 打开的注册条目 → 返回自身（不派生——
+   开关全关时与 0021 共享形态逐字节相同,零新对象）
+2. [act] 新建视图：按父视图成员顺序逐个处理——
+   2.1 来自打开开关的条目 → 用同一个注册条目新建成员实例（mcp 绑定;测试替身工厂在场时用替身工厂）,
+       记入新视图的 owned
+   2.2 其余成员（内置文件工具、通知、宿主注入、开关关闭的 server）→ 直接用父视图的同一个实例
+   2.3 逐个过装配期名字检查（名字与父视图完全相同,必然通过;走同一路径是为了路由表同法生成）
+3. [act] warn 汇与"裸奔只警告一次"的记录表与父视图共用（一个 run 一套诊断,不因子任务数翻倍刷屏）
+4. [act] 新视图登记进父视图的 forks;返回新视图
+
+派生视图的关闭 closeOwned():
+1. [act] 逐个关 owned 成员（mcp 成员三段收+终态闸,见 ^anc-exec-mcp-binding）
+2. [act] 递归关自己的 forks（并行 call 子实例本身不是 worker,还能再派并行子任务——派生视图可以再派生）
+3. [act] 从父视图的 forks 里摘掉自己;失败只吞不抛（清理尽力而为,与 close 同语义）
+
+关闭时机（Dispatcher 侧逐条兑现,权威条款 [[step-dispatcher#^anc-exec-standalone-parallel]] "worker 共享父 ToolProvider"段的例外条款）:
+- 并行子任务非暂停收场（完成/失败/runSpec 抛异常）→ 关
+- 并行子任务暂停等人回答 → 不关（进程里的浏览器页面、登录态要留到恢复后接着用）
+- 暂停的子任务恢复后完成或失败 → 关;恢复后又停在下一个暂停点 → 不关;恢复应答被拒 → 不关
+- 中止级联（stop_run）碰到暂停中的子任务 → 关
+- 在飞子任务被主线失败杀掉 → 由它自己的收场路径关（协作式中止,子任务 runSpec 返回后走"非暂停收场"）
+- 兜底：顶层 close()（run 终态三收点）连带关掉所有还没关的派生视图——覆盖主线失败时暂停中的
+  子任务、恢复时抛异常等走不到上面各条的路径
+
+顶层 close()（run 终态）:
+1. [act] 逐成员 close（同上）
+2. [act] 逐个对还在 forks 里的派生视图调 closeOwned()（兜底）
 ```
 
 - 消费面零变化：dispatcher 注入位 `hostConfig.tool_provider` 语义升级为"并入成员"（原整体替换语义废——宿主想加一个工具不再需要重实现文件十件）；四条工具通道（[[tool-channels]]）零感知；
@@ -455,4 +547,4 @@ execute(name, args)（运行期逐调用）:
 
 ## 正反例要求【说明】
 
-加载（合法/语法错/名冲突/凭证明文拒）、装配（并集/同名 fail-fast/宿主并入）、双端校验（发端拦/无声明 warn 放行/缺字段入升级链带明细/多余裁剪/unwrap 解包与解析失败）、语言面 ID（中文名经 tool_id 调用/tool_id 冲突拒）、time 内置（now/today 求值/journal 重放取记录值/条件里调用静态错误）——各正反成对。
+加载（合法/语法错/名冲突/凭证明文拒/per_parallel_child 非布尔拒/in-process 写 per_parallel_child 拒）、装配（并集/同名 fail-fast/宿主并入）、派生（开关打开时每个并行子任务一个独立进程且收场后退出/开关关闭时共用一个进程/串行 call 共用顶层进程/并行子任务里的串行 call 用该子任务的进程/暂停期间进程保留/中止级联关闭）、双端校验（发端拦/无声明 warn 放行/缺字段入升级链带明细/多余裁剪/unwrap 解包与解析失败）、语言面 ID（中文名经 tool_id 调用/tool_id 冲突拒）、time 内置（now/today 求值/journal 重放取记录值/条件里调用静态错误）——各正反成对。

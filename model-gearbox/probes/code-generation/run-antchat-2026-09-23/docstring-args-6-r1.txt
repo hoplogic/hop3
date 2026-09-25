@@ -1,0 +1,78 @@
+```python
+import ast
+import re
+import sys
+
+source = open(sys.argv[1], encoding='utf-8').read()
+tree = ast.parse(source)
+lines = source.splitlines()
+reported = set()
+
+param_re = re.compile(r'^([a-zA-Z_]\w*)$')
+word_re = re.compile(r'[a-zA-Z_]\w*')
+
+def check_node(node):
+    func_name = node.name
+    if func_name.startswith('_'):
+        return
+    param_names = []
+    all_args = node.args
+    for arg in all_args.posonlyargs:
+        param_names.append(arg.arg)
+    for arg in all_args.args:
+        param_names.append(arg.arg)
+    if all_args.vararg is not None:
+        param_names.append(all_args.vararg.arg)
+    for arg in all_args.kwonlyargs:
+        param_names.append(arg.arg)
+    if all_args.kwarg is not None:
+        param_names.append(all_args.kwarg.arg)
+
+    if node.body:
+        first_stmt = node.body[0]
+        docstring = ast.get_docstring(first_stmt)
+    else:
+        docstring = None
+
+    missing = []
+    if docstring is None:
+        missing = [p for p in param_names if p not in ('self', 'cls')]
+    else:
+        found = set()
+        for m in re.finditer(r'[a-zA-Z_]\w*', docstring):
+            found.add(m.group(0))
+        for p in param_names:
+            if p in ('self', 'cls'):
+                continue
+            if p not in found:
+                missing.append(p)
+
+    if missing:
+        location = node.lineno
+        for param in missing:
+            key = (location, param)
+            if key not in reported:
+                reported.add(key)
+                print(f"Line {location}: Missing parameter '{param}' in docstring")
+
+def process_top_level(node):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        check_node(node)
+    elif isinstance(node, ast.ClassDef) and not node.name.startswith('_'):
+        for item in node.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                check_node(item)
+        for item in node.body:
+            if isinstance(item, ast.ClassDef) and not item.name.startswith('_'):
+                for sub_item in item.body:
+                    if isinstance(sub_item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        check_node(sub_item)
+
+for node in tree.body:
+    process_top_level(node)
+
+if reported:
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

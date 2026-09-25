@@ -1,0 +1,38 @@
+```python
+import ast
+import sys
+
+if len(sys.argv) < 2:
+    print("请提供待检查文件的路径")
+    sys.exit(1)
+
+path = sys.argv[1]
+
+try:
+    stream = open(path, 'rt', encoding='utf-8')
+    source = stream.read()
+    stream.close()
+except Exception:
+    print("无法读取文件: " + path)
+    sys.exit(1)
+
+try:
+    tree = ast.parse(source)
+except SyntaxError:
+    print("语法错误，无法解析文件")
+    sys.exit(1)
+
+bad = False
+
+for node in ast.walk(tree):
+    if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+        length = node.end_lineno - node.lineno + 1
+        if length > 40:
+            bad = True
+            print("行 " + str(node.lineno) + ": 函数 " + node.name + " 长度为 " + str(length) + " 行，超过 40 行")
+
+if bad:
+    sys.exit(1)
+
+sys.exit(0)
+```

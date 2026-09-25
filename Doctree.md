@@ -10,7 +10,7 @@
 
 本文件回答两个问题：**库里有什么文档**（每份附一句话表述，读者据此决定要不要展开细读——即"渐进展开"：先读一句话，需要时才读全文，再需要时沿链接与锚点深挖），以及**文档之间谁派生自谁**（SSR：Source-derivation Relation，源—派生关系），用于一致性审查与衍生同步。
 
-**主线（读的顺序骨架）**：全库文档按**十站主线**组织阅读顺序——①工程实现链规范（元规范）②核心创新+核心规范（定位）③HopType（架构语言）④ARCHITECTURE（架构）⑤module-principles（模块规范）⑥本文件「模块索引」（15 模块收链）⑦chain-enforcement（守卫与人的职责）⑧⑨⑩安装/使用/hopskill 构建（tutorials 01-03）。各站读法见 [[D0-生态开发者导读]]；README 有最短投影。本文件是**地图**（有什么、在哪、谁派生谁），主线是**路线**（按什么顺序读）——两者正交。
+**主线（读的顺序骨架）**：全库文档按**十站主线**组织阅读顺序——①工程实现链规范（元规范）②核心创新+核心规范（定位）③HopType（架构语言）④ARCHITECTURE（架构）⑤module-principles（模块规范）⑥本文件「模块索引」（16 模块收链）⑦chain-enforcement（守卫与人的职责）⑧⑨⑩安装/使用/hopskill 构建（tutorials 01-03）。各站读法见 [[D0-生态开发者导读]]；README 有最短投影。本文件是**地图**（有什么、在哪、谁派生谁），主线是**路线**（按什么顺序读）——两者正交。
 
 **两类读者、两套根（2026-08-06 作者定：根要讲清楚）**——同一个库，人和 agent 从不同的根进入，各有各的入口链，别拿错门：
 
@@ -64,7 +64,7 @@ hoplogic3/
 ├── src/                ← HopJIT 引擎（21 个 TS 源文件，@a: 代码锚点；见下方源码层专节）
 ├── tests/              ← vitest 测试（34 个 *.test.ts，@v: 测试锚点）
 ├── examples/           ← 可执行 spec 范本 + doc-ref 知识文档（纯演示）
-├── model-gearbox/      ← 模型变速箱（2026-09-18 作者定纲,比喻经认可升格为目录名——两根变速轴之模型轴;载体轴归 driver/）：profiles/ 机读能力档案（三段:七维粗档/act_free 稳定性数值曲线/适配开关,引擎与 hopbuild2 消费面挂 todo/0095）+ probes/ 度量仪器（协议探针/引擎冒烟/act-free 稳定性阶梯矩阵/七维定性——D12 教程四层测试的机械化,教程管方法论本目录管跑法与数据）（度量数据总表.md=三 service 人读汇总快照,Obsidian 阅读版——权威恒在 profiles/ 机读档案）
+├── model-gearbox/      ← 模型变速箱（2026-09-18 作者定纲,比喻经认可升格为目录名——两根变速轴之模型轴;载体轴归 driver/）：profiles/ 机读能力档案（三段:七维粗档/act_free 稳定性数值曲线/适配开关,引擎与 hopbuild2 消费面挂 todo/0095）+ probes/ 度量仪器（协议探针/引擎冒烟/act-free 稳定性阶梯矩阵/七维定性/G6 代码生成 Python 与 SQL 两种语言〔code-generation/,2026-09-23〕——D12 教程四层测试的机械化,教程管方法论本目录管跑法与数据）（度量数据总表.md=三 service 裸能力人读汇总快照〔适配前体检报告〕+适配效果总表.md=变速箱适配后效果评价〔上岗成绩单:每模型×任务的前后对照带代价账,2026-09-21 作者定两表成对〕+适配对象清单.md=库内 skill 适配需求盘点〔逐份判要不要变体/缺什么/优先级,27b 基准档,作者定"看实际的 skill 明确列出来"〕+完工测试清单.md=完工验收台账〔七宏观任务×三模型 21 格销格制,作者定宏观任务面七项〕——权威恒在 profiles/ 机读档案与各跑批账）
 ├── scripts/            ← 机检守卫（chain-health / check-* / run-audit）+ audit/ 审计工具链（anchor-audit/test-coverage-audit spec+知识文档+scan/cross_compare+standalone 化五件 prep_env/make_batches/tally_batches/write_artifact/write_batch，2026-08-08 自 examples/ 迁入；+test-coverage-audit 配套 collect_coverage.py 四子命令，2026-09-01 双模式化批新建；见守卫脚本专节）
 ```
 
@@ -83,7 +83,7 @@ hoplogic3/
 
 ---
 
-## docs/concepts/ — 概念层（维护者快照 ×16）
+## docs/concepts/ — 概念层（维护者快照 ×17）
 
 > 概念层的编写与演进在库外（维护者工作区），本库存放其受控快照，各文件 `@trace` 标注派生关系。**库内不修改**（发现内容问题→报维护者修源→重新快照）。唯一例外：机检抓出的格式违规（如锚点缺空格）可就地修，同时报维护者同步源。
 
@@ -96,6 +96,7 @@ hoplogic3/
 | HopSpec V3扩展-模型变速箱适配 | 变速箱半边概念规范——度量两原则（model service 非模型/维度非症状）、能力维度两组制（G1-G8+P1-P3）、九个适配方法（把关按核验能力选形态/每步任务量不超过模型可靠处理上限/不让弱规划模型现场拆任务/修订轮换短提示词/用不上的工具不给/缺领域知识随步喂/按目标模型定制构建产物/思考型模型跑机械步骤关思考/概率型步骤并发多实例取并集）、两条铁律（教学清不了零/弱档消费是适配非弃用）；工程实装归 model-gearbox/ 与设计文档 | 源（2026-09-19 作者定"概念层应该加一个 model 变速箱适配文档"） |
 | HopSpec V3错误模型 | 错误分类与传播语义 | 源 |
 | HopSpec V3扩展-事务与补偿 | commit 失败处理的两种扩展模式（saga 补偿/事务边界） | extend（源=核心规范） |
+| HopSpec V3扩展-Python语法沙箱 | 规约交付物本身是真 Python 脚本时的受控通道——引擎不执行产物只静态审它，源码里每个名字（模块符号/内置名/对象属性）都查白名单、有能力的对象不许作为值出现，三条规则（CPython 自己的 ast.parse 按字节解析 / 只许 `import 模块` 且模块名只以 `模块.符号` 出现 / 条目自带用法许可），审过才许跑才许交付；与 hop_python 是对偶关系（编排代码 vs 产物代码），可叠加系统沙箱但不依赖它 | extend（源=核心规范；2026-09-23 作者定"这个应该单独成文"+定名"Python 语法沙箱"） |
 | HopSpec核心创新 | 核心创新独立阐述（从核心规范定位章提取） | extract（源=核心规范） |
 | HopSpec-prompt-author | Spec 作者构建速查卡（LLM system prompt 用 compact 版） | compact（源=核心规范） |
 | HopSpec V3语法参考 | 完整语法便查手册（标准语法 + 大纲语法变种），§0 设计理念 | compact（源=核心规范） |
@@ -120,6 +121,7 @@ hoplogic3/
 | exec-engine        | ExecutionEngine 状态机——步骤推进、retry/adaptive、None 传播、崩溃恢复、并行 fan-out 调度 |
 | prompt-assembler   | PromptAssembler 6 层 context 组装 + worker 子树视图                        |
 | act-body           | hop_python 受限编排语言（parser/interpreter/builtins）                      |
+| py-sandbox         | Python 语法沙箱——产物脚本白名单三表（模块符号/内置名/属性）+ 检查器三条规则契约 + 执行契约（审的字节即跑的字节/python3 -I/系统沙箱在场即套）+ 与 run_script 的关系收窄 |
 | doc-ref            | `[[文档路径#章节名]]` 确定性引用——解析、切片、注入                                        |
 | persistence        | 状态快照存取（FilePersistence/MemoryPersistence + for-each worker 参数通道）    |
 | parallel-execution | parallel 统一模型（§U 现行权威：步骤级异步派发+容器边界收齐+杀活+测试矩阵）+ 旧通道退役期存档（子实例隔离、fanout 顾问、join merge） |
@@ -160,9 +162,10 @@ hoplogic3/
 | release-engineering                             | 发版工程快照制（2026-09-04 立卷,缘起 0.12.2 三连拦——HEAD 移动靶）——release 启动冻结 SNAP,全检/升版本/publish 对快照 worktree 跑,主区并行不拦;凭证闸对 SNAP 判;收编三拍 cherry-pick+push+push tag;dry-run 演练;scripts/release.sh 的行为权威 |
 | roadmap                                         | v1/v2/v3 里程碑路线                                                            |
 | tools                                           | 受控工具装配层（成员构成/生命周期/出口边界;各工具组契约归 tools/ 子目录）。**工具家族四切面（interface 声明/channels 消费/tools 装配/tools/ 子目录各件）分工的权威论述在其开头"工具设计面地图"节** |
-| tools/file-tools                                | 内置文件/目录工具组十件（读写权限链/写域分域）                                             |
+| tools/file-tools                                | 内置文件/目录工具组十一件（读写权限链/写域分域）                                             |
 | tools/spec-tree-tools                           | spec 内容工具族六件（读/写/验三面）                                                  |
 | tools/dingtalk-notify                           | 钉钉通知出箱通道（第一个 requires_commit=true 内置件;引擎终态挂点共用发送体）                       |
+| tools/run-script                                | 执行类工具组一件 run_script（受控脚本执行——模型只选脚本不选命令,解释器引擎按扩展名定;第一个 category=special 内置件;命令执行原语与 body 的 subprocess.run 共用一份实现） |
 
 ## 根目录文档
 
@@ -233,7 +236,7 @@ hoplogic3/
 | （CC 共享细则） | driver/references/ | driver-subagent / step-execution-rules / discovery——CC 驱动的执行细则（parallel-worker 已随旧通道退役，P0.5）；其中 **cli-discovery.md 是唯一真正载体中立、各载体共用**的部分 |
 | **Codex 载体** | driver/codex/ | 有 subagent 时三主体拆分；无 subagent 时 Main 按同一角色文件 inline 执行、parallel 串行降级。references 自包含（batch-fanout / execution-rules / discovery），不带 CC 原语。完整契约见设计层 [[codex-driver-carrier]] |
 
-## 模块索引 — 锚点串起概念/设计/代码/测试（×15）
+## 模块索引 — 锚点串起概念/设计/代码/测试（×16）
 
 > 模块是横向组织单元（[[module-principles]] 定原则：判据/依赖方向/接口边界/版本兼容/拆分信号）。每行的**模块锚点**即收链入口：设计文档该锚点章节=边界声明+出口清单+模块版本；`@module:` 标注绑定 src/tests 文件；TRACEABILITY 对应卡片汇总全链。分层依 module-principles §2。
 
@@ -244,6 +247,7 @@ hoplogic3/
 | exec-engine（`anc-struct-exec-engine`） | 核心 | [[exec-engine]] | 配套运行时能力（模式无关原则） | engine/engine-traverse/runtime-types | engine/engine-traverse.test |
 | prompt-assembler（`anc-struct-prompt-assembler`） | 核心 | [[prompt-assembler]] | 核心规范 ^anc-exec-prompt-assembly | prompt | prompt.test |
 | act-body（`anc-struct-act-body`） | 核心 | [[act-body]] | 核心规范 ^anc-step-act-body-lang | act-body-parser/-interpreter/act-builtins | act-body-*.test ×4 |
+| py-sandbox（`anc-struct-py-sandbox`） | 核心 | [[py-sandbox]] | 扩展-Python语法沙箱 ^anc-pysb-model | py-sandbox（+随包检查器 scripts/pysb/pysb_check.py） | py-sandbox.test |
 | doc-ref（`anc-struct-doc-ref`） | 核心 | [[doc-ref]] | 核心规范 ^anc-exec-doc-ref | doc-ref | doc-ref.test |
 | hoplog（`anc-obs-hoplog`） | 核心 | [[spec-observability]] | 可观测性扩展（YAMLL 标准） | hoplog | hoplog.test |
 | persistence（`anc-provider-persistence`） | 适配 | [[persistence]] | 配套运行时能力（durable resume） | persistence | persistence.test |
@@ -255,7 +259,7 @@ hoplogic3/
 | shared-errors（`anc-error-error-code`） | 共享 | [[shared-errors]] | 错误模型 | errors | （常量模块） |
 | anchor-audit-scripts（`anc-meta-traceability`） | 工具 | [[concept-anchor-rules]] | 工程实现链规范 ^anc-meta-traceability | scripts/audit/*.py | anchor-scan.test + audit-scripts.test（资产安全三钉,第九轮 review 补） |
 
-## src/ — 引擎源码层（29 个 TS 文件）
+## src/ — 引擎源码层（30 个 TS 文件）
 
 > 每个文件对应的设计文档见上方 design 表（改 src 前对应设计先改定）。计数与逐文件表 2026-09-06 review 补账（曾滞后八件——21 实 29）。文件内 `@a: anc-*` 锚点是设计契约的代码落点，汇总于 TRACEABILITY.md。按职责分组：
 
@@ -287,6 +291,7 @@ hoplogic3/
 | act-body-parser.ts | hop_python 词法/语法（INDENT/DEDENT 敏感） | act-body |
 | act-body-interpreter.ts | 解释器（执行期无推理，严格按 body） | act-body |
 | act-builtins.ts | 内置函数表 | act-body |
+| py-sandbox.ts | Python 语法沙箱编排——私有副本→检查器审→审过执行副本→清理;系统沙箱探测（检查器本体是随包的 scripts/pysb/pysb_check.py） | py-sandbox |
 
 **驱动适配与共享**：
 
@@ -349,6 +354,7 @@ hoplogic3/
 | examples/（入门随包件） | 三课递进：coffee-week（①纯确定性首跑）+data-quality（②tool_request 演示，数值非基线）+doc-review（③介入点）+ 两份演示数据 +GETTING-STARTED（files 白名单按文件挑；run 定位第 2 级同路径命中） |
 | scripts/audit/ | 审计工具（scan.py 六层采集 / cross_compare.py 15 项比对 / standalone 化五件：prep_env.py 环境准备、make_batches.py 分批、tally_batches.py 汇总计数、write_artifact.py 产物落盘、write_batch.py 批结果写前校验；sample_anchors.py 已废弃删除） |
 | scripts/deep-validate/ | 跑前深检 hopskill（deep-validate.md spec 三步骨架 + deep-validate-knowledge.md 判据台账五面与环境事实教材 + dv-batch.md 批量外壳〔loop for-each + call parallel 十行 spec,N 份并行体检交引擎派发——2026-09-01 全库 40 份体检与双模式化批复跑实战件〕；设计权威 docs/design/deep-validate.md） |
+| scripts/pysb/ | Python 语法沙箱检查器（pysb_check.py——三条规则的唯一实现,随 npm 包发布,由 py-sandbox.ts 经命令执行原语以 `python3 -I -B` 调起;设计权威 docs/design/py-sandbox.md） |
 | scripts/hopfix/ | 定向修正 hopskill（hopfix.md——按工单对既有 spec 做节点级定向编辑:分诊四档/树编辑五件/三层把关/快照写回;设计权威 docs/design/hopfix.md） |
 
 ---

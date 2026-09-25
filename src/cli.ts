@@ -438,10 +438,11 @@ program.command('init <spec>')
   .option('--params <json>', 'Spec inputs as JSON or @file')
   .option('--parent <id>', 'Parent instance ID')
   .option('--step <id>', 'Call step ID')
+  .option('--child-instance <id>', 'Call child instance ID (dir <parent>/calls/<id>/; defaults to --step; engine gives <step>.<iters> inside loops)')
   .option('--parallel-parent <id>', 'Parent instance ID (for parallel child subinstance)')
   .option('--parallel-child <id>', 'Parallel child step ID (subinstance落 <parent>/parallel/<id>/)')
   .option('--trace <id>', 'Trace ID')
-  .option('--upstream-feedback <text>', 'Parent-layer revision feedback for call child (D41 reuse-mode leg — engine renders it as L5 upstream entry)')
+  .option('--upstream-feedback <text>', 'Parent-layer revision feedback for call child, text or @file (D41 reuse-mode leg — engine renders it as L5 upstream entry)')
   .option('--state-dir <dir>', 'State directory', '.hopstate')
   .option('--log-dir <dir>', 'Log directory for .hoplog output')
   .option('--log-level <level>', 'Log level: debug | info | warn', 'debug')
@@ -455,7 +456,9 @@ program.command('init <spec>')
       const callMode = opts.parent && opts.step; // @a: anc-step-call
       const isParallelChild = !!(opts.parallelParent && opts.parallelChild); // @a: anc-exec-parallel-subinstance
       const childParent = callMode ? opts.parent : isParallelChild ? opts.parallelParent : undefined;
-      const childStep = callMode ? opts.step : isParallelChild ? opts.parallelChild : undefined;
+      // call 子实例 ID 与步骤号分开传（hopissues/0098）：--child-instance 定目录,缺席回退 --step;
+      // 参数映射恒按 --step 取（下方 resolveCallParams）。// @a: anc-exec-call-child-iter-id
+      const childStep = callMode ? (opts.childInstance ?? opts.step) : isParallelChild ? opts.parallelChild : undefined;
       const subdir = callMode ? 'calls' : 'parallel';
       const effectiveStateDir = (callMode || isParallelChild)
         ? join(opts.stateDir, childParent, subdir)
@@ -501,7 +504,7 @@ program.command('init <spec>')
         ...(isParallelChild ? { canFanout: false, subtreeRoot: opts.parallelChild } : {}),
         ...(opts.trace ? { traceId: opts.trace } : {}),
         driverChannel: 'cli',   // 双执行硬闸落账 // @a: anc-exec-driver-channel
-              ...(opts.upstreamFeedback ? { upstreamFeedback: String(opts.upstreamFeedback) } : {}),   // H2 复用半边（D41）——init_command 携带,汇入 standalone 同一注入口 // @a: anc-exec-l2c-retry-feedback
+              ...(opts.upstreamFeedback ? { upstreamFeedback: resolveTextParam(String(opts.upstreamFeedback)) } : {}),   // H2 复用半边（D41）——init_command 携带,汇入 standalone 同一注入口;引擎烘焙恒 @<反馈文件>（^anc-exec-cmd-args-file） // @a: anc-exec-l2c-retry-feedback, anc-exec-cmd-args-file
       };
 
       const engine = new ExecutionEngine();
@@ -963,19 +966,23 @@ export function bootstrapStandaloneConfig(carrier: Carrier): { written: string |
   if (carrier === 'opencode') {
     // opencode 自举：deep-merge 三文件（opencode 加载顺序 config.json → opencode.json → opencode.jsonc,
     // 后者覆盖、.jsonc 优先,与 opencode 加载一致）取 model + provider.<id>.options.baseURL + env[0]（凭证名）。
-    // protocol 按 provider id 推断（含 anthropic→anthropic,否则 openai-chat,与 Codex 同——openai-responses 未实装）。
+    // protocol 忠实照抄 provider.<id>.npm 字段（0020 批改定——npm 字段=opencode 的 wire_api 等价物:
+    // 声明该 provider 用哪个 AI SDK,官方文档明定 @ai-sdk/openai→/v1/responses、
+    // @ai-sdk/openai-compatible→chat/completions、@ai-sdk/anthropic→Anthropic 原生）;
+    // npm 缺席（内置 provider 协议定义在 opencode 内置注册表,配置文件里抄不到）回退 id 推断:
+    // 含 anthropic→anthropic,否则保守取 openai-chat（猜 responses 撞无此面端点=启动即炸,不猜）。
     // 只写凭证名不写值。学习源缺失→不写文件,note 明示。见 design/hop-cli.md ^anc-cli-install-skill opencode 载体 LLM 自举子条。
     // @a: anc-cli-install-skill
     const home = resolveCarrierHome(carrier);
     const ocFiles = ['config.json', 'opencode.json', 'opencode.jsonc'].map(f => join(home, f));   // opencode 加载顺序
     let model: string | undefined;
-    const provider: Record<string, { options?: { baseURL?: string }; env?: string[] }> = {};
+    const provider: Record<string, { options?: { baseURL?: string }; env?: string[]; npm?: string }> = {};
     let anyExists = false;
     for (const f of ocFiles) {
       if (!existsSync(f)) continue;
       anyExists = true;
       const errs: ParseError[] = [];
-      const c = parseJsonc(readFileSync(f, 'utf-8'), errs) as { model?: string; provider?: Record<string, { options?: { baseURL?: string }; env?: string[] }> };
+      const c = parseJsonc(readFileSync(f, 'utf-8'), errs) as { model?: string; provider?: Record<string, { options?: { baseURL?: string }; env?: string[]; npm?: string }> };
       if (errs.length > 0) continue;   // 坏文件跳过(best-effort,不阻断 deep-merge 其他文件)
       if (c.model) model = c.model;   // 后者覆盖(.jsonc 优先)
       if (c.provider) {
@@ -1001,7 +1008,10 @@ export function bootstrapStandaloneConfig(carrier: Carrier): { written: string |
     }
     entry = {
       service_id: 'opencode_host',
-      protocol: providerId.toLowerCase().includes('anthropic') ? 'anthropic' : 'openai-chat',
+      protocol: prov?.npm === '@ai-sdk/anthropic' ? 'anthropic'
+        : prov?.npm === '@ai-sdk/openai' ? 'openai-responses'
+        : prov?.npm ? 'openai-chat'   // @ai-sdk/openai-compatible 及其余 SDK 包一律 chat
+        : providerId.toLowerCase().includes('anthropic') ? 'anthropic' : 'openai-chat',
       base_url: baseUrl,
       model: modelId,
       api_key_env: envKey ?? 'OPENAI_API_KEY',
@@ -1049,19 +1059,21 @@ export function bootstrapStandaloneConfig(carrier: Carrier): { written: string |
     const model = toml.match(/^model\s*=\s*"([^"]+)"/m)?.[1];
     const providerId = toml.match(/^model_provider\s*=\s*"([^"]+)"/m)?.[1];
     // provider 表：providerId 命中 [model_providers.<id>] 节内取 base_url/env_key（节界=下一个 [ 行）
-    let baseUrl: string | undefined; let envKey: string | undefined;
+    let baseUrl: string | undefined; let envKey: string | undefined; let wireApi: string | undefined;
     if (providerId) {
       const section = toml.split(new RegExp(`\\[model_providers\\.${providerId}\\]`))[1]?.split(/\n\[/)[0];
       baseUrl = section?.match(/base_url\s*=\s*"([^"]+)"/)?.[1];
       envKey = section?.match(/env_key\s*=\s*"([^"]+)"/)?.[1];
+      wireApi = section?.match(/wire_api\s*=\s*"([^"]+)"/)?.[1];
     }
     if (!model || !baseUrl) {
       return { written: null, note: `未自举 standalone 配置：${tomlPath} 缺 model/model_provider 的 base_url——请自建 ~/.hopjit/config.yaml` };
     }
     entry = {
       service_id: 'codex_host',
-      // openai-responses 适配器系枚举预留未实装——学它=交付启动即炸的配置,一律学为 openai-chat（设计条款）
-      protocol: 'openai-chat',
+      // protocol 忠实照抄宿主 wire_api（0020 批撤强制降级——responses 适配器实装后照抄即忠实,
+      // 原"一律学 openai-chat"防的是预留枚举启动即炸,前提已消;缺省 chat 与 Codex 同）
+      protocol: wireApi === 'responses' ? 'openai-responses' : 'openai-chat',
       base_url: baseUrl,
       model,
       api_key_env: envKey ?? 'OPENAI_API_KEY',
@@ -1240,7 +1252,16 @@ program.command('install-skill')
           if (copyDir(join(driverDir, '..', 'skills', buildSkill), join(target, buildSkill))) {
             installed.push(join(target, `${buildSkill}/`));
             const sk = join(target, buildSkill, 'SKILL.md');
-            if (existsSync(sk)) writeFileSync(sk, stampSkill(readFileSync(sk, 'utf-8'), sk), 'utf-8');
+            if (existsSync(sk)) {
+              // 按 opencode-driver-carrier 原语映射（斜杠触发→隐式触发，见 driver/opencode/SKILL.md @trace note） // @a: anc-driver-opencode-install-layout
+              // 把 CC 源的 /hopspec run 改写为隐式触发（装时改副本，不改 CC 源）。opencode 有斜杠命令系统
+              // （每个 skill 注册为 /skillname，/hopspec run <spec> 经 prompt.ts（1.18.31）追加为 user 输入可工作），
+              // 但 hopbuild SKILL.md 由 LLM 消费（用户调 hopbuild2 时 LLM 读它再调 hopspec skill），
+              // LLM 经 skill 工具隐式触发更直接，斜杠形式需 LLM 自行翻译。
+              let content = stampSkill(readFileSync(sk, 'utf-8'), sk);
+              content = content.replace(/\/hopspec run /g, '用 hopspec skill 执行 ');
+              writeFileSync(sk, content, 'utf-8');
+            }
           }
         }
         if (copyFile(join(driverDir, '..', 'scripts', 'hopfix', 'hopfix.md'), join(target, 'hopfix', 'hopfix.md'))) {
@@ -1499,11 +1520,18 @@ program.command('install-skill')
             if (errs.length > 0) {   // jsonc-parser parse 不抛错,坏 JSON 填 errs
               mcpNote = `${configPath} 不是合法 JSON——未注册 MCP（不覆盖用户配置,请修复后重试 --mcp）`;
             } else {
-              const value = { type: 'local', command: ['hopjit-mcp'], enabled: true, environment: {} };
+              // 默认 enabled:false——避免 LLM 在有 hopjit_start_run MCP 工具可用时自决调它、劫持 // @a: anc-cli-install-skill
+              // hopspec 复用模式（名字即模式:hopspec=复用 CLI / hopspec-mcp=standalone MCP）。
+              // opencode 无 MCP 优先机制（MCP 工具与内置工具平级注入同一工具字典，session/tools.ts:390-490（1.18.31）
+              // 无优先级/权重，工具选择由 LLM 在 toolChoice:auto 下自决）——劫持是 LLM 的自决倾向，
+              // 非 opencode 引导；enabled:false 经 opencode mcp/index.ts:514-517（1.18.31）使 server 不启动、工具不注入，
+              // 机制层兜住（skill 指令拦不住 LLM 用 MCP）。走 standalone（hopspec-mcp）时用户手动改 enabled:true。
+              const value = { type: 'local', command: ['hopjit-mcp'], enabled: false, environment: {} };
               const edits = jsoncModify(text, ['mcp', 'hopjit'], value, { formattingOptions: { insertSpaces: true, tabSize: 2 } });
               mkdirSync(dirname(configPath), { recursive: true });
               writeFileSync(configPath, jsoncApplyEdits(text, edits), 'utf-8');
               mcpRegistered = configPath;
+              mcpNote = `已注册 mcp.hopjit（默认 enabled:false,避免劫持 hopspec 复用模式）。走 standalone（用 hopspec-mcp skill）时手动改 enabled:true`;
             }
           }
         } else if (carrierFamily(carrier) === 'codex') {

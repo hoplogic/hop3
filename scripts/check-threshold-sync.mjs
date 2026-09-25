@@ -67,6 +67,11 @@ const MAP = [
     code: { file: 'src/ast-helpers.ts', re: /export const INLINE_PREVIEW_MAX = (\d+)/ },
     design: { file: 'docs/design/shared-types.md', re: /INLINE_PREVIEW_MAX（(\d+) chars）/ },
   },
+  {
+    name: 'line-length（设计文档散文区单行行长线,todo/0098——联审修复批补登记）',
+    code: { file: 'scripts/check-line-length.mjs', re: /const LIMIT = (\d+)/ },
+    design: { file: 'docs/design/chain-enforcement.md', re: /作者拍 (\d+) 字线/ },
+  },
 ];
 
 function extract(side, entry) {

@@ -27,7 +27,9 @@ opencode（sst/opencode,npm `opencode-ai`）是独立的开源 agent 家族—�
 **复用判据（三层各自裁定,2026-09-19 真机核实 v1.18.31）**：
 
 1. **skill 发现层=同构复用**：opencode 的 skill 机制按 CC 设计（`<name>/SKILL.md`+YAML frontmatter,只校验 name+description,`user_invocable` 忽略不报错;甚至主动扫 `~/.claude/skills/`）——0089 批已核,维持；
-2. **driver 正文层=派生适配**（本批新立）：CC 正文含 CC 专属原语（AskUserQuestion/driver subagent/task-notification 等,hopspec-skill.md 计 30 处），opencode **有原生等价物**（见原语映射表）但名字与调用形态不同。真机 E2E 实证:装 CC 原文 opencode 也能跑通 coffee-week 全链——但通靠的是模型自由发挥（transcript 自述"我没有 AskUserQuestion 工具,改为直接问"）,不是协议。**协议不能靠模型每次现场翻译**（[[codex-driver-carrier#^anc-driver-codex-rule-parity]] 同一裁定:载体必须自包含）。故 `driver/opencode/` 持有派生自 CC 源的适配版正文——只做原语映射与措辞替换,执行语义/CLI 协议/介入点纪律与 CC 版逐条同构（语义签名表同 codex 文档该节）；
+2. **driver 正文层=派生适配**（本批新立）：CC 正文含 CC 专属原语（AskUserQuestion/driver subagent/task-notification 等,hopspec-skill.md 计 30 处），opencode **有原生等价物**（见原语映射表）但名字与调用形态不同。
+   - 真机 E2E 实证:装 CC 原文 opencode 也能跑通 coffee-week 全链——但通靠的是模型自由发挥（transcript 自述"我没有 AskUserQuestion 工具,改为直接问"）,不是协议。**协议不能靠模型每次现场翻译**（[[codex-driver-carrier#^anc-driver-codex-rule-parity]] 同一裁定:载体必须自包含）;
+   - 故 `driver/opencode/` 持有派生自 CC 源的适配版正文——只做原语映射与措辞替换,执行语义/CLI 协议/介入点纪律与 CC 版逐条同构（语义签名表同 codex 文档该节）；
 3. **引擎协议层=零适配**：hopjit CLI 的 JSON 协议载体中立,opencode 跑 bash 与 CC 跑 Bash 无异。
 
 **维护纪律**：CC 源改协议面（新介入点/新命令/纪律变更）时 opencode 版同批随改——与 codex rule-parity 同款"接受两份"决策,不规定 CC 文本是上游,但改动核对面把 opencode 版列进 driver 载体清单（check-driver-carriers 守卫扩员见安装布局节）。
@@ -38,13 +40,15 @@ CC 原语 → opencode 等价物（适配正文的替换依据,2026-09-19 对 op
 
 | CC 原语 | opencode 等价物 | 映射说明 |
 |---|---|---|
-| `AskUserQuestion` 组件 | **`question` 内置工具** | 语义同构：header+问题+选项列表,用户可选可自由输入,多问题可导航——HITL 呈交纪律（present_inputs 先 dump 后问）原样保留 |
+| `AskUserQuestion` 组件 | **`question` 内置工具** | 语义同构：header+问题+选项列表,用户可选可自由输入,多问题可导航——HITL 呈交纪律（present_inputs 先 dump 后问）原样保留。question 工具不可用时（部分 OpenAI 兼容服务端拒收该工具——hopissues/0103 theta 实撞）降级普通文本消息问人,等下条消息回答 |
 | `Agent` 工具起 driver subagent | **subagent 机制**（内置 general,或 Task 派发） | 执行段外包语义同构;opencode 真机已实证 General agent 承接执行段跑到终态。无 subagent 能力形态降级为主对话自跑（inline）——与 Codex 载体同款降级语义 |
 | `task-notification`（后台任务完成通知） | 无直接等价（不依赖） | CC 版仅 /hop 的后台看护 subagent 场景用;opencode 版 /hop 照 codex 先例按 subagent 能力降级（有 subagent 外移阅卷与翻查,无后台通知就同步等或自驱）,不依赖此原语 |
 | `run_in_background` | 无（同上,v1 不依赖） | parallel fan-out 的后台 worker 场景,opencode 版首版按串行退化口径（引擎顺序等价保证在场） |
 | `/skill` 斜杠触发 | 隐式触发或直接说 skill 名 | opencode 按 description 触发 skill 工具装载;正文中"用户说 /hopspec run"改"用户要求执行 spec" |
 | `--notify dingtalk` 意图翻译 | 原样保留（载体中立） | 通知是引擎挂点,driver 只翻译意图——非 CC 原语,不删（阅卷抓首版误删,补回） |
 | dispatch_ready 的 call 占位符 | 原样保留（协议件） | `<CALLEE_SPEC_PATH:id>` 解析是引擎协议不是 CC 原语——串行退化只改执行形态不改协议（阅卷抓首版丢失,补回） |
+
+**Glob 失败纪律【契约】**（hopissues/0102,本条为权威源;`driver/opencode/references/discovery.md` 头部条款是其落地件）：opencode 的 Glob 工具依赖 ripgrep（未装则自动下载,无公网环境下载失败即报 `ripgrep execution failed`）。Glob 失败时**不降级 `find /`、`find ~` 之类全库搜**——全库搜会超时且违反 spec 定位的禁全库搜纪律；照 spec 两级定位走（现成路径 / `<PKG>/examples/`），两级都不中即停下问用户,不自行扩大搜索面。
 
 ## 安装布局【契约】 ^anc-driver-opencode-install-layout
 
@@ -62,7 +66,9 @@ install-skill `--carrier opencode` 装载面：
 - `driver/opencode/SKILL-mcp.md` → `<home>/skills/hopspec-mcp/SKILL.md`（+discovery.md）
 - `driver/opencode/references/` → `<home>/skills/hopspec/references/`
 - hopbuild/hopbuild2/hopfix 照旧整目录拷（构建工具件载体中立度高——正文以 spec 编写知识为主,CC 原语密度低;如实记:未逐件适配,v1 接受,撞到原语问题按增量修）
-- **`hop`（日常任务管理件）照装**——`driver/opencode/hop-skill.md` → `<home>/skills/hop/SKILL.md`（2026-09-20 作者抓"在 codex /hop 都能用,为什么在 opencode 不装?"撤销首版"v1 不装"裁定:该裁定把"原语密度高"误当"适配成本高",而 Codex 先例〔driver/codex/hop-skill.md,type: adapt〕已证 /hop 适配=三处载体差异——触发前缀/问人形态/spawn 能力降级,全部降级路径 Codex 版已铺好;opencode 能力面〔question 工具+内置 subagent〕只强不弱。opencode 版以 codex 版为适配基准,载体差异:隐式触发/question 工具问人/subagent 降级判据同 codex。首版的 stale 清理与 carrier_note 随撤——hop 现为正装件）
+- **`hop`（日常任务管理件）照装**——`driver/opencode/hop-skill.md` → `<home>/skills/hop/SKILL.md`。
+  - 撤销沿革（2026-09-20 作者抓"在 codex /hop 都能用,为什么在 opencode 不装?"撤销首版"v1 不装"裁定）:该裁定把"原语密度高"误当"适配成本高",而 Codex 先例〔driver/codex/hop-skill.md,type: adapt〕已证 /hop 适配=三处载体差异——触发前缀/问人形态/spawn 能力降级,全部降级路径 Codex 版已铺好;opencode 能力面〔question 工具+内置 subagent〕只强不弱;
+  - opencode 版以 codex 版为适配基准,载体差异:隐式触发/question 工具问人/subagent 降级判据同 codex。首版的 stale 清理与 carrier_note 随撤——hop 现为正装件
 - MCP 注册与配置自举照旧（0089 批产物,jsonc 写法与 deep-merge 面零变化,权威 [[hop-cli#^anc-cli-install-skill]] opencode 条款）
 
 **守卫**：check-driver-carriers.mjs 载体清单扩 opencode（CC/Codex 双载体断言面扩三载体——判据 token 表同源,opencode 版丢关键纪律句即红）。

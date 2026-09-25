@@ -1,0 +1,25 @@
+```python
+import sys
+
+path = sys.argv[1]
+handle = open(path, 'r', encoding='utf-8')
+lines = handle.readlines()
+handle.close()
+
+bad = False
+number = 0
+for line in lines:
+    number = number + 1
+    if line.endswith('\n'):
+        line = line[:-1]
+        if line.endswith('\r'):
+            line = line[:-1]
+    length = len(line)
+    if length > 100:
+        bad = True
+        print('line ' + str(number) + ': length ' + str(length) + ' exceeds 100')
+
+if bad:
+    sys.exit(1)
+sys.exit(0)
+```

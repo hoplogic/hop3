@@ -1,0 +1,39 @@
+```python
+import ast
+import sys
+
+def check_file(path):
+    with open(path, 'r', encoding='utf-8') as f:
+        source = f.read()
+    tree = ast.parse(source)
+    lines = source.splitlines()
+    violations = []
+
+    def get_end(node):
+        if hasattr(node, 'end_lineno') and node.end_lineno is not None:
+            return node.end_lineno
+        return node.lineno
+
+    def check_function(node, func_name):
+        start = node.lineno
+        end = get_end(node)
+        length = end - start + 1
+        if length > 40:
+            violations.append((start, "function '{}' is {} lines long (exceeds 40)".format(func_name, length)))
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                check_function(child, child.name)
+
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            check_function(node, node.name)
+
+    if violations:
+        for lineno, reason in violations:
+            print("Line {}: {}".format(lineno, reason))
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+check_file(sys.argv[1])
+```

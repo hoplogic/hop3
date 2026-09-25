@@ -1,0 +1,157 @@
+```python
+import ast
+import re
+import sys
+
+def extract_function_args(func_node):
+    args = []
+    # Positional only arguments (before /)
+    for arg in func_node.args.posonlyargs:
+        if arg.arg not in ['self', 'cls']:
+            args.append(arg.arg)
+    
+    # Regular arguments
+    for arg in func_node.args.args:
+        if arg.arg not in ['self', 'cls']:
+            args.append(arg.arg)
+    
+    # *args
+    if func_node.args.vararg:
+        args.append(func_node.args.vararg.arg)
+    
+    # Keyword-only arguments after *
+    for arg in func_node.args.kwonlyargs:
+        if arg.arg not in ['self', 'cls']:
+            args.append(arg.arg)
+    
+    # **kwargs
+    if func_node.args.kwarg:
+        args.append(func_node.args.kwarg.arg)
+        
+    return args
+
+def is_mentioned_in_docstring(param_name, docstring):
+    if not docstring:
+        return False
+    
+    # Create a regex pattern that matches param_name as a complete word
+    # The parameter should be surrounded by word boundaries or certain punctuation
+    escaped_param = re.escape(param_name)
+    # Matches param_name as whole word, possibly with punctuation around it like "param.", "`param`", "(param)", etc.
+    pattern = r'(?:^|(?<=\W))' + escaped_param + r'(?=\W|$)'
+    return bool(re.search(pattern, docstring))
+
+def check_file(filepath):
+    with open(filepath, 'r', encoding='utf-8') as f:
+        content = f.read()
+        
+    if not content.strip():
+        # Empty file is compliant
+        return []
+    
+    try:
+        tree = ast.parse(content)
+    except SyntaxError as e:
+        # If there's a syntax error, we just proceed with an empty violation list
+        # Actually, syntax errors are out of scope, so we'll continue
+        tree = ast.parse(content)
+
+    violations = []
+    
+    # Stack to track current scope (functions and classes)
+    # Elements are tuples: (node_type, node) where node_type is 'function', 'class'
+    scope_stack = []
+
+    def process_node(node, ancestors):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # Check if function name starts with underscore
+            if node.name.startswith('_'):
+                return
+
+            # Function is considered top-level if there's no class or function above it
+            # in the scope stack (we only consider classes as nesting structures here)
+            is_top_level = True
+            for scope_type, unused in scope_stack:
+                if scope_type == 'function':
+                    # This is nested inside another function - don't check
+                    return
+                elif scope_type == 'class':
+                    # This is a method inside a class - that's fine
+                    is_top_level = False
+            
+            # Check if this is at module level or in a class
+            if is_top_level or not scope_stack:
+                # It's a top-level function
+                pass
+            else:
+                # Check if we're directly under a class (not nested further)
+                # Find the closest parent that is a class
+                is_method = False
+                for ancestor in reversed(ancestors):
+                    if isinstance(ancestor, ast.ClassDef):
+                        is_method = True
+                        break
+                    elif isinstance(ancestor, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        # Nested function, skip
+                        return
+                
+                if not is_method:
+                    # Not a class method, and not top-level - means it's inside another function
+                    return
+
+            # If we reach here, this is either a top-level function or a class method
+            # Extract parameters
+            args = extract_function_args(node)
+            
+            # Get the docstring
+            docstring = ast.get_docstring(node)
+            
+            # Check if docstring exists
+            if docstring is None:
+                violations.append(f"{node.lineno}: Function '{node.name}' missing docstring")
+                return
+            
+            # Check if each argument is mentioned in docstring
+            for arg in args:
+                if not is_mentioned_in_docstring(arg, docstring):
+                    violations.append(f"{node.lineno}: Function '{node.name}' docstring missing parameter '{arg}'")
+
+        elif isinstance(node, ast.ClassDef):
+            # Process the class and its children
+            pass
+
+    def walk_with_ancestors(tree_node, ancestors=[]):
+        # Process current node
+        process_node(tree_node, ancestors)
+        
+        # Add to scope stack if needed
+        current_scope_type = None
+        if isinstance(tree_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            current_scope_type = 'function'
+            scope_stack.append(('function', tree_node))
+        elif isinstance(tree_node, ast.ClassDef):
+            current_scope_type = 'class'
+            scope_stack.append(('class', tree_node))
+        
+        # Process children
+        for child in ast.iter_child_nodes(tree_node):
+            walk_with_ancestors(child, ancestors + [tree_node])
+        
+        # Remove from scope stack
+        if current_scope_type:
+            scope_stack.pop()
+
+    walk_with_ancestors(tree)
+    
+    return violations
+
+filepath = sys.argv[1]
+violations = check_file(filepath)
+
+if violations:
+    for violation in violations:
+        print(violation)
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

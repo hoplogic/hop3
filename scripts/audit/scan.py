@@ -57,6 +57,8 @@ CATEGORIES = frozenset([
     "module", "flow", "guard", "hoptype", "ref",
     # release：发版工程设施（快照制发版生命周期/凭证闸/收编协议,2026-09-04 快照制批）
     "release",
+    # pysb：Python 语法沙箱（产物代码的白名单静态审查与受控执行,2026-09-23）
+    "pysb",
 ])
 
 GROUP_TITLE_WHITELIST = frozenset([
@@ -325,7 +327,7 @@ def scan_traceability(project, src_dir, test_dir):
 
     # 引用格式：`file.ts` 或旧式 `file.ts:123`（行号可选、已废弃——行号必然随代码增删腐坏，
     # 定位靠 @a:/@v: 锚点 grep，不靠行号快照。见 anchor-audit-knowledge.md「引用有效性」）
-    code_ref_re = re.compile(r'([\w./-]+\.(?:ts|py))(?::(\d+))?')
+    code_ref_re = re.compile(r'([\w./-]+\.(?:ts|py|mjs|sh))(?::(\d+))?')   # 与 CODE_EXTENSIONS 对齐(联审抓:卡引用正则漏 .mjs/.sh 致守卫族 39 条恒挂 missing)
     cards = []
     current = None
     in_gaps = False
@@ -384,6 +386,8 @@ def scan_traceability(project, src_dir, test_dir):
                     # 路径以仓库根为基准：已带合法目录前缀的不动，裸文件名按 @a:/@v: 归 src/tests
                     if "/" in fname:
                         path = fname
+                    elif fname.endswith('.mjs') or fname.endswith('.sh'):
+                        path = "scripts/" + fname   # 守卫/发版脚本族恒住 scripts/(联审抓:裸名被派 src//tests/ 致死引用)
                     elif is_v or '.test.' in fname or '_test.' in fname or fname.startswith('test_'):
                         path = test_dir + "/" + fname
                     else:

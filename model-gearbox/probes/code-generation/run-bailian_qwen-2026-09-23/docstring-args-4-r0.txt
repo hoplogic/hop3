@@ -1,0 +1,158 @@
+```python
+import ast
+import re
+import sys
+
+def extract_function_args(func_node):
+    args = []
+    # Positional only arguments (before /)
+    for arg in func_node.args.posonlyargs:
+        if arg.arg not in ['self', 'cls']:
+            args.append(arg.arg)
+    
+    # Regular arguments
+    for arg in func_node.args.args:
+        if arg.arg not in ['self', 'cls']:
+            args.append(arg.arg)
+    
+    # Var args (*args)
+    if func_node.args.vararg:
+        if func_node.args.vararg.arg not in ['self', 'cls']:
+            args.append(func_node.args.vararg.arg)
+    
+    # Keyword only arguments (* after which keywords must be specified)
+    for arg in func_node.args.kwonlyargs:
+        if arg.arg not in ['self', 'cls']:
+            args.append(arg.arg)
+    
+    # Kw args (**kwargs)
+    if func_node.args.kwarg:
+        if func_node.args.kwarg.arg not in ['self', 'cls']:
+            args.append(func_node.args.kwarg.arg)
+    
+    return args
+
+def is_mentioned(param_name, docstring):
+    # Use word boundaries to check if param_name is mentioned as a whole word
+    pattern = r'\b' + re.escape(param_name) + r'\b'
+    return bool(re.search(pattern, docstring))
+
+def check_file(filename):
+    with open(filename, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    if not content.strip():
+        # Empty file is compliant
+        return []
+
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        print(f"Syntax error in {filename}")
+        sys.exit(1)
+
+    violations = []
+
+    # We'll use a stack to track the context (what class/function we're inside of)
+    # Start with a simple visitor approach
+    class FunctionVisitor(ast.NodeVisitor):
+        def __init__(self):
+            self.violations = []
+            self.context_stack = []  # Track classes and functions we are inside of
+
+        def visit_FunctionDef(self, node):
+            # Check if this function is at module level or directly in a class (not nested in another function)
+            # If the context stack has no function in it (only classes are OK), then this is a valid target
+            
+            # Add current function to stack before processing its children
+            self.context_stack.append(('function', node.name))
+            
+            # Process child nodes first to handle nested functions
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        self.visit_FunctionDef(child) if isinstance(child, ast.FunctionDef) else self.visit_AsyncFunctionDef(child)
+                    elif isinstance(child, ast.ClassDef):
+                        self.visit_ClassDef(child)
+            
+            # Remove from stack after processing children
+            self.context_stack.pop()
+            
+            # Now check if we should process this function
+            # The function is checked if we're NOT inside another function (besides classes which are OK)
+            inside_function_not_class = False
+            for ctx_type, _ in self.context_stack:
+                if ctx_type == 'function':
+                    inside_function_not_class = True
+                    break
+
+            if not inside_function_not_class:
+                # This function is at top level or inside class but not inside another function
+                if not node.name.startswith('_'):
+                    self.check_function_docstring(node)
+
+        def visit_AsyncFunctionDef(self, node):
+            # Similar logic for async functions
+            self.context_stack.append(('function', node.name))
+            
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        self.visit_FunctionDef(child) if isinstance(child, ast.FunctionDef) else self.visit_AsyncFunctionDef(child)
+                    elif isinstance(child, ast.ClassDef):
+                        self.visit_ClassDef(child)
+            
+            self.context_stack.pop()
+            
+            inside_function_not_class = False
+            for ctx_type, _ in self.context_stack:
+                if ctx_type == 'function':
+                    inside_function_not_class = True
+                    break
+
+            if not inside_function_not_class:
+                if not node.name.startswith('_'):
+                    self.check_function_docstring(node)
+
+        def visit_ClassDef(self, node):
+            # Add class to stack
+            self.context_stack.append(('class', node.name))
+            
+            # Visit children
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        self.visit_FunctionDef(child) if isinstance(child, ast.FunctionDef) else self.visit_AsyncFunctionDef(child)
+                    elif isinstance(child, ast.ClassDef):
+                        self.visit_ClassDef(child)
+            
+            # Remove class from stack
+            self.context_stack.pop()
+
+        def check_function_docstring(self, node):
+            docstring = ast.get_docstring(node)
+            
+            if docstring is None:
+                self.violations.append((node.lineno, f"Function '{node.name}' missing docstring"))
+                return
+            
+            required_args = extract_function_args(node)
+            
+            for arg in required_args:
+                if not is_mentioned(arg, docstring):
+                    self.violations.append((node.lineno, f"Function '{node.name}' docstring does not mention parameter '{arg}'"))
+
+    visitor = FunctionVisitor()
+    visitor.visit(tree)
+    
+    return visitor.violations
+
+violations = check_file(sys.argv[1])
+
+if violations:
+    for line_no, reason in violations:
+        print(f"{line_no}: {reason}")
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

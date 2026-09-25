@@ -22,7 +22,8 @@
 
 - **stdio 生命周期=Unix 管道语义**：宿主 spawn、stdin EOF 即退、SIGPIPE 兜底、孤儿是已知残留风险。启停监护谁都逃不掉（作者点破）——MCP 的价值是把监护外包给宿主的现成实现；引擎侧接 server 时自己扛同一套（spawn→EOF→SIGTERM→SIGKILL），与 daemon+CLI 形态的真实差异是"启停有主 vs 无主"；
 - **一次 standalone 运行的四层生命线**：会话养 server、server 养 run、run 养工具 server；**run 的真身在盘上不在进程里**（任何一层死、损失以最近落盘为界）→ 推论：.hopstate 完整性是单点（已立账 [[../../TODO#^todo-hopstate-integrity]]）；
-- **协议版本**：日期版本号 + initialize 协商，**多版本共存设计**（SDK 单包同时支持 5 版：2024-10-07→2025-11-25）。SDK 源码实况：协商=server 回什么 client 查在不在支持列表（二值判定，非取共同最大）；**stdio 下协商结果无运行时后果**（只存起来+给 HTTP 设 header）——版本机制是"礼貌表态"。结论：**lockfile 钉 SDK 包=版本管理的全部**；"协议版本追赶困难"是最初的错账（真实撞过的 SSE→Streamable HTTP 是 transport 迁移、Codex 延迟加载是宿主行为，都非协议版本问题）；行业事实标准=用 SDK 默认，显式钉版是零成本的更保守姿势；
+- **协议版本**：日期版本号 + initialize 协商，**多版本共存设计**（SDK 单包同时支持 5 版：2024-10-07→2025-11-25）。SDK 源码实况：协商=server 回什么 client 查在不在支持列表（二值判定，非取共同最大）；**stdio 下协商结果无运行时后果**（只存起来+给 HTTP 设 header）——版本机制是"礼貌表态"。
+  - 结论：**lockfile 钉 SDK 包=版本管理的全部**；"协议版本追赶困难"是最初的错账（真实撞过的 SSE→Streamable HTTP 是 transport 迁移、Codex 延迟加载是宿主行为，都非协议版本问题）；行业事实标准=用 SDK 默认，显式钉版是零成本的更保守姿势；
 - **版本管理只剩自家三面**：hopjit-mcp 工具面版本（mcp-server.md 版本行既管）、ToolSpec 接口标准版本（正式稿立）、各插件自己的版本（hoptools.yaml 声明比对，不符 fail-fast）。
 
 ## 四、百炼四服务实测档案（2026-08-12，同一把通用 key，逐服务在 MCP 广场单独开通）
@@ -45,7 +46,11 @@
 
 **接入细节备忘**：百炼通用 key 有新旧两种格式（短 `sk-` 32 位 / 新 `sk-ws…` 116 位，均通用）；MCP 服务逐个开通（前 2000 次免费档各自独立）；第三方托管服务名=市场 ID（`market-*`）。
 
-**相关端点旁证**（同轮实测）：百炼 OpenAI 兼容端点 ✅（`compatible-mode/v1`，我们 openai 协议适配器真机路径）；Anthropic 兼容端点 ✅（主域名 `dashscope.aliyuncs.com/apps/anthropic`，模型名不带 `[1m]` 后缀；**tool_use 循环可用**，qwen/deepseek 都通）；Anthropic 官方 web_search server tool 语法在百炼 anthropic 端点**静默忽略**（不报错不搜索——server-side search 落地须按 provider 区分：百炼走 openai 端点 `enable_search` ✅ 实测通）。
+**相关端点旁证**（同轮实测）：
+
+- 百炼 OpenAI 兼容端点 ✅（`compatible-mode/v1`，我们 openai 协议适配器真机路径）；
+- Anthropic 兼容端点 ✅（主域名 `dashscope.aliyuncs.com/apps/anthropic`，模型名不带 `[1m]` 后缀；**tool_use 循环可用**，qwen/deepseek 都通）；
+- Anthropic 官方 web_search server tool 语法在百炼 anthropic 端点**静默忽略**（不报错不搜索——server-side search 落地须按 provider 区分：百炼走 openai 端点 `enable_search` ✅ 实测通）。
 
 ## 五、结论去向
 

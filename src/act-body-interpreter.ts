@@ -8,7 +8,7 @@
 // @a: anc-exec-act-body-interp
 
 import { readFile } from 'node:fs/promises';
-import { spawnSync } from 'node:child_process';   // subprocess.run 专路（^anc-exec-subprocess-run） // @a: anc-exec-subprocess-run
+import { runWhitelistedCommand } from './command-exec.js';   // subprocess.run 的执行半边（^anc-exec-command-primitive——与 tools 的 run_script 共用） // @a: anc-exec-subprocess-run
 import type { ActBody, ActStatement, ActExpr, AssignStmt, CallStmt, IfStmt, CallExpr, OutputDecl } from './ast-types.js';
 import type { ToolProvider } from './provider-types.js';
 import { ACT_BUILTINS } from './act-builtins.js';
@@ -354,9 +354,10 @@ export class BodyInterpreter {
     }
   }
 
-  // subprocess.run 专路（^anc-exec-subprocess-run——白名单命令行调用:参数解析/白名单核/
-  // journal 重放/spawnSync 执行。HopSop 五步全在此,设计 design/act-body.md）。
-  // @a: anc-exec-subprocess-run
+  // subprocess.run 专路（^anc-exec-subprocess-run——白名单命令行调用。本方法管前半边:
+  // 实参解析 + argv 形态核 + journal 重放 + toolCallLog 记账;后半边（白名单核/hopjit 恒拒/
+  // spawn/失败指路）在命令执行原语 command-exec.ts,与 tools 的 run_script 共用一份实现。
+  // HopSop 见 design/act-body.md）。// @a: anc-exec-subprocess-run
   private async evalSubprocessRun(call: CallExpr, scope: Map<string, unknown>): Promise<unknown> {
     // 空名单拒移至 argv 解析后（0090——报文要点名命令;判空提前拒省一次解析不值一个哑报文）// @a: anc-exec-subprocess-run
     // 参数解析:位置参数恰一个(argv 列表);具名只认 input/timeout/cwd,其余点名拒
@@ -391,44 +392,26 @@ export class BodyInterpreter {
       throw new Error('TOOL_EXEC_ERROR: subprocess.run 的 argv 必须是非空字符串列表（["git", "diff"] 形态——整串命令行 "git diff" 没有 shell 在解释,会找一个叫 "git diff" 的命令）');
     }
     const cmd = argv[0] as string;
-    // hopjit 恒拒名单（^anc-exec-subprocess-deny-hopjit,2026-08-30 作者定——层次约束:被执行的
-    // 步骤内容不得反过来驱动执行引擎,自嵌套执行必坏状态账;优先于白名单,白名单写了也不放行）
-    // @a: anc-exec-subprocess-deny-hopjit
-    if (cmd === 'hopjit' || cmd.split('/').pop() === 'hopjit') {
-      throw new Error('TOOL_EXEC_ERROR: act/commit 步骤不得调用 hopjit——执行中的步骤不驱动引擎（自嵌套执行会破坏状态账）。跑别的 spec 用 [call <Id>] 步骤;通知等不可逆动作走注册工具的 commit 步骤;执行状态是引擎的账,步骤不查');
-    }
-    if (!this.ctx.commandWhitelist || this.ctx.commandWhitelist.length === 0) {
-      throw new Error(`TOOL_EXEC_ERROR: 命令 "${cmd}" 无法执行——本执行环境未配置命令白名单（sandbox.runtime.available 为空=能力关死,缺省安全）。修法:把 ${cmd} 加进项目根 hopjit.yaml 的 commands: 列表（如 commands:\n  - ${cmd}）后重跑（hopissues/0090 指路条款）`);
-    }
-    if (!this.ctx.commandWhitelist.includes(cmd)) {
-      throw new Error(`TOOL_EXEC_ERROR: 命令 "${cmd}" 不在白名单（sandbox.runtime.available: ${this.ctx.commandWhitelist.join(', ')}）。修法:把 ${cmd} 加进项目根 hopjit.yaml 的 commands: 列表（如 commands:\n  - ${cmd}）后重跑（hopissues/0090 指路条款）`);
-    }
     // journal 重放:撞第 n 次取记录值不重执行（命令不幂等——git worktree add 二跑必败;
-    // body 中断续跑从头重放,与 timeJournal 同款）
+    // body 中断续跑从头重放,与 timeJournal 同款）。重放先于白名单核与 spawn:重放的是已发生
+    // 的事实,不重走管控闸。
     const n = this.cmdSeq++;
     if (this.ctx.cmdJournal && n < this.ctx.cmdJournal.length) {
       return this.ctx.cmdJournal[n];
     }
-    const r = spawnSync(cmd, (argv as string[]).slice(1), {
-      input,
-      timeout: timeoutSec * 1000,
+    // 白名单核对/hopjit 恒拒/spawn/失败三类分辨指路全在命令执行原语内——与 tools 模块的
+    // run_script 共用一份实现,不抄第二套（^anc-exec-command-primitive）。原语只抛不翻译,
+    // 前缀 TOOL_EXEC_ERROR 由本消费口传入（引擎按该前缀把 body 抛错转成本步失败）。
+    // @a: anc-exec-command-primitive
+    const rec = runWhitelistedCommand(argv as string[], {
+      whitelist: this.ctx.commandWhitelist,
       cwd: cwd ?? this.ctx.workZone ?? undefined,
-      encoding: 'utf-8',
-      shell: false,   // 恒定——参数列表制的物理保证,不是可选项
-      maxBuffer: 10 * 1024 * 1024,
+      timeoutSec,
+      maxBuffer: 10 * 1024 * 1024,   // body 面消费者是变量（工具面 64KB 的理由见 run-script 契约）
+      input,
+      label: 'subprocess.run',
+      errorPrefix: 'TOOL_EXEC_ERROR: ',
     });
-    if (r.error) {
-      // spawn 自身失败——真故障走 TOOL_EXEC_ERROR → 本步 fail 既有升级链;三类常见因指路
-      //（review 抓 ENOBUFS 裸报不指路——设计"撞顶=步骤失败报文指路",不截断:截断的 stdout
-      // 喂下游=静默数据缺角,比响亮失败更危险）。// @a: anc-exec-subprocess-run
-      const code = (r.error as NodeJS.ErrnoException).code;
-      const hint = code === 'ENOBUFS' ? '——输出超过 10MB 上限,用命令自带过滤收窄（如 git log --grep= 而非全量再筛）'
-        : code === 'ETIMEDOUT' ? `——超时（timeout=${timeoutSec}s,可调大或收窄命令工作量）`
-        : code === 'ENOENT' ? '——命令不存在（白名单里有名字但系统里找不到可执行文件）'
-        : '';
-      throw new Error(`TOOL_EXEC_ERROR: subprocess.run ["${cmd}", ...] 执行失败: ${r.error.message}${hint}`);
-    }
-    const rec = { stdout: r.stdout ?? '', stderr: r.stderr ?? '', returncode: r.status ?? -1 };
     this.ctx.cmdJournal?.push(rec);
     this.ctx.toolCallLog.push({ name: 'subprocess.run:' + cmd, result: rec.returncode === 0 ? 'success' : 'failure', at: isoNow() });
     return rec;

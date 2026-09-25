@@ -472,7 +472,7 @@ const SEARCH_ENTRY: ToolServerEntry = {
 // @v: anc-exec-tool-composite
 describe('CompositeToolProvider 装配', () => {
   // @v: anc-exec-builtin-member-table —— 并集例也是成员表装配面的钉（面四 G3 抓 @v 只罩下例后上移补位）
-  it('正例：list()=内置组∪外部成员并集（file 十七件〔0070 批 search_file 扩员〕+notify 两条目〔wire 名+tool_id〕+外部 1 件）', () => {
+  it('正例：list()=内置组∪外部成员并集（file 十七件〔0070 批 search_file 扩员〕+run_script 一件〔0110 批执行类工具组扩员〕+notify 两条目〔wire 名+tool_id〕+外部 1 件）', () => {
     const c = makeComposite(SEARCH_ENTRY, stubProvider({ bailian_web_search: { result: '{}' } }));
     const names = c.list().map(t => t.name);
     expect(names).toContain('read');
@@ -480,7 +480,8 @@ describe('CompositeToolProvider 装配', () => {
     expect(names).toContain('bailian_web_search');
     expect(names).toContain('dingtalk_notify');   // 内置成员表第二员（^anc-exec-builtin-member-table）
     expect(names).toContain('notify');            // tool_id 渠道中立条目
-    expect(names.length).toBe(20);
+    expect(names).toContain('run_script');        // 执行类工具组一件（^anc-exec-builtin-run-script）
+    expect(names.length).toBe(21);
   });
 
   // @v: anc-exec-builtin-member-table, anc-tool-dingtalk-notify
@@ -751,6 +752,28 @@ describe('call_timeout_ms 注册文法', () => {
       '    binding: { kind: mcp, transport: stdio, command: /bin/cat }',
       '    tools:', '      - name: t', '        requires_commit: false'].join('\n'));
     expect(loadToolRegistry(p)[0].call_timeout_ms).toBeUndefined();
+  });
+});
+
+// @v: anc-config-tool-registry —— per_parallel_child 文法（todo/0112:并行子任务独占进程开关）
+describe('per_parallel_child 注册文法', () => {
+  const entryWith = (line: string, binding = '{ kind: mcp, transport: stdio, command: /bin/cat }') =>
+    writeRegistry(['tool_servers:', '  - name: s', ...(line ? [`    ${line}`] : []),
+      `    binding: ${binding}`,
+      '    tools:', '      - name: t', '        requires_commit: false'].join('\n'));
+  it('反例：写成非布尔值（字符串 "yes"）→ TOOLS_FILE_INVALID', () => {
+    expect(() => loadToolRegistry(entryWith('per_parallel_child: "yes"'))).toThrow(/TOOLS_FILE_INVALID.*per_parallel_child 须为布尔值/);
+  });
+  it('反例：写在 in-process 绑定上 → TOOLS_FILE_INVALID（进程内模块没有进程可独占）', () => {
+    expect(() => loadToolRegistry(entryWith('per_parallel_child: true', '{ kind: in-process, module: ./m.mjs }')))
+      .toThrow(/TOOLS_FILE_INVALID.*per_parallel_child.*只适用于 kind: mcp/);
+  });
+  it('正例：true 被解析进条目', () => {
+    expect(loadToolRegistry(entryWith('per_parallel_child: true'))[0].per_parallel_child).toBe(true);
+  });
+  it('正例：缺省与显式 false → 条目无该字段（所有子任务共用顶层进程）', () => {
+    expect(loadToolRegistry(entryWith(''))[0].per_parallel_child).toBeUndefined();
+    expect(loadToolRegistry(entryWith('per_parallel_child: false'))[0].per_parallel_child).toBeUndefined();
   });
 });
 

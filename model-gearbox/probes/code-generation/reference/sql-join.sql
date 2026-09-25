@@ -1,0 +1,8 @@
+SELECT c.region,
+       COUNT(DISTINCT c.id) AS customer_count,
+       COUNT(o.id) AS paid_order_count,
+       COALESCE(SUM(o.amount), 0) AS paid_amount
+FROM customers c
+LEFT JOIN orders o ON o.customer_id = c.id AND o.status = 'paid'
+GROUP BY c.region
+ORDER BY paid_amount DESC, c.region ASC

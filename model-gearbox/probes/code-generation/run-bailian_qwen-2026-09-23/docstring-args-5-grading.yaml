@@ -1,0 +1,7 @@
+- round: 0
+  outcome: ran
+  public_pass: true
+  hidden_pass: false
+  hidden_failed:
+    - bad_posonly.py(应1实0)
+  crashed_files: 0

@@ -1,0 +1,80 @@
+```python
+import ast
+import re
+import sys
+
+
+def check_function(node, violations):
+    name = node.name
+    if name.startswith('_'):
+        return
+
+    doc = ast.get_docstring(node)
+    if doc is None:
+        violations.append((node.lineno, "函数 " + name + " 缺少文档字符串"))
+        return
+
+    params = []
+    args = node.args
+    for arg in args.posonlyargs:
+        params.append(arg.arg)
+    for arg in args.args:
+        params.append(arg.arg)
+    if args.vararg is not None:
+        params.append(args.vararg.arg)
+    for arg in args.kwonlyargs:
+        params.append(arg.arg)
+    if args.kwarg is not None:
+        params.append(args.kwarg.arg)
+
+    for param in params:
+        if param == 'self' or param == 'cls':
+            continue
+        pattern = r'\b' + re.escape(param) + r'\b'
+        if re.search(pattern, doc) is None:
+            violations.append((node.lineno, "函数 " + name + " 的文档字符串未提及参数 " + param))
+
+
+def process_node(node, violations):
+    if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+        check_function(node, violations)
+        return
+    if isinstance(node, ast.ClassDef):
+        for child in ast.iter_child_nodes(node):
+            process_node(child, violations)
+        return
+    for child in ast.iter_child_nodes(node):
+        process_node(child, violations)
+
+
+if len(sys.argv) < 2:
+    print("用法: python 脚本.py <文件路径>")
+    sys.exit(1)
+
+path = sys.argv[1]
+
+try:
+    f = open(path, 'r', encoding='utf-8')
+    content = f.read()
+    f.close()
+except OSError:
+    print("无法读取文件: " + path)
+    sys.exit(1)
+
+try:
+    tree = ast.parse(content)
+except SyntaxError:
+    print("语法错误: " + path)
+    sys.exit(1)
+
+violations = []
+process_node(tree, violations)
+
+if len(violations) == 0:
+    sys.exit(0)
+
+for lineno, message in violations:
+    print(str(lineno) + ": " + message)
+
+sys.exit(1)
+```

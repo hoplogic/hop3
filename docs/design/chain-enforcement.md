@@ -82,7 +82,9 @@
 
 ### 1c-2. 模块八件单：新建模块的收链把关序列【契约】 ^anc-meta-module-checklist
 
-**新建模块＝收链把关最重的一档**（2026-08-06 作者两次定性：①"模块登记需要有一个明确的环节"②"这是 agent 收链把关的工作，不是人的操作手册项"；本节即该环节的守卫链权威——CLAUDE.md 只是本节的汇聚摘要）。Agent 建模块必须按序收齐八件、**一次改动交付**，不许散落多 commit 事后补（实撞：mcp-server 登记散在四个 commit，靠人两次盘出）。依据 = 元规范四必备件（[[../concepts/工程实现链规范#^anc-meta-module-design-artifacts]]）+ 本库落点（[[module-principles#^anc-meta-module-arch-audit]]）。
+**新建模块＝收链把关最重的一档**（2026-08-06 作者两次定性：①"模块登记需要有一个明确的环节"②"这是 agent 收链把关的工作，不是人的操作手册项"；本节即该环节的守卫链权威——CLAUDE.md 只是本节的汇聚摘要）。
+
+Agent 建模块必须按序收齐八件、**一次改动交付**，不许散落多 commit 事后补（实撞：mcp-server 登记散在四个 commit，靠人两次盘出）。依据 = 元规范四必备件（[[../concepts/工程实现链规范#^anc-meta-module-design-artifacts]]）+ 本库落点（[[module-principles#^anc-meta-module-arch-audit]]）。
 
 | # | 件 | 落点 | 守卫兜底 |
 |---|---|---|---|
@@ -111,13 +113,16 @@
 | `audit-scope.mjs`（手动/发版前） | 语义审计增量范围推导——module_ledger（每模块最后审于哪个 commit）× git diff 判"动过没审"，输出按模块跑命令；零 @module 标注 exit 2 显式失败；判据回归常驻 guard-scripts.test.ts（2正2反） |
 | `check-scripts-syntax.mjs`（check:fast 内） | scripts/ 全部 .mjs `node --check` + 全部 .sh `bash -n` 语法门（.sh 面 2026-08-14 三档 review 补——7 个 shell 脚本含 release.sh 此前语法零机检,批量脚本改写高频期裸奔）——e2e 断言库等脚本不经 tsc/vitest，语法级断链（如重复声明）此前只有真机跑才暴露（2026-08-11 实撞：断言迁移引入重复 `const log`，vitest fixture 测的是 import 后的函数、编译错在 import 时才炸，5 场景真机全红同因）。零匹配 exit 2 显式失败防 glob 空转；判据回归常驻 guard-scripts.test.ts（正例+两反例）；HOPJIT_CHECK_ROOT 注入 fixture（同族三守卫同模式） |
 | `check-e2e-assertions.mjs`（check 内） | 概念 [[../concepts/工程实现链-守卫规范#^anc-guard-assertion-on-chain]]"断言可执行或可重放"的本库落点——对 `passes/` 归档以 offline 模式干跑各场景断言的账面部分（事件流/终态文本判据跳过），语义迁移改漏断言当场红；归档缺席跳过明说（gitignore 本地资产）。断言挂 `@v:` 入收链通道（scan.py `--aux-test-dirs scripts`）；判据回归 e2e-assertion-replay.test.ts 正反例（2026-08-12 准入，原 G13。设计 [[carrier-live-e2e#^anc-driver-live-e2e-assertions]]；沙箱等价台账同批 [[carrier-live-e2e#^anc-driver-live-e2e-equivalence]]，原 G14） |
+| `check-line-length.mjs`（`check:fast` 成员） | 设计文档行长纪律 warn（todo/0098 作者拍 300 字线"300字,一行啊!"——docs/design 散文区单行 >300 字点名,排除代码块/表格行;超长单行=实撞叙事逐次追加的灾情原始形态,批一至批三 601+ 处清零后的防复发线）。**报告型 exit 恒 0**（拆行是纪律不是正确性,红档会把顺手小改逼成大批次;量回涨时升红须重走准入四步）;负向验证=临时造 301 字行确认 warn 点名（2026-09-21 批三随批验）。 ^anc-meta-line-length-guard |
 | `i18n-staleness.mjs`（`check:i18n`,手动/发版前） | 译本滞后报告（[[i18n#^anc-i18n-translation-discipline]] 第 3 条——译本 @trace last_sync vs 中文源 git 最后改动日,复用 `^anc-driver-lint-last-sync` 日粒度判据;另报结构问题:缺 @trace type:translation/缺 last_sync/source 死链）。**报告型 exit 恒 0**（初期降档不拦是设计条款;译本量上来后升红须重走准入四步）;git 不可用显式跳过;判据回归 guard-scripts.test.ts（1 正 3 反:滞后/新鲜/缺 trace/死链） |
 | `parser-fuzz.mjs`（`fuzz:parser`,手动/改 parser 后/发版前;`fuzz:parser:cov` 附带覆盖率） | parser **五**不变量穷举（[[spec-parser#^anc-meta-parser-fuzz]]——删行等价『无静默吞』+双语等价『方案 B 机械核证,替换器独立实现防自证』+往返投影稳定『排版豁免投影不豁免』）。语料=examples 可执行 spec+双种子;惰性白名单=台账每条挂设计出处;已知盲区走 parser-fuzz-known.json 基线（棘轮只许变好,新增即红）;examples 扫描面空转 exit 2;判据回归 guard-scripts.test.ts。首跑战果:双语等价全绿+1 真投影漂移+14 惰性行入账;扩面（2026-08-15 作者拍板）:+④全半角变异等价（探针三中——全角冒号 121 站点/全角右括号 3 站点,按**形态**归组入基线防站点淹没台账）+⑤崩溃安全 no-throw（throw 即红不入基线;js-yaml 边界实证已捕获）+双语面扩 validate 规则码等价（覆盖率揭盲:validator 原 0% 在面）。覆盖率测量 `fuzz:parser:cov`（V8 原生,报 dist 行覆盖=fuzz 盲区量化,不设闸——首测 parser 83.3%/validator 55.9%/总 59.1%） |
 | `coverage-report.mjs`（通用报告器） | NODE_V8_COVERAGE 多进程覆盖 JSON 合并→dist/*.js 行覆盖报告（fuzz 与真机三档共用;真机挂法 HOPJIT_COVERAGE=1,见 [[carrier-live-e2e#^anc-driver-live-e2e-entry]] 覆盖率条款;目录空/无 dist 数据 exit 2 不装绿） |
 | `builtins-doc-sync.test.ts`（npm test 内） | 内置函数表四消费位同源（名单唯一事实源=src/act-builtins.ts 的 ACT_BUILTINS,四个文档消费位〔concepts 快照/语法参考/教程等,清单权威=设计条款〕逐员比对,新增内置函数漏记文档即红点名——any/all、strip_fence、parse_json 三次入引擎恒漏文档的实撞对治;`^anc-exec-builtins-doc-sync`;2026-09-03 本行补登记——落码落测后登记表缺行,工程链 review 抓获） |
 | `config-keys-doc-sync.test.ts`（npm test 内） | Config 引擎消费键与概念层记载面同源（清单唯一事实源=src/ast-types.ts 的 ENGINE_CONFIG_KEYS;双向核:①清单每键在概念层语法参考记载面在场缺即红,②src 索引消费形态 `config?.['键']` 提取键不在清单即红——expansion_max/engine_min_version/requires_commands 三键先后落设计+代码+测试而概念层零条款半个多月的实撞对治,作者抓"工程链严重脱节"2026-09-15;`^anc-ast-config-keys-doc-sync`;先例=builtins-doc-sync 同源钉形态） |
 
-> **登记步漏登第 2 次实撞复审**（2026-09-03 工程链 review 记录）：本表已两次出现"守卫落码落测但登记表缺行"——第 1 次是 hopbuild2 载体词表断言段（`anc-guard-hb2-carrier`,D73 批引入时欠登记、D74 批 review 面四抓获补），第 2 次是本次的 builtins-doc-sync（立卡入 TRACEABILITY 但本表无行）。两次同病：准入四步的第①步"映射表登记"是纯手工动作，无机检兜底。评估：登记步可升机检——当 TRACEABILITY.md 出现新的 `@v:` 挂 `anc-guard-*` 或 `anc-*-sync` 类锚的卡片时，比对本表（§1d）有无同名行，缺行即红；形态类似既有的 check-threshold-sync（跨文件同源比对）。是否立项归作者拍板，本段只记录评估结论与两次实撞事实。
+> **登记步漏登第 2 次实撞复审**（2026-09-03 工程链 review 记录）：本表已两次出现"守卫落码落测但登记表缺行"——第 1 次是 hopbuild2 载体词表断言段（`anc-guard-hb2-carrier`,D73 批引入时欠登记、D74 批 review 面四抓获补），第 2 次是本次的 builtins-doc-sync（立卡入 TRACEABILITY 但本表无行）。两次同病：准入四步的第①步"映射表登记"是纯手工动作，无机检兜底。
+>
+> 评估：登记步可升机检——当 TRACEABILITY.md 出现新的 `@v:` 挂 `anc-guard-*` 或 `anc-*-sync` 类锚的卡片时，比对本表（§1d）有无同名行，缺行即红；形态类似既有的 check-threshold-sync（跨文件同源比对）。是否立项归作者拍板，本段只记录评估结论与两次实撞事实。
 
 ## 2. 三类守卫的性质差异【契约】 ^anc-meta-guard-kinds
 
@@ -133,7 +138,13 @@
 
 **推论**：宣称"CI 全绿"**不等于**实现链健康——CI 只覆盖第一类。第二类需定期跑 anchor-audit skill（LLM 语义审计），第三类只能靠评审。**别把三类混为一谈**。
 
-**行为纪律新增条：机械翻查外包 subagent（作者定 2026-08-22）** ^anc-meta-review-offload：语义审计与工程链 review 的执行姿态约束——**机械的大面积翻查外包给 subagent，主对话只管判断与决策**。收链前置要求收锚点链，但把链的全文逐轮 grep 进主上下文会淹没判断力（实撞：单特性 review 七轮 grep 灌主窗口——注意力经济被 review 自己违反）。分工判据：面大于约 3 个文件的锚点链核对、hoplog 逐步走查、测试覆盖清点、跨文件一致性比对 → 外包（subagent 只带回"缺陷+证据行号+建议"）；缺陷真伪判断、修法决定、决策上报 → 主对话保留。本条与 anchor-audit 的"必须读源文件"宪法原则不冲突——读源的是 subagent，主对话消费其结论。**长任务 subagent 必须边走边写进度文件**（同日补——派活时指定进度文件路径,subagent 每完成一个单元追加一行结论:人可随时 tail 看进展/中途死掉进度不丢续班可接/主对话仍只消费终报。实撞:28 实例走查跑 5 分钟期间进度无处可看）。属第三类（不可机检），靠 CLAUDE.md 常驻 + 评审。
+**行为纪律新增条：机械翻查外包 subagent（作者定 2026-08-22）** ^anc-meta-review-offload
+
+语义审计与工程链 review 的执行姿态约束——**机械的大面积翻查外包给 subagent，主对话只管判断与决策**。收链前置要求收锚点链，但把链的全文逐轮 grep 进主上下文会淹没判断力（实撞：单特性 review 七轮 grep 灌主窗口——注意力经济被 review 自己违反）。属第三类（不可机检），靠 CLAUDE.md 常驻 + 评审。
+
+- 分工判据：面大于约 3 个文件的锚点链核对、hoplog 逐步走查、测试覆盖清点、跨文件一致性比对 → 外包（subagent 只带回"缺陷+证据行号+建议"）；缺陷真伪判断、修法决定、决策上报 → 主对话保留；
+- 本条与 anchor-audit 的"必须读源文件"宪法原则不冲突——读源的是 subagent，主对话消费其结论；
+- **长任务 subagent 必须边走边写进度文件**（同日补——派活时指定进度文件路径,subagent 每完成一个单元追加一行结论:人可随时 tail 看进展/中途死掉进度不丢续班可接/主对话仍只消费终报。实撞:28 实例走查跑 5 分钟期间进度无处可看）。
 
 ## 3. 空白台账【契约】 ^anc-meta-guard-gap-ledger
 
@@ -154,12 +165,18 @@
 | G3  | S→D 语义审计无常规节奏                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | 仅语义                | **补节奏（2026-08-08 机检化，同日修假闸；2026-08-11 作者裁决降为提示不拦发版）**：release.sh ④a 检查 **`semantic_audit_summary.yaml`**（anchor-audit **块二·语义审计**的专属产物，步骤 6.2 带时间戳落盘）——缺失或 >14 天**打印醒目提示后放行**（原"强制人工确认否则中断"降级：语义审计非发版闸——终点凭证〔④ e2e〕才是硬闸，审计节奏靠提示+人自律；实撞：作者发版时被 [y/N] 拦截，裁"这个不应该设置成强行限制"）。**增量节奏（2026-08-11 作者问"能否自动增量"）**：summary 增设 `module_ledger`（每模块 audited_commit/audited_at 累积台账，按模块跑时增量合并不覆盖）；`scripts/audit-scope.mjs` 按台账 × git diff 自动推"动过没审"的模块清单并给出按模块跑命令——审计工作量从"每次全量"降为"只审改动模块"，全量留大版本。⚠️ 初版误核 cross_compare 产物（块一机检、每次 check 刷新→恒绿假闸），当日分拆三块后修正——**分不清 anchor-audit 内部工作性质直接导致闸失效**，是"大杂烩必须拆"的实证 | 审计产物结构变更时                    |
 | G4  | 比喻不指代 / 推演链显式两条内容宪法无机检                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | 仅语义                | **接受不守（机检层）**：纯语义判断，启发式 lint（检测已知比喻词作指代）误报率会高到淹没信号。靠评审 + 语义审计                                                                                                                                                                                                 | 若同类违规实际发生 ≥2 次，复审是否上启发式 lint |
 | G11 | e2e"核真过程"落实（2026-08-07 当日大部销账）：`e2e-execution.test.ts` 原有 hoplog 断言✓；`carrier-live-e2e` readTerminalEvidence 用 HopLog `extractHopLogStepKeys` 核验真实 YAMLL 块键（main.yaml 在场+state 每个 done 步骤有精确记录，缺即红；fixture 由 HopLog 真写，防守卫自测假格式）✓；mcp-server 补 HopLog 恒开+日志在场断言✓；`e2e.test.ts` 经盘点判定**非执行类**（纯 parse/validate 链，无执行过程可核）不适用。**余量①**：轨迹断言的"lint 所有执行类 e2e 含日志断言"元守卫未做——执行类 e2e 现仅三处且均已覆盖，新增时人工核，累计 ≥5 处再上 lint。**余量②（2026-08-07 review 抓出）**：readTerminalEvidence 只扫顶层 main.yaml，而 parallel child 生命周期按方案 A 记在卫星日志（`parallel/<cid>/log/`，见 spec-observability ^anc-obs-parallel-child-satellite）——含 parallel 的 live 场景其 child 步骤在 main.yaml 无块键、会假红。当前 live 场景（coffee-week）无 parallel 暂不触发；上第一个含 parallel 的 live 场景时必须先扩 readTerminalEvidence 聚合卫星日志 | 机检可达               | **大部销账**，余量待定（截止①=执行类 e2e 达 5 处；截止②=首个含 parallel 的 live 场景）                                                                                                                                                                                                   | 新增执行类 e2e 时必查                |
-| G12 | 样例/工具 spec 语法漂移无守卫（作者定 2026-08-09 release 必查）：语法改版后旧写法兼容读——引擎绿但**教材含旧写法用户会照抄**（实撞：认知三改后 audit-kit 外仍可能混入旧形态；spec 漂移曾致两载体 demo 不同版） | 机检可达 | **已上守卫**：`check-spec-syntax.mjs`——examples+scripts 全 spec ①validate 绿 ②旧写法黑名单（max_iterations=/check finally/旧统配/旧 call 形态）零命中，**零豁免**（初版曾给"冻结基线"开豁免口，作者当日纠正拆除——语法演进时工具样例必须跟着变）。**③文档行文扫描面**（2026-08-13 作者定"扩"——实撞：概念层 2026-08-09 宣废 check finally 后文档残留 15+ 处含当日新写教程,守卫只扫 spec 文件=盲区,旧术语在行文里繁殖被人肉抓）：docs/ 全 md 的黑名单扫描,**行级豁免**=该行含废止告示类标记词（将废止/兼容读/黑名单/旧写法/旧修饰/兼容判据/过渡期）——废止告示与兼容判据的本职就是提旧写法,按行判不误伤;rounds/ 整目录豁免（讨论存档不改正文）。**④hopbuild2 专项断言段**（D73 批引入对齐门词表断言,D74 批〔hopissues/0062+0065〕扩齐,权威=hopbuild2.md D73/D74）：③a 对齐门 carrier_cons 词表/③b split-node 路径闸/③c 分拆通道 carrier_lines 词表——九子串正典逐词相等（单侧与同步漂移皆红）+毒句每词至少一句+0062 半边三处在场（free_warns 计数/legal_ok 判据/legal_note 指路）+0065 消费接线（syntax_ok 含 len(carrier_lines) == 0）+B7 文案跨层同源（validator 源文与 spec.md 判据子串一致）。挂 `npm run check` 尾（release ② 全量检查即含） | 语法改版时黑名单同步扩;hopbuild2 载体词表变更时正典清单同步 |
+| G12 | 样例/工具 spec 语法漂移无守卫（作者定 2026-08-09 release 必查）：语法改版后旧写法兼容读——引擎绿但**教材含旧写法用户会照抄**（实撞：认知三改后 audit-kit 外仍可能混入旧形态；spec 漂移曾致两载体 demo 不同版） | 机检可达 | **已上守卫**：`check-spec-syntax.mjs`——examples+scripts 全 spec ①validate 绿 ②旧写法黑名单（max_iterations=/check finally/旧统配/旧 call 形态）零命中，**零豁免**（初版曾给"冻结基线"开豁免口，作者当日纠正拆除——语法演进时工具样例必须跟着变）。**③文档行文扫描面**（2026-08-13 作者定"扩"——实撞：概念层 2026-08-09 宣废 check finally 后文档残留 15+ 处含当日新写教程,守卫只扫 spec 文件=盲区,旧术语在行文里繁殖被人肉抓）：docs/ 全 md 的黑名单扫描,**行级豁免**=该行含废止告示类标记词（将废止/兼容读/黑名单/旧写法/旧修饰/兼容判据/过渡期）——废止告示与兼容判据的本职就是提旧写法,按行判不误伤;rounds/ 整目录豁免（讨论存档不改正文）。**④hopbuild2 专项断言段**（D73 批引入对齐门词表断言,D74 批〔hopissues/0062+0065〕扩齐,权威=hopbuild2.md D73/D74）：③a 对齐门 carrier_cons 词表/③b split-node 路径闸/③c 分拆通道 carrier_lines 词表——九子串正典逐词相等（单侧与同步漂移皆红）+毒句每词至少一句+0062 半边三处在场（free_warns 计数/legal_ok 判据/legal_note 指路）+0065 消费接线（syntax_ok 含 len(carrier_lines) == 0）+B7 文案跨层同源（validator 源文与 spec.md 判据子串一致）;③f-6（D101,todo/0104）修检烧尽兜底的人裁接受现状分支——母本 spec.md 与 qwen3.8-27b 变体都查:← 含 exhaust_brief 与 exhaust_path、声明 + → sensible_note、body 给 sensible_note 的赋值同时含这两个变量,提取不到分支即红（不赋值则审阅文件修检遗留节渲染出字面 undefined）。挂 `npm run check` 尾（release ② 全量检查即含） | 语法改版时黑名单同步扩;hopbuild2 载体词表变更时正典清单同步 |
 
 
 
 
-**台账维护规则**：新发现的空白**必须入账**（哪怕处置是待定）；处置为"补守卫"的项完成后**从台账移除、在 §1 映射表登记**——台账只记洞，不记已关的洞（历史见 git。近例：G5/G7/G8/G9 均在发现后数日内补守卫销账（G5=scripts/release.sh 十步检查单，0.1.2 四坑+0.1.5 发版时点坑全固化；2026-08-14 +⑥a patch 档 breaking 闸——0.2.6 实撞:breaking 批被缺省 patch 发出,档位判断不能靠人肉记忆;判据=上一 tag 以来 commit 含破坏性标记词即拒 patch 指路 minor,HOPJIT_RELEASE_ALLOW_PATCH=1 显式豁免,事故窗口 v0.2.5..v0.2.6 实测命中 7 条）；G10=模块架构工程链审计，2026-08-06 mcp-server 实撞当日销账（check-module-arch-audit.mjs，顺带抓出 act-body/shared-errors 两个存量缺登）；G13=e2e 断言在链，2026-08-12 销账（断言挂 @v:+scan.py aux-test-dirs 扩面+check-e2e-assertions.mjs 存档重放，首跑即抓 assertParallelSmokeScenario 顶层实例过滤按全路径误滤的真 bug）；G14=沙箱等价台账，2026-08-12 销账（carrier-live-e2e §8 ^anc-driver-live-e2e-equivalence 逐场景登记）；边界双指标钉零，2026-08-12 作者定'立刻强化'当日（存量 14 边界违规=5 模块出口表滞后,逐模块补登记清零+4 出口注释补写;anchor-baseline 增 module_boundary_violations/export_comment_violations 两指标钉 0——新增跨模块 import 不登记出口表当场红,'缓慢变差'空间关闭））。
+**台账维护规则**：新发现的空白**必须入账**（哪怕处置是待定）；处置为"补守卫"的项完成后**从台账移除、在 §1 映射表登记**——台账只记洞，不记已关的洞（历史见 git）。销账近例：
+
+- G5/G7/G8/G9 均在发现后数日内补守卫销账。其中 G5=scripts/release.sh 十步检查单，0.1.2 四坑+0.1.5 发版时点坑全固化；2026-08-14 +⑥a patch 档 breaking 闸——0.2.6 实撞:breaking 批被缺省 patch 发出,档位判断不能靠人肉记忆;判据=上一 tag 以来 commit 含破坏性标记词即拒 patch 指路 minor,HOPJIT_RELEASE_ALLOW_PATCH=1 显式豁免,事故窗口 v0.2.5..v0.2.6 实测命中 7 条；
+- G10=模块架构工程链审计，2026-08-06 mcp-server 实撞当日销账（check-module-arch-audit.mjs，顺带抓出 act-body/shared-errors 两个存量缺登）；
+- G13=e2e 断言在链，2026-08-12 销账（断言挂 @v:+scan.py aux-test-dirs 扩面+check-e2e-assertions.mjs 存档重放，首跑即抓 assertParallelSmokeScenario 顶层实例过滤按全路径误滤的真 bug）；
+- G14=沙箱等价台账，2026-08-12 销账（carrier-live-e2e §8 ^anc-driver-live-e2e-equivalence 逐场景登记）；
+- 边界双指标钉零，2026-08-12 作者定'立刻强化'当日（存量 14 边界违规=5 模块出口表滞后,逐模块补登记清零+4 出口注释补写;anchor-baseline 增 module_boundary_violations/export_comment_violations 两指标钉 0——新增跨模块 import 不登记出口表当场红,'缓慢变差'空间关闭）。
 
 ## 3b. 跨项目议题通道接入【契约】 ^anc-meta-hopissues-scan
 
@@ -167,6 +184,11 @@
 
 - **接入件**：`scripts/check-hopissues.mjs` 挂 `check:fast`（必经点——README 接入义务①"零守护零轮询,通知靠必经点顺带"）;
 - **两数报告**：他方标 fixed 待本方复验 N 笔（**逐条点名**并指路"先跑卡内 probe 复验再开新工:绿→closed,红→reopen 携实跑输出"）+ 报给本方待修（open/reopen）N 笔;
+- **"待本方复验"必须按 frontmatter 的 `from` 字段过滤**（2026-09-22 立，原先"他库子目录下的 fixed 卡一律点名"的近似判据作废）：
+  - **归属判据是谁是报告方**——`fixed→closed` 与 `reopen` 归报告方（README 单写侧规则），所以只有 `from: hoplogic3` 的卡才是本库的复验活。他库子目录下 `from` 是别家的 fixed 卡，报告方是那一家，与本库无关，点名即误派;
+  - **为什么原判据当时够用而现在不够**：通道刚接入时参与方只有两家，"在他库目录里"与"本库报的"恰好等价；现在通道里的 `from` 已有七个不同值（本库、知识库项目、几个外部 skill 项目、公开仓等），等价关系破裂;
+  - **实撞形态**：`hopkb/0003`（`from` 是知识库项目）被本库守卫连续点名为"待本方复验"，而那张卡的 probe 要知识库项目自己的 Vault 环境才能跑，本库既没有环境也没有义务——每轮 `check:fast` 都在给本库派一件干不了也不该干的活;
+  - **`from` 读不到的卡不静默丢**（frontmatter 缺失或损坏）：仍然点名，但单列"归属待核"一档并注明读不到 `from`——宁可多报一条让人核，不可静默漏掉本方真欠的复验。
 - **通道缺席显式失败**（exit 1 附 clone 指引）——不静默跳过（[[#^anc-meta-guard-trust]] 同款纪律）;议题在场只报数不拦（exit 0——议题是队列不是违规,拦截会把"有活要干"误标成"库坏了"）;
 - **判据随外库演进**：README 接入义务节改版时本脚本随动（外库文档无 ^anc 锚,本节即其在本库的契约投影点）。
 
@@ -215,14 +237,21 @@
 | `scan.py` 拿卡片 id 去嵌套锚点的文件里找 | 58 处报缺里 25 处是假报缺失 | 深查个例时发现 |
 | `anchor-scan.test.ts` 首版静默跳过 | python 探测失败即 `return`，5 个用例每例 0ms 假绿，比没测试更坏 | **故意改坏被测对象后测试仍全绿**才暴露 |
 
-由此定三条硬要求：
+由此定五条硬要求：
 
 1. **新增守卫必须做负向验证**：故意制造违规，确认守卫**真的红**（并记录在提交信息里）。只验证"当前通过"等于什么都没验证。
 2. **守卫的判据变更须过测试**：判据脚本本身要有回归测试（`tests/anchor-scan.test.ts` 锁 scan.py 四条判据；`tests/guard-scripts.test.ts` 锁 G8/G9/G10 三守卫九路径——HOPJIT_CHECK_ROOT 注入 fixture 仓库，合规/违规/判据源异常三态全断言，2026-08-07 补），否则重构时会静默退回。
 3. **禁止静默跳过**：依赖缺失（python/pyyaml 未装等）必须**显式失败**并给出装法，不得 `return`/`skip` 冒充通过。
 4. **测试输出零假警报**：测试中**故意触发**的错误路径（防呆断言、错误码用例）与被测工具对临时最小工程的正常警告，其 stderr **必须捕获进断言、不得直通终端**（子进程调用加 `stdio: pipe`）——绿灯测试跑出满屏 `Error:`/警告，装包跑测试的人分不清真假、会被吓到（2026-08-06 用户实撞两处：anchor-scan 的"目录不存在"警告 + cli 错误路径用例的 INVALID_STATE/ENOENT）。与第 3 条互补：3 管"坏了不许装好"，本条管"好着不许装坏"。
+5. **测试运行器的进度回报不许被用例饿死**：全部用例通过、`npm test` 却退出码 1，同样是"好着装坏"，而且会拦发版。
+   - 已知病因：`tests/cli.test.ts` 这类套件用 `execSync`/`spawnSync` 同步起子进程，单个用例在同步调用里连续占住 vitest 工作进程的事件循环。
+   - 后果：工作进程向主进程回报进度的 `onTaskUpdate` 调用发不出去，排队超过 vitest 内置的 60 秒通信超时（写死在 vitest 的进程间通信层，配置项改不了），就报 `Timeout calling "onTaskUpdate"` 并计 1 个错误。
+   - 治法：`vitest.config.ts` 的 `setupFiles` 挂 `tests/setup/yield-event-loop.ts`，每个用例结束后用 `setImmediate` 让出一次事件循环，排队中的回报在下一个用例开跑前发出。
+   - 实证（2026-09-26，vitest 3.2.4，机器负载平均值 6 到 9）：单跑 `cli.test.ts` 不挂让出钩子三次全部复现该报错（273 过、退出码 1）；挂上后三次全部退出码 0、零报错。
+   - `teardownTimeout` 放宽（2026-09-04）管的是收尾钩子，管不到这个 60 秒通信超时——当时把它当成这个报错的治法是误判，配置注释已改正。
+   - 常驻保护：`tests/guard-scripts.test.ts` 断言 `vitest.config.ts` 的 `setupFiles` 挂着该文件、该文件在 `afterEach` 里让出事件循环；删掉任一处即红。
 
-> 这四条是对治"守卫失效无声/守卫输出失真"的唯一手段——守卫是链的最后一道防线，它自己没有防线。
+> 这五条是对治"守卫失效无声/守卫输出失真"的唯一手段——守卫是链的最后一道防线，它自己没有防线。
 
 ## 6. 守卫准入规则【契约】 ^anc-meta-guard-admission
 

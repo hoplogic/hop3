@@ -52,6 +52,8 @@ step_ready 的 `step_type` 为 `call` 时，整步归你驱动（引擎不解释
 3. **子实例 completed** → 照抄 `call_protocol.report_completed`（引擎按 output_mapping 从子实例取值，你不搬运数据）。
 4. **子实例 failed** → 照抄 `call_protocol.report_failed`（🔴 引擎读子实例失败记录原封组装 CalleeFailure——绝不用 `--failure` 自由文本转述，那等于 catch 到异常丢了 stack trace）。
 
+**命令怎么执行**（hopissues/0097）：引擎给的命令（`call_protocol` 各条与派发的 `launch_command`）里,参数表、打回意见这类数据值一律不在命令行上——引擎把它们写进父实例目录下的参数文件,命令里只放 `"@<文件绝对路径>"`。所以命令串本身只含路径与标识符,**整串原样交给 shell 执行即可**（用你的 bash 工具跑,或程序里 `execSync(整串)`）。🔴 不要自己二次加工命令：不要拆开重新加引号、不要把 `@` 路径换成文件内容内联、不要为"保险"再套一层引号——二次加工正是旧形态腐蚀子 spec 源码的来路（反引号与 `$` 在双引号里被 shell 解释,代码块被静默吞掉）。程序里想绕开 shell,就按 shell 规则把整串拆成参数数组再 `execFileSync`,拆出来的每个参数一字不改。
+
 （兼容注：旧引擎响应无 `call_protocol` 字段时，按旧协议手拼——`init <子spec路径> --parent <INST> --step <call步骤id> --params '<子Inputs JSON>' --state-dir <STATE>`，子实例循环用 `<STATE>/<INST>/calls` + 子 ID，回报命令同上两条的形状。）
 
 ## 异常处理

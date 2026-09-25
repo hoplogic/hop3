@@ -1,0 +1,11 @@
+```sql
+SELECT 
+    c.region,
+    COUNT(DISTINCT c.id) AS customer_count,
+    COALESCE(SUM(CASE WHEN o.status = 'paid' THEN 1 ELSE 0 END), 0) AS paid_order_count,
+    COALESCE(SUM(CASE WHEN o.status = 'paid' THEN IFNULL(o.amount, 0) ELSE 0 END), 0) AS paid_amount
+FROM customers c
+LEFT JOIN orders o ON c.id = o.customer_id
+GROUP BY c.region
+ORDER BY paid_amount DESC, c.region ASC;
+```

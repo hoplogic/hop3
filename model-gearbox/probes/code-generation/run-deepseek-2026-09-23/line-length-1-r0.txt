@@ -1,0 +1,23 @@
+```python
+import sys
+
+path = sys.argv[1]
+handle = open(path, 'rt', encoding='utf-8')
+lines = handle.readlines()
+handle.close()
+
+bad = 0
+lineno = 0
+for line in lines:
+    lineno = lineno + 1
+    length = len(line)
+    if length > 0 and line.endswith('\n'):
+        length = length - 1
+    if length > 100:
+        print("第 " + str(lineno) + " 行长度 " + str(length) + "，超过 100 个字符")
+        bad = bad + 1
+
+if bad > 0:
+    sys.exit(1)
+sys.exit(0)
+```

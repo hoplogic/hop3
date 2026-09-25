@@ -1,0 +1,21 @@
+```python
+import sys
+
+file_path = sys.argv[1]
+
+with open(file_path, 'r', encoding='utf-8') as f:
+    content = f.read()
+
+lines = content.splitlines()
+
+found_violation = False
+for idx, line in enumerate(lines):
+    if len(line) > 100:
+        print(f"Line {idx + 1}: {len(line)} characters (exceeds 100)")
+        found_violation = True
+
+if found_violation:
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

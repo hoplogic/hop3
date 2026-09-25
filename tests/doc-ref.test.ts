@@ -347,6 +347,47 @@ describe('resolveDocRefs', () => {
     expect(frags[0].content.length).toBeGreaterThan(4096);
   });
 
+  // @v: anc-exec-llm-inline-context — inlineMode 三档（todo/0115 v3:本步有没有 read 决定大节给预览还是全文）
+  it("inlineMode='full' 超 20K 大节全文内联——不落盘不产预览", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'docref-'));
+    writeFileSync(join(dir, 'big.md'), '## 大章节\n' + 'x'.repeat(24000));
+    const workZone = mkdtempSync(join(tmpdir(), 'work_zone-'));
+    const frags = resolveDocRefs([{ doc: 'big', section: '大章节' }], dir, sandboxFor(dir), workZone, undefined, undefined, 'full');
+    expect(frags[0].file_path).toBeUndefined();
+    expect(frags[0].preview).toBeUndefined();
+    expect(frags[0].content.length).toBe(24000);
+    expect(existsSync(join(workZone, 'docref'))).toBe(false);
+  });
+
+  it("inlineMode='full' 中节（4K-20K）不落进 deflate 分支——全文内联无 file_path（BUG-H 不复发）", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'docref-'));
+    writeFileSync(join(dir, 'big.md'), '## 大章节\n' + 'x'.repeat(5000));
+    const workZone = mkdtempSync(join(tmpdir(), 'work_zone-'));
+    const frags = resolveDocRefs([{ doc: 'big', section: '大章节' }], dir, sandboxFor(dir), workZone, undefined, undefined, 'full');
+    expect(frags[0].file_path).toBeUndefined();
+    expect(frags[0].content.length).toBe(5000);
+  });
+
+  it("inlineMode='preview' 超 20K 大节转预览——头部节选+全文落盘", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'docref-'));
+    writeFileSync(join(dir, 'big.md'), '## 大章节\n' + 'x'.repeat(24000));
+    const workZone = mkdtempSync(join(tmpdir(), 'work_zone-'));
+    const frags = resolveDocRefs([{ doc: 'big', section: '大章节' }], dir, sandboxFor(dir), workZone, undefined, undefined, 'preview');
+    expect(frags[0].preview!.length).toBe(20000);
+    expect(frags[0].full_chars).toBe(24000);
+    expect(readFileSync(frags[0].file_path!, 'utf-8').length).toBe(24000);
+  });
+
+  it("inlineMode='preview' 中节（4K-20K）全文内联——不预览也不 deflate", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'docref-'));
+    writeFileSync(join(dir, 'big.md'), '## 大章节\n' + 'x'.repeat(5000));
+    const workZone = mkdtempSync(join(tmpdir(), 'work_zone-'));
+    const frags = resolveDocRefs([{ doc: 'big', section: '大章节' }], dir, sandboxFor(dir), workZone, undefined, undefined, 'preview');
+    expect(frags[0].file_path).toBeUndefined();
+    expect(frags[0].preview).toBeUndefined();
+    expect(frags[0].content.length).toBe(5000);
+  });
+
   it('文件不存在抛 DocRefError', () => {
     const dir = setup();
     expect(() => resolveDocRefs([{ doc: 'missing', section: 'x' }], dir, sandboxFor(dir), ''))

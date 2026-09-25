@@ -127,12 +127,10 @@ function attrWord(a: string, lang: SpecLang): string { return lang === 'zh' ? (A
 
 // ── 关键词转换（lang 命令的手术核,^anc-i18n-language-config 转换工具条款）。
 // 行级手术:只改关键词 token,变量名/说明文字/body/叙事节字节不动——serializeSpec 单向有损
-// 禁用于整文重建。范围:## 段头行/首段 Id 行/步骤行 [] 内 token/工具授权行;围栏内跳过;
+// 禁用于整文重建。识别面对齐 parser 接受面(^anc-i18n-convert-surface):段头行/首段 Id 行/
+// 裸键段头行/步骤行(含标题形态) [] 内 token/工具授权行;围栏内跳过;
 // 括号组内容整体跳过（case 条件/call 映射是表达式面,唯 (else)/(其他) 整组转换）。// @a: anc-i18n-language-config
-// 段头转换表从 SECTION_EN/SECTION_ZH 程序化派生（单一事实源——阅卷抓手抄第二份自违同源纪律）
-const SECTION_HEAD_EN2ZH: Record<string, string> = Object.fromEntries(
-  Object.keys(SECTION_EN).filter(k => SECTION_ZH[k]).map(k => [SECTION_EN[k], SECTION_ZH[k]]));
-const SECTION_HEAD_ZH2EN: Record<string, string> = Object.fromEntries(Object.entries(SECTION_HEAD_EN2ZH).map(([e, z]) => [z, e]));
+// 段种类查 SECTION_KEYWORDS(键名小写,与 parser 同表)、出词走 sectionWord——单一事实源,不另抄转换表
 const CLAUSE_EN2ZH: Record<string, string> = { 'for-each': '遍历', in: '于', collect: '收集', into: '入' };
 const CLAUSE_ZH2EN: Record<string, string> = Object.fromEntries(Object.entries(CLAUSE_EN2ZH).map(([e, z]) => [z, e]));
 
@@ -192,18 +190,27 @@ function convertBracketContent(content: string, to: SpecLang): string {
 export function convertSpecKeywords(text: string, to: SpecLang): string {
   const lines = text.split('\n');
   let inFence = false;
-  let seenHeading = false;
+  let seenHeading = false;     // 见过任一段头行——Id 行只在此前转换
+  let sectionsOpen = false;    // 段区已开启(一级标题/关键字二级段头/Id 行)——parser 此前不看内联标签
+  let stepsStarted = false;    // 已进入步骤段——之后裸键不转(叙事节 Goal: 字样不误伤)
+  const seenKinds = new Set<SectionKind>();   // 已出现的段种类——同种类只转第一次,## 与裸键两形态共用
   const out = lines.map(line => {
     if (/^\s*```/.test(line)) { inFence = !inFence; return line; }
     if (inFence) return line;
-    // 段头行 ## Word
-    const hm = line.match(/^(#{1,6}\s+)([A-Za-z\u4e00-\u9fff]+)(\s*)$/);
+    if (/^#\s+\S/.test(line)) sectionsOpen = true;               // 一级标题(多词亦算,parser 的 title 段)
+    if (RE_ID_LINE.test(line)) sectionsOpen = true;              // Id 行不论位置都开启段区 // @a: anc-i18n-convert-surface
+    // 段头行 ## Word——词转小写查表,出规范形(作者拍甲案:大小写不敏感、一律规范形)
+    const hm = line.match(/^(#{1,6})(\s+)([A-Za-z\u4e00-\u9fff]+)(\s*)$/);
     if (hm) {
       seenHeading = true;
-      const w = hm[2];
-      if (to === 'zh' && SECTION_HEAD_EN2ZH[w]) return hm[1] + SECTION_HEAD_EN2ZH[w] + hm[3];
-      if (to === 'en' && SECTION_HEAD_ZH2EN[w]) return hm[1] + SECTION_HEAD_ZH2EN[w] + hm[3];
-      return line;
+      const kind = SECTION_KEYWORDS[hm[3].toLowerCase()];
+      if (!kind) return line;
+      if (hm[1].length === 2) {
+        sectionsOpen = true;
+        seenKinds.add(kind);
+        if (kind === 'steps') stepsStarted = true;
+      }
+      return hm[1] + hm[2] + sectionWord(kind, to) + hm[4];
     }
     // Id 行（首个段头之前——叙事节里的 Id: 字样不误伤）
     if (!seenHeading) {
@@ -216,8 +223,20 @@ export function convertSpecKeywords(text: string, to: SpecLang): string {
       const en = ENTRY_KEY_ZH2EN[tm[2]] ?? tm[2];
       return tm[1] + (to === 'zh' ? (ENTRY_KEY_EN2ZH[en] ?? en) : en) + tm[3];
     }
-    // 步骤行 [] 内转换
-    const sm = line.match(/^(\s*\d+(?:\.\d+)*\.?\s+\[)([^\]]*)(\].*)$/);
+    // 裸键段头行 Goal: / 目标:——对齐 identifySections 内联标签分支(半角冒号/行首无缩进无 "- "/同类只认第一次),
+    // 只在步骤段之前(比 parser 窄:步骤段后首见关键字裸键会截断步骤段,属写错不跟)。// @a: anc-i18n-convert-surface
+    if (sectionsOpen && !stepsStarted) {
+      const bm = line.match(/^([\w\u4e00-\u9fff]+)(\s*:.*)$/);
+      const kind = bm ? SECTION_KEYWORDS[bm[1].toLowerCase()] : undefined;
+      if (bm && kind) {
+        if (seenKinds.has(kind)) return line;
+        seenKinds.add(kind);
+        if (kind === 'steps') stepsStarted = true;
+        return sectionWord(kind, to) + bm[2];
+      }
+    }
+    // 步骤行 [] 内转换——行首可带任意个 # 加空白(标题形态,对齐 parseStepSection 剥前缀) // @a: anc-i18n-convert-surface
+    const sm = line.match(/^(\s*(?:#+\s+)?\d+(?:\.\d+)*\.?\s+\[)([^\]]*)(\].*)$/);
     if (sm) return sm[1] + convertBracketContent(sm[2], to) + sm[3];
     return line;
   });

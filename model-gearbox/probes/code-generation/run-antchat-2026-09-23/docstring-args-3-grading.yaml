@@ -1,0 +1,32 @@
+- round: 0
+  outcome: rejected
+  public_pass: false
+  hidden_pass: false
+  reject_head: >-
+    Python 语法沙箱审查未通过,脚本没有执行。逐条改完再跑: | - 第 41 行 `.parent_stack`:属性 parent_stack 不在属性白名单内。替代:改用白名单内的方法(字符串/列表/字典/集合常用方法、文件 read 系列、匹配结果 group 系列、语法树节点字段) | - 第 47 行 `.parent_stack`:属性 parent_stack
+    不在属性白名单内。替代:改用白名单内的方法(字符串/列表/字典/集合常用方法、文件 read 系列、匹配结果 group 系列、语法树节点字段)
+- round: 1
+  outcome: ran
+  public_pass: false
+  hidden_pass: false
+  hidden_failed:
+    - bad_async_method.py(应1实1 崩溃)
+    - bad_case.py(应1实1 崩溃)
+    - bad_missing_kwargs.py(应1实1 崩溃)
+    - bad_missing_kwonly.py(应1实1 崩溃)
+    - bad_missing_varargs.py(应1实1 崩溃)
+    - bad_nested_class_method.py(应1实1 崩溃)
+    - bad_no_docstring.py(应1实1 崩溃)
+    - bad_posonly.py(应1实1 崩溃)
+    - bad_string_not_first.py(应1实1 崩溃)
+    - bad_substring.py(应1实1 崩溃)
+    - ok_docstring_formats.py(应0实1 崩溃)
+    - ok_full.py(应0实1 崩溃)
+    - ok_private_nested.py(应0实1 崩溃)
+  crashed_files: 13
+- round: 2
+  outcome: ran
+  public_pass: true
+  hidden_pass: true
+  hidden_failed: []
+  crashed_files: 0

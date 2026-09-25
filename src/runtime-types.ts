@@ -35,6 +35,10 @@ export interface RetryRecord {
   attempt: number;
   failure_reason: string;
   steps_tried: StepSummary[];
+  // 位置戳：记账那一刻执行事件流的长度。L2c 注入只取位置在容器本轮起点（祖先 loop 最晚一条轮进
+  // 事件）之后的记录;缺席（旧状态文件）按本轮处理。见 [[exec-engine#^anc-exec-retry-feedback-iter-scope]]
+  // @a: anc-exec-retry-feedback-iter-scope
+  event_seq?: number;
 }
 
 /** PromptAssembler 组装后的六层执行上下文——任务契约、知识注入、进度摘要、输入、指令与输出约束，随 StepReady 交给 driver。见 [[exec-engine#^anc-exec-prompt-assembly]] */
@@ -44,6 +48,11 @@ export interface AssembledContext { // @a: anc-exec-prompt-assembly
   spec_knowledge_context?: string; // L2-spec: spec 级知识（Spec @knowledge 预检索——跨步恒定入稳定面）// @a: anc-exec-cache-affinity
   knowledge_context?: string;     // L2-step: 步骤级知识（步骤 @knowledge + 补充 + 动态检索——随步变）
   tool_manifest?: string;         // L4 工具清单（0054 ^anc-step-tool-grant——无 body act 的实发工具面:每件从注册面取真身〔名/语义/params/output_schema〕+作者意图注释;渲染进 L4 当前节点区块）
+  // 本步工具面里有没有"能自由写命令行"的工具（^anc-exec-l0-worldview-impl 第 6 条,todo/0110
+  // 候选 A）——角色档的 Bash 纪律句按它条件化。复用模式（引擎无注册面,执行者是自带 Bash 的
+  // caller agent）=true;standalone=false,挂了 run_script 也是 false（run_script 收脚本路径+
+  // 参数列表,命令行由引擎拼,管道与链式在那个接口上写不出来）。组装期按注册面有无置位。
+  shell_commands_available?: boolean; // @a: anc-exec-l0-worldview-impl
   doc_ref_context?: string;       // L2: doc-ref [[doc#章节]] 确定性精确引用（渲染进 L2 区块,yaml 条目化）// @a: anc-exec-doc-ref-injection
   hop_env_table?: string;         // L2: hop_env 值表（spec 引用了 hop_env_* 时随 prompt 注入,执行 LLM 自行指代——instruction 不做引擎展开）// @a: anc-exec-hop-env-table
   progress_summary: string;       // L3 轨迹半边: 执行链上下文（已完成步骤摘要）

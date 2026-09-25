@@ -1,0 +1,126 @@
+```python
+import ast
+import re
+import sys
+
+def get_all_function_defs(node):
+    functions = []
+    classes = []
+    
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, ast.FunctionDef) or isinstance(child, ast.AsyncFunctionDef):
+            functions.append(child)
+        elif isinstance(child, ast.ClassDef):
+            classes.append(child)
+    
+    # Also find nested function definitions in class methods
+    for cls in classes:
+        functions.extend(get_functions_in_class(cls))
+    
+    return functions
+
+def get_functions_in_class(cls_node):
+    functions = []
+    for child in ast.iter_child_nodes(cls_node):
+        if isinstance(child, ast.FunctionDef) or isinstance(child, ast.AsyncFunctionDef):
+            if not (isinstance(child, ast.FunctionDef) and child.name.startswith('_')):
+                functions.append(child)
+        elif isinstance(child, ast.ClassDef):
+            # Recursively get functions from nested classes
+            functions.extend(get_functions_in_class(child))
+    
+    return functions
+
+def get_all_params(func_def):
+    args = func_def.args
+    params = []
+
+    # Positional-only arguments (before the slash)
+    for arg in args.posonlyargs:
+        if arg.arg != 'self' and arg.arg != 'cls':
+            params.append(arg.arg)
+
+    # Regular arguments
+    for arg in args.args:
+        if arg.arg != 'self' and arg.arg != 'cls':
+            params.append(arg.arg)
+
+    # *args parameter
+    if args.vararg:
+        if args.vararg.arg != 'self' and args.vararg.arg != 'cls':
+            params.append(args.vararg.arg)
+
+    # Keyword-only arguments after *
+    for arg in args.kwonlyargs:
+        if arg.arg != 'self' and arg.arg != 'cls':
+            params.append(arg.arg)
+
+    # **kwargs parameter
+    if args.kwarg:
+        if args.kwarg.arg != 'self' and args.kwarg.arg != 'cls':
+            params.append(args.kwarg.arg)
+
+    return params
+
+def is_param_mentioned(param_name, docstring):
+    # Create a pattern to match the param as a whole word
+    # Use word boundaries with \b but also consider backticks and parentheses
+    escaped_param = re.escape(param_name)
+    pattern = r'\b' + escaped_param + r'\b|`' + escaped_param + r'`|\(' + escaped_param + r'\)|"' + escaped_param + r'"|\'' + escaped_param + r'\''
+    matches = re.findall(pattern, docstring)
+    return len(matches) > 0
+
+def check_file(filepath):
+    with open(filepath, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    if not content.strip():
+        # Empty file is compliant
+        sys.exit(0)
+
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        # If syntax error, assume not compliant
+        print(f"Syntax error in {filepath}")
+        sys.exit(1)
+
+    # Get all top-level functions
+    top_level_functions = [n for n in ast.iter_child_nodes(tree) 
+                           if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and not n.name.startswith('_')]
+    
+    # Get all classes and their methods
+    classes = [n for n in ast.iter_child_nodes(tree) if isinstance(n, ast.ClassDef)]
+    all_functions = top_level_functions[:]
+    
+    for cls in classes:
+        all_functions.extend(get_functions_in_class(cls))
+
+    violations = []
+
+    for func in all_functions:
+        docstring = ast.get_docstring(func)
+        
+        if docstring is None:
+            violations.append(f"{filepath}:{func.lineno}: Function '{func.name}' missing docstring")
+            continue
+        
+        params = get_all_params(func)
+        missing_params = []
+        
+        for param in params:
+            if not is_param_mentioned(param, docstring):
+                missing_params.append(param)
+        
+        if missing_params:
+            violations.append(f"{filepath}:{func.lineno}: Function '{func.name}' docstring missing parameters: {', '.join(missing_params)}")
+
+    if violations:
+        for violation in violations:
+            print(violation)
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+check_file(sys.argv[1])
+```

@@ -1,0 +1,76 @@
+```python
+import ast
+import re
+import sys
+
+def get_param_names(node):
+    names = []
+    args = node.args
+    for arg in args.posonlyargs:
+        names.append(arg.arg)
+    for arg in args.args:
+        names.append(arg.arg)
+    if args.vararg is not None:
+        names.append(args.vararg.arg)
+    for arg in args.kwonlyargs:
+        names.append(arg.arg)
+    if args.kwarg is not None:
+        names.append(args.kwarg.arg)
+    result = []
+    for name in names:
+        if name == 'self' or name == 'cls':
+            continue
+        result.append(name)
+    return result
+
+def check_function(node, violations):
+    if node.name.startswith('_'):
+        return
+    doc = ast.get_docstring(node, False)
+    if doc is None:
+        violations.append((node.lineno, "函数 " + node.name + " 缺少文档字符串"))
+        return
+    params = get_param_names(node)
+    for param in params:
+        pattern = r'\b' + re.escape(param) + r'\b'
+        if re.search(pattern, doc) is None:
+            violations.append((node.lineno, "函数 " + node.name + " 的文档字符串未提及参数 " + param))
+
+def traverse(node, in_function, violations):
+    if in_function:
+        return
+    if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+        check_function(node, violations)
+    elif isinstance(node, ast.ClassDef):
+        for child in node.body:
+            traverse(child, False, violations)
+    else:
+        for child in ast.iter_child_nodes(node):
+            traverse(child, in_function, violations)
+
+path = sys.argv[1]
+try:
+    f = open(path, 'r', encoding='utf-8')
+    source = f.read()
+    f.close()
+except OSError as e:
+    print("无法读取文件:", e)
+    sys.exit(1)
+
+try:
+    tree = ast.parse(source)
+except SyntaxError as e:
+    print("语法错误:", e)
+    sys.exit(1)
+
+violations = []
+for node in tree.body:
+    traverse(node, False, violations)
+
+if violations:
+    for lineno, reason in violations:
+        print("第 " + str(lineno) + " 行: " + reason)
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

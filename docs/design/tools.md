@@ -9,7 +9,8 @@
 
 # tools 模块设计
 
-shared-providers 的 `ToolProvider` 契约（见 [[shared-providers#^anc-provider-tool]]）的**实现与装配层**——六个物理文件合成一个模块：内置实现（`tools.ts`）、声明加载（`tools-registry.ts`）、装配器（`tools-composite.ts`）、mcp 绑定（`tools-mcp-binding.ts`）、in-process 绑定（`tools-inprocess-binding.ts`）、通知通道（`tools-notify.ts`）。本文管**装配层本体**：定位、成员构成、生命周期、出口边界；家族四切面（interface/channels/本文/tools/ 子目录）的分工见下"工具设计面地图"节。被 doc-ref 复用其沙箱读取能力。
+shared-providers 的 `ToolProvider` 契约（见 [[shared-providers#^anc-provider-tool]]）的**实现与装配层**——六个物理文件合成一个模块：内置实现（`tools.ts`）、声明加载（`tools-registry.ts`）、装配器（`tools-composite.ts`）、mcp 绑定（`tools-mcp-binding.ts`）、in-process 绑定（`tools-inprocess-binding.ts`）、通知通道（`tools-notify.ts`）。
+本文管**装配层本体**：定位、成员构成、生命周期、出口边界；家族四切面（interface/channels/本文/tools/ 子目录）的分工见下"工具设计面地图"节。被 doc-ref 复用其沙箱读取能力。
 
 ## 工具设计面地图【说明】 ^anc-struct-tools-family-map
 
@@ -26,7 +27,18 @@ shared-providers 的 `ToolProvider` 契约（见 [[shared-providers#^anc-provide
 
 ## tools 模块定位【契约】 ^anc-struct-tools
 
-> **模块版本**：tools `v0.18.0`（2026-09-16）。本版 DefaultToolProvider.execute 实参名进闸核对（作者拍,决策页 todo/decision/20260916-内置工具参数名写时校验.md——move(src:/dst:) 笔误 undefined 穿透 Node fs 报误导错;分派前按 input_schema 核未知参数名/缺必填,报文点名合法参数名集,走 ToolResult 失败通道;契约 file-tools.md 实参名进闸条款）。上版（v0.17.1）listdir/exists 条目类型字段正名 type、kind 留作同值兼容别名（作者拍乙案——R9 实撞 e.type 缺键恒假,行业主流用词 type;契约 file-tools.md）。上版（v0.17.0）出口表补登 makeEngineToolProviderFactory 与 loadProjectToolRegistry（0076 批漏登+真收敛挪入,review 机检实拦补）。上版（v0.16.0）读侧两工具批（todo/0070——作者拍'rg 类工具两件立todo'）：文件工具组扩员 search_file（单文件子串搜索带行号,契约 file-tools.md ^anc-exec-builtin-search-file）+read 扩 start_line/end_line 行号段参数（存量零回归）,十件→十一件——D81 定向读盘正路的读侧兑现。上版（v0.15.0）文件工具组扩员 edit_file（局部精确替换,契约归 file-tools.md ^anc-exec-builtin-edit-file-tool）,九件→十件。0.x 未承诺稳定。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
+> **模块版本**：tools `v0.20.1`（2026-09-23）。本版 `run_script` 的工具说明补写工作目录约定——脚本以它自己所在的目录为工作目录运行,同目录的样例文件给 `args` 传裸文件名（T9 复跑实撞:模型照其余文件工具的习惯传工作区相对路径,脚本找不到文件,qwen3.8-27b 因此烧穿一轮 20 轮工具上限;契约 [[tools/run-script#^anc-exec-builtin-run-script]]）。
+>
+> - 上版（v0.20.0）`run_script` 的 `.py` 脚本一律先过 Python 语法沙箱再执行（审查与执行归 py-sandbox 模块,契约 [[py-sandbox]]）;回执 JSON 加 `defense` 字段标本次防护等级;审查被拒=工具失败带逐行拒绝报文。run_script 原工程偏差①"白名单管不住脚本内容能再 spawn 什么"由此关上（[[tools/run-script]]）。
+>
+> - 上版（v0.19.0）新增执行类工具组首件 `run_script`（受控脚本执行,category=special 须节点声明）——缘起=todo/0110 候选 B 作者拍板,standalone 的 `[act free]` 工具面此前没有任何一件能让进程跑起来;命令执行原语与 hop_python 的 subprocess.run 共用一份实现（见 [[act-body#^anc-exec-command-primitive]]）;
+>
+> - 上版（v0.18.0）DefaultToolProvider.execute 实参名进闸核对（作者拍,决策页 todo/decision/20260916-内置工具参数名写时校验.md——move(src:/dst:) 笔误 undefined 穿透 Node fs 报误导错;分派前按 input_schema 核未知参数名/缺必填,报文点名合法参数名集,走 ToolResult 失败通道;契约 file-tools.md 实参名进闸条款）；
+> - 上版（v0.17.1）listdir/exists 条目类型字段正名 type、kind 留作同值兼容别名（作者拍乙案——R9 实撞 e.type 缺键恒假,行业主流用词 type;契约 file-tools.md）；
+> - 上版（v0.17.0）出口表补登 makeEngineToolProviderFactory 与 loadProjectToolRegistry（0076 批漏登+真收敛挪入,review 机检实拦补）；
+> - 上版（v0.16.0）读侧两工具批（todo/0070——作者拍'rg 类工具两件立todo'）：文件工具组扩员 search_file（单文件子串搜索带行号,契约 file-tools.md ^anc-exec-builtin-search-file）+read 扩 start_line/end_line 行号段参数（存量零回归）,十件→十一件——D81 定向读盘正路的读侧兑现；
+> - 上版（v0.15.0）文件工具组扩员 edit_file（局部精确替换,契约归 file-tools.md ^anc-exec-builtin-edit-file-tool）,九件→十件；
+> - 0.x 未承诺稳定。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
 
 **① 自身定位**：tools 模块是 shared-providers 契约的实现与装配层。负责实现与装配，不碰调度/状态。沙箱拦截规则见 [[sandbox]]。
 
@@ -34,7 +46,7 @@ shared-providers 的 `ToolProvider` 契约（见 [[shared-providers#^anc-provide
 
 | 文件 | 职责 | 关键类型/类 | 设计权威 |
 |---|---|---|---|
-| `tools.ts` | 内置实现：file 十件 + spec 内容族六件 + 沙箱路径校验链 | `DefaultToolProvider` | [[tools/file-tools]] / [[tools/spec-tree-tools]] |
+| `tools.ts` | 内置实现：file 十一件 + spec 内容族六件 + 执行类一件 + 沙箱路径校验链 | `DefaultToolProvider` | [[tools/file-tools]] / [[tools/spec-tree-tools]] / [[tools/run-script]] |
 | `tools-registry.ts` | hoptools.yaml 声明加载（fail-fast 校验） | `ToolSpec`/`ToolServerEntry`/`ToolBinding`/`loadToolRegistry` | [[tool-interface#^anc-config-tool-registry]] |
 | `tools-composite.ts` | 装配器：成员并集/按名路由/双端校验/audit 元信息 | `CompositeToolProvider` | [[tool-interface#^anc-exec-tool-composite]] |
 | `tools-mcp-binding.ts` | mcp 绑定成员：惰性连接/超时硬闸/终态收 | `McpBindingMember` | [[tool-interface#^anc-exec-mcp-binding]] |
@@ -54,9 +66,18 @@ shared-providers 的 `ToolProvider` 契约（见 [[shared-providers#^anc-provide
 
 **⑤ 配置案例**：内置组零配置恒在；外部工具声明见 [[tool-interface#^anc-config-tool-registry]] 文法与 `examples/hoptools-bailian.yaml` 真机样例（百炼 WebSearch+amap，tool_id/unwrap/shape 全要素）；真机凭证 `npm run test:e2e:mcp-binding`（绑定层零 LLM）+ `test:e2e:standalone-tools`（LLM×外部工具全链）。
 
-**⑤b 内置成员表（2026-08-31 随 dingtalk-notify 改造——第二内置组插槽）** ^anc-exec-builtin-member-table：CompositeToolProvider 构造器的内置段从"硬编码单成员 builtin-file"改为**内置成员表遍历装配**（数组常量 BUILTIN_MEMBERS：每项三字段 {label, provider 实例, specs}——specs 是该成员工具的 ToolSpec 表,**tool_id 渠道中立映射与 requires_commit 声明的物理载体**（notify 的两样全靠它,漏挂=语言面调用名失效+不可逆闸空转）;现两员:builtin-file=DefaultToolProvider〔specs 空表〕/ builtin-notify=NotifyToolProvider〔specs 含 dingtalk_notify 条目〕。2026-08-31 review 面一/面二双面实抓原句"{label, provider 工厂}"两字段失记 specs 且"工厂"失实——按设计扩渠道会漏挂映射）。将来新增内置通道=表里添一行,构造器零改动。内置成员与 registry 成员/宿主注入成员同过 addMember 判重与 execute 路由,双端校验/write_scope 透传/requires_commit 拦截零特殊分支——内置不是特权成员,只是装配来源不同。
+**⑤b 内置成员表（2026-08-31 随 dingtalk-notify 改造——第二内置组插槽）** ^anc-exec-builtin-member-table
 
-**⑥ in-process 扩展档**：in-process 扩展模块=**与主代码库隔离的独立工具库**（如 hopkb 工具组）——领域逻辑住自己的库、走自己库的工程链审计，**一行不进本库**（防污染主代码库/引擎保持领域无关）；in-process 仅指运行形态（装载进引擎进程，零序列化换失去进程隔离——它崩=引擎崩,资格卡审计状态,声明装载=操作者断言）。注册文法（`kind: in-process` + `module: <路径>`）、模块接口契约（execute 必须/close 可选/名单权威恒在声明侧）、装载与崩溃面语义见 [[tool-interface#^anc-exec-inprocess-binding]]；参考例=`examples/ext-tools/word-stats.mjs`（隔离模块形态样板）。内置组（本库自有能力）经内置成员表装配（⑤b——表驱动,非配置注册），与扩展模块是两类成员。hopkb 升格时照参考例接入。
+CompositeToolProvider 构造器的内置段从"硬编码单成员 builtin-file"改为**内置成员表遍历装配**（数组常量 BUILTIN_MEMBERS：每项三字段 {label, provider 实例, specs}）。
+
+- specs 是该成员工具的 ToolSpec 表,**tool_id 渠道中立映射与 requires_commit 声明的物理载体**（notify 的两样全靠它,漏挂=语言面调用名失效+不可逆闸空转）;现两员:builtin-file=DefaultToolProvider〔specs 空表〕/ builtin-notify=NotifyToolProvider〔specs 含 dingtalk_notify 条目〕;
+- 2026-08-31 review 面一/面二双面实抓原句"{label, provider 工厂}"两字段失记 specs 且"工厂"失实——按设计扩渠道会漏挂映射;
+- 将来新增内置通道=表里添一行,构造器零改动。内置成员与 registry 成员/宿主注入成员同过 addMember 判重与 execute 路由,双端校验/write_scope 透传/requires_commit 拦截零特殊分支——内置不是特权成员,只是装配来源不同。
+
+**⑥ in-process 扩展档**：in-process 扩展模块=**与主代码库隔离的独立工具库**（如 hopkb 工具组）——领域逻辑住自己的库、走自己库的工程链审计，**一行不进本库**（防污染主代码库/引擎保持领域无关）；in-process 仅指运行形态（装载进引擎进程，零序列化换失去进程隔离——它崩=引擎崩,资格卡审计状态,声明装载=操作者断言）。
+
+- 注册文法（`kind: in-process` + `module: <路径>`）、模块接口契约（execute 必须/close 可选/名单权威恒在声明侧）、装载与崩溃面语义见 [[tool-interface#^anc-exec-inprocess-binding]]；参考例=`examples/ext-tools/word-stats.mjs`（隔离模块形态样板）;
+- 内置组（本库自有能力）经内置成员表装配（⑤b——表驱动,非配置注册），与扩展模块是两类成员。hopkb 升格时照参考例接入。
 
 ## 工具模块索引【说明】（docs/design/tools/ 子目录——一模块一文件） ^anc-struct-tools-modules
 
@@ -67,8 +88,14 @@ shared-providers 的 `ToolProvider` 契约（见 [[shared-providers#^anc-provide
 | [[tools/file-tools]] | 内置文件/目录工具组十一件（读写侧权限链/写域分域） | ^anc-exec-builtin-file-tools / ^anc-exec-write-scope |
 | [[tools/spec-tree-tools]] | spec 内容工具族六件（读/写/验三面+族总览） | ^anc-exec-spec-tools-family / ^anc-exec-builtin-edit-tree-tool / ^anc-exec-builtin-read-tree-tool / ^anc-exec-builtin-validate-tool |
 | [[tools/dingtalk-notify]] | 钉钉通知通道（不可逆工具）（第一个 requires_commit=true 内置件） | ^anc-tool-dingtalk-notify 等四锚 |
+| [[tools/run-script]] | 执行类工具组一件 run_script（受控脚本执行——模型只选脚本不选命令,解释器引擎按扩展名定;第一个 category=special 内置件） | ^anc-exec-builtin-run-script / ^anc-exec-run-script-no-command-choice 等五锚 |
 
-**requires_commit 现状随第一个不可逆内置工具更新（2026-08-31）**：原"内置全 false"的全局假设废止——按声明逐件定,权威在各模块自己的声明（文件/spec 内容两组恒 false=沙箱内无不可逆;dingtalk-notify true=不可逆）。预检 T1（[[exec-engine]] validateToolSurface）对内置声明形态同样生效。
+**requires_commit 现状随第一个不可逆内置工具更新（2026-08-31）**：原"内置全 false"的全局假设废止——按声明逐件定,权威在各模块自己的声明（文件/spec 内容两组恒 false=沙箱内无不可逆;dingtalk-notify true=不可逆;run_script false——同一份能力在 body 面的 subprocess.run 同档）。预检 T1（[[exec-engine]] validateToolSurface）对内置声明形态同样生效。
+
+**category 现状随第一个 special 内置工具更新（2026-09-22）**：原"内置件恒 basic（零声明可用）"同样不再是全局假设——`run_script` 是 `category='special'`,**须节点显式写 `- 工具: run_script` 才下发**。两条理由（完整三条论证见 [[tools/run-script#^anc-exec-builtin-run-script]]）：
+
+- 它的安全增量是"决定跑什么的人从规约作者变成了执行模型",这一处增量要 opt-in;
+- 白名单缺省关死的装配里 basic 恒列等于往清单里塞一件必然调用失败的工具——那正是 todo/0110 本身的病（教学面许诺供给面没有的东西）。
 
 ## 对外接口清单【封闭】 ^anc-struct-tools-exports
 

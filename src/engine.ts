@@ -13,14 +13,14 @@ import {
   dfsNextStep, propagateCompletion, finalizeForEachCollect,
   collectDescendants, findNonTerminalBefore,
   type TraversalState, getCollectPairs, getAsyncUnitVars } from './engine-traverse.js';
-import { FilePersistence, MemoryPersistence, writeChildParams, readChildParams, stateExists, readState, readVars, flattenVars } from './persistence.js';
+import { FilePersistence, MemoryPersistence, writeChildParams, readChildParams, stateExists, readState, readVars, flattenVars, writeAtomic } from './persistence.js';
 import { HopLog, timestamp, type LogLevel } from './hoplog.js';
 import { resolveDocRefs, formatDocRefContext, DocRefError } from './doc-ref.js';
 import { getParentStepId, isParallelContainer, getForEach } from './ast-helpers.js';
 import type { PersistenceProvider, HostConfig, ToolProvider } from './provider-types.js';
 import { credentialLikeHopEnvKey, hopEnvCredentialError } from './provider-types.js';
 import type { ExecEvent, FailKind, StepFailRecord, StateFile, AssembledContext, RetryRecord, InflightCall } from './runtime-types.js';
-import { PromptAssembler, formatPromptText, formatHumanContext, actRoleKind } from './prompt.js';
+import { PromptAssembler, formatPromptText, formatHumanContext, actRoleKind, stepDeliversReadTool } from './prompt.js';
 import type { SpecAST, StepNode, ExecutableStepType, SubtaskStep, CaseStep, StepSummary, BranchStep, CheckStep, CallStep, ConfirmStep, AskStep, ResponseOption, ActStep, CommitStep, ParallelStep , LoopStep, OutputDecl } from './ast-types.js';
 import { DEFAULT_EXPANSION_MAX } from './ast-types.js';   // @a: anc-exec-subtask-free-expand
 import type { InitResponse, NextResponse, CommandResponse, StatusResponse, VarsResponse, ReplanResponse, StepReady, AbortResponse, AdaptiveNeeded } from './cli-types.js';
@@ -50,6 +50,39 @@ const ENGINE_NOOP_TOOL_PROVIDER: ToolProvider = {
 // 派发启动宽限期（§U2 dispatch-lost 判据）：账面已入而子实例目录未建的允许时长——
 // 覆盖复用模式后台 worker 启动延迟；超此才判 dispatch-lost。// @a: anc-exec-parallel-inflight-reconcile
 const DISPATCH_GRACE_SECONDS = 60;
+
+/** 失败档次判定（^anc-exec-deterministic-no-retry "档次判定只看失败原因的开头",todo/0116）：
+ * 只看失败原因的开头——失败原因里常装着模型写的自由文字（判定打回意见/缺信息自报/工具故障自报/
+ * 驱动方失败说明）,正文出现什么字样都不改变失败类别;修前子串匹配把判定打回意见里引用的前缀字样
+ * 当成类别证据,retry=2 容器第一次打回就被当事务级直接失败。
+ * 开头之前只许剥引擎自己拼的包装前缀——封闭清单,新增包装须同批改这里与设计条款
+ * （漏改的后果是被包的前缀不再被识别,按普通档照扣预算）。 */ // @a: anc-exec-deterministic-no-retry
+export const ENGINE_WRAP_PREFIXES: readonly RegExp[] = [
+  /^Replan API error after \d+ attempts: /,   // dispatcher 重规划流水线 API 重试用完（recordReplanFailure catch 出口）
+  /^Initial plan generation failed: /,          // dispatcher 到步展开首次出计划失败
+];
+/** 事务级前缀（失败根因在结构或子层,任何一轮重跑都同因——直达兜底）。 */
+export const TRANSACTIONAL_PREFIXES: readonly string[] = ['DEPTH_EXCEEDED:', 'CalleeFailure:', 'CONTEXT_OVERFLOW:'];
+/** 步级瞬态前缀（失败绑定本轮输入,下轮带新反馈输入即变——首撞免扣预算）。 */
+export const TRANSIENT_PREFIXES: readonly string[] = ['OUTPUT_TRUNCATED:', 'THINKING_EXHAUSTED:', 'TOOL_LOOP_REPEAT:'];
+/** 失败档次：事务级直达兜底 / 步级瞬态首撞免扣 / 普通照扣预算走阶梯。 */
+export type FailClass = 'transactional' | 'transient' | 'normal';
+/** 判失败档次——设计 HopSop 五步:失败记录类别为确定性即事务级;否则反复剥开头的包装前缀,剩下的开头命中哪份清单就是哪档,都不命中为普通。 */
+export function classifyFailReason(reason: string, failKind?: FailKind): { fail_class: FailClass; transient_prefix?: string } { // @a: anc-exec-deterministic-no-retry
+  if (failKind === 'deterministic') return { fail_class: 'transactional' };
+  let head = reason;
+  for (let stripped = true; stripped;) {
+    stripped = false;
+    for (const re of ENGINE_WRAP_PREFIXES) {
+      const m = re.exec(head);
+      if (m) { head = head.slice(m[0].length); stripped = true; }
+    }
+  }
+  if (TRANSACTIONAL_PREFIXES.some(p => head.startsWith(p))) return { fail_class: 'transactional' };
+  const hit = TRANSIENT_PREFIXES.find(p => head.startsWith(p));
+  if (hit) return { fail_class: 'transient', transient_prefix: hit.slice(0, -1) };
+  return { fail_class: 'normal' };
+}
 
 /** ExecutionEngine 构造选项（stateDir 持久化根/父子实例关联/trace 继承）——cli/mcp-server/dispatcher 建实例消费。见 [[exec-engine#^anc-struct-exec-engine]] */
 export interface EngineOptions {
@@ -511,6 +544,19 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     }
     return iters;
   }
+  // 串行 call 子实例 ID（hopissues/0098）：有祖先 loop 时带全部祖先 loop 的当前轮次（外层→内层）,
+  // 各轮落自己的 calls/<ID>/,re-init 净室不再删掉前面轮次的产出（父层存的常是指向子目录的路径）。
+  // 取全部祖先不只最近一层——内层 loop 每次进入轮次复位为 1,只取一层则嵌套时跨外层轮碰撞。
+  // 复用模式 buildCallProtocol 与独立模式 dispatcher.executeCall 共用本方法。// @a: anc-exec-call-child-iter-id
+  // 直接沿祖先链收集成数组——不借 ancestorLoopIters 的 Record:整数形键（'1'）在对象里恒排最前,
+  // 键序不等于插入序,取 values 会把外层内层颠倒（嵌套用例实抓）。
+  serialCallChildInstance(stepId: string): string {
+    const iters: number[] = [];
+    for (let cur = getParentStepId(stepId); cur; cur = getParentStepId(cur)) {
+      if (this.findStepById(cur)?.step_type === 'loop') iters.unshift(this.loopCounters.get(cur) ?? 1);   // 由内向外遍历,头插得外层→内层
+    }
+    return iters.length === 0 ? stepId : `${stepId}.${iters.join('.')}`;
+  }
   /** load 恢复的配置读取根（host_context 持久化——BUG-I:server 重启恢复据此重读项目级配置）。// @a: anc-mcp-run-restore */
   getRestoredConfigProjectDir(): string | undefined { return this.hostConfig?.config_project_dir; }  // spec 文件路径（load 从 state.json 恢复,server 重启恢复据此重建 DirSpecProvider）// @a: anc-mcp-run-restore
   getRestoredWorkspaceDir(): string | undefined { return this.hostConfig?.workspace_dir; }  // 作业对象根随快照钉住（显式 workspace_dir 的 run 重启恢复不漂回 server cwd）// @a: anc-mcp-run-restore
@@ -698,6 +744,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
       attempt: history.length + 1,
       failure_reason: `【升层指引】${guidance}`,
       steps_tried: [],
+      event_seq: this.execEvents.length,   // 位置戳——L2c 只取本轮起点之后的记录 // @a: anc-exec-retry-feedback-iter-scope
     });
     this.retryHistory.set(containerId, history);
     this.escalatePending = null;
@@ -864,12 +911,14 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
 
     const newlyRunning: StepNode[] = [];
     const condWarnings: { stepId: string; message: string }[] = [];
+    const loopIters: { loopId: string; iter: number }[] = [];
     const state: TraversalState = {
       stepStates: this.stepStates,
       variables: this.variables,
       loopCounters: this.loopCounters,
       newlyRunning,
       condWarnings,
+      loopIters,   // 轮次起点回收通道 // @a: anc-exec-retry-feedback-iter-scope
       hasInflightFor: (id: string) => this.hasInflightFor(id),   // 收齐门 // @a: anc-exec-parallel-reap-drain
       onFailActive: this.onFailActive,   // 兜底激活集 // @a: anc-exec-on-fail
       onFailConsumed: this.onFailConsumed,   // 兜底消耗集（激活/消耗分离）// @a: anc-exec-on-fail
@@ -887,6 +936,9 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     for (const w of condWarnings) {
       this.hoplog?.recordWarn(w.stepId, `[cond-eval] ${w.message}`);
     }
+    // 轮次起点记 loop_iter 事件——须在下方记 step_start 之前（本轮首步的开始事件落在起点之后）
+    // @a: anc-exec-retry-feedback-iter-scope
+    for (const li of loopIters) this.recordEvent(li.loopId, 'loop_iter', String(li.iter));
 
     if (result.kind === 'retry') {
       return this.nextStep();
@@ -2117,7 +2169,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     // hop_env 随派发透传（环境参数对子实例同义——worker/call 子进程各自组合根摘出重建同一张表;
     // 业务 params 优先,防环境键覆盖业务同名——命名空间保留下不可能,防御写法）。// @a: anc-config-hop-env
     if (this.hostConfig?.hop_env) params = { ...this.hostConfig.hop_env, ...params };
-    const paramsJson = JSON.stringify(JSON.stringify(params));   // shell 单参双层引：外层 JSON.stringify 加引号+转义
+    const paramsArg = this.cmdArgValue(kind === 'subtask' ? 'parallel' : 'calls', childInstance, 'params.json', JSON.stringify(params));
     // 卫星日志约定（^anc-obs-parallel-child-satellite）：worker 日志归父 run 目录
     // parallel/<ci>/log（call→calls/<ci>/log）——缺省会各开顶层 run 目录破坏约定
     //（2026-08-11 真机 audit 实撞：断言找不到 worker 子日志）。
@@ -2128,11 +2180,27 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     const logArg = (parentRunDir ? ` --log-dir "${join(parentRunDir, kind === 'subtask' ? 'parallel' : 'calls', childInstance, 'log')}"` : '') + levelArg;
     if (kind === 'subtask') {
       // 同 spec 子树收窄 worker：init 沿用 --parallel-parent/--parallel-child 通道（目录 parallel/<ci>/）
-      return `node "${this.cliAbsPath}" --json run "${this.specPath}" --parallel-parent ${this.instanceId} --parallel-child ${childInstance} --params ${paramsJson} --state-dir "${stateDir}"${logArg}`;
+      return `node "${this.cliAbsPath}" --json run "${this.specPath}" --parallel-parent ${this.instanceId} --parallel-child ${childInstance} --params ${paramsArg} --state-dir "${stateDir}"${logArg}`;
     }
     // call：callee spec 由 driver 按名解析（复用模式寻址归 caller——SpecProvider 是独立模式件），
     // 命令给 init 骨架，<CALLEE_SPEC_PATH> 占位由 driver 填
-    return `node "${this.cliAbsPath}" --json run "<CALLEE_SPEC_PATH:${callee}>" --call-parent ${this.instanceId} --call-step ${childInstance} --params ${paramsJson} --state-dir "${stateDir}"${logArg}`;
+    return `node "${this.cliAbsPath}" --json run "<CALLEE_SPEC_PATH:${callee}>" --call-parent ${this.instanceId} --call-step ${childInstance} --params ${paramsArg} --state-dir "${stateDir}"${logArg}`;
+  }
+
+  // 命令数据值走参数文件（hopissues/0097——旧实装两层 JSON.stringify 塞双引号,反引号与 ${X}
+  // 在双引号内照样被 shell 解释,driver 经 /bin/sh 执行时 node_source 代码块被静默吞掉）:值写进
+  // <父实例目录>/cmd_args/<类别>-<子实例ID>.<后缀>,命令里只放 "@<路径>"。放父目录不放子目录——
+  // 子实例 re-init 净室会整目录删除子实例目录,stale 重拼再执行时文件已不在。类别前缀防 calls/
+  // 与 parallel/ 两个命名空间同名子实例 ID 相撞。每次拼命令都原子覆盖（命令现拼,内容=当次快照）。
+  // 内存实例无目录可落:退回 POSIX 单引号内联（单引号内 sh 不做任何解释,' 写成 '\''）。
+  // @a: anc-exec-cmd-args-file
+  private cmdArgValue(kind: 'calls' | 'parallel', childInstance: string, suffix: 'params.json' | 'feedback.txt', content: string): string {
+    if (!this.instanceDir) return `'${content.replace(/'/g, `'\\''`)}'`;
+    const dir = join(this.instanceDir, 'cmd_args');
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const filePath = join(dir, `${kind}-${childInstance}.${suffix}`);
+    writeAtomic(filePath, content);
+    return `"@${filePath}"`;
   }
 
   // call 协议载荷（^anc-exec-call-protocol-payload,2026-08-14 立项）：普通 call 的 step_ready
@@ -2162,15 +2230,17 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
   private buildCallProtocol(step: CallStep): { init_command: string; child_state_dir: string; child_instance: string; child_advance: string; report_completed: string; report_failed: string } | undefined {
     if (!this.cliAbsPath || !this.specPath) return undefined;
     const stateDir = this.instanceDir ? dirname(this.instanceDir) : '.hopstate';
-    const childInstance = step.step_id;   // 协议 A 子实例 ID=call step id（确定性,init --parent 落 calls/<step>/）
+    // 协议 A 子实例 ID：不在 loop 里=call 步骤号,在 loop 里带各层轮次（init --parent 落 calls/<ID>/）// @a: anc-exec-call-child-iter-id
+    const childInstance = this.serialCallChildInstance(step.step_id);
     // params=引擎 auto-map 快照（取值方一律引擎 ^anc-exec-call-auto-map）+hop_env 透传（同派发纪律）
     let params = this.resolveCallParams(step.step_id);
     if (this.hostConfig?.hop_env) params = { ...this.hostConfig.hop_env, ...params };
-    const paramsJson = JSON.stringify(JSON.stringify(params));
     // 插值形态先求值再进占位（^anc-step-call-dynamic-callee）——求值不出即不拼协议载荷
     // （与 cliAbsPath 缺席同款返回 undefined 形态）,决不让 {表达式} 原文漏进命令。// @a: anc-step-call-dynamic-callee
     const callee = this.resolveCalleeToken(step);
     if (callee === null) return undefined;
+    // 参数表走参数文件（求值失败返回 undefined 之后才落盘——不拼协议就不留文件）// @a: anc-exec-cmd-args-file
+    const paramsArg = this.cmdArgValue('calls', childInstance, 'params.json', JSON.stringify(params));
     // 卫星日志与级别继承同 buildDispatchLaunchCommand（子实例日志归父 run 目录 calls/<ci>/log）
     const parentRunDir = this.hoplog?.getRunDir();
     const levelArg = this.hoplog?.getLevel() === 'debug' ? ' --log-level debug' : '';
@@ -2179,14 +2249,15 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     const childStateDir = join(stateDir, this.instanceId, 'calls');
     // H2 复用半边（D41——2026-08-31 作者拍 A 案）:重跑轮把父层反馈拼进 init_command,
     // CLI init 转 EngineOptions.upstreamFeedback 汇入 standalone 同一注入口。协议命令是
-    // 吐 step_ready 时现拼——每次到该步都重拼,重跑轮自然带当轮反馈。转义同 params 先例。
+    // 吐 step_ready 时现拼——每次到该步都重拼,重跑轮自然带当轮反馈。反馈文本同 params 走参数文件
+    //（^anc-exec-cmd-args-file——打回意见是 LLM 写的任意文本,同样会带反引号与 $）。
     // 载荷经 buildUpstreamFeedbackPayload 公共体拼装——与 standalone 同构（含 prior 历史行
     // 与 24000 尾部截留;初版只拼当轮 reason,callee 看不到此前打回史,review 面二抓分叉后归一）。
     // @a: anc-exec-l2c-retry-feedback
     const combined = this.buildUpstreamFeedbackPayload(step.step_id);
-    const fbArg = combined ? ` --upstream-feedback ${JSON.stringify(JSON.stringify(combined))}` : '';
+    const fbArg = combined ? ` --upstream-feedback ${this.cmdArgValue('calls', childInstance, 'feedback.txt', combined)}` : '';
     return {
-      init_command: `${base} init "<CALLEE_SPEC_PATH:${callee}>" --parent ${this.instanceId} --step ${step.step_id} --params ${paramsJson}${fbArg} --state-dir "${stateDir}" --trace ${this.instanceId}${logArg}`,
+      init_command: `${base} init "<CALLEE_SPEC_PATH:${callee}>" --parent ${this.instanceId} --step ${step.step_id} --child-instance ${childInstance} --params ${paramsArg}${fbArg} --state-dir "${stateDir}" --trace ${this.instanceId}${logArg}`,
       child_state_dir: childStateDir,
       child_instance: childInstance,
       // 循环起步命令（cc:call 真机实撞:init 建的子实例是"新建未推进"态,skill 说"走标准循环"
@@ -3216,10 +3287,11 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
 
     // paused 摘要装配（todo/0081——看护方判"该叫人了"只需 reason+step,卡全文归 resume 通道）
     // // @a: anc-cli-status-response
-    let pauseSummary: { pause_reason?: string; paused_step_id?: string } = {};
+    // call_path 仅嵌套串行调用停点在场（todo/0105）// @a: anc-cli-status-nested-pause
+    let pauseSummary: { pause_reason?: string; paused_step_id?: string; call_path?: string[] } = {};
     if (executionStatus === 'paused') {
       const d = this.detectPausedState();
-      if (d) pauseSummary = { pause_reason: d.reason, paused_step_id: d.stepId };
+      if (d) pauseSummary = { pause_reason: d.reason, paused_step_id: d.stepId, ...(d.callPath && d.callPath.length > 0 ? { call_path: d.callPath } : {}) };
     }
 
     // completed 标记与步骤态一致性核（hopissues/0093——病态快照〔盘外写入/回放重建〕形态:
@@ -3358,17 +3430,20 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
   // 见 design/spec-observability.md ^anc-obs-step-done-timing。// @a: anc-obs-step-done-timing
   private propagateAndRecord(stepId: string): void {
     const newlyDone: { node: StepNode; failed: boolean }[] = [];
+    const loopIters: { loopId: string; iter: number }[] = [];
     propagateCompletion(stepId, {
       stepStates: this.stepStates,
       variables: this.variables,
       loopCounters: this.loopCounters,
       newlyDone,
+      loopIters,   // 轮次起点回收通道（轮进发生在级联里）// @a: anc-exec-retry-feedback-iter-scope
       hasInflightFor: (id: string) => this.hasInflightFor(id),   // 收齐门 // @a: anc-exec-parallel-reap-drain
       onFailActive: this.onFailActive,   // @a: anc-exec-on-fail
       onFailConsumed: this.onFailConsumed,
       pendingChainFeeds: this.pendingChainFeeds,   // 续链失败半边待喂账（壳完结即喂）// @a: anc-exec-parallel-reap-chain
       retryCounters: this.retryCounters,
     }, this.spec!);
+    for (const li of loopIters) this.recordEvent(li.loopId, 'loop_iter', String(li.iter));   // 先于 hoplog 早退——事件流不依赖 hoplog
     if (!this.hoplog) return;
     // worker 掩码祖先豁免（^anc-obs-step-done-timing 豁免条,todo/0022）：subtreeRoot 的真祖先
     // 是 executeSubtreeOnly 设的 scope 掩码——结构状态非执行态,worker 内从未 start;对它们记
@@ -3540,12 +3615,14 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
       seen.add(k);
       return true;
     });
-    // inline 标志（v2 ^anc-exec-llm-inline-context）:workZone 照传（预览通道要落全文盘）,
-    // inlinePreview=true——中小节全文内联,超 INLINE_PREVIEW_MAX 大节转预览条目（真内容节选
+    // inline 标志（^anc-exec-llm-inline-context）:workZone 照传（预览通道要落全文盘）,
+    // inline 两档——中小节全文内联,超 INLINE_PREVIEW_MAX 大节对能 read 的步骤转预览条目（真内容节选
     // 非 $file 死引用;旧形态=空串 workZone 一刀切全内联,ppt4 41K 变量 12 处重复内联 57% 超线的病根同族）
     // specDir=两级基准第一级（spec 自带材料随 spec 走）;specPath 缺席（内存态）时 undefined 跳过该级
     // 修订短 prompt 免注入（走查缺陷 B:设计明写短 prompt"不带生成教材",而 doc-ref 注入在
-    const fragments = resolveDocRefs(uniq, host.workspace_dir, host.sandbox, this.getWorkZone(), host.hop_env, this.specPath ? dirname(resolve(this.specPath)) : undefined, this.inlineLlmContext);   // hop_env 展开随注入 // @a: anc-exec-doc-ref-hop-env, anc-exec-doc-ref-resolve
+    // inline 档按本步有没有 read 选（v3 todo/0115,与 L4 输入预览同一判定 stepDeliversReadTool）// @a: anc-exec-llm-inline-context
+    const inlineMode = this.inlineLlmContext ? (stepDeliversReadTool(step) ? 'preview' : 'full') : undefined;
+    const fragments = resolveDocRefs(uniq, host.workspace_dir, host.sandbox, this.getWorkZone(), host.hop_env, this.specPath ? dirname(resolve(this.specPath)) : undefined, inlineMode);   // hop_env 展开随注入 // @a: anc-exec-doc-ref-hop-env, anc-exec-doc-ref-resolve
     const text = formatDocRefContext(fragments);
     if (text) context.doc_ref_context = text;
     // HopLog 流控字段延后记录——此刻 step 尚未 recordStepStart（在本方法之后），
@@ -3587,7 +3664,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     if (this.terminalState === 'completed') return 'completed';
     // paused 档（todo/0081——终态凌驾之后、步骤态推导之前）：停驻等外部应答如实转述。
     // 此前枚举缺 paused,停驻报 running——看护方接 CLI status 通道感知不到"引擎在等人",
-    // 停点挂死（2026-09-09 实撞 30+ 分钟）。判定三源见 detectPausedState。
+    // 停点挂死（2026-09-09 实撞 30+ 分钟）。判定五源见 detectPausedState（④⑤为 todo/0105 追加）。
     // // @a: anc-cli-status-response
     if (this.detectPausedState()) return 'paused';
     const steps = this.spec?.steps ?? [];
@@ -3605,10 +3682,13 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
    * ②confirm/ask 停驻=某 running 态步骤的 step_type∈{confirm,ask}（暂停态由 running
    * 编码,^anc-exec-pause-persist）;③盘卡 paused.json 在场且经陈卡对账（卡 step_id 在
    * 步骤账里仍 running 才认——卡是递送件非状态源,崩溃路径可残留陈卡;对账纪律与 MCP
-   * run_status 兜底路同款）。pause_reason 优先取卡内值,无卡按判源推。已知边界（设计
-   * 显式不覆盖）：network 暂停由 dispatcher 内存组装、不落卡、步骤回置 pending——快照
-   * 侧结构性判不出,且是非人工停点不在感知痛点面。 // @a: anc-cli-status-response */
-  private detectPausedState(): { reason: string; stepId: string } | null {
+   * run_status 兜底路同款）。pause_reason 优先取卡内值,无卡按判源推。
+   * todo/0105 追加两源（^anc-cli-status-nested-pause——作者拍甲案"顶层+嵌套都看见"）：
+   * ④网络暂停=某步 pending 且事件流里它的最后一条事件是 network_pause（不落卡,但状态账
+   * 有痕迹）;⑤嵌套串行调用=running 的非 parallel call 步,读 calls/<子实例>/ 子快照递归
+   * 判定,取最深层停点并头插调用步号成 callPath。parallel 子实例不下钻——run 整体状态归
+   * parallel-execution ^anc-exec-parallel-hitl-queue 第 3 条。 // @a: anc-cli-status-response */
+  private detectPausedState(): { reason: string; stepId: string; callPath?: string[] } | null {
     // 源③优先读卡（卡有完整 pause_reason）,但必须过陈卡对账
     const card = this.readPausedCardRaw();
     if (card && typeof card['step_id'] === 'string') {
@@ -3629,7 +3709,38 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
         return { reason: node.step_type === 'confirm' ? 'confirm' : 'ask', stepId: id };
       }
     }
+    // 源④：网络暂停——该步已回置 pending,事件流里它的最后一条事件仍是 network_pause
+    // （重新 step_start 或完成后末事件就不是它了,自然不再算）。// @a: anc-cli-status-nested-pause
+    for (const [id, state] of this.stepStates) {
+      if (state !== 'pending') continue;
+      if (this.lastEventOf(id) === 'network_pause') return { reason: 'network', stepId: id };
+    }
+    // 源⑤：嵌套串行调用下钻——子流程快照在 calls/<serialCallChildInstance>/,递归同一套判定。
+    // 纯内存实例/子目录缺席/读失败一律当该层无停点（status 是观测面,不因观测失败而失败）。
+    // // @a: anc-cli-status-nested-pause
+    if (this.instanceDir) {
+      for (const [id, state] of this.stepStates) {
+        if (state !== 'running') continue;
+        const node = this.findStepById(id);
+        if (!node || node.step_type !== 'call' || (node as CallStep).parallel) continue;
+        const childDir = join(this.instanceDir, 'calls', this.serialCallChildInstance(id));
+        if (!existsSync(join(childDir, 'state.json'))) continue;
+        let child: ExecutionEngine;
+        try { child = ExecutionEngine.load(childDir); } catch { continue; }
+        if (child.terminalState) continue;
+        const d = child.detectPausedState();
+        if (d) return { reason: d.reason, stepId: d.stepId, callPath: [id, ...(d.callPath ?? [])] };
+      }
+    }
     return null;
+  }
+
+  /** 某步在执行事件流里的最后一条事件名（无则 undefined）——源④网络暂停判据用。 */
+  private lastEventOf(stepId: string): string | undefined {
+    for (let i = this.execEvents.length - 1; i >= 0; i--) {
+      if (this.execEvents[i].step_id === stepId) return this.execEvents[i].event;
+    }
+    return undefined;
   }
 
   /** 实例主动中止（^anc-exec-abort——todo/0007 第3项,用户"不要了"的暗管）。
@@ -3657,8 +3768,12 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     return this.stepFailReasons.get(stepId)?.reason ?? 'Unknown failure';
   }
 
-  private handleFailStepRetry(stepId: string, reason: string): void {
+  private handleFailStepRetry(stepId: string, reason: string, lastFailure?: string): void {
     let subtask = this.findNearestSubtaskAncestor(stepId, true);   // 失败路径:退火跳级留痕 // @a: anc-exec-commit-anneal
+    // 烧尽上浮带上内层最后一次失败原文（todo/0107）：记账与终态原因用 full,档次判定只看 reason——
+    // 原文参与判定会让内层的 CONTEXT_OVERFLOW 之类改变外层的重试行为。
+    // @a: anc-exec-retry-feedback-iter-scope
+    const full = lastFailure ? `${reason}（最后一次失败：${lastFailure}）` : reason;
 
     // 升级链围栏（0018——worker 越围栏根因）：worker 子实例（subtreeRoot 在场）的失败升级
     // 不得越过子树根——子树外祖先 subtask 是父实例的事务边界,不是本 worker 的。越界取用的
@@ -3687,7 +3802,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
         }
       }
       // 实例级终止标记：容器级联（含 failed child 的祖先链）不允许吞掉这次失败
-      this.terminalFailure = { stepId, reason };
+      this.terminalFailure = { stepId, reason: full };
       this.propagateAndRecord(stepId);
       return;
     }
@@ -3696,7 +3811,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     // 带未激活兜底的退火边界——不扣预算不重跑,立即激活兜底（防不可逆重放,善后照走）。
     if (this.hasCommitInRetryScope(subtask.step_id)) {
       if (this.activateOnFail(subtask, stepId)) return;
-      this.markSubtaskFailed(subtask);   // 兜底已用/意外缺失——照常上浮
+      this.markSubtaskFailed(subtask, full);   // 兜底已用/意外缺失——照常上浮
       return;
     }
 
@@ -3708,26 +3823,24 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     // 父层重跑=再赌)/CONTEXT_OVERFLOW(材料总量超窗,重试追加反馈只增不减)/fail_kind 枚举(产错方
     // 显式标记含 SCHEMA_MISMATCH 确定性档)。
     // **步级瞬态（乙案:免扣预算继续重试,兜底问人恒等预算耗尽单入口）**——OUTPUT_TRUNCATED(输出
-    // 超长绑定本轮生成选择,下轮反馈工单变了输入就变)/THINKING_EXHAUSTED(反刍绑定本轮输入形态)。
+    // 超长绑定本轮生成选择,下轮反馈工单变了输入就变)/THINKING_EXHAUSTED(反刍绑定本轮输入形态)/
+    // TOOL_LOOP_REPEAT(同签名复读,^anc-exec-toolloop-repeat-break)。
     // 免预算有界化:同步骤同前缀首次免扣,复发照扣(deterministicWaived 记账随快照持久——裸免=
     // 预算永不减兜底 ask 永不到,比旧形态更糟)。adaptive 不豁免。
+    // 档次判定只看失败原因的开头（classifyFailReason,todo/0116）;CONTEXT_OVERFLOW 的产生点在
+    // dispatcher 已记 fail_kind='deterministic',前缀判据兜复用模式驱动方原文上报 // @a: anc-exec-toolloop-ctx-degrade
     // @a: anc-exec-deterministic-no-retry
     const failRec = this.stepFailReasons.get(stepId);
-    const transactionalDeterministic = failRec?.fail_kind === 'deterministic'
-      || reason.startsWith('DEPTH_EXCEEDED:')
-      || reason.startsWith('CalleeFailure:')
-      || reason.includes('CONTEXT_OVERFLOW:');   // 压缩降级后仍超模型窗——重发必然同因更大(0070 四连撞实撞)// @a: anc-exec-toolloop-ctx-degrade
-    if (transactionalDeterministic) {
+    const cls = classifyFailReason(reason, failRec?.fail_kind);
+    if (cls.fail_class === 'transactional') {
       this.recordEvent(subtask.step_id, 'retry', 'skipped: deterministic failure（事务级——重跑必然同因,直达兜底）');
       if (this.activateOnFail(subtask, stepId)) return;   // 兜底照走（善后非重放）
-      this.markSubtaskFailed(subtask);
+      this.markSubtaskFailed(subtask, full);
       return;
     }
-    const stepTransient = reason.includes('OUTPUT_TRUNCATED:')   // 步级瞬态:下轮带新反馈输入即变（0037 环二 9 轮修过关实证）
-      || reason.includes('THINKING_EXHAUSTED:')   // @a: anc-exec-thinking-exhausted
-      || reason.includes('TOOL_LOOP_REPEAT:');   // 同签名复读——同输入重发大概率原样复读,免预算首撞重试（^anc-exec-toolloop-repeat-break） // @a: anc-exec-toolloop-repeat-break
-    if (stepTransient) {
-      const truncPrefix = reason.includes('OUTPUT_TRUNCATED:') ? 'OUTPUT_TRUNCATED' : reason.includes('TOOL_LOOP_REPEAT:') ? 'TOOL_LOOP_REPEAT' : 'THINKING_EXHAUSTED';
+    // 步级瞬态:下轮带新反馈输入即变（0037 环二 9 轮修过关实证）// @a: anc-exec-thinking-exhausted // @a: anc-exec-toolloop-repeat-break
+    if (cls.fail_class === 'transient') {
+      const truncPrefix = cls.transient_prefix!;
       const waiveKey = `${stepId}|${truncPrefix}`;
       if (!this.deterministicWaived.has(waiveKey)) {
         this.deterministicWaived.add(waiveKey);
@@ -3748,7 +3861,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
 
     if (remaining <= 0) {
       if (this.activateOnFail(subtask, stepId)) return;   // 耗尽先看兜底（^anc-exec-on-fail）// @a: anc-exec-on-fail
-      this.markSubtaskFailed(subtask);
+      this.markSubtaskFailed(subtask, full);
       return;
     }
 
@@ -3760,8 +3873,9 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     const history = this.retryHistory.get(subtask.step_id) ?? [];
     history.push({
       attempt: attemptsUsed,
-      failure_reason: reason,
+      failure_reason: full,
       steps_tried: this.summarizeChildren(subtask),
+      event_seq: this.execEvents.length,   // 位置戳——L2c 只取本轮起点之后的记录 // @a: anc-exec-retry-feedback-iter-scope
     });
     this.retryHistory.set(subtask.step_id, history);
 
@@ -3787,28 +3901,26 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
   // "机械缺陷A"而非"打回意见X"——意见永远到不了重拆现场,分层白做）。
   // 无重试容器或全链无历史 → undefined（首跑不渲染）。// @a: anc-exec-l2c-retry-feedback
   getActiveRetryFeedback(stepId: string): { attempt: number; reason: string; prior?: string[] } | undefined {
-    // 首跑步骤不注入（hopissues/0073——重试反馈的语义是"重做的活要保持已落实的修正",
-    // 首次执行的步骤没有旧活可保持,注入祖先容器的打回工单是受众错位:实撞 step 1.1
-    // 一次重试成功后,同容器 1.6.1/1.8.1 等首跑步骤 prompt 全带 stale 工单。判据机械=
-    // 重跑参与者才注入:本步 step_start 事件≥2 次（失败轮+重跑轮——含容器重置连带重跑的
-    // 兄弟步,它们的已落实修正正是要保持的）或本步自己有失败记录（首轮失败当轮反馈）;
-    // start 恰 1 次且零失败史且零升层史=纯首跑,不注入（升层豁免:escalate 问路的步骤
-    // 无失败记录但人给的指引正是它重跑要吃的——^anc-exec-check-escalate 反馈借道本通道）。
-    // @a: anc-exec-l2c-retry-feedback
-    const startCount = this.execEvents.filter(e => e.step_id === stepId && e.event === 'step_start').length;
-    if (startCount <= 1 && !this.stepFailReasons.has(stepId)
-        && !this.execEvents.some(e => e.step_id === stepId && e.event === 'escalate')) return undefined;
-    // 祖先链收集（带 worker 子树围栏——与 handleFailStepRetry 同款,不越 subtreeRoot）
+    // 祖先链收集（带 worker 子树围栏——与 handleFailStepRetry 同款,不越 subtreeRoot）。每个容器过两道筛
+    // （todo/0107 按轮生效——loop 新一轮=新迭代全新事务,前几轮的重试反馈不属于本轮）：
+    // ①只取本轮记录（位置戳在容器本轮起点之后,缺戳按本轮）;②本步须是本轮的重跑参与者
+    // （hopissues/0073 受众闸——首跑步骤没有旧活可保持,注入打回工单是受众错位;判据只数本轮事件,
+    // 实撞:意见轮第 4 轮起分诊步吃到第 1~3 轮的旧机械失败,照上轮旧意见基准抄回成 revise 死循环）。
+    // @a: anc-exec-l2c-retry-feedback, anc-exec-retry-feedback-iter-scope
     const chain: { id: string; history: RetryRecord[] }[] = [];
     let id = stepId;
     while (id.includes('.')) {
       id = id.slice(0, id.lastIndexOf('.'));
       if (this.subtreeRoot && id !== this.subtreeRoot && !this.subtreeRoot.startsWith(id + '.') && !id.startsWith(this.subtreeRoot + '.') ) break;
       const node = this.findStepById(id);
-      if (node && (node.step_type === 'subtask' || node.step_type === 'case')) {
-        const h = this.retryHistory.get(id);
-        if (h && h.length > 0) chain.push({ id, history: h });
-      }
+      if (!node || (node.step_type !== 'subtask' && node.step_type !== 'case')) continue;
+      const h = this.retryHistory.get(id);
+      if (!h || h.length === 0) continue;
+      const windowStart = this.iterWindowStart(id);
+      const current = h.filter(r => r.event_seq === undefined || r.event_seq > windowStart);
+      if (current.length === 0) continue;
+      if (!this.isRerunParticipant(stepId, windowStart)) continue;
+      chain.push({ id, history: current });
     }
     if (chain.length === 0) return undefined;
     // 主容器=最近发生 retry 事件的那个（事件流从尾扫;无事件命中回退最近祖先）
@@ -3834,6 +3946,42 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
         .map(c => { const l = c.history[c.history.length - 1]; return `（外围容器 ${c.id} 第 ${l.attempt} 次:${trunc(l.failure_reason)}）`; }),
     ].slice(-4);
     return { attempt: last.attempt, reason: last.failure_reason, ...(prior.length ? { prior } : {}) };
+  }
+
+  /** 容器的本轮起点：它全部祖先 loop 里最晚一条轮进事件（loop_iter 且 detail≠'1'）的下标;没有返回 -1。
+   * 入口事件不划界线——外层容器重试重建时内层 loop 重新进入仍是同一次事务的重做,重建前的意见要继续可见。
+   * 取全部祖先里最晚的而不是先看最内层:外层轮进后内层只记入口,内层最后一条轮进停在外层上一轮,是过期界线。
+   * // @a: anc-exec-retry-feedback-iter-scope */
+  private iterWindowStart(containerId: string): number {
+    const loops = new Set<string>();
+    for (let cur = getParentStepId(containerId); cur; cur = getParentStepId(cur)) {
+      if (this.findStepById(cur)?.step_type === 'loop') loops.add(cur);
+    }
+    if (loops.size === 0) return -1;
+    for (let i = this.execEvents.length - 1; i >= 0; i--) {
+      const e = this.execEvents[i];
+      if (e.event === 'loop_iter' && e.detail !== '1' && loops.has(e.step_id)) return i;
+    }
+    return -1;
+  }
+
+  /** 受众闸（0073 判据,todo/0107 起按轮计数）：有本轮起点（windowStart≥0）只数起点之后——本步 step_start≥2 /
+   * 有 step_failed / 有 escalate;无起点沿用原判据整条事件流计数。
+   * // @a: anc-exec-l2c-retry-feedback, anc-exec-retry-feedback-iter-scope */
+  private isRerunParticipant(stepId: string, windowStart: number): boolean {
+    if (windowStart < 0) {
+      const startCount = this.execEvents.filter(e => e.step_id === stepId && e.event === 'step_start').length;
+      return startCount > 1 || this.stepFailReasons.has(stepId)
+        || this.execEvents.some(e => e.step_id === stepId && e.event === 'escalate');
+    }
+    let starts = 0;
+    for (let i = windowStart + 1; i < this.execEvents.length; i++) {
+      const e = this.execEvents[i];
+      if (e.step_id !== stepId) continue;
+      if (e.event === 'step_failed' || e.event === 'escalate') return true;
+      if (e.event === 'step_start') starts++;
+    }
+    return starts > 1;
   }
 
   /** on fail 兜底步失败上下文（^anc-exec-onfail-context,todo/0078）：stepId 的祖先链上有
@@ -4096,21 +4244,38 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     this.onFailActive.add(onFail.step_id);
     this.stepStates.set(onFail.step_id, 'pending');
     this.setSubtreePending(getChildren(onFail));
+    const skipPending = (nodes: StepNode[]): void => {
+      for (const n of nodes) {
+        if (this.stepStates.get(n.step_id) === 'pending') this.stepStates.set(n.step_id, 'skipped');
+        if (hasChildren(n)) skipPending(getChildren(n));
+      }
+    };
+    // 失败点到容器之间的中间容器终态化（第五样,hopissues/0104）：失败点嵌在 branch/case、loop
+    // 下时,链上中间容器停在 running——其完成判定只在完成级联里做,失败升级路径不经过。不终态化
+    // 则兜底走完后级联在本容器层判"子步全终态"不成立而返回,容器永不收场、宿主循环断轮。
+    // 链上子树 pending 标 skipped;running 中间容器标 failed（同 branch 语义:激活的 case 败即
+    // branch 败）,不做完成收尾——本轮已放弃,容器输出归兜底赋值。失败点是直接子步时链为空。
+    if (failedStepId) {
+      const failedNode = this.findStepById(failedStepId);
+      if (failedNode && hasChildren(failedNode)) skipPending(getChildren(failedNode));
+      let pid = getParentStepId(failedStepId);
+      while (pid && pid !== container.step_id) {
+        const mid = this.findStepById(pid);
+        if (mid && hasChildren(mid)) skipPending(getChildren(mid));
+        if (this.stepStates.get(pid) === 'running') {
+          this.stepStates.set(pid, 'failed');
+          this.hoplog?.recordStepFailed(pid, `container '${pid}' failed`);
+        }
+        pid = getParentStepId(pid);
+      }
+    }
     // 前序 pending 常规子步标 skipped——本轮放弃（容器若后续重试,resetSubtaskForRetry 整树
     // 置 pending 照常复活,与既有重试语义自洽）。失败步自身保持 failed 不动。
     for (const sibling of getChildren(container)) {
       if (sibling.step_id === onFail.step_id) break;
       if (this.stepStates.get(sibling.step_id) === 'pending') {
         this.stepStates.set(sibling.step_id, 'skipped');
-        if (hasChildren(sibling)) {
-          const skipAll = (nodes: StepNode[]): void => {
-            for (const n of nodes) {
-              if (this.stepStates.get(n.step_id) === 'pending') this.stepStates.set(n.step_id, 'skipped');
-              if (hasChildren(n)) skipAll(getChildren(n));
-            }
-          };
-          skipAll(getChildren(sibling));
-        }
+        if (hasChildren(sibling)) skipPending(getChildren(sibling));
       }
     }
     this.stepStates.set(container.step_id, 'running');
@@ -4120,7 +4285,9 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     return true;
   }
 
-  private markSubtaskFailed(subtask: RetryContainer): void {
+  /** lastFailure=本容器最后一次失败的完整原因,上浮时交外层记账（todo/0107——原先只上浮"retry exhausted",
+   * 内层最后一次被打回的意见就此丢失）。// @a: anc-exec-retry-feedback-iter-scope */
+  private markSubtaskFailed(subtask: RetryContainer, lastFailure?: string): void {
     // fail 不碰值空间（2026-08-09 函数级 fail 定稿）——容器输出不置 None
     this.pendingChainFeeds = this.pendingChainFeeds.filter(f => f.chain_child_id !== subtask.step_id);   // 壳终 failed:续链待喂账销账,失败不贡献元素 // @a: anc-exec-parallel-reap-chain
     this.stepStates.set(subtask.step_id, 'failed');
@@ -4159,7 +4326,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     // retry 耗尽 = 标准 fail（2026-08-09 作者定）——容器作为"一个步骤"继续走升级链,
     // 找外层事务边界扣其预算重跑;原实现只 propagateAndRecord(完成级联),外层 retry
     // 形同虚设,"每层 caller 在自己的 retry 范围内尝试"的监督链在第一层就断。
-    this.handleFailStepRetry(subtask.step_id, `subtask '${subtask.step_id}' retry exhausted`);
+    this.handleFailStepRetry(subtask.step_id, `subtask '${subtask.step_id}' retry exhausted`, lastFailure);
   }
 
 

@@ -27,20 +27,33 @@
 | 关键决策 | 决策 | — |
 | CLI 命令表 | 说明 | — |
 | 命令契约 | 契约 | `anc-cli-dispatch` / `anc-cli-instance-resolve` / `anc-cli-state-load` / `anc-cli-list` / `anc-cli-pack` / `anc-cli-install-skill` / `anc-cli-carrier-home-resolution` / `anc-cli-notify-reuse` / `anc-cli-abort` |
-| CLI 响应类型 | 契约 | `anc-cli-response-types`（组标题）/ `anc-cli-init-response` / `anc-cli-validate-response` / `anc-cli-list-response` / `anc-cli-next-response` / `anc-cli-step-ready` / `anc-cli-execution-paused` / `anc-cli-command-response` / `anc-cli-vars-response` / `anc-cli-status-response` / `anc-cli-abort-response` / `anc-cli-replan-response` / `anc-cli-branch-request` |
+| CLI 响应类型 | 契约 | `anc-cli-response-types`（组标题）/ `anc-cli-init-response` / `anc-cli-validate-response` / `anc-cli-list-response` / `anc-cli-next-response` / `anc-cli-step-ready` / `anc-cli-execution-paused` / `anc-cli-command-response` / `anc-cli-vars-response` / `anc-cli-status-response` / `anc-cli-status-nested-pause` / `anc-cli-abort-response` / `anc-cli-replan-response` / `anc-cli-branch-request` |
 | JSON I/O 约定 | 契约 | `anc-cli-json-io` / `anc-cli-file-arg-safety` |
 | JSON 交互示例 | 说明 | — |
 
 ## 定位【契约】 ^anc-struct-hop-cli
 
-> **模块版本**：hop-cli `v0.29.0`（2026-09-20）。本版=0096 陈旧副本新鲜度提示（^anc-cli-stale-skill-scan——install-skill 装载后只读扫描旧位置,本器产物落后报 stale_notes 携升级路径;InstallSkillResponse 补字段）。上版 v0.28.0=0086 语义审计修复批（abort 契约句独立带锚/HopLog 恒开条款带锚/分级表补四锚/响应类型章补 InstallSkillResponse+PackResponse/出口清单勘误四符号/@file 清单补 --tool-result/CALL_PROTOCOL_MISUSE 闸回写/work_zone 固定名同步/install rmSync 条款/计数句去数字改指权威/钝感句容错两分/debug_step 入双执行闸枚举）。上版（v0.27.3）=0081 批（StatusResponse/VarsResponse 枚举补 paused+status 两摘要字段+VarsResponse 存量漏 aborted 修）。0.x 未承诺稳定。**CLI 命令+参数+JSON 响应结构是包级对外稳定面**——driver 依赖,破坏即破坏 driver,按 `^anc-meta-module-evolution` 属包级 MAJOR 候选；cli-types 子文件即此对外契约。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
+> **模块版本**：hop-cli `v0.33.0`（2026-09-25）。0.x 未承诺稳定。
+> - 本版=status 对网络暂停与嵌套串行调用子流程里的停点也报 paused,StatusResponse 新增可选字段 call_path（^anc-cli-status-nested-pause,todo/0105 作者拍甲案）；
+> - 上版 v0.32.0=init 新增 --child-instance（循环里的串行 call 子实例按轮次命名,子实例 ID 与步骤号分开传,hopissues/0098）；
+> - 上版 v0.31.0=init 的 --upstream-feedback 支持 @file（引擎拼给 driver 的命令里数据值一律走参数文件,hopissues/0097）；
+> - 上版 v0.30.0=PR#8 opencode 两契约行为（--mcp 注册缺省 enabled:false 防复用模式误调独立模式工具〔hopissues/0099〕+ hopbuild 族装 opencode 时 SKILL.md 副本 /hopspec run 改写为隐式触发〔hopissues/0101〕）+ 联审修复批；
+> - 上版 v0.29.0=0096 陈旧副本新鲜度提示（^anc-cli-stale-skill-scan——install-skill 装载后只读扫描旧位置,本器产物落后报 stale_notes 携升级路径;InstallSkillResponse 补字段）；
+> - 上版 v0.28.0=0086 语义审计修复批（abort 契约句独立带锚/HopLog 恒开条款带锚/分级表补四锚/响应类型章补 InstallSkillResponse+PackResponse/出口清单勘误四符号/@file 清单补 --tool-result/CALL_PROTOCOL_MISUSE 闸回写/work_zone 固定名同步/install rmSync 条款/计数句去数字改指权威/钝感句容错两分/debug_step 入双执行闸枚举）；
+> - 上版（v0.27.3）=0081 批（StatusResponse/VarsResponse 枚举补 paused+status 两摘要字段+VarsResponse 存量漏 aborted 修）；
+> - **CLI 命令+参数+JSON 响应结构是包级对外稳定面**——driver 依赖,破坏即破坏 driver,按 `^anc-meta-module-evolution` 属包级 MAJOR 候选；cli-types 子文件即此对外契约；
+> - **逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
 >
-> **`--version` 单一事实源 = package.json【契约】** ^anc-cli-version-single-source：`program.version()` **不硬编码字面量**，在构建期从包 `package.json` 的 `version` 字段读取——`hopjit --version` 输出恒等于已安装包版本，杜绝"发版忘同步 CLI 字面量"的脱节（0.1.1 发布时 CLI 仍自报 0.1.0 即此病）。读取方式：编译产物 `dist/cli.js` 相对定位包根 `package.json`（`fileURLToPath(import.meta.url)` → 上溯 `dist/../package.json`），读失败则回退字符串常量兜底（不阻断 CLI 启动）。
+> **`--version` 单一事实源 = package.json【契约】** ^anc-cli-version-single-source：`program.version()` **不硬编码字面量**，在构建期从包 `package.json` 的 `version` 字段读取——`hopjit --version` 输出恒等于已安装包版本，杜绝"发版忘同步 CLI 字面量"的脱节（0.1.1 发布时 CLI 仍自报 0.1.0 即此病）。
+> - 读取方式：编译产物 `dist/cli.js` 相对定位包根 `package.json`（`fileURLToPath(import.meta.url)` → 上溯 `dist/../package.json`），读失败则回退字符串常量兜底（不阻断 CLI 启动）。
 
 **① 自身定位**：HopCLI 是 ExecutionEngine 的命令行路由薄壳——把命令行参数解析为对 Engine 方法的一次调用，再按输出分流契约序列化结果（缺省 YAML，机器调用显式 `--json`）。它**不含任何业务逻辑**：步骤调度、状态机、变量作用域、重试策略全在 Engine 内（见 [[exec-engine]]）。CLI 的全部职责是「解析参数 → 路由到一个 Engine 方法 → 序列化结果」。（解释性类比：类似数据库的命令行客户端——只做协议转换，不做查询规划。）
 
 **② 与其他 HopType 的关系**：
-- **ExecutionEngine 的薄封装层**：每个命令对应一个**主** Engine 方法（`init`→`init_execution`、`submit_and_fetch_next`→`completeAndAdvance`、`debug_step`→`next_step`……），主方法前后允许**推进面固定序列**（claimDriverChannel/reconcileInflight/advanceToCaller 这类每次调用形态恒定的编排薄链——reap_and_fetch_next 五连调、advance 四连调即此形态;2026-09-12 0088 批按实况收窄原"不组合多个 Engine 调用"过宽表述）。CLI 不含业务判定（判定恒归引擎——组合的每一环都是无条件顺序调用,无 CLI 侧分支裁量;escalate 应答分派按引擎自报的待答态查询分流,查询归引擎判定仍不在 CLI）、不在命令间维护状态。**节奏与消化逻辑已全部归引擎**（[[exec-engine#^anc-exec-advance-to-caller]]）——CLI 是真正的纯薄壳，无任何业务逻辑例外
+- **ExecutionEngine 的薄封装层**：每个命令对应一个**主** Engine 方法（`init`→`init_execution`、`submit_and_fetch_next`→`completeAndAdvance`、`debug_step`→`next_step`……）。
+  - 主方法前后允许**推进面固定序列**（claimDriverChannel/reconcileInflight/advanceToCaller 这类每次调用形态恒定的编排薄链——reap_and_fetch_next 五连调、advance 四连调即此形态;2026-09-12 0088 批按实况收窄原"不组合多个 Engine 调用"过宽表述）；
+  - CLI 不含业务判定（判定恒归引擎——组合的每一环都是无条件顺序调用,无 CLI 侧分支裁量;escalate 应答分派按引擎自报的待答态查询分流,查询归引擎判定仍不在 CLI）、不在命令间维护状态；
+  - **节奏与消化逻辑已全部归引擎**（[[exec-engine#^anc-exec-advance-to-caller]]）——CLI 是真正的纯薄壳，无任何业务逻辑例外
 - **热路径不经 CLI**：StepDispatcher↔Engine 的循环走进程内 TypeScript API（[[exec-engine]] 决策 1），零进程边界开销。CLI 子进程 IPC 仅用于外部人工交互、调试、HITL 介入
 - **面向 Agent 与人双消费**：缺省 YAML 供人在终端阅读；外部脚本/Agent 显式传全局 `--json` 取得单行 JSON
 - **不碰 Provider 抽象、不碰持久化**：CLI 不持有 ToolProvider/KnowledgeProvider，不直接读写 state.json——状态由 Engine 经 `state_dir` 管理，CLI 只传 `state_dir` 路径
@@ -53,7 +66,11 @@
 
 **②b 对外接口清单【封闭】** ^anc-struct-hop-cli-exports：
 
-> 本表是 hop-cli 对外依赖面的封闭集，表外符号即内部实现。出口文件 = `cli-types.ts`（响应/请求 JSON 契约，是 driver 依赖的包级对外稳定面）。`cli.ts` 是可执行入口薄壳，**但并非零导出**（原文"无被 import 的对外符号"与实况不符,2026-09-11 审计勘误）——实况四个测试面导出符号：`program`（`export { program }`,src/cli.ts:1666,消费方=tests——tests/cli.test.ts:19 直接 import 用 `program.parseAsync` 进程内驱动命令）、`bootstrapStandaloneConfig`/`readStandaloneCredentialNames`/`detectCcHopjitRegistration`（src/cli.ts:923/1010/1029,export 面在场,面向测试可达性导出;当前测试经 program 进程内路由间接覆盖,无静态 import 点）。另有 resolveParam/assertOutputInWorkZone 等 CLI 参数处理 helper 同被 tests 直接 import——这些是测试可达面,不是跨模块业务出口,生产代码跨模块 import cli.ts 仍违规（guard-scripts 越层检查在案）。校验见 [[anchor-audit-knowledge#模块边界接口校验]]。
+> 本表是 hop-cli 对外依赖面的封闭集，表外符号即内部实现。出口文件 = `cli-types.ts`（响应/请求 JSON 契约，是 driver 依赖的包级对外稳定面）。校验见 [[anchor-audit-knowledge#模块边界接口校验]]。
+> - `cli.ts` 是可执行入口薄壳，**但并非零导出**（原文"无被 import 的对外符号"与实况不符,2026-09-11 审计勘误）——实况四个测试面导出符号：
+>   - `program`（`export { program }`,src/cli.ts:1666,消费方=tests——tests/cli.test.ts:19 直接 import 用 `program.parseAsync` 进程内驱动命令）；
+>   - `bootstrapStandaloneConfig`/`readStandaloneCredentialNames`/`detectCcHopjitRegistration`（src/cli.ts:923/1010/1029,export 面在场,面向测试可达性导出;当前测试经 program 进程内路由间接覆盖,无静态 import 点）；
+> - 另有 resolveParam/assertOutputInWorkZone 等 CLI 参数处理 helper 同被 tests 直接 import——这些是测试可达面,不是跨模块业务出口,生产代码跨模块 import cli.ts 仍违规（guard-scripts 越层检查在案）。
 
 | 符号 | 种类 | 出口文件 | 用途（谁依赖） | 稳定性 |
 |---|---|---|---|---|
@@ -133,7 +150,9 @@ trait：
 
 ---
 
-**commands 配置通路（2026-08-30 属地登记,二轮 review 抓零字）**：`buildHostConfig` 经 `readProjectCommands` 读项目级 `hopjit.yaml` 的 `commands` 键装入 `sandbox.runtime.available`——复用模式的配置加载面为三个单键分别读取（commands 本条+language〔readProjectLanguage,^anc-i18n-language-config〕+tool_servers〔loadProjectToolRegistry,0076 批〕,不引入完整配置合并）,**容错档位两分**（2026-09-11 review 修复批勘正——原并称"钝感读"对 tool_servers 文实相反）:commands 与 language 钝感（文件缺席/坏 YAML/形状不符回缺省——空名单/en,不炸 CLI）;tool_servers 响亮（坏 YAML 直接抛、坏节 parseToolServers 拒,折 CONFIG_ERROR 退出码 1——工具注册错配静默回空会让声明的工具悄然缺席,拒载好过带病跑）。执行契约权威 [[act-body#^anc-exec-subprocess-run]]。
+**commands 配置通路（2026-08-30 属地登记,二轮 review 抓零字）**：`buildHostConfig` 经 `readProjectCommands` 读项目级 `hopjit.yaml` 的 `commands` 键装入 `sandbox.runtime.available`。执行契约权威 [[act-body#^anc-exec-subprocess-run]]。
+- 复用模式的配置加载面为三个单键分别读取（commands 本条+language〔readProjectLanguage,^anc-i18n-language-config〕+tool_servers〔loadProjectToolRegistry,0076 批〕,不引入完整配置合并）；
+- **容错档位两分**（2026-09-11 review 修复批勘正——原并称"钝感读"对 tool_servers 文实相反）:commands 与 language 钝感（文件缺席/坏 YAML/形状不符回缺省——空名单/en,不炸 CLI）;tool_servers 响亮（坏 YAML 直接抛、坏节 parseToolServers 拒,折 CONFIG_ERROR 退出码 1——工具注册错配静默回空会让声明的工具悄然缺席,拒载好过带病跑）。
 
 ## CLI 命令表【说明】
 
@@ -149,7 +168,7 @@ trait：
 | `hopjit validate <spec.md> [--fragment] [--known-vars a,b]` | SpecParser.parse/parseFragment + validate_spec（不创建实例;片段模式见 ^anc-cli-validate-response 片段条款） | ValidateResponse |
 | `hopjit tool-call <名> [--args '<json>'\|--args @file]` | CompositeToolProvider 全量注册面直调一件工具（复用模式 act free 的特殊工具执行通道——通道⑥,契约见 [[tool-channels#^anc-exec-tool-channels]]）:无实例无状态;requires_commit=true 恒拒;未知名报 UNKNOWN_TOOL 附注册面清单指路 | 工具结果 JSON（{success, result, ...}） |
 | `hopjit list <dir>` | 扫目录 + parseSpec 解析 + 判定可执行 spec（不创建实例、无状态） | ListResponse |
-| `hopjit init <spec.md> [--params json] [--parent id] [--step call-step-id] [--trace id] [--upstream-feedback text] [--state-dir dir]` | ExecutionEngine.init_execution（**调试用**，正常启动用 run）。**路径身份两字段（specPath/cliAbsPath）与 run 入口对称传入**——漏传即 doc-ref 首级解析目录错位到 cwd（跨目录 init 报 P15 文件未找到）+嵌套 call 响应缺 call_protocol（buildCallProtocol 两字段任一缺席返 undefined），hopissues/0076 实撞 | InitSuccess \| InitError |
+| `hopjit init <spec.md> [--params json\|@file] [--parent id] [--step call-step-id] [--child-instance id] [--trace id] [--upstream-feedback text\|@file] [--state-dir dir]` | ExecutionEngine.init_execution（**调试用**，正常启动用 run）。**--upstream-feedback 支持 `@file`**（引擎拼的 init_command 恒用文件形态传反馈,见 [[exec-engine#^anc-exec-cmd-args-file]]）。**--child-instance 给 call 子实例 ID**（决定子实例目录 `<父>/calls/<id>/`;缺席时取 --step 的值;--step 恒用于父引擎取参数映射——两者在 loop 里的串行 call 上值不同,见 [[exec-engine#^anc-exec-call-child-iter-id]]）。**路径身份两字段（specPath/cliAbsPath）与 run 入口对称传入**——漏传即 doc-ref 首级解析目录错位到 cwd（跨目录 init 报 P15 文件未找到）+嵌套 call 响应缺 call_protocol（buildCallProtocol 两字段任一缺席返 undefined），hopissues/0076 实撞 | InitSuccess \| InitError |
 | `hopjit status [--instance id]` | ExecutionEngine.get_status | StatusResponse |
 | `hopjit vars [--instance id]` | ExecutionEngine.get_vars | VarsResponse |
 | `hopjit resume [--instance id]` | ExecutionEngine.recover → completeAndAdvance | NextResponse |
@@ -179,43 +198,102 @@ trait：
 
 **`hopjit install-skill` 契约** ^anc-cli-install-skill：把包内 `driver/` 的 skill 源展开到用户项目的 `.claude/skills/`（CC 载体）或指定目录，解决"包内布局 ≠ CC skill 发现布局"的错配（包内主文件 `hopspec-skill.md`，CC 要 `<name>/SKILL.md`）。**不涉引擎状态、纯文件拷贝**。
 - **包根定位**：用 `import.meta.url` 解析 cli.js 自身路径 → 包根 = `dist/../`（不依赖 cwd，全局/本地装都对）。
-- **两载体清单对等：构建工具随装（hopissues/0052,2026-08-31——实现遗漏修正;2026-09-15 todo/0093 件二扩员 hopfix）**：`hopbuild`/`hopbuild2`/`hopfix` 三件住包内 `skills/` 聚合目录,**载体中立**（构建工具非载体驱动件——cli.ts 拷贝点注释自始明示）,CC 与 Codex 分支**都装**。修前 Codex 分支漏拷两件（同一命令两载体能力不对等,Codex 用户装完无 /hopbuild 可用——报告方实撞）。版本戳口径:与 CC 分支同源对齐——copyDir 拷入后对两件的 SKILL.md 走 stampSkill 注版本戳（CC 分支 2026-08-25 起即如此,对齐=清单与戳都齐;设计首稿误记"CC 不注戳",4.2 实现时对码纠正）。正例:codex 载体装出 hopbuild/hopbuild2 两目录;反例回归:CC 载体清单不因本修变化。（hopfix 特殊性:hopspec skill 形态——壳 SKILL.md 之外流程真源 `scripts/hopfix/hopfix.md` 拷入装载目录成自足件,SKILL 内执行命令按装载形态指本目录 hopfix.md;版本兼容三义务的迁移通道消费面,^anc-release-version-compat 义务③——其"版本迁移对照"知识节随每次破坏性收严更新）
-- **目标按 carrier 解析（`--dir` 覆盖；2026-09-02 加 cfuse 载体 + 读官方环境变量,见 ^anc-cli-carrier-home-resolution）**：`--dir` 显式指定 skills 根目录时直接用;缺席时按 `--carrier` 映射到对应载体 home 下的 `skills/`——`cc`→`$CLAUDE_CONFIG_DIR/skills`、`codex`→`$CODEX_HOME/skills`、`cfuse-cc`→`~/.codefuse/engine/cc/skills`、`cfuse-codex`→`~/.codefuse/engine/codex/skills`、`opencode`→`$OPENCODE_CONFIG_DIR/skills`（环境变量缺席回落 XDG `~/.config/opencode/skills`）;`cc`/`codex` 的环境变量缺席时回落 `~/.claude`/`~/.codex`（原生默认,与 2026-08-27 作者定"codex 和 cc 看齐=用户级"一致）。
+- **两载体清单对等：构建工具随装（hopissues/0052,2026-08-31——实现遗漏修正;2026-09-15 todo/0093 件二扩员 hopfix）**：`hopbuild`/`hopbuild2`/`hopfix` 三件住包内 `skills/` 聚合目录,**载体中立**（构建工具非载体驱动件——cli.ts 拷贝点注释自始明示）,CC 与 Codex 分支**都装**。修前 Codex 分支漏拷两件（同一命令两载体能力不对等,Codex 用户装完无 /hopbuild 可用——报告方实撞）。
+  - 版本戳口径:与 CC 分支同源对齐——copyDir 拷入后对两件的 SKILL.md 走 stampSkill 注版本戳（CC 分支 2026-08-25 起即如此,对齐=清单与戳都齐;设计首稿误记"CC 不注戳",4.2 实现时对码纠正）；
+  - 正例:codex 载体装出 hopbuild/hopbuild2 两目录;反例回归:CC 载体清单不因本修变化；
+  - hopfix 特殊性:hopspec skill 形态——壳 SKILL.md 之外流程真源 `scripts/hopfix/hopfix.md` 拷入装载目录成自足件,SKILL 内执行命令按装载形态指本目录 hopfix.md;版本兼容三义务的迁移通道消费面,^anc-release-version-compat 义务③——其"版本迁移对照"知识节随每次破坏性收严更新
+- **目标按 carrier 解析（`--dir` 覆盖；2026-09-02 加 cfuse 载体 + 读官方环境变量,见 ^anc-cli-carrier-home-resolution）**：`--dir` 显式指定 skills 根目录时直接用;缺席时按 `--carrier` 映射到对应载体 home 下的 `skills/`。
+  - 映射表：`cc`→`$CLAUDE_CONFIG_DIR/skills`、`codex`→`$CODEX_HOME/skills`、`cfuse-cc`→`~/.codefuse/engine/cc/skills`、`cfuse-codex`→`~/.codefuse/engine/codex/skills`、`opencode`→`$OPENCODE_CONFIG_DIR/skills`（环境变量缺席回落 XDG `~/.config/opencode/skills`）；
+  - `cc`/`codex` 的环境变量缺席时回落 `~/.claude`/`~/.codex`（原生默认,与 2026-08-27 作者定"codex 和 cc 看齐=用户级"一致）。
 
-- **载体 home 解析（2026-09-02 作者定:cfuse 内置载体适配）** ^anc-cli-carrier-home-resolution：hopjit install-skill 原硬编码 `~/.claude/skills` 与 `~/.codex/skills`,在 cfuse 环境下装错位置——cfuse 内置的 Claude Code / Codex 通过官方环境变量 `CLAUDE_CONFIG_DIR` / `CODEX_HOME` 把 home 重定向到 `~/.codefuse/engine/{cc,codex}/`,skill 从重定向后的 home 读。两条安装路径必须都覆盖:
+- **载体 home 解析（2026-09-02 作者定:cfuse 内置载体适配）** ^anc-cli-carrier-home-resolution：hopjit install-skill 原硬编码 `~/.claude/skills` 与 `~/.codex/skills`,在 cfuse 环境下装错位置。
+  - 错位原因：cfuse 内置的 Claude Code / Codex 通过官方环境变量 `CLAUDE_CONFIG_DIR` / `CODEX_HOME` 把 home 重定向到 `~/.codefuse/engine/{cc,codex}/`,skill 从重定向后的 home 读。
+  - **两条安装路径必须都覆盖**:
   - **场景一:在目标 agent 会话里跑 install-skill**（最常见——hoplogic3 是 agent 工具,用户在 cc/codex 会话里让 agent 装）。此时进程继承目标 agent 注入的环境变量,`--carrier cc`/`codex` 读 `CLAUDE_CONFIG_DIR`/`CODEX_HOME` 即自动装到目标 agent 的 home（原生或 cfuse 重定向均可）。用户视角:cfuse 内置窗口表现为原生载体,按该载体的原生命令跑即可,无需特殊 cfuse 命令。
   - **场景二:裸终端跑 install-skill,目标 agent 未启动**。此时无环境变量,且 hopjit 无从知道用户接下来要启动哪个 agent——环境变量只能反映"当前在哪",不能反映"装给谁",信息缺失。`--carrier cc`/`codex` 缺席环境变量时回落 `~/.claude`/`~/.codex`（原生默认）,若用户其实要装给 cfuse 内置载体就装错。
   - **解法:carrier 扩展为 `cc | codex | cfuse-cc | cfuse-codex | opencode`**。`cc`/`codex` 读官方环境变量（场景一自动适配当前环境）;`cfuse-cc`/`cfuse-codex` **不读环境变量**,固定 `~/.codefuse/engine/{cc,codex}/skills`（场景二裸终端显式指定 cfuse 目标）。读环境变量会与"裸终端指定 cfuse"的意图冲突——用户显式选了 cfuse carrier 就是声明目标,不该被当前进程环境（可能空、可能恰好是别的 home）覆盖。
   - **driver 源复用,不新写**:`cfuse-cc` 与 `cc` 共用 CC driver 源（`driver/hopspec-skill.md` 等）,`cfuse-codex` 与 `codex` 共用 Codex driver 源（`driver/codex/` 等）——cfuse 内置载体是 CC/Codex 本体套壳,skill 格式完全一致,仅 home 不同。代码层用 `carrierFamily(carrier)` 派生 driver 源系别（`cc`|`codex`）。
   - **`~/.codefuse` 硬编码可接受**:与硬编码 `~/.claude`/`~/.codex` 同性质（该工具的约定默认 home）;若 cfuse 未来提供 home 环境变量,`resolveCarrierHome` 的 cfuse 分支顺带读它。
   - **适用范围**:本条款的 home 解析同样适用于 `--mcp` 配置自举（CC 系读 `<home>/settings.json`、Codex 系读 `<home>/config.toml`）、MCP 注册（Codex 系写 `<home>/config.toml`）、`detectCcHopjitRegistration`（CC 系读 `<home>/.claude.json`）——所有按载体 home 定位的路径统一走 `resolveCarrierHome(carrier)`,不各自硬编码。
-  - 正例:cfuse 用户在 cfuse 内置 cc 会话里 `hopjit install-skill`（零参数）→ 读 `CLAUDE_CONFIG_DIR` 装到 `~/.codefuse/engine/cc/skills`;裸终端 `hopjit install-skill --carrier cfuse-cc` → 装到 `~/.codefuse/engine/cc/skills`。反例:裸终端 `hopjit install-skill`（零参数,无环境变量）→ 回落 `~/.claude/skills`,cfuse 内置 cc 读不到（用户须显式 `--carrier cfuse-cc` 或在 cfuse 会话里跑）。
+  - 正例:cfuse 用户在 cfuse 内置 cc 会话里 `hopjit install-skill`（零参数）→ 读 `CLAUDE_CONFIG_DIR` 装到 `~/.codefuse/engine/cc/skills`;裸终端 `hopjit install-skill --carrier cfuse-cc` → 装到 `~/.codefuse/engine/cc/skills`。
+  - 反例:裸终端 `hopjit install-skill`（零参数,无环境变量）→ 回落 `~/.claude/skills`,cfuse 内置 cc 读不到（用户须显式 `--carrier cfuse-cc` 或在 cfuse 会话里跑）。
 - **opencode 载体（2026-09-15 加,见 todo/0089）**：opencode 是独立载体家族（非 CC/Codex 套壳）,home 用 XDG——`OPENCODE_CONFIG_DIR` 重定向 config 目录,缺席回落 `$XDG_CONFIG_HOME/opencode`（默认 `~/.config/opencode`,**不是** `~/.opencode`）。与 cfuse 的两点关键不同:
-  - **driver 源=driver/opencode/ 自有内容层**（2026-09-19 改判,原'复用 CC 不新写'废——作者抓'opencode 完全复用 cc 的?':发现层兼容（`<name>/SKILL.md`+frontmatter 同构,opencode 甚至主动兼容 `~/.claude/skills/`）**不等于**执行层可用,CC 正文 30 处 CC 专属原语（AskUserQuestion/driver subagent/task-notification）对 opencode 无协议保证,真机能通靠模型自由发挥。skill 展开走 opencode 专属分支装 `driver/opencode/` 原语适配版（权威 [[opencode-driver-carrier#^anc-driver-opencode-primitive-map]]）;hopbuild 族照旧共装;**hop 件不装**（CC 机制深绑定,carrier_note 明示——待真实需求适配）;`carrierFamily('opencode')='cc'` 仅余 demo/pack 包装模板选型语义。
-  - **MCP 注册与 LLM 自举形态不同,须单独分支**:opencode 把所有配置（含 MCP）集中在 opencode 配置文件（`opencode.jsonc`/`opencode.json`/`config.json`,opencode 加载 deep-merge 三者、`.jsonc` 优先;非 TOML/YAML）,无独立 `.mcp.json`;hoplogic3 跟随 opencode 配置管理——写 `opencode.jsonc`（opencode 标准,globalConfigFile candidates[0]）,用 jsonc-parser 保留注释（opencode 同款 modify/applyEdits）;检测 candidates `[opencode.jsonc, opencode.json, config.json]` 查 mcp.hopjit;坏 JSON best-effort 不阻断;MCP 条目 `mcp.<name> = { type:"local", command:[...], environment:{...} }`（`command` 是 command+args 合并的数组、`type` 必填、env 字段叫 `environment` 非 `env`）。LLM 配置也在 opencode 配置文件（`model`=`"provider/model-id"`、`provider.<id>.options.baseURL`/`apiKey`、`provider.<id>.env` 凭证名数组）。
-  - **skill 展开走 opencode 正路**（作者 2026-09-15 拍,不借道 `~/.claude/skills/`）:落 `<opencode home>/skills/<name>/SKILL.md`（用户级 `~/.config/opencode/skills/`）,opencode 原生发现路径（`{skill,skills}/**/SKILL.md`）。不借道 `~/.claude/skills/` 的理由:该红利只在原生 CC home（`~/.claude`）成立——cfuse-cc 装在 `~/.codefuse/engine/cc/skills` opencode 读不到（opencode 只扫 `$HOME/.claude`,不读 `CLAUDE_CONFIG_DIR`）,依赖巧合不可靠;走 opencode 正路所有场景一致。
-  - **--mcp 注册（opencode 分支）**:写**用户级** opencode 配置（candidates `[opencode.jsonc, opencode.json, config.json]` 第一个存在,对齐 opencode globalConfigFile;都不存在用 `opencode.jsonc`）的 `mcp.hopjit`——`{ type:"local", command:["hopjit-mcp"], enabled:true, environment:{} }`。`environment` 留空 `{}`:opencode 启动 local server 时 `env = { ...process.env, ...mcp.environment }`,process.env 透传凭证（与 CC `.mcp.json` 只放 command、靠会话 env 透传同思路,守 standalone 不变量第 1 条"只写名不写值"）。**jsonc-parser modify/applyEdits 保留原格式+注释**——hoplogic 对所有候选文件统一 jsoncModify（opencode 仅 .jsonc 用 patchJsonc,非 .jsonc 用 stringify 重新格式化;hoplogic 统一 jsoncModify 更优雅——保留原格式不重新格式化用户文件,是"高质量优雅"取舍,不严格跟随 opencode 非 .jsonc 的 stringify）;**检测 candidates 查 mcp.hopjit**（.jsonc/opencode.json/config.json 任一已有则跳过——opencode global deep-merge 任一有即生效,消除"只查一个文件漏其他"的静默冲突）;坏 JSON best-effort 不阻断 skill 安装（与 cc 分支 .claude.json 解析失败同纪律）;已有 `mcp.hopjit` 条目跳过（与 cc/codex 同纪律,--force 不覆盖注册面）。用户级而非项目级:与 install-skill 主体（用户级 skill）+ Codex（用户级 config.toml）对齐,跟人走不污染项目。
-  - **LLM 配置自举（opencode 分支）**:**deep-merge 三文件**（opencode 加载顺序 `config.json → opencode.json → opencode.jsonc`,后者覆盖、`.jsonc` 优先,与 opencode 加载一致;jsonc-parser parse 含注释）取 `model`（`"provider/model-id"` 拆出 provider id+model id）+ `provider.<id>.options.baseURL`（base_url）+ `provider.<id>.env[0]`（api_key_env 凭证名,opencode provider 定义声明该 provider 接受的 env var 名）。protocol 按 provider id 推断:含 `anthropic`→anthropic,否则→openai-chat（与 Codex 同,openai-responses 未实装）。写入系统级 `~/.hopjit/config.yaml`,`service_id=opencode_host`,只写凭证名不写值。学习源缺失（三文件都不存在/坏 JSON/无 model/provider）→不写文件,note 明示需自建（与 cc/codex 同纪律;坏 JSON best-effort 不阻断,与 --mcp 注册同纪律）。
+  - **driver 源=driver/opencode/ 自有内容层**（2026-09-19 改判,原'复用 CC 不新写'废）：skill 展开走 opencode 专属分支装 `driver/opencode/` 原语适配版（权威 [[opencode-driver-carrier#^anc-driver-opencode-primitive-map]]）。
+    - 改判缘起：作者抓'opencode 完全复用 cc 的?'——发现层兼容（`<name>/SKILL.md`+frontmatter 同构,opencode 甚至主动兼容 `~/.claude/skills/`）**不等于**执行层可用,CC 正文 30 处 CC 专属原语（AskUserQuestion/driver subagent/task-notification）对 opencode 无协议保证,真机能通靠模型自由发挥；
+    - hopbuild 族照旧共装;**hop 件不装**（CC 机制深绑定,carrier_note 明示——待真实需求适配）;`carrierFamily('opencode')='cc'` 仅余 demo/pack 包装模板选型语义。
+  - **MCP 注册与 LLM 自举形态不同,须单独分支**:opencode 把所有配置（含 MCP）集中在 opencode 配置文件（`opencode.jsonc`/`opencode.json`/`config.json`,opencode 加载 deep-merge 三者、`.jsonc` 优先;非 TOML/YAML）,无独立 `.mcp.json`。
+    - hoplogic3 跟随 opencode 配置管理——写 `opencode.jsonc`（opencode 标准,globalConfigFile candidates[0]）,用 jsonc-parser 保留注释（opencode 同款 modify/applyEdits）;检测 candidates `[opencode.jsonc, opencode.json, config.json]` 查 mcp.hopjit;坏 JSON best-effort 不阻断；
+    - MCP 条目 `mcp.<name> = { type:"local", command:[...], environment:{...} }`（`command` 是 command+args 合并的数组、`type` 必填、env 字段叫 `environment` 非 `env`）；
+    - LLM 配置也在 opencode 配置文件（`model`=`"provider/model-id"`、`provider.<id>.options.baseURL`/`apiKey`、`provider.<id>.env` 凭证名数组）。
+  - **skill 展开走 opencode 正路**（作者 2026-09-15 拍,不借道 `~/.claude/skills/`）:落 `<opencode home>/skills/<name>/SKILL.md`（用户级 `~/.config/opencode/skills/`）,opencode 原生发现路径（`{skill,skills}/**/SKILL.md`）。
+    - 不借道 `~/.claude/skills/` 的理由:该红利只在原生 CC home（`~/.claude`）成立——cfuse-cc 装在 `~/.codefuse/engine/cc/skills` opencode 读不到（opencode 只扫 `$HOME/.claude`,不读 `CLAUDE_CONFIG_DIR`）,依赖巧合不可靠;走 opencode 正路所有场景一致。
+  - **--mcp 注册（opencode 分支）**:写**用户级** opencode 配置（candidates `[opencode.jsonc, opencode.json, config.json]` 第一个存在,对齐 opencode globalConfigFile;都不存在用 `opencode.jsonc`）的 `mcp.hopjit`——`{ type:"local", command:["hopjit-mcp"], enabled:false, environment:{} }`。
+    - **默认 enabled:false**（PR#8（贡献者合未）,经 opencode 1.18.31 源码核实——hopissues/0099）:LLM 在有 hopjit_start_run MCP 工具可用时自决调它,劫持 hopspec 复用模式（名字即模式:hopspec=复用 CLI / hopspec-mcp=standalone MCP）；
+      - 为什么机制层兜:opencode 无 MCP 工具优先机制（MCP 工具与内置工具平级注入同一工具字典,session/tools.ts:390-490 无优先级/权重,工具选择由 LLM 在 toolChoice:auto 下自决）——skill 指令拦不住 LLM 用 MCP;enabled:false 经 opencode mcp/index.ts:514-517 使 server 不启动、工具不注入；
+      - 走 standalone 时用户手动改 enabled:true,注册 note 明示；
+    - `environment` 留空 `{}`:opencode 启动 local server 时 `env = { ...process.env, ...mcp.environment }`,process.env 透传凭证（与 CC `.mcp.json` 只放 command、靠会话 env 透传同思路,守 standalone 不变量第 1 条"只写名不写值"）；
+    - **jsonc-parser modify/applyEdits 保留原格式+注释**——hoplogic 对所有候选文件统一 jsoncModify（opencode 仅 .jsonc 用 patchJsonc,非 .jsonc 用 stringify 重新格式化;hoplogic 统一 jsoncModify 更优雅——保留原格式不重新格式化用户文件,是"高质量优雅"取舍,不严格跟随 opencode 非 .jsonc 的 stringify）；
+    - **检测 candidates 查 mcp.hopjit**（.jsonc/opencode.json/config.json 任一已有则跳过——opencode global deep-merge 任一有即生效,消除"只查一个文件漏其他"的静默冲突）；
+    - 坏 JSON best-effort 不阻断 skill 安装（与 cc 分支 .claude.json 解析失败同纪律）;已有 `mcp.hopjit` 条目跳过（与 cc/codex 同纪律,--force 不覆盖注册面）；
+    - 用户级而非项目级:与 install-skill 主体（用户级 skill）+ Codex（用户级 config.toml）对齐,跟人走不污染项目。
+  - **LLM 配置自举（opencode 分支）**:**deep-merge 三文件**（opencode 加载顺序 `config.json → opencode.json → opencode.jsonc`,后者覆盖、`.jsonc` 优先,与 opencode 加载一致;jsonc-parser parse 含注释）。
+    - 学习字段：取 `model`（`"provider/model-id"` 拆出 provider id+model id）+ `provider.<id>.options.baseURL`（base_url）+ `provider.<id>.env[0]`（api_key_env 凭证名,opencode provider 定义声明该 provider 接受的 env var 名）；
+    - protocol **忠实照抄 `provider.<id>.npm` 字段**（0020 批改定 2026-09-20,作者问"opencode 自己是怎么判定用 chat 还是 responses"查实——npm 字段就是 opencode 的 wire_api 等价物:它声明该 provider 用哪个 AI SDK 驱动,官方文档明定 `@ai-sdk/openai`→`/v1/responses`、`@ai-sdk/openai-compatible`→`/v1/chat/completions`、`@ai-sdk/anthropic`→Anthropic 原生）；
+      - 映射:`@ai-sdk/anthropic`→anthropic / `@ai-sdk/openai`→openai-responses / `@ai-sdk/openai-compatible` 及其余→openai-chat；
+    - npm 字段缺席（内置 provider 不写 npm——协议定义在 opencode 内置注册表不在用户配置文件,抄不到）回退 provider id 推断:含 `anthropic`→anthropic,否则保守取 openai-chat（猜错代价不对称:猜 responses 撞无此面的端点=启动即炸,猜 chat 最坏少用好通道）；
+    - 写入系统级 `~/.hopjit/config.yaml`,`service_id=opencode_host`,只写凭证名不写值；
+    - 学习源缺失（三文件都不存在/坏 JSON/无 model/provider）→不写文件,note 明示需自建（与 cc/codex 同纪律;坏 JSON best-effort 不阻断,与 --mcp 注册同纪律）。
   - **装载清单对等**:opencode 走 CC 分支,`hopspec`/`hopspec-mcp`/`hopbuild`/`hopbuild2`/`hopfix` 全装（含 0093 件二 hopfix,载体中立件随 CC 分支）。
+    - **hopbuild 族装时改写副本**（PR#8（贡献者合未）,经 opencode 1.18.31 源码核实——hopissues/0101）:hopbuild/hopbuild2/hopfix 从 CC 源拷贝后,把 SKILL.md 副本的 `/hopspec run ` 改写为 `用 hopspec skill 执行 `（装时改副本,不改 CC 源）；
+      - 为什么改写:opencode 有斜杠命令系统（/hopspec run 可工作,command/index.ts:134-152）,改写非修功能失效——是对齐原语映射"斜杠触发→隐式触发"+LLM 消费友好度（hopbuild SKILL.md 由 LLM 消费,经 skill 工具隐式触发更直接）；
+      - 豁免注记:hopfix/hopfix.md 正文不在改写面——其 `/hopspec run` 出现在 spec body 字符串字面量内,改写会变更 spec 产出文本,豁免（联审裁定 2026-09-21）。
 - **展开动作**（CC 载体，`--carrier cc` 默认，`opencode` 同走本分支）：
   - `driver/hopspec-skill.md` → `<目标>/hopspec/SKILL.md`（**改名**为 SKILL.md）
   - `skills/hopbuild/` → `<目标>/hopbuild/`（整目录，其 SKILL.md 已对名）
   - **旧名目录清理（rename 残留清理）**：CC 分支尾部检查 `<目标>/hopskill-build/`（hopbuild 的改名前旧目录名）——存在即 `rmSync` 整目录删除，并在 `installed` 清单记一条"旧名残留已清理"（src/cli.ts:1239-1241）。定性：这不是受管目录 manifest 清理（那套只删自己 manifest 里的 `.md`），而是 hopskill-build→hopbuild 一次性改名的残留兜底——旧名 skill 残留会与新名双触发。
-  - `driver/references/` → `<目标>/hopspec/references/`（**随 skill 拷贝**，使 skill 自包含，不依赖 `<PKG>` 探测能否回指 node_modules——用户可能只装 skill 未装包，或全局装路径探测失败。拷贝后 skill 内 `<PKG>/driver/references/` 引用由自举探测解析：探到包→引包内；探不到→引 `.claude/skills/hopspec/references/` 本地副本作兜底）。references/ 是受管目录，`--force` 时清除源里已不存在的残留 `.md`（条款见下方 Codex 段"受管目录清理"——两载体同一契约）。
+  - `driver/references/` → `<目标>/hopspec/references/`（**随 skill 拷贝**，使 skill 自包含，不依赖 `<PKG>` 探测能否回指 node_modules——用户可能只装 skill 未装包，或全局装路径探测失败）。
+    - 拷贝后 skill 内 `<PKG>/driver/references/` 引用由自举探测解析：探到包→引包内；探不到→引 `.claude/skills/hopspec/references/` 本地副本作兜底；
+    - references/ 是受管目录，`--force` 时清除源里已不存在的残留 `.md`（条款见下方 Codex 段"受管目录清理"——两载体同一契约）。
   - `--carrier codex`：按 [[codex-driver-carrier#^anc-driver-codex-install-layout]] 展开**按 agent 主体拆分**的 Codex skill：
     - `driver/codex/SKILL.md` → `<目标>/.agents/skills/hopspec/SKILL.md`
     - `driver/codex/agents/` → `<目标>/.agents/skills/hopspec/agents/`
     - `driver/codex/references/` → `<目标>/.agents/skills/hopspec/references/`
     - `driver/references/cli-discovery.md` → `<目标>/.agents/skills/hopspec/references/cli-discovery.md`
     - **不复制**公共 `driver-subagent.md` / `parallel-worker.md` / `step-execution-rules.md` / `discovery.md`；这些文件含 CC 载体原语，Codex 使用自己的 agent 与 reference 文件。
-    - **受管目录清理（2026-08-13 立实撞销账;2026-08-24 hopissues/0022 改判据为自有安装清单——方案甲作者拍板）**：`references/`（CC/Codex）与 `agents/`（Codex）是**受管目录**。**受管的边界=清单不是目录**：安装器每次装机在受管目录落 `.hopjit-manifest.json`（本次写入的 `.md` 文件名列表+版本戳）;`--force` 清理**只删"上次 manifest 里有、本次源里已没有"的文件**——自己上版装的陈旧残留照删（2026-08-13 立意完整保留:parallel-worker.md 残留喂废协议致真机 41s 读废文档、健康活被 dispatch-lost 误杀）,**用户/别的工具放的文件天然豁免**（不在任何 manifest 里=不是我写的=无权删。原判据"源目录补集"把'受管目录'误解成'目录里所有 .md 都归我管'——probe 实证用户笔记 my-note.md 被无声 rmSync,且 dev-install.sh 缺省带 --force 让日常装机天然走此档;同一个 --force 同时表达'覆盖我的同名文件'与'删除我的非同名文件'两种强度悬殊的授权,后者现在收窄到零越权面）。**manifest 缺席（首次装/旧版装机）按空清单处理=零删除**,本次装机落新 manifest 后下次清理恢复正常——存量残留经一次正常装机周期自然进入清单管辖。响应 `removed` 字段列出实删项;非 force 不删（与"存在即跳过"对称）。清理只限受管目录、只删 manifest 内 `.md`——SKILL.md 顶层与用户其它 skill 不碰。
-    - **【决策：依赖驱动】为什么不再装 AGENTS.md（2026-07-17 改定，由 Codex 官方 skills 机制查证触发）**：早期方案把驱动指令装为项目根 `AGENTS.md`，有三重错配——① AGENTS.md 是用户的项目级常驻指令（等位 CC 的 CLAUDE.md），驱动指令只是一个可选能力，占顶层身份即鸠占鹊巢，且与用户已有 AGENTS.md 冲突不可调和（跳过=装不上，--force=毁用户文件）；② AGENTS.md 每会话全文常驻（32 KiB 硬限），驱动指令常驻浪费用户注意力预算；③ Codex 官方明确"可复用 workflow 属 Skills 不属 AGENTS.md"，skills 描述常驻、正文按需加载（渐进式），且支持隐式触发（按 SKILL.md frontmatter description 匹配任务）。skill 布局三者全解。此决策随 Codex skills 机制演进复审。
+    - **受管目录清理（2026-08-13 立实撞销账;2026-08-24 hopissues/0022 改判据为自有安装清单——方案甲作者拍板）**：`references/`（CC/Codex）与 `agents/`（Codex）是**受管目录**。**受管的边界=清单不是目录**：安装器每次装机在受管目录落 `.hopjit-manifest.json`（本次写入的 `.md` 文件名列表+版本戳）。
+      - `--force` 清理**只删"上次 manifest 里有、本次源里已没有"的文件**——自己上版装的陈旧残留照删（2026-08-13 立意完整保留:parallel-worker.md 残留喂废协议致真机 41s 读废文档、健康活被 dispatch-lost 误杀）；
+      - **用户/别的工具放的文件天然豁免**（不在任何 manifest 里=不是我写的=无权删。原判据"源目录补集"把'受管目录'误解成'目录里所有 .md 都归我管'——probe 实证用户笔记 my-note.md 被无声 rmSync,且 dev-install.sh 缺省带 --force 让日常装机天然走此档;同一个 --force 同时表达'覆盖我的同名文件'与'删除我的非同名文件'两种强度悬殊的授权,后者现在收窄到零越权面）；
+      - **manifest 缺席（首次装/旧版装机）按空清单处理=零删除**,本次装机落新 manifest 后下次清理恢复正常——存量残留经一次正常装机周期自然进入清单管辖；
+      - 响应 `removed` 字段列出实删项;非 force 不删（与"存在即跳过"对称）。清理只限受管目录、只删 manifest 内 `.md`——SKILL.md 顶层与用户其它 skill 不碰。
+    - **【决策：依赖驱动】为什么不再装 AGENTS.md（2026-07-17 改定，由 Codex 官方 skills 机制查证触发）**：早期方案把驱动指令装为项目根 `AGENTS.md`，有三重错配。skill 布局三者全解。此决策随 Codex skills 机制演进复审。
+      - ① AGENTS.md 是用户的项目级常驻指令（等位 CC 的 CLAUDE.md），驱动指令只是一个可选能力，占顶层身份即鸠占鹊巢，且与用户已有 AGENTS.md 冲突不可调和（跳过=装不上，--force=毁用户文件）；
+      - ② AGENTS.md 每会话全文常驻（32 KiB 硬限），驱动指令常驻浪费用户注意力预算；
+      - ③ Codex 官方明确"可复用 workflow 属 Skills 不属 AGENTS.md"，skills 描述常驻、正文按需加载（渐进式），且支持隐式触发（按 SKILL.md frontmatter description 匹配任务）。
 - **`--mcp`：装 MCP 变体壳并同步注册 MCP server（2026-08-16 作者定——模式选定装配时化,见 [[codex-driver-carrier#^anc-driver-codex-standalone-dispatch]]）**：
   - 壳：CC 装 `driver/hopspec-skill-mcp.md` → `<目标>/hopspec-mcp/SKILL.md`（双名双壳恒装,不同名并存、名字即模式——与复用变体 `hopspec/` 各居其位;原文"同名互斥同位"系 2026-08-27 四改前旧口径,同文档 §install-skill 现行条款已按双名双壳改定,本句 2026-09-12 0088 批清同文档残句）；Codex 装 `driver/codex/SKILL-mcp.md`；两变体共享 `references/discovery.md`（§0 spec 定位与参数组装是模式无关的人机前置）；
-  - 注册：CC 合并写 `<cwd>/.mcp.json` 的 `mcpServers.hopjit = {command: "hopjit-mcp"}`（JSON 合并保留其他 server;项目作用域——.mcp.json 是 CC 项目级注册位）。**CC 跨 scope 已注册感知（2026-08-20 实撞立——开发库 local 级注册在场时 install 又写 project 级,CC 报同名多 scope 冲突诊断且新注册被窄 scope 盖住）**：写 .mcp.json 前先查 `<CC home>/.claude.json`（home 按 ^anc-cli-carrier-home-resolution 解析,原生=`~/.claude.json`）的 user 级（顶层 `mcpServers.hopjit`）与本 cwd 的 local 级（`projects["<cwd>"].mcpServers.hopjit`），任一在场即跳过不写、note 指明所在 scope——"已有条目跳过"原则的检测面补全:CC 注册面是三 scope 一体,只查 .mcp.json 看不见另两个;`~/.claude.json` 缺席/解析失败照常走 .mcp.json 判定（best-effort,CC 内部格式演进不拦装）；Codex 追加 `<Codex home>/config.toml`（home 按 ^anc-cli-carrier-home-resolution 解析,原生=`~/.codex`）的 `[mcp_servers.hopjit]`（command + `env_vars` 凭证名透传——Codex 干净环境启动 stdio server 实撞防线,值不落盘）。**env_vars 凭证名联动 standalone 配置（2026-08-20 实撞立——原硬编码 ANTHROPIC 对,standalone 配置用 DEEPSEEK_API_KEY 等其他凭证名时 server 拿不到凭证=启动即缺凭证,透传目的落空）**：取系统级 `~/.hopjit/config.yaml` providers 的 `api_key_env` 并集（含本次自举刚写的——自举先于注册执行）;读不到（配置缺席/坏文件/空表）回落缺省对 `["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"]`。已有 hopjit 条目一律跳过并提示（注册配置是用户资产,--force 不覆盖注册面——force 只管壳文件）；opencode 载体注册（写**用户级** `opencode.json` 的 `mcp.hopjit`——`{ type:"local", command:["hopjit-mcp"], environment:{} }`,`command` 数组合并、`environment` 留空靠 process.env 透传）见上 opencode 载体条款;
+  - 注册：CC 合并写 `<cwd>/.mcp.json` 的 `mcpServers.hopjit = {command: "hopjit-mcp"}`（JSON 合并保留其他 server;项目作用域——.mcp.json 是 CC 项目级注册位）。
+    - **CC 跨 scope 已注册感知（2026-08-20 实撞立——开发库 local 级注册在场时 install 又写 project 级,CC 报同名多 scope 冲突诊断且新注册被窄 scope 盖住）**：写 .mcp.json 前先查 `<CC home>/.claude.json`（home 按 ^anc-cli-carrier-home-resolution 解析,原生=`~/.claude.json`）。
+      - 查两处：user 级（顶层 `mcpServers.hopjit`）与本 cwd 的 local 级（`projects["<cwd>"].mcpServers.hopjit`），任一在场即跳过不写、note 指明所在 scope。
+      - "已有条目跳过"原则的检测面补全:CC 注册面是三 scope 一体,只查 .mcp.json 看不见另两个;`~/.claude.json` 缺席/解析失败照常走 .mcp.json 判定（best-effort,CC 内部格式演进不拦装）；
+    - Codex 追加 `<Codex home>/config.toml`（home 按 ^anc-cli-carrier-home-resolution 解析,原生=`~/.codex`）的 `[mcp_servers.hopjit]`（command + `env_vars` 凭证名透传——Codex 干净环境启动 stdio server 实撞防线,值不落盘）；
+    - **env_vars 凭证名联动 standalone 配置（2026-08-20 实撞立——原硬编码 ANTHROPIC 对,standalone 配置用 DEEPSEEK_API_KEY 等其他凭证名时 server 拿不到凭证=启动即缺凭证,透传目的落空）**：取系统级 `~/.hopjit/config.yaml` providers 的 `api_key_env` 并集（含本次自举刚写的——自举先于注册执行）;读不到（配置缺席/坏文件/空表）回落缺省对 `["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"]`；
+    - 已有 hopjit 条目一律跳过并提示（注册配置是用户资产,--force 不覆盖注册面——force 只管壳文件）；
+    - opencode 载体注册（写**用户级** `opencode.json` 的 `mcp.hopjit`——`{ type:"local", command:["hopjit-mcp"], environment:{} }`,`command` 数组合并、`environment` 留空靠 process.env 透传）见上 opencode 载体条款;
   - 响应 `mcp_registered` 字段（写入的配置路径,跳过时 null+原因）；
-  - **配置自举（2026-08-17 作者定——没有已有配置时把主 agent 的 LLM 配置学习为 standalone 缺省模型,并向用户明示）**：仅当两级 standalone 配置（`~/.hopjit/config.yaml` 与 `<cwd>/hopjit.yaml`）**全缺席**时执行——已有配置是用户资产零触碰（与注册面同款纪律）。学习源按载体：**CC** = 两级链——①进程环境 `ANTHROPIC_*` 族；②环境缺席时读 **CC settings 文件族**（`<CC home>/settings.json`（home 按 ^anc-cli-carrier-home-resolution 解析,原生=`~/.claude`）与 `<cwd>/.claude/settings.json`/`settings.local.json` 的 `env` 块同名变量 + 顶层 `model` 字段,项目级>用户级——覆盖『在普通终端跑装配』的形态:settings env 块只在 CC 会话内注入子进程,终端环境是干净的;而运行期 MCP server 由 CC 拉起必继承 env 块,故凭证名引用仍有效）。凭证名 AUTH_TOKEN 优先、API_KEY 次之,**只写名不写值**〔standalone 不变量第 1 条——settings 里读到的也只取『哪个名字被配了』不抄值〕;BASE_URL 缺省 `https://api.anthropic.com`,MODEL 缺省引擎缺省模型;protocol=anthropic。两级链都空（如 OAuth 订阅登录——凭证在 keychain 无 env 名,且订阅凭证本不可复用给独立 server）→ 不写文件,note 如实明示需自建并配 API key；**Codex** = `<Codex home>/config.toml`（home 按 ^anc-cli-carrier-home-resolution 解析,原生=`~/.codex`）的 `model`+`model_provider`→`[model_providers.<id>]` 的 `base_url`+`env_key`（env_key 缺省 OPENAI_API_KEY 惯例;protocol 一律学为 **openai-chat**——openai-responses 适配器系枚举预留未实装,学它=交付启动即炸的配置,引擎自身报错文案即指路 openai-chat）。写入**系统级** `~/.hopjit/config.yaml`（providers 归系统级——跟人走）,`service_id=<carrier>_host`（命名忠实:值是宿主后端）,文件头注释注明学习来源与时间,**providers 节经 YAML 序列化器输出**（值来自宿主配置不可控——裸模板拼接遇 `: `/`#` 类字符产物即炸自家加载器,二审探针实抓）;学习源缺失（CC 无凭证 env / Codex 无 config.toml 或缺 model/base_url）→ **不写文件**,note 明示需自建;响应 `+mcp_config_bootstrapped`（写入路径,未自举 null）`+mcp_config_note`（明示学了什么——模型/端点/凭证名,或未学习原因）。opencode 载体自举（读 `opencode.json` 的 `model`+`provider.<id>` 的 `options.baseURL`+`env[0]`,protocol 按 provider id 推断 anthropic/openai-chat）见上 opencode 载体条款。
-- **`--demo`：附装全部演示 skill（2026-08-11 作者改定：装所有 demo + 名字统一防冲突污染；2026-08-06 原定默认不装不变）**：带 `--demo` 时在装完 driver skill 后，内部走 carrier-aware pack，装入**demo 集全部成员**，skill 名一律 **`demo-` 前缀**（pack 传 `name` 参数；spec 自身 `Id` 不改——Id 牵动 call 引用与 hoplog spec_id）。前缀是命名空间：用户一眼识别哪些是演示件、可整批删除，且绝不与用户自己的 skill 名撞车。当前 demo 集：
+  - **配置自举**（2026-08-17 作者定——没有已有配置时把主 agent 的 LLM 配置学习为 standalone 缺省模型，并向用户明示）：
+    - **触发条件**：仅当两级 standalone 配置（`~/.hopjit/config.yaml` 与 `<cwd>/hopjit.yaml`）**全缺席**时执行——已有配置是用户资产零触碰（与注册面同款纪律）。
+    - **学习源（CC 载体）**=两级链：①进程环境 `ANTHROPIC_*` 族；②环境缺席时读 **CC settings 文件族**——`<CC home>/settings.json`（home 按 ^anc-cli-carrier-home-resolution 解析，原生=`~/.claude`）与 `<cwd>/.claude/settings.json`/`settings.local.json` 的 `env` 块同名变量 + 顶层 `model` 字段，项目级>用户级。
+      - 为什么要读 settings：覆盖"在普通终端跑装配"的形态——settings env 块只在 CC 会话内注入子进程，终端环境是干净的；而运行期 MCP server 由 CC 拉起必继承 env 块，故凭证名引用仍有效；
+      - 凭证名 AUTH_TOKEN 优先、API_KEY 次之，**只写名不写值**（standalone 不变量第 1 条——settings 里读到的也只取"哪个名字被配了"不抄值）；BASE_URL 缺省 `https://api.anthropic.com`，MODEL 缺省引擎缺省模型；protocol=anthropic；
+      - 两级链都空（如 OAuth 订阅登录——凭证在 keychain 无 env 名，且订阅凭证本不可复用给独立 server）→ 不写文件，note 如实明示需自建并配 API key。
+    - **学习源（Codex 载体）**=`<Codex home>/config.toml`（home 按 ^anc-cli-carrier-home-resolution 解析，原生=`~/.codex`）的 `model`+`model_provider`→`[model_providers.<id>]` 的 `base_url`+`env_key`+`wire_api`（env_key 缺省 OPENAI_API_KEY 惯例）。
+      - protocol **忠实照抄宿主 wire_api**——`"responses"`→openai-responses，`"chat"` 或缺省→openai-chat（0020 批次改定 2026-09-20：responses 适配器实装后原"一律学为 openai-chat"的强制降级撤销——降级当年是防"学预留枚举=交付启动即炸的配置"，实装后照抄即忠实，降级反成失真：Codex 生态 provider 已普遍 wire_api="responses"）。
+    - **学习源（opencode 载体）**：读 opencode 配置的 `model`+`provider.<id>` 的 `options.baseURL`+`env[0]`，protocol 忠实照抄 `provider.<id>.npm` 字段、缺席回退 id 推断（0020 批次改定）——详见上方 opencode 载体条款。
+    - **写入**：**系统级** `~/.hopjit/config.yaml`（providers 归系统级——跟人走），`service_id=<carrier>_host`（命名忠实：值是宿主后端），文件头注释注明学习来源与时间。**providers 节经 YAML 序列化器输出**——值来自宿主配置不可控，裸模板拼接遇 `: `/`#` 类字符产物即炸自家加载器（二审探针实抓）。
+    - **学习源缺失**（CC 无凭证 env / Codex 无 config.toml 或缺 model/base_url）→ **不写文件**，note 明示需自建。
+    - **响应字段**：`+mcp_config_bootstrapped`（写入路径，未自举 null）、`+mcp_config_note`（明示学了什么——模型/端点/凭证名，或未学习原因）。
+- **`--demo`：附装全部演示 skill（2026-08-11 作者改定：装所有 demo + 名字统一防冲突污染；2026-08-06 原定默认不装不变）**：带 `--demo` 时在装完 driver skill 后，内部走 carrier-aware pack，装入**demo 集全部成员**，skill 名一律 **`demo-` 前缀**（pack 传 `name` 参数；spec 自身 `Id` 不改——Id 牵动 call 引用与 hoplog spec_id）。
+  - 前缀是命名空间：用户一眼识别哪些是演示件、可整批删除，且绝不与用户自己的 skill 名撞车。当前 demo 集：
   | skill 名 | 源 spec | 资产 | 演示什么 |
   |---|---|---|---|
   | `demo-coffee-week` | `examples/coffee-week.md` | `coffee-sales.json` | 入门：ask 确认 + act 纯计算 + reason 判断 + check 核验 |
@@ -229,21 +307,37 @@ trait：
   | `hop-fact-check` | `examples/hop-fact-check.md` | `fact-check-sample.md` | 事实核查完整版（断言提取+并行检索验证+推演审查+可信度分级报告） |
   | `hop-deep-research` | `examples/hop-deep-research/hop-deep-research.md` | `hop-deep-research-sample.md` | 深度研究（子问题分解+双语检索+对抗式验证+引用报告+落盘交付） |
   安装位=正式件同点（CC 用户级 `~/.claude/skills`,Codex 项目级）;已存在跳过,`--force` 覆盖——与既有防覆盖口径一致。
-  2. **工具配置自动落位**：把 `examples/hoptools-websearch.yaml` 与 `examples/hoptools-playwright.yaml` 的 `tool_servers` 条目**合并写入系统级 `~/.hopjit/config.yaml`**——按 server `name` 判重（`bailian_search`/`playwright`）,已有同名条目跳过不覆盖（用户资产纪律,与 --mcp 注册面同款）;config.yaml 缺席则新建只含 tool_servers 节;YAML 经序列化器输出不裸拼。响应 `plus_tools_merged` 字段（写入的 server 名列表,全跳过时空表+note 说明）。
+  2. **工具配置自动落位**：把 `examples/hoptools-websearch.yaml` 与 `examples/hoptools-playwright.yaml` 的 `tool_servers` 条目**合并写入系统级 `~/.hopjit/config.yaml`**。
+     - 按 server `name` 判重（`bailian_search`/`playwright`）,已有同名条目跳过不覆盖（用户资产纪律,与 --mcp 注册面同款）;config.yaml 缺席则新建只含 tool_servers 节;YAML 经序列化器输出不裸拼；
+     - 响应 `plus_tools_merged` 字段（写入的 server 名列表,全跳过时空表+note 说明）。
   3. **打印剩余人工动作**（自动化替代不了的一步）：note 明示"export DASHSCOPE_API_KEY=<百炼key>（web_search 凭证;Playwright 首跑自动下载浏览器 ~150MB）"。
   npm 包前提：`files` 白名单补 `examples/hop-fact-check.md`、`examples/hop-deep-research/`（目录含 spec+sample）、两份 hoptools-*.yaml。默认不装：与 --demo 同理,进阶件不该未经请求占用户目录与配置。
-- **版本可见性（2026-08-04 补，2026-08-05 修正 frontmatter 顺序）**：①响应带 `driver_version`（=包 package.json version）与 `driver_source`（=包根绝对路径）——用户一眼看出"装的是哪个版本、从哪来的源"（全局包 vs 本库开发源）；②展开的 `<skill>/SKILL.md` 在 YAML frontmatter 闭合线后注入一行 HTML 注释版本戳 `<!-- driver: @hoplogic/hopjit v{version} ({source}) installed {ISO时间} -->`——已装副本自身可查（`head -5` 即见），不依赖当初的安装响应。Codex 要求 `SKILL.md` 第一行必须是 `---`，版本戳不得前置。
+- **版本可见性（2026-08-04 补，2026-08-05 修正 frontmatter 顺序）**：
+  - ①响应带 `driver_version`（=包 package.json version）与 `driver_source`（=包根绝对路径）——用户一眼看出"装的是哪个版本、从哪来的源"（全局包 vs 本库开发源）；
+  - ②展开的 `<skill>/SKILL.md` 在 YAML frontmatter 闭合线后注入一行 HTML 注释版本戳 `<!-- driver: @hoplogic/hopjit v{version} ({source}) installed {ISO时间} -->`——已装副本自身可查（`head -5` 即见），不依赖当初的安装响应。Codex 要求 `SKILL.md` 第一行必须是 `---`，版本戳不得前置。
 - **陈旧副本新鲜度提示（hopissues/0096,2026-09-20 作者定"给的不是清理命令,是 hopfix 这样的升级命令"）** ^anc-cli-stale-skill-scan：install-skill 装载完成后扫描**本安装器写过的旧位置**,发现陈旧副本报 `stale_notes`（提示型,不拦装载、不代删、不代改——处置权归用户,给的是**升级路径**不是清理命令）。三件判据与边界：
   - **扫描面**：①当前 carrier 的历史装载位置（Codex 族=`~/.agents/skills/`——"demo 恒项目级"口径〔2026-08-27〕之前的历史用户级装载点,0096 事故病灶;CC 族=`~/.claude/skills/` 下的 demo 件——demo 改恒项目级前的旧装）;②cwd 项目级 demo 位置。**只读扫描**——翻用户主目录的敏感性在"改"不在"看",本条恒只读;
   - **认领判据**：目录下 SKILL.md 含本安装器版本戳（`driver: @hoplogic/hopjit`）才认——不是本器写的文件零打扰;版本戳的版本号落后当前包版本、或 spec.md 无 `engine_min_version` 指纹（0093 前的旧产物）,即判陈旧;
   - **提示内容=升级命令按对象分流**：引擎自带件（demo/驱动 skill）→ 指路 `hopjit install-skill --carrier <c> --demo --force`（对现行装载位置刷新）**并点名旧位置文件已不受 --force 管辖、附具体路径供用户自行处置**;用户自建 spec 产物 → 指路 `/hopfix`（0093 版本迁移正门——validate error 清单为工单的定向修正,不是简单覆盖）。响应字段 `stale_notes: [line]`（可选,零发现缺席）。
 - **输出 InstallSkillResponse**：`{ status:'ok', carrier, driver_version, driver_source, installed: [路径…], target }`；`--mcp` 时另带 `mcp_registered`/`mcp_note`/`mcp_config_bootstrapped`/`mcp_config_note`（配置自举明示——学了什么模型/端点/凭证名,或未学习原因）；`stale_notes`（可选——陈旧副本提示,见上条）；失败 `{ status:'error', message }`。
 - **为何随包发 driver 是前提**：install-skill 从 `node_modules/@hoplogic/hopjit/driver/` 读源——`files` 白名单必含 `driver/`（已含）。
-- **入门 examples 随包（2026-08-04 作者定；2026-08-05 收平路径——作者指出别让新手多敲字）**：入门四件（`data-quality.md`+`doc-review.md`+`demo-data.json`+`GETTING-STARTED.md`）直接放 `examples/` 根随包（files 白名单按文件挑），**仓库路径与包内路径同形**——新手命令恒为 `run examples/data-quality.md`，无论 clone 仓库还是纯 npm 全局装都一次命中（getting-started 子目录曾致命令变长+两处路径不同形，已废）。全量 22 个 spec 仍只在仓库。
+- **入门 examples 随包（2026-08-04 作者定；2026-08-05 收平路径——作者指出别让新手多敲字）**：入门四件（`data-quality.md`+`doc-review.md`+`demo-data.json`+`GETTING-STARTED.md`）直接放 `examples/` 根随包（files 白名单按文件挑）。全量 22 个 spec 仍只在仓库。
+  - **仓库路径与包内路径同形**——新手命令恒为 `run examples/data-quality.md`，无论 clone 仓库还是纯 npm 全局装都一次命中（getting-started 子目录曾致命令变长+两处路径不同形，已废）。
 
-**`hopjit pack` 契约** ^anc-cli-pack：把一个 hopskill spec 打包成**独立具名 skill**——用户视角是"装了一个叫 doc-review 的能力"，HopSpec/hopjit/通用 driver 全部成为实现细节。**validate 闸门含 doc-ref 解析上下文**（hopissues/0077——原恒缺席 P15 空转:知识文件/章节缺失 validate 报 error 而 pack 照 ok 写产物,打包假绿;pack 是交付时点知识闭合是产物硬要求,不用 validate 命令的 lenient 跨目录降级——error 即拒不写产物;知识文档收集面缺失同响亮拒,静默跳过=产物装上即 P15）。默认 `--carrier cc` 保持既有行为；`--carrier codex` 生成 Codex 项目 skill；`--carrier cfuse-cc`/`cfuse-codex` 复用对应原生系的包装模板（CC 系 `/skill` 或 Codex 系 `$skill`）;`--carrier opencode` 复用 CC 系包装模板（`/skill` 入口——opencode 兼容 CC skill 格式）,`--dir` 缺省 `.opencode/skills`（项目级,opencode 原生发现路径）。pack 的 `--dir` 缺省是项目级（`.claude/skills` / `.agents/skills` / `.opencode/skills`,按 carrierFamily）——与 install-skill 不同,pack 产物跟项目走;cfuse 用户要装到 cfuse home 用 `--dir` 显式指定（如 `--dir ~/.codefuse/engine/cc/skills`）。pack 产物薄包装的前置段按 carrier 生成装驱动命令/位置（cfuse-* 指引 `--carrier cfuse-*`,不硬编码原生 `~/.claude`/`~/.codex`）。用户要的是具名能力，spec 是能力实现。**skill 版本注入（hopissues/0092——pack 薄包装 SKILL.md frontmatter 原恒缺 version:HopSpec 头部无 version 槽,源 skill 版本在 hopbuild 翻译期即丢,pack 无源可继承,消费方读空回退 unknown 致任务归属丢失）**:`--skill-version <v>` 选项显式注入 frontmatter `version:` 行（两载体薄包装同注）;未传时 frontmatter 不写 version 行且 pack 输出 note 提示"产物无版本号——消费方读 version 的场景传 --skill-version"（交付时点不再静默;不设缺省值——编造版本号比缺席更误导）。全链版本槽（SpecHeader 加 version 字段让翻译期承接源 skill 版本）属语法面改动须经概念层决策,另案不并本条。**engine_min_version 注入（todo/0093 版本兼容性原则,与 --skill-version 正交——skill 业务版本给消费方,engine_min_version 给引擎闸）**:pack 时向 spec 的 Config 段注入 `engine_min_version: <打包时引擎版本>`（readPackageVersion 单点;spec 已有该键则保留作者手写值不覆盖——作者放宽是知情行为）;引擎 init 比对契约归 [[exec-engine#^anc-exec-engine-min-version-gate]]。
+**`hopjit pack` 契约** ^anc-cli-pack：把一个 hopskill spec 打包成**独立具名 skill**——用户视角是"装了一个叫 doc-review 的能力"，HopSpec/hopjit/通用 driver 全部成为实现细节。用户要的是具名能力，spec 是能力实现。
 
-- **name 覆盖时 Id 随名改写（2026-08-11 作者指出"Id 不动会干扰目标环境"后补定）**：`--name`（或内部 name 参数）与 spec 自身 `Id` 不一致时，打包**副本**的 `Id:` 行改写为 name——Id 是运行痕迹的命名根（hoplog 目录 `<spec_id>-<时间戳>`、状态元数据、call 寻址），skill 名与 Id 不一致会让 demo-rename 的运行留下 confirm-commit-* 日志，且可能与用户同 Id spec 的痕迹混淆。**源文件不动**（改的是 skill 内副本）；不传 name 时零改写（原样打包，既有行为不变）。⚠️ 副本 Id 改写后，其它 spec 若按旧 Id `call` 该副本会找不到——demo 场景无此耦合；将来出现"打包被 call 依赖的 spec"需求时复审。
+- **validate 闸门含 doc-ref 解析上下文**（hopissues/0077——原恒缺席 P15 空转：知识文件/章节缺失 validate 报 error 而 pack 照 ok 写产物，打包假绿）：pack 是交付时点，知识闭合是产物硬要求，不用 validate 命令的 lenient 跨目录降级——error 即拒不写产物；知识文档收集面缺失同响亮拒（静默跳过=产物装上即 P15）。
+- **carrier 分流**：默认 `--carrier cc` 保持既有行为；`--carrier codex` 生成 Codex 项目 skill；`--carrier cfuse-cc`/`cfuse-codex` 复用对应原生系的包装模板（CC 系 `/skill` 或 Codex 系 `$skill`）；`--carrier opencode` 复用 CC 系包装模板（`/skill` 入口——opencode 兼容 CC skill 格式），`--dir` 缺省 `.opencode/skills`（项目级，opencode 原生发现路径）。
+- **`--dir` 缺省是项目级**（`.claude/skills` / `.agents/skills` / `.opencode/skills`，按 carrierFamily）——与 install-skill 不同，pack 产物跟项目走。cfuse 用户要装到 cfuse home 用 `--dir` 显式指定（如 `--dir ~/.codefuse/engine/cc/skills`）。
+- **薄包装前置段按 carrier 生成**装驱动命令/位置（cfuse-* 指引 `--carrier cfuse-*`，不硬编码原生 `~/.claude`/`~/.codex`）。
+- **skill 版本注入**（hopissues/0092——pack 薄包装 SKILL.md frontmatter 原恒缺 version：HopSpec 头部无 version 槽，源 skill 版本在 hopbuild 翻译期即丢，pack 无源可继承，消费方读空回退 unknown 致任务归属丢失）：`--skill-version <v>` 选项显式注入 frontmatter `version:` 行（两载体薄包装同注）。
+  - 未传时 frontmatter 不写 version 行且 pack 输出 note 提示"产物无版本号——消费方读 version 的场景传 --skill-version"（交付时点不再静默；不设缺省值——编造版本号比缺席更误导）；
+  - 全链版本槽（SpecHeader 加 version 字段让翻译期承接源 skill 版本）属语法面改动须经概念层决策，另案不并本条。
+- **engine_min_version 注入**（todo/0093 版本兼容性原则，与 --skill-version 正交——skill 业务版本给消费方，engine_min_version 给引擎闸）：pack 时向 spec 的 Config 段注入 `engine_min_version: <打包时引擎版本>`（readPackageVersion 单点；spec 已有该键则保留作者手写值不覆盖——作者放宽是知情行为）；引擎 init 比对契约归 [[exec-engine#^anc-exec-engine-min-version-gate]]。
+
+- **name 覆盖时 Id 随名改写（2026-08-11 作者指出"Id 不动会干扰目标环境"后补定）**：`--name`（或内部 name 参数）与 spec 自身 `Id` 不一致时，打包**副本**的 `Id:` 行改写为 name——Id 是运行痕迹的命名根（hoplog 目录 `<spec_id>-<时间戳>`、状态元数据、call 寻址），skill 名与 Id 不一致会让 demo-rename 的运行留下 confirm-commit-* 日志，且可能与用户同 Id spec 的痕迹混淆。
+  - **源文件不动**（改的是 skill 内副本）；不传 name 时零改写（原样打包，既有行为不变）；
+  - ⚠️ 副本 Id 改写后，其它 spec 若按旧 Id `call` 该副本会找不到——demo 场景无此耦合；将来出现"打包被 call 依赖的 spec"需求时复审。
 
 - **输入**：spec 文件路径。先 `parseSpec` 校验（validate 闸门，error 即拒——pack 不放行坏 spec），并从 AST 取 `id`（默认 skill 名）与 `goal`（生成触发描述）。
 - **目标与展开布局**：
@@ -253,10 +347,20 @@ trait：
   - `SKILL.md`——**生成的薄包装**（见下），frontmatter `name`=skill 名、`description`=由 goal 生成的触发描述（含中文任务动词，CC 隐式触发靠它）；
   - `spec.md`——spec 文件原样拷入（改名 spec.md，skill 目录即自包含）；
   - spec 引用的**知识文档**（doc-ref `[[X#…]]` 提到的同目录 .md）逐个拷入——doc-ref 按 cwd 相对解析，spec 与知识文档必须同目录（同 hopbuild 的知识文档同住约定）；
-  - **数据资产**（`--assets <逗号分隔文件名>`，2026-08-06 补；**2026-09-04 扩目录形态**——hopissues/0069 多文件 skill 语料实锤：成熟 skill 的附属资产是 `references/`、`scripts/` 整目录，逐文件点名既繁琐又易漏）：spec 运行依赖的非 .md 资产（演示数据 JSON/CSV、引用文档目录、脚本目录等）逐个从 spec 同目录拷入 skill 目录——条目是文件即拷文件，是**目录即整树递归拷入**（保持相对路径结构，产物内指针原样可解析）；skill 目录即自包含可分发单元，装完即可跑、不依赖用户现场备数据（作者原则："数据集当然应该现场准备好"）。资产不存在即 error 拒 pack（防呆：不产出一个装上就跑不了的 skill）。
+  - **数据资产**（`--assets <逗号分隔文件名>`，2026-08-06 补；**2026-09-04 扩目录形态**——hopissues/0069 多文件 skill 语料实锤：成熟 skill 的附属资产是 `references/`、`scripts/` 整目录，逐文件点名既繁琐又易漏）：spec 运行依赖的非 .md 资产（演示数据 JSON/CSV、引用文档目录、脚本目录等）逐个从 spec 同目录拷入 skill 目录。
+    - 条目是文件即拷文件，是**目录即整树递归拷入**（保持相对路径结构，产物内指针原样可解析）；
+    - skill 目录即自包含可分发单元，装完即可跑、不依赖用户现场备数据（作者原则："数据集当然应该现场准备好"）；
+    - 资产不存在即 error 拒 pack（防呆：不产出一个装上就跑不了的 skill）。
     - 【决策：依赖驱动】为什么走 `--assets` 参数而非 spec 头部 `Assets:` 声明：后者是 spec 文法（语言面）改动，权威在概念层，而 `docs/concepts/` 是库内只读快照——本库无权加语言特性。`--assets` 落在适配层职权内，零文法改动。若概念层将来引入资产声明，此参数降级为覆盖手段，随之复审。
-- **🔴 用户注意力原则（pack 产物的第一设计约束，2026-08-04 作者定）**：hopskill 是**给非程序员用户**用的，非 debug 模式——**注意力是最宝贵的资源，不要浪费**。落为三条硬要求：①包装 SKILL.md 指示执行 LLM **不向用户展示内务**（CLI 探测、路径解析、状态目录、JSON 结构等命令行细节一律不进对话，只报"在做什么"级别的一行进度）；②面向用户的语言**零行话**（不说 spec/引擎/介入点/subagent，说"步骤/任务/需要你确认"）；③用户看到的只有三类内容——**要收集的输入、必须拍板的暂停点、最终交付物**。debug 视角是 /hopspec 技术用户的事，不是 pack 产物的事。
-- **前置段版本声明（hopissues/0051,2026-08-31 作者拍定"只提示+给升级命令"——低版本场景的指路责任）** ^anc-cli-pack-version-floor：两载体薄包装 SKILL.md 的前置段第 1 条从静态句改为**带打包时版本的精确句**——"hopjit 引擎已安装且版本 >= X.Y.Z（本 skill 由该版本打包;`hopjit --version` 可验证,低于则先升级:`npm i -g @hoplogic/hopjit@latest`）"。X.Y.Z 取 `readPackageVersion()`（版本单一事实源 ^anc-cli-version-single-source——不写第二份真值,报告卡拍板点②直采）。**为什么闸长在包装层不在引擎**：低版本场景里执行 parse 的正是旧引擎——旧引擎不认识新语法才报语法错误,让它"识别新语法并改报版本过低"等于它已经不旧,逻辑死结;spec 文件自身加版本字段属概念层文法权威,本库快照无权改。故前置检查的执行位=薄包装的指引文字（caller agent 读到版本要求会跑 `hopjit --version` 比对,低则按指引先升级——**只提示不默认升级**:`npm i -g` 改全局环境是不可逆外向动作,默认做违背"不可逆须授权"一贯口径,且可能破坏用户其它项目的版本依赖;提示文案自带命令,升级代价=一次确认〔2026-08-31 作者拍 A〕）。正例:pack 产物前置段含当前包版本号与升级命令;反例:版本号写死字面量（第二真值——包升版后 pack 产物仍写旧版即谎报）。
+- **🔴 用户注意力原则（pack 产物的第一设计约束，2026-08-04 作者定）**：hopskill 是**给非程序员用户**用的，非 debug 模式——**注意力是最宝贵的资源，不要浪费**。debug 视角是 /hopspec 技术用户的事，不是 pack 产物的事。落为三条硬要求：
+  - ①包装 SKILL.md 指示执行 LLM **不向用户展示内务**（CLI 探测、路径解析、状态目录、JSON 结构等命令行细节一律不进对话，只报"在做什么"级别的一行进度）；
+  - ②面向用户的语言**零行话**（不说 spec/引擎/介入点/subagent，说"步骤/任务/需要你确认"）；
+  - ③用户看到的只有三类内容——**要收集的输入、必须拍板的暂停点、最终交付物**。
+- **前置段版本声明（hopissues/0051,2026-08-31 作者拍定"只提示+给升级命令"——低版本场景的指路责任）** ^anc-cli-pack-version-floor：两载体薄包装 SKILL.md 的前置段第 1 条从静态句改为**带打包时版本的精确句**——"hopjit 引擎已安装且版本 >= X.Y.Z（本 skill 由该版本打包;`hopjit --version` 可验证,低于则先升级:`npm i -g @hoplogic/hopjit@latest`）"。
+  - X.Y.Z 取 `readPackageVersion()`（版本单一事实源 ^anc-cli-version-single-source——不写第二份真值,报告卡拍板点②直采）；
+  - **为什么闸长在包装层不在引擎**：低版本场景里执行 parse 的正是旧引擎——旧引擎不认识新语法才报语法错误,让它"识别新语法并改报版本过低"等于它已经不旧,逻辑死结;spec 文件自身加版本字段属概念层文法权威,本库快照无权改；
+  - 故前置检查的执行位=薄包装的指引文字（caller agent 读到版本要求会跑 `hopjit --version` 比对,低则按指引先升级——**只提示不默认升级**:`npm i -g` 改全局环境是不可逆外向动作,默认做违背"不可逆须授权"一贯口径,且可能破坏用户其它项目的版本依赖;提示文案自带命令,升级代价=一次确认〔2026-08-31 作者拍 A〕）；
+  - 正例:pack 产物前置段含当前包版本号与升级命令;反例:版本号写死字面量（第二真值——包升版后 pack 产物仍写旧版即谎报）。
 
 - **薄包装 SKILL.md 的内容契约（壳层原则,2026-08-15 作者定单立——hopbuild 自举实撞三连沉淀,适用一切 pack 产物的壳）** ^anc-cli-pack-shell：
   - **参数引导只列用户真有信息的参数**：agent 自供参数（探测值/环境值）不进参数表——执行 agent 装了 /hopspec 就已按驱动协议持有 CLI 等环境事实,列出来=把内务当参数问用户;
@@ -290,7 +394,16 @@ trait：
 > 这是**设计层的分层选择**（取舍：逻辑归引擎换取两路径行为一致），非宪法级原则。`submit_and_fetch_next` 虽含多种提交参数，仍是"一命令一方法"——按参数选**一个**回写方法 + completeAndAdvance（后者是引擎单一方法）。节奏消化逻辑归引擎（[[exec-engine#^anc-exec-advance-to-caller]]）后，CLI 再无业务逻辑例外。
 
 **实例解析** ^anc-cli-instance-resolve
-`--instance` 省略时，CLI 取 `state_dir` 下最新（按目录 mtime 或 run_id 时间戳排序）的实例目录作为目标。显式传 `--instance id` 时直接定位该实例，**且先做目录在场校验**（2026-09-01 作者令"按工程链修"——live:core codex:parallel 实撞：driver 手抄实例号丢一字符，缺校验时错号一路走到 persistence 读 spec.json 撞 ENOENT，报 `CORRUPT_STATE_FILE`"状态文件损坏"——两种病一张脸：收报文的 driver/人不会想到是自己把号抄错了，排障方向被误导。LLM driver 手抄 UUID 是常态误差面，报文必须让它能自纠）：目录不存在 → 报 `INSTANCE_NOT_FOUND: 实例 <id> 在 <state_dir> 下不存在——若实例号是手抄的请核对有无抄错`（提醒句是报文的一部分——报文的读者常是抄错号的 LLM driver，直接点破最常见成因），**并列出该 state_dir 下真实存在的实例目录名**（按 mtime 新前旧后，最多 5 个——指路：抄错号的一眼能对出正确的号；空目录如实说"目录下无任何实例"；state_dir 本身不可读时如实报"state_dir 本身不可读"——指路失败不掩主错误）。**校验覆盖 CLI 全部实例定位通路**（2026-09-01 review 面二抓：初版只在 --instance 参数通路，`run --call-parent` 的父实例定位直调 load 绕过校验，错号父实例仍报旧病——收纯是全称承诺，凡 CLI 收外部实例号的入口同经 resolveInstance）。`CORRUPT_STATE_FILE` 语义随之收纯：目录在而状态文件缺/坏（崩溃半写、真损坏）才是它。**半初始化子实例目录再收窄一档**（0059 实撞:父已写 params.json 但 child 未 init,目录在场而 spec/state/vars 三件全缺——按上句口径报 CORRUPT_STATE_FILE"spec.json 不可读",报文教人往"文件损坏"方向排障,而病是"子实例从未完成初始化"）:实例定位命中目录后、交 Engine.load 前,**探测 state.json 在场性**——缺席且目录内无 spec.json → 报 `INSTANCE_NOT_INITIALIZED: 子实例 <id> 目录在场但未完成初始化（无 state.json/spec.json——常见成因:child 启动失败留下的半截目录）。删除该目录后重新派发即可`;state.json 在场而内容坏才是 CORRUPT_STATE_FILE 的地盘。三档语义排开:目录不在=INSTANCE_NOT_FOUND / 目录在而未初始化=INSTANCE_NOT_INITIALIZED / 初始化过而文件坏=CORRUPT_STATE_FILE——每档报文指路各自的处置。校验只在显式 `--instance` 分支——省略分支取的就是真实存在的目录，天然无此病。CLI 自身不读写实例内状态文件，仅把解析出的实例标识/目录传给 Engine。
+`--instance` 省略时，CLI 取 `state_dir` 下最新（按目录 mtime 或 run_id 时间戳排序）的实例目录作为目标。显式传 `--instance id` 时直接定位该实例，**且先做目录在场校验**。
+
+- 校验来历：2026-09-01 作者令"按工程链修"——live:core codex:parallel 实撞：driver 手抄实例号丢一字符，缺校验时错号一路走到 persistence 读 spec.json 撞 ENOENT，报 `CORRUPT_STATE_FILE`"状态文件损坏"——两种病一张脸：收报文的 driver/人不会想到是自己把号抄错了，排障方向被误导。LLM driver 手抄 UUID 是常态误差面，报文必须让它能自纠；
+
+- 目录不存在 → 报 `INSTANCE_NOT_FOUND: 实例 <id> 在 <state_dir> 下不存在——若实例号是手抄的请核对有无抄错`（提醒句是报文的一部分——报文的读者常是抄错号的 LLM driver，直接点破最常见成因），**并列出该 state_dir 下真实存在的实例目录名**（按 mtime 新前旧后，最多 5 个——指路：抄错号的一眼能对出正确的号；空目录如实说"目录下无任何实例"；state_dir 本身不可读时如实报"state_dir 本身不可读"——指路失败不掩主错误）；
+- **校验覆盖 CLI 全部实例定位通路**（2026-09-01 review 面二抓：初版只在 --instance 参数通路，`run --call-parent` 的父实例定位直调 load 绕过校验，错号父实例仍报旧病——收纯是全称承诺，凡 CLI 收外部实例号的入口同经 resolveInstance）。`CORRUPT_STATE_FILE` 语义随之收纯：目录在而状态文件缺/坏（崩溃半写、真损坏）才是它；
+- **半初始化子实例目录再收窄一档**（0059 实撞:父已写 params.json 但 child 未 init,目录在场而 spec/state/vars 三件全缺——按上句口径报 CORRUPT_STATE_FILE"spec.json 不可读",报文教人往"文件损坏"方向排障,而病是"子实例从未完成初始化"）:实例定位命中目录后、交 Engine.load 前,**探测 state.json 在场性**。
+  - 缺席且目录内无 spec.json → 报 `INSTANCE_NOT_INITIALIZED: 子实例 <id> 目录在场但未完成初始化（无 state.json/spec.json——常见成因:child 启动失败留下的半截目录）。删除该目录后重新派发即可`;state.json 在场而内容坏才是 CORRUPT_STATE_FILE 的地盘；
+- 三档语义排开:目录不在=INSTANCE_NOT_FOUND / 目录在而未初始化=INSTANCE_NOT_INITIALIZED / 初始化过而文件坏=CORRUPT_STATE_FILE——每档报文指路各自的处置；
+- 校验只在显式 `--instance` 分支——省略分支取的就是真实存在的目录，天然无此病。CLI 自身不读写实例内状态文件，仅把解析出的实例标识/目录传给 Engine。
 
 **状态加载契约** ^anc-cli-state-load
 除 init（新建实例）外，每个命令先用 `ExecutionEngine.load(dir)` 或 `recover(dir)` 从快照重建引擎实例，再调一个业务方法。**加载是前置构造，不计入「一命令一 Engine 方法」**——它产出引擎实例而非业务结果。两个加载入口的语义差异是关键契约（概念见 [[../concepts/HopSpec V3配套HopJIT运行时能力#^anc-exec-durable-resume]]）：
@@ -347,13 +460,18 @@ outputWithNotify(result, engine):
 4. output(result) 恒执行（通知是旁路,主流程响应先行无阻塞语义变化）
 ```
 
-测试正反例：--notify dingtalk 记入 state 且跨进程可见（run 后另起命令读快照）;终态发送 fetch 桩收 ✅ 卡片含 spec 标题;未 --notify 零发送;--notify 带非法渠道启动即拒;发送异常 output 照常返回;paused 停点发 ⏸️ 卡片。composeRunCard 三态渲染单测归 tools.test.ts。driver 接线口径：用户话语点名钉钉渠道（"跑完钉钉通知我/钉我"）→ /hop 建卡后 run 命令带 --notify dingtalk（发不发判断恒归引擎门,driver 只翻译意图不自作主张——没点名渠道就不带 flag）;MCP 载体=start_run params 带 hop_notify:true（standalone 侧契约不随本条变,分道理由见 Trait 二与门条款）。
+测试正反例：--notify dingtalk 记入 state 且跨进程可见（run 后另起命令读快照）;终态发送 fetch 桩收 ✅ 卡片含 spec 标题;未 --notify 零发送;--notify 带非法渠道启动即拒;发送异常 output 照常返回;paused 停点发 ⏸️ 卡片。composeRunCard 三态渲染单测归 tools.test.ts。
+
+driver 接线口径：用户话语点名钉钉渠道（"跑完钉钉通知我/钉我"）→ /hop 建卡后 run 命令带 --notify dingtalk（发不发判断恒归引擎门,driver 只翻译意图不自作主张——没点名渠道就不带 flag）;MCP 载体=start_run params 带 hop_notify:true（standalone 侧契约不随本条变,分道理由见 Trait 二与门条款）。
 
 **~~通知推送 notify~~（已退役,2026-08-30 当日立当日撤——作者定"tools 不再直接通过 hopjit cli 外露"）** ^anc-cli-notify
 
 同日三连纠后收口：①"不是做一个 hopjit cli 给人用,是给 hopspec 和 hop 用的"→②"没说钉钉通知为啥会通知"→③"hopjit 阉割=tools 不再直接通过 hopjit cli 外露"。CLI 不承载工具能力外露——工具能力恒经工具面（ToolProvider 装配）,通知的正式形态=注册工具模块+引擎终态/停点配置驱动挂点（归 todo/0052 后续批次:设计归口 docs/design/tools/ 子目录）。notify 命令与 NotifyResponse 当日实装当日移除,实现史归 git log。
 
-**本条与 tool-call 命令的分界（2026-08-31 作者定"hopjit cli 应该是工具的标准出口了,因为要被复用模式调用"——两条裁决不冲突,消费方不同）**：本条封的是**给人的命令面**——把工具做成 `hopjit notify` 这类面向终端用户的独立命令,导向"普通人直接用 hopjit"的错误定位。`hopjit tool-call`（通道⑥,[[tool-channels#^anc-exec-tool-channels]]）是**给复用模式 driver 的机器通道**——caller agent 在 act free 执行期按 L4 清单调引擎内建工具,引擎实现是唯一语义源,driver 不用 Bash 模仿。判据一句话:命令的预期使用者是人=违反本条;是 driver 按清单指引的机器调用=通道⑥职权。tool-call 因此是复用模式的工具标准出口,不是本条的翻案。
+**本条与 tool-call 命令的分界（2026-08-31 作者定"hopjit cli 应该是工具的标准出口了,因为要被复用模式调用"——两条裁决不冲突,消费方不同）**：
+- 本条封的是**给人的命令面**——把工具做成 `hopjit notify` 这类面向终端用户的独立命令,导向"普通人直接用 hopjit"的错误定位；
+- `hopjit tool-call`（通道⑥,[[tool-channels#^anc-exec-tool-channels]]）是**给复用模式 driver 的机器通道**——caller agent 在 act free 执行期按 L4 清单调引擎内建工具,引擎实现是唯一语义源,driver 不用 Bash 模仿；
+- 判据一句话:命令的预期使用者是人=违反本条;是 driver 按清单指引的机器调用=通道⑥职权。tool-call 因此是复用模式的工具标准出口,不是本条的翻案。
 
 **实现**：TypeScript（代码侧），文件 `src/cli.ts`（commander.js）。
 
@@ -361,7 +479,8 @@ outputWithNotify(result, engine):
 
 ## CLI 响应类型【契约】 ^anc-cli-response-types
 
-> 各 CLI 命令序列化到 stdout 的 JSON 响应结构。2026-07-02 从 shared-types.md 归位——它们是 hop-cli 模块的对外 JSON 契约（driver 依赖），属 CLI 命令表「响应类型」列的类型定义。`SpecError`/`ErrorCode` 见 [[shared-errors]]，`OutputDecl`/`StepSummary`/`RetryRecord`/`ExecEvent` 见 [[shared-types#^anc-type-auxiliary]]，`$file`/`preview` 卸载见 [[shared-types#^anc-exec-deflate]]。
+> 各 CLI 命令序列化到 stdout 的 JSON 响应结构。2026-07-02 从 shared-types.md 归位——它们是 hop-cli 模块的对外 JSON 契约（driver 依赖），属 CLI 命令表「响应类型」列的类型定义。
+> - `SpecError`/`ErrorCode` 见 [[shared-errors]]，`OutputDecl`/`StepSummary`/`RetryRecord`/`ExecEvent` 见 [[shared-types#^anc-type-auxiliary]]，`$file`/`preview` 卸载见 [[shared-types#^anc-exec-deflate]]。
 
 ### InitResponse（hopjit init） ^anc-cli-init-response
 
@@ -386,7 +505,12 @@ init 跑完整校验：**error 级阻断**（不创建实例、不写状态目�
 
 ### ValidateResponse（hopjit validate） ^anc-cli-validate-response
 
-**片段模式 `validate <file> --fragment [--known-vars a,b,c]`**（hopbuild 单轮核查用——逐节点展开的 spec 片段无完整头部）：**parser 原生吃裸片段**（parseFragment:输入=裸步骤序列,无 `# 标题`/`## Steps` 节头也直接解析——不是内部拼假头骗过整文验证器;原生解析的实利:报错行号=片段文件真实行,拼头会整体偏移）,validator 只验**片段自身的合法性**,豁免整文完备性类规则（S8 goal 必备/S10 头部结构/exit 交付完整性/P10 输出无产出 warn——片段天然不完整,报了全是噪声）;`--known-vars` 逗号分隔的上层已知变量名,注入 V1 可追溯来源（片段引用上层变量不误报凭空引用;类型未知按通配匹配——类型核对归整文 validate）。片段仍全量执行的面:步骤文法/容器结构（C 族）/片段内变量流（V 族,含 known-vars 扩展来源）/特殊步骤规则（P 族除 P10）。**片段编号从 1 起**（相对编号——片段是自足局部,`3.2.1.` 类绝对路径起头会因祖先不在场被树装配拒;调用方并入全文时自行改写编号）。响应结构与整文模式同形。
+**片段模式 `validate <file> --fragment [--known-vars a,b,c]`**（hopbuild 单轮核查用——逐节点展开的 spec 片段无完整头部）。响应结构与整文模式同形。
+- **parser 原生吃裸片段**（parseFragment:输入=裸步骤序列,无 `# 标题`/`## Steps` 节头也直接解析——不是内部拼假头骗过整文验证器;原生解析的实利:报错行号=片段文件真实行,拼头会整体偏移）；
+- validator 只验**片段自身的合法性**,豁免整文完备性类规则（S8 goal 必备/S10 头部结构/exit 交付完整性/P10 输出无产出 warn——片段天然不完整,报了全是噪声）；
+- `--known-vars` 逗号分隔的上层已知变量名,注入 V1 可追溯来源（片段引用上层变量不误报凭空引用;类型未知按通配匹配——类型核对归整文 validate）；
+- 片段仍全量执行的面:步骤文法/容器结构（C 族）/片段内变量流（V 族,含 known-vars 扩展来源）/特殊步骤规则（P 族除 P10）；
+- **片段编号从 1 起**（相对编号——片段是自足局部,`3.2.1.` 类绝对路径起头会因祖先不在场被树装配拒;调用方并入全文时自行改写编号）。
 
 
 ```
@@ -486,9 +610,9 @@ struct: StepReady
 struct: CallProtocol
   Id: call-protocol
   Fields:
-    - init_command: line          # 完整 init 命令,callee 路径 <CALLEE_SPEC_PATH:id> 占位（寻址归 caller,同 DispatchReady.launch_command 先例）;params=引擎 auto-map 快照+hop_env 透传;trace/log-dir/级别继承已折入;父层有修正意见时另拼 --upstream-feedback（重跑轮才有,D41 复用半边）
+    - init_command: line          # 完整 init 命令,callee 路径 <CALLEE_SPEC_PATH:id> 占位（寻址归 caller,同 DispatchReady.launch_command 先例）;params=引擎 auto-map 快照+hop_env 透传;trace/log-dir/级别继承已折入;父层有修正意见时另拼 --upstream-feedback（重跑轮才有,D41 复用半边）;参数表与反馈文本都以 "@<文件绝对路径>" 形态出现,值由引擎预先写进父实例目录 cmd_args/ 下的文件,命令行上不含数据值（[[exec-engine#^anc-exec-cmd-args-file]],hopissues/0097）
     - child_state_dir: line       # 子实例驱动循环的 --state-dir 值（<顶层STATE>/<inst>/calls）
-    - child_instance: line        # 子实例 ID（=call step id,确定性）
+    - child_instance: line        # 子实例 ID（确定性:不在 loop 里=call 步骤号,在 loop 里=<步骤号>.<各祖先 loop 当前轮次,外层到内层>——[[exec-engine#^anc-exec-call-child-iter-id]];init_command 以 --child-instance 带同一值）
     - child_advance: line         # 循环起步命令全文（init 建的子实例是未推进态,advance 领首个介入点——cc:call 真机实撞:未给起步命令则 driver 翻 CLI 源码反推,8 轮侧查顶过超时线;照抄纪律不许有"你自己想第一步"的洞）
     - report_completed: line      # 成功回报命令全文（--child-instance 机器通道）
     - report_failed: line         # 失败回报命令全文（--failure-child 机器通道）
@@ -537,12 +661,63 @@ struct: StatusResponse
     - completed: number       # 已完成步骤数
     - failed: number          # 已失败步骤数
     - pending: number         # 待执行步骤数
-    - current_step: line      # 可选。当前 running 的步骤 ID（无则已结束;paused 时与 paused_step_id 同指停驻步——暂停态由 running 编码,^anc-exec-pause-persist）
-    - pause_reason: line      # 可选。仅 paused 时在场——停驻原因摘要（confirm/waiting_human/ask/escalate;畸形卡兜底 unknown——卡在场但 pause_reason 字段非字符串时的防御值,引擎自产卡恒带 reason 正常不出现）,看护方判"该叫人了"用;问题卡全文不在本响应（归 resume/run_status 通道,status 不膨胀）
-    - paused_step_id: line    # 可选。仅 paused 时在场——停驻步骤 ID
+    - current_step: line      # 可选。本实例当前 running 的步骤 ID（无则已结束）。paused 时分三种情形:停点是本层的 confirm/ask/escalate 步→与 paused_step_id 同指停驻步（暂停态由 running 编码,^anc-exec-pause-persist）;停点是本层的网络暂停→该步已回置 pending,本字段取本层仍 running 的步骤（通常是网络暂停步的父容器;顶层步网络暂停时缺席）;停点在嵌套串行调用的子流程里→本字段照旧取本层 running 的步骤（步骤账先父后子排列、取最后一个 running 的,即那个调用步）,停点本身看 paused_step_id + call_path
+    - pause_reason: line      # 可选。仅 paused 时在场——停驻原因摘要（confirm/waiting_human/ask/escalate/network——network=网络重试用完后的网络暂停,todo/0105 起在场;停点在嵌套子流程里时取最深那层的值;畸形卡兜底 unknown——卡在场但 pause_reason 字段非字符串时的防御值,引擎自产卡恒带 reason 正常不出现）,看护方判"该叫人了"用;问题卡全文不在本响应（归 resume/run_status 通道,status 不膨胀）
+    - paused_step_id: line    # 可选。仅 paused 时在场——停驻步骤 ID（停点在嵌套子流程里时是最深那层子流程自己的步骤号,不是父层步骤号——配合 call_path 定位）
+    - call_path: [line]       # 可选。仅当停点在嵌套串行调用的子流程里时在场——从顶层调用步到停点所在子流程的直接父调用步,逐层的步骤号（与 MCP 暂停载荷 ExecutionPaused.call_path 同语义,[[step-dispatcher#^anc-exec-call-recursion]]）;停点在顶层时缺席。todo/0105 新增
 ```
 
-**paused 判定三源（引擎侧,状态源优先不依赖递送件;判定位置=终态凌驾之后、步骤态推导之前——aborted 凌驾〔[[exec-engine#^anc-exec-abort]] 第5条〕与 failed/completed 终态标记凌驾〔todo/0058〕两条既有决策不被扰动:实例已终态时纵有残卡也恒报终态）**：①escalate 停驻=state.json `escalate_pending` 在场;②confirm/ask 停驻=某 running 态步骤的 step_type∈{confirm,ask}（暂停态由 running 编码,[[exec-engine#^anc-exec-pause-persist]]）;③盘上问题卡 paused.json 在场且经陈卡对账（卡的 step_id 在步骤账里仍是 running 才认——卡是递送件非状态源,崩溃路径可残留陈卡,对账纪律与 MCP run_status 兜底路同款）。pause_reason 优先取卡内值（卡有完整 reason）,无卡时按判源推。**陈卡对账边缘分叉（记档）**：卡缺 step_id 时引擎侧弃卡落状态源（源①②接力）,MCP run_status 兜底侧认卡返回 paused+卡全文——核心判据（卡 step_id 须仍 running）两侧同款,此边缘各自语境合理（引擎有状态源可接力,MCP 兜底无内存账宁信卡）,不强求归一。**已知边界（显式不覆盖）**：network 暂停（网络中断自动重连停点）由 dispatcher 内存组装、不落卡、步骤回置 pending——CLI 快照侧结构性判不出,且它是非人工停点（resume 即续）,不在"主 agent 感知等人停驻"的痛点面。
+**paused 判定三源（0081 原判;0105 追加的源④⑤见下一段——引擎侧,状态源优先不依赖递送件;判定位置=终态凌驾之后、步骤态推导之前——aborted 凌驾〔[[exec-engine#^anc-exec-abort]] 第5条〕与 failed/completed 终态标记凌驾〔todo/0058〕两条既有决策不被扰动:实例已终态时纵有残卡也恒报终态）**：
+- ①escalate 停驻=state.json `escalate_pending` 在场;
+- ②confirm/ask 停驻=某 running 态步骤的 step_type∈{confirm,ask}（暂停态由 running 编码,[[exec-engine#^anc-exec-pause-persist]]）;
+- ③盘上问题卡 paused.json 在场且经陈卡对账（卡的 step_id 在步骤账里仍是 running 才认——卡是递送件非状态源,崩溃路径可残留陈卡,对账纪律与 MCP run_status 兜底路同款）；
+- pause_reason 优先取卡内值（卡有完整 reason）,无卡时按判源推；
+- **陈卡对账边缘分叉（记档）**：卡缺 step_id 时引擎侧弃卡落状态源（源①②接力）,MCP run_status 兜底侧认卡返回 paused+卡全文——核心判据（卡 step_id 须仍 running）两侧同款,此边缘各自语境合理（引擎有状态源可接力,MCP 兜底无内存账宁信卡）,不强求归一；
+- 源④⑤（网络暂停、嵌套串行调用子流程里的停点）见下一段。
+
+**网络暂停与嵌套串行调用停点也报 paused（todo/0105,2026-09-25）** ^anc-cli-status-nested-pause
+
+演进来由：
+- 0081 批次（2026-09-09）当时把网络暂停写成"已知边界,显式不覆盖"——理由是网络暂停由 dispatcher 在内存里组装载荷、不落问题卡、步骤回置 pending,快照侧判不出;且它是"非人工停点,resume 即续",不在"主 agent 感知等人停驻"的痛点面。嵌套子流程里的停点当时没有讨论,父实例 status 不下钻子实例目录;
+- 0105 实撞推翻了这个判断（2026-09-21 完工清单 T5,hb2 自建 × Ling）：主任务第 5.1.2.2.1.1 步串行调用子流程,子流程第 1.1 步网络重试用完进入网络暂停。观察方全程用命令行 `hopjit status`,30 多分钟看到的一直是"running、停在 5.1.2.2.1.1",最后停掉任务。网络暂停没人调 resume 就永远停着——恰是 0081 要消灭的"引擎停下了外面没人知道";嵌套子流程里的 ask 停点经复现测试确认同样报 running;
+- 判断"判不出"也不成立：网络暂停在状态账事件流里留有 network_pause 事件（随 state.json 持久化）,子流程的快照在父实例目录的 `calls/<子实例>/` 下,都是盘上可读的状态源,不需要新增问题卡;
+- 作者 2026-09-25 拍板,选项原文"甲：顶层+嵌套都看见（推荐）"：命令行 status 对顶层网络暂停和嵌套串行调用子流程里的停点都报 paused,判定只看状态账。
+
+**能力契约（HopTrait）**：
+
+```
+trait: StatusNestedPauseVisible
+  Id: status-nested-pause-visible
+  Constraints:
+  - 判定位置不动:源④⑤追加在源①～③之后,仍处于"终态凌驾之后、步骤态推导之前"——aborted、failed、completed 三个终态标记照旧先判,实例已终态时纵有残留停点也报终态
+  - 源④ 网络暂停:本实例某步当前是 pending,且事件流里 step_id 等于该步的最后一条事件是 network_pause → paused,pause_reason=network,paused_step_id=该步。该步重新开始（记 step_start）或完成后最后一条事件已不是 network_pause,自然不再算——判据只看状态账,不看递送件
+  - 源⑤ 嵌套串行调用下钻:本实例某个未标 parallel 的 call 步当前是 running,且本实例目录下 calls/<子实例名>/ 有子流程快照 → 对子流程快照递归套用同一套判定（源①～⑤）,命中即报 paused;子实例名用引擎现成取名法 serialCallChildInstance（循环里带各层轮次后缀,[[exec-engine#^anc-exec-call-child-iter-id]]）——与子引擎落盘目录同一来源,不另造
+  - 最深层取值:pause_reason 与 paused_step_id 取最深那层停点的值,call_path 记从本层到停点所在子流程的逐层调用步号;子流程已落终态标记（completed/failed/aborted）时不算停点
+  - 不下钻 parallel 子实例:parallel 子实例等人时 run 整体报什么,已由 [[parallel-execution#^anc-exec-parallel-hitl-queue]] 第 3 条锁定（主线还能推进报 running + 待答队列,主线只剩等人才报 paused;呈现通道是 MCP run_status 的 paused_queue）——status 见到 parallel 子实例等人就报 paused 会与之冲突。作者拍板原文指定的取名法 serialCallChildInstance 也只对应串行调用
+  - 读失败不抛错:纯内存实例（无实例目录）、子目录不存在、子快照读失败,一律当作该层无停点,落到步骤态推导——status 是观测面,不因观测失败而失败
+  - 不新增问题卡、不改暂停与恢复语义:网络暂停照旧不落卡、resume 照旧按 call_path 下钻（[[step-dispatcher#^anc-exec-network-pause]]）;本条只让观测面如实
+```
+
+**关键逻辑（HopSop）**：
+
+```
+detectPausedState(本实例) → {reason, stepId, callPath?} | null:
+1. 源③:读 paused.json,卡的 step_id 在本实例步骤账里仍是 running → 返回 {卡内 reason 或 unknown, 卡 step_id};否则视为陈卡落下一步
+2. 源①:escalate_pending 在场 → 返回 {escalate, 该步}
+3. 源②:某步 running 且 step_type ∈ {confirm, ask} → 返回 {confirm|ask, 该步}
+4. 源④:某步 pending 且 事件流里该步最后一条事件 = network_pause → 返回 {network, 该步}
+5. 源⑤:对每个 running 且未标 parallel 的 call 步 c:
+   5.1 子目录 = <本实例目录>/calls/<serialCallChildInstance(c)>/;无本实例目录或子目录无 state.json → 跳过
+   5.2 子引擎 = load(子目录);读失败 → 跳过
+   5.3 子引擎已落终态标记 → 跳过
+   5.4 d = 子引擎.detectPausedState();d 非空 → 返回 {d.reason, d.stepId, callPath: [c, ...(d.callPath ?? [])]}
+6. 返回 null
+
+determineExecutionStatus:aborted → failed → completed 标记 → detectPausedState 非空报 paused → 步骤态推导（顺序不变）
+getStatus:paused 时 pauseSummary = {pause_reason, paused_step_id, call_path(仅非空时)}
+```
+
+测试正反例（tests/engine.test.ts、tests/dispatcher.test.ts、tests/cli.test.ts,@v: anc-cli-status-nested-pause）：顶层网络暂停报 paused+network,该步重新开始或完成后不再报;嵌套串行调用子流程网络暂停报 paused+network+call_path,子步重新开始后回 running;dispatcher 真跑出的嵌套网络暂停经 load 父目录报 paused+network+call_path,按 call_path 恢复跑完后报 completed;嵌套 ask 停点报 paused+ask+call_path,答完后不再报;两层嵌套时 call_path 由外到内;循环里的串行调用（子实例名带轮次后缀）也能下钻命中;父实例已终态时子目录残留停点仍报终态;子实例已落终态标记（completed 或 abort 后残留暂停痕迹）不下钻;命令行 status 读快照同口径。
 
 ### AbortResponse（hopjit abort） ^anc-cli-abort-response
 
@@ -596,7 +771,8 @@ struct: BranchRequest
 
 ## JSON I/O 约定【契约】
 
-**tool_request 通道（2026-08-04，随引擎 `^anc-exec-tool-request` 新增）**：NextResponse 联合类型增 `ToolRequest` 分支（形状见 [[exec-engine#^anc-exec-tool-request]]）；`submit_and_fetch_next` 增 `--tool-result '<json>'|@file` 参数（与 --output/--answer 互斥三选一）——应答 tool_request 专用，注入单工具结果后引擎续解释 body。对非 tool_request 状态使用返回 INVALID_STATE。
+**tool_request 通道（2026-08-04，随引擎 `^anc-exec-tool-request` 新增）**：NextResponse 联合类型增 `ToolRequest` 分支（形状见 [[exec-engine#^anc-exec-tool-request]]）。
+- `submit_and_fetch_next` 增 `--tool-result '<json>'|@file` 参数（与 --output/--answer 互斥三选一）——应答 tool_request 专用，注入单工具结果后引擎续解释 body。对非 tool_request 状态使用返回 INVALID_STATE。
 
 **输出分流** ^anc-cli-json-io
 - **缺省输出 YAML**（多行块状，人可读——2026-08-06 作者拍板："缺省都是 yaml，除非用 --json 强制"；锚点 ID 保留历史名不改，契约以本文为准）；`--json` 全局 flag 或环境变量 `HOPJIT_OUTPUT=json` 强制单行 JSON（优先级：`--json` flag 或 `HOPJIT_OUTPUT=json` 任一即 JSON（实现为 env 恒优先——现实用况两者无分歧））
@@ -608,10 +784,14 @@ struct: BranchRequest
 - 由关键决策 2 推演：单行 JSON + stdout/stderr 分流
 
 **文件参数与 work_zone 工作区** ^anc-cli-file-arg-safety
-- `@file` 路径：`--output`/`--answer`/`--params`/`--replan`/`--tool-result` 的值以 `@` 开头时从文件读取内容。**推荐并鼓励用响应给出的确切路径**（step_ready 的 `output_path` / `work_zone` 目录下）。
-- **提交越界校验**：`submit_and_fetch_next --output "@<path>"` 与 `--tool-result "@<path>"` 时，引擎校验 `<path>` 落在本执行单元的 `work_zone` 内，**越界（如 /tmp、项目根、兄弟 child 的 work_zone）→ 拒绝提交并报错**（提示改写本单元 work_zone 路径；两入口同款 `assertOutputInWorkZone`，src/cli.ts:687 与 :681）。**前缀判定用平台分隔符**（`path.sep`,不硬编码 `'/'`）——win32 下 `resolve` 产反斜杠路径,硬编码前斜杠使 work_zone 内的合法路径永不匹配、`@file` 提交全废（0057 实撞:Windows 用户 parallel 场景 @file 全被误拒,而 @file 恰是 worker 输出提交的设计形态）。整个 `@<path>` 必须作为一个双引号参数，兼容含空格的工作区；`@` 位于参数值首字符，CLI 才会读文件。这是引擎唯一能真拦的点——复用模式 act 由 CC/worker 的 Bash/Write 执行、写入不过引擎，无法在"写入那一刻"拦，只能在"提交那一刻"校验。硬边界的极限即此（不做 OS 级沙箱）。
+- `@file` 路径：`--output`/`--answer`/`--params`/`--replan`/`--tool-result`/`--upstream-feedback` 的值以 `@` 开头时从文件读取内容（`--upstream-feedback` 读原文不做 JSON 解析——引擎拼给 driver 的命令里参数表与反馈文本恒走文件形态,见 [[exec-engine#^anc-exec-cmd-args-file]]）。**推荐并鼓励用响应给出的确切路径**（step_ready 的 `output_path` / `work_zone` 目录下）。
+- **提交越界校验**：`submit_and_fetch_next --output "@<path>"` 与 `--tool-result "@<path>"` 时，引擎校验 `<path>` 落在本执行单元的 `work_zone` 内，**越界（如 /tmp、项目根、兄弟 child 的 work_zone）→ 拒绝提交并报错**（提示改写本单元 work_zone 路径；两入口同款 `assertOutputInWorkZone`，src/cli.ts:687 与 :681）。
+  - **前缀判定用平台分隔符**（`path.sep`,不硬编码 `'/'`）——win32 下 `resolve` 产反斜杠路径,硬编码前斜杠使 work_zone 内的合法路径永不匹配、`@file` 提交全废（0057 实撞:Windows 用户 parallel 场景 @file 全被误拒,而 @file 恰是 worker 输出提交的设计形态）；
+  - 整个 `@<path>` 必须作为一个双引号参数，兼容含空格的工作区；`@` 位于参数值首字符，CLI 才会读文件；
+  - 这是引擎唯一能真拦的点——复用模式 act 由 CC/worker 的 Bash/Write 执行、写入不过引擎，无法在"写入那一刻"拦，只能在"提交那一刻"校验。硬边界的极限即此（不做 OS 级沙箱）。
 - **并行 worker 隔离（消除串台）** ^anc-cli-parallel-file-isolation：parallel fan-out 多个 worker subagent 共享 cwd。三重保险消除串台（实证 bug：ppt-html 多页并行，worker 共用 `/tmp/out_4.3.1.1.json` 互相覆盖、s5 变 s4）：
-  - **① work_zone 路径带 child 身份（身份在实例目录层级，不在目录名）**：parallel/call 子实例的实例目录本身按 child 分道（`<父instanceDir>/parallel/<child_step_id>/` 或 `calls/<child_step_id>/`），work_zone 恒为实例目录下的**固定名** `work_zone/`（persistence `getWorkZone` = `<instanceDir>/work_zone`，src/persistence.ts:165-167）——不同 child 的完整路径天然不同。原文"目录名带后缀 `work_zone_<child_step_id>`"与实现不符，[[exec-engine#^anc-exec-work-zone]] 2026-08-30 已勘误，本处同步。
+  - **① work_zone 路径带 child 身份（身份在实例目录层级，不在目录名）**：parallel/call 子实例的实例目录本身按 child 分道（`<父instanceDir>/parallel/<child_step_id>/` 或 `calls/<child_step_id>/`），work_zone 恒为实例目录下的**固定名** `work_zone/`（persistence `getWorkZone` = `<instanceDir>/work_zone`，src/persistence.ts:165-167）——不同 child 的完整路径天然不同。
+    - 原文"目录名带后缀 `work_zone_<child_step_id>`"与实现不符，[[exec-engine#^anc-exec-work-zone]] 2026-08-30 已勘误，本处同步。
   - **② 响应给确切 output_path**：step_ready 直接给本步 output 文件确切路径（含 child 区分），worker 照写、不拼名。
   - **③ 裸文件名重定向**：worker 若用裸相对名（`@out.json`，不含 `/`、非绝对），CLI 重定向到本 child work_zone（`resolveFileArgBase`）。两 worker 入口都覆盖：submit（`--instance` 含 `/parallel/`）、run 启动（`--parallel-parent`+`--parallel-child`）。
 - **work_zone 工作区**：每个执行单元（顶层实例 + parallel/call 子实例）的独占工作区目录在 `initExecution` 时自动创建。所有 `NextResponse` 携带 `work_zone`（绝对路径），临时文件统一写此目录。见 [[exec-engine#^anc-exec-work-zone]]

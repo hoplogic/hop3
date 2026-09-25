@@ -3,13 +3,15 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-08-17T22:57+0800
+	last_sync: 2026-09-25T11:49+0800
 	note: parallel 执行设计。§U 现行权威。2026-08-11：P0/P0.5/P2 交付+真机九场景验收过；P1 生产可靠四契约设计定形（对账/超时/协作中断/收割入轨），第三件 paused 让名额摘除归 HITL 挂账。
 %%
 
 # Parallel 执行设计（统一模型：步骤级异步派发）
 
-> **⚠️ 2026-08-10 统一模型注记（读本文必先知，覆盖 2026-08-07 注记）**：概念层已定形 **parallel 统一模型**（[[../concepts/HopSpec V3核心规范#^anc-step-parallel]] + [[../concepts/HopSpec V3核心规范#^anc-exec-gather]]，五项作者拍板见 [[rounds/call-parallel-草案]]）：parallel = **subtask/call 的 callee 并发申报 + 步骤级异步派发**——主线到标注步骤即派出、容器边界收齐；`loop for-each ... parallel` 循环头属性与"静态并行组"读法**已废除**。**本文 §U 为现行设计权威**；§1-§10 是旧通道（静态 fan-out→批量窗口→单点 join）的设计，**语义上是统一模型的退化特例，处于退役期**——代码迁移完成前锚点与机制描述保留（现行代码仍照其运行），迁移完成后归档。新旧冲突时以 §U 为准。
+> **⚠️ 2026-08-10 统一模型注记（读本文必先知，覆盖 2026-08-07 注记）**：概念层已定形 **parallel 统一模型**（[[../concepts/HopSpec V3核心规范#^anc-step-parallel]] + [[../concepts/HopSpec V3核心规范#^anc-exec-gather]]，五项作者拍板见 [[rounds/call-parallel-草案]]）。新旧冲突时以 §U 为准。
+> - 统一模型内容：parallel = **subtask/call 的 callee 并发申报 + 步骤级异步派发**——主线到标注步骤即派出、容器边界收齐；`loop for-each ... parallel` 循环头属性与"静态并行组"读法**已废除**；
+> - **本文 §U 为现行设计权威**；§1-§10 是旧通道（静态 fan-out→批量窗口→单点 join）的设计，**语义上是统一模型的退化特例，处于退役期**——代码迁移完成前锚点与机制描述保留（现行代码仍照其运行），迁移完成后归档。
 
 > **关系**：本文是 [[exec-engine#决策 4]] 的展开稿。文法与静态校验归 [[spec-parser]]；worker 上下文规则归 [[prompt-assembler]]。
 
@@ -77,12 +79,17 @@ struct: InflightCall
 - 名额判定：`len(inflight where status='inflight') < max_concurrent_workers - 1`（主线占 1）；
 - **crash-resume 在飞对账（P1 ✅ 设计定形）** ^anc-exec-parallel-inflight-reconcile：load/resume 后对每笔 status='inflight' 的账读子实例 `state.json` 判终态，三分支——
   - **已终态未收割** → 补收割（`reapFromChildDir` 现成——值在盘上，纯捡账，两模式同一入口）；
-  - **未终态** → 重建：独立模式重起子 Dispatcher 续跑子实例（子实例自身恢复走既有 `ExecutionEngine.load`+resumeSpec；worker 门不开）；复用模式不重建进程——`advance`/`reap_and_fetch_next` 对账后响应附 `stale: string[]` 清单（**DrainWait 与 DispatchReady 都带**——2026-08-13 随 dispatch-lost 降级补：对账后主线若还有活可派,响应是 dispatch_ready,stale 只挂 drain_wait 就丢了;driver 契约=任一响应见 stale 即自查），driver 对清单项重起 worker（**如实注**：run 子实例入口撞已有目录是**重新 init 从头跑**、非断点续跑——act 可安全重做语义下结果等价,半跑状态被覆盖;真断点续跑待需求再立。2026-08-13 review 实测修正原'续跑'措辞）；
+  - **未终态** → 重建：独立模式重起子 Dispatcher 续跑子实例（子实例自身恢复走既有 `ExecutionEngine.load`+resumeSpec；worker 门不开）；复用模式不重建进程——`advance`/`reap_and_fetch_next` 对账后响应附 `stale: string[]` 清单，driver 对清单项重起 worker；
+    - **DrainWait 与 DispatchReady 都带 stale**——2026-08-13 随 dispatch-lost 降级补：对账后主线若还有活可派,响应是 dispatch_ready,stale 只挂 drain_wait 就丢了;driver 契约=任一响应见 stale 即自查；
+    - **如实注**：run 子实例入口撞已有目录是**重新 init 从头跑**、非断点续跑——act 可安全重做语义下结果等价,半跑状态被覆盖;真断点续跑待需求再立。2026-08-13 review 实测修正原'续跑'措辞；
   - **子实例目录不存在** → 按账龄二分（2026-08-11 真机实撞修正：复用模式 worker 是 driver 异步后台起的，advance 续推时目录未建是**常态启动窗口**而非崩溃——无宽限期即误杀启动中的活，首轮真机 cc:parallel 实红）：
     - 账龄 ≤ 启动宽限期（`DISPATCH_GRACE_SECONDS=60`，常量——覆盖 subagent 启动延迟的保守值）→ 视为启动中，保持在飞（drain_wait 正常等待，不判死不判 stale）；
     - 账龄 > 宽限期 → **两模式分道**（2026-08-13 作者批准，真机二撞修正：cc:parallel-partial 中主 agent 收到 dispatch_ready 后合法耗时 67s 才起 worker——读文档/思考没有上界，固定宽限必然再撞；引擎单凭墙钟判"driver 有没有派活"是判不了的，**只有 driver 自己知道起没起**）：
       - **独立模式**（dispatcher 自己派发自己监护，启动=进程内动作有确定节奏）→ 判 failed 收割（FailRecord 注明 dispatch-lost），不留悬账——60s 判据成立；
-      - **复用模式**（unifiedDispatch 经 CLI 通道，启动归外部 driver）→ **降级入 stale 清单**交 driver（与"未终态重建"同通道）：driver 对 stale 项自查——没起过就起：**响应同带 `stale_launch`（childInstance→launch_command 映射,引擎按账面 step_id/iter+params 重算重拼）**,driver 原样执行零手拼（与 dispatch_ready 同纪律;review 抓缝 2026-08-13:原'从 dispatch 事件重取或按协议重拼'两条路 driver 都走不通——launch_command 不落盘无从重取,手拼正是 fanout 代码化要杀的易错面）。起过就等。引擎不判死；活真丢了（driver 也认领不了）由 driver 用 `reap_and_fetch_next --status failed` 显式报败收割（下条"谎报失败只是放弃产出"容错通道现成）。**判据=模式**：`unifiedDispatch` 开而进程内无派发句柄（CLI 进程天然如此）即复用模式档；
+      - **复用模式**（unifiedDispatch 经 CLI 通道，启动归外部 driver）→ **降级入 stale 清单**交 driver（与"未终态重建"同通道）：driver 对 stale 项自查——没起过就起,起过就等。
+        - 没起过就起的供给：**响应同带 `stale_launch`（childInstance→launch_command 映射,引擎按账面 step_id/iter+params 重算重拼）**,driver 原样执行零手拼（与 dispatch_ready 同纪律;review 抓缝 2026-08-13:原'从 dispatch 事件重取或按协议重拼'两条路 driver 都走不通——launch_command 不落盘无从重取,手拼正是 fanout 代码化要杀的易错面）；
+        - 引擎不判死；活真丢了（driver 也认领不了）由 driver 用 `reap_and_fetch_next --status failed` 显式报败收割（下条"谎报失败只是放弃产出"容错通道现成）；
+        - **判据=模式**：`unifiedDispatch` 开而进程内无派发句柄（CLI 进程天然如此）即复用模式档；
     - 原单一"超宽限即 dispatch-lost"判死对复用模式作废——健康但起得慢的活被误杀，杀的恰是本该活的（真机实证：三路并行死的是 sale=3200 正常路，预期失败的 bad-data 路反而按设计走完）；
   - killed 项恒不复活（既有）。合理性：账面(原子落盘)+子实例状态(各自独立落盘)两真值源都在，对账是纯读合并——无新持久化状态，崩溃窗口不扩大。mcp-server restoreRun 接同一入口。正反例矩阵行 14。
 - **显式报败对目录缺失的容错（复用模式收割入口）**：driver `reap_and_fetch_next --status failed` 而子实例目录不存在（worker 未启动/启动即崩溃）→ 合成 FailRecord 收割，不因缺盘面崩溃。不对称是有意的：**谎报成功会捏造产出，谎报失败只是放弃产出**——集合语义可容，故"failed 报告即权威"而"completed 报告须盘面为证"（目录缺失时 readVars 响亮报错，不静默算空产出）。正反例：报败无目录合成收割/报成无目录响亮报错。
@@ -111,25 +118,61 @@ struct: InflightCall
 4. 全模型仅两个等待位置：1.2 派发点、3 容器边界（S12 无 Future 禁令保证无第三个）
 ```
 
-- **收割按声明产出链投递——parallel 只改时机不改拓扑（2026-09-04 作者三轮纠偏定形,决策档案 todo/decision/20260904-parallel收割须兑现声明产出链.md;D80 实撞:hopbuild2 的 loop>subtask retry=0 壳>call parallel 三层合法形态,旧收割抄近道直连"最近任务容器"的 collect——壳无 collect 值静默蒸发〔全成功也丢产物账面 completed〕、失败不投递回壳 on fail 兜底成死代码、迭代号从壳取恒 1 撞名互覆,探针三坑实证）** ^anc-exec-parallel-reap-chain：子实例终态回来时,产出/失败**写到 call/subtask 标注步骤在声明链上的位置,从那里继续执行包围容器该走的剩余路**——成功:mapCallOutputs 写步骤所在容器作用域→步标 done→既有完成传播逐层走→中间容器（如事务壳）完结时边界产出自然聚合→到达 loop 层由既有 collect 机械收;失败:failStep 语义投递回标注步骤→包围容器事务机制接手（retry/on fail 照常——壳的兜底走完照常聚合上行,U3 HopSop"兄弟位记 fail 走升级链"即本路径在兄弟位的自然特例）。收割不再直连循环缓冲——缓冲只是链条末端的实现细节。**call 直挂循环体的既有形态是本链的零中间容器特例**,行为不变（退化等价性:矩阵 2/16"配 1 与配 5 语义等价"两侧同基准）。子实例编号随派发时迭代上下文取（沿祖先链找 **loop** 祖先的计数器,非最近任务容器——壳无循环计数,旧取法恒 1 撞名）,撞名响亮拒非幂等短路。收齐点/杀活域判定不随本条改（仍=最近任务容器,U1 2026-08-13 作者定形——一处判定两种用途,本条把"收割投递/编号"两用途从中拆出走声明链,防再混）。**call/subtask 两种标注步骤同链同修**（首版只改 call 侧被阅卷 D2 探针拦下——契约主语本就是两种,subtask parallel 隔壳形态三坑同构:dispatchParallelSubtask 编号沿 loop 祖先/reapParallelSubtask 喂缓冲沿 loop 祖先+壳作用域写值+待喂账,与 call 侧同机制）。**喂缓冲/待喂账恒先于完成传播**（阅卷 D1 实抓——传播级联在末迭代触发 loop finalize 合并缓冲,后喂元素成孤儿恒丢;晚收割时序〔主线已 drain_wait〕必现,与 completeCallStep 既有"先喂后 complete"次序对齐）。待喂账 pendingChainFeeds 随快照持久（复用模式每命令一进程,失败投递与兜底走完必然跨进程——不持久=兜底产物跨进程半边照丢〔阅卷 D3〕）。**待喂账按收集对记账**（复阅实抓双重喂送后收窄——账目携 unit_var/list_var,兑现只喂账上点名的那一对且值为 null 同挡不入列;记账只对"壳声明了且属 getAsyncUnitVars 异步集"的收集对——已直喂的对不记〔再记=元素翻倍〕,串行兄弟步产的对归轮末传送带不记〔记了=收两遍;未写壳作用域时兑现穿透读 root 残值=幻影 null 入列〕。宽版语义"壳边界声明的被收集变量走待喂账"作废——照宽版重实现必重造双重喂送,复阅双探针〔双收集对×早/晚收割时序〕即验收判据）。配套静态检测归 [[spec-parser]] S16（collect 供给核+链条逐环核——写时抓"spec 真断链",本条管"链齐必须走通",两半合拢消灭静默地带）。
+- **收割按声明产出链投递——parallel 只改时机不改拓扑**：子实例终态回来时,产出/失败**写到 call/subtask 标注步骤在声明链上的位置,从那里继续执行包围容器该走的剩余路**;收割不再直连循环缓冲——缓冲只是链条末端的实现细节。 ^anc-exec-parallel-reap-chain
+  - 定形来历：2026-09-04 作者三轮纠偏定形,决策档案 todo/decision/20260904-parallel收割须兑现声明产出链.md；
+  - D80 实撞:hopbuild2 的 loop>subtask retry=0 壳>call parallel 三层合法形态,旧收割抄近道直连"最近任务容器"的 collect——壳无 collect 值静默蒸发〔全成功也丢产物账面 completed〕、失败不投递回壳 on fail 兜底成死代码、迭代号从壳取恒 1 撞名互覆,探针三坑实证。
+  - **成功路径**：mapCallOutputs 写步骤所在容器作用域→步标 done→既有完成传播逐层走→中间容器（如事务壳）完结时边界产出自然聚合→到达 loop 层由既有 collect 机械收;
+  - **失败路径**：failStep 语义投递回标注步骤→包围容器事务机制接手（retry/on fail 照常——壳的兜底走完照常聚合上行,U3 HopSop"兄弟位记 fail 走升级链"即本路径在兄弟位的自然特例）;
+  - **call 直挂循环体的既有形态是本链的零中间容器特例**,行为不变（退化等价性:矩阵 2/16"配 1 与配 5 语义等价"两侧同基准）;
+  - **子实例编号随派发时迭代上下文取**——沿祖先链找 **loop** 祖先的计数器,非最近任务容器（壳无循环计数,旧取法恒 1 撞名）;撞名响亮拒非幂等短路;
+  - **收齐点/杀活域判定不随本条改**（仍=最近任务容器,U1 2026-08-13 作者定形——一处判定两种用途,本条把"收割投递/编号"两用途从中拆出走声明链,防再混）;
+  - **call/subtask 两种标注步骤同链同修**（首版只改 call 侧被阅卷 D2 探针拦下——契约主语本就是两种,subtask parallel 隔壳形态三坑同构:dispatchParallelSubtask 编号沿 loop 祖先/reapParallelSubtask 喂缓冲沿 loop 祖先+壳作用域写值+待喂账,与 call 侧同机制）;
+  - **喂缓冲/待喂账恒先于完成传播**（阅卷 D1 实抓——传播级联在末迭代触发 loop finalize 合并缓冲,后喂元素成孤儿恒丢;晚收割时序〔主线已 drain_wait〕必现,与 completeCallStep 既有"先喂后 complete"次序对齐）;
+  - **待喂账 pendingChainFeeds 随快照持久**（复用模式每命令一进程,失败投递与兜底走完必然跨进程——不持久=兜底产物跨进程半边照丢〔阅卷 D3〕）;
+  - **待喂账按收集对记账**（复阅实抓双重喂送后收窄）：账目携 unit_var/list_var,兑现只喂账上点名的那一对,且值为 null 同挡不入列。记账只对"壳声明了且属 getAsyncUnitVars 异步集"的收集对——已直喂的对不记（再记=元素翻倍）;串行兄弟步产的对归轮末传送带不记（记了=收两遍;未写壳作用域时兑现穿透读 root 残值=幻影 null 入列）。宽版语义"壳边界声明的被收集变量走待喂账"作废——照宽版重实现必重造双重喂送,复阅双探针（双收集对×早/晚收割时序）即验收判据;
+  - **配套静态检测**归 [[spec-parser]] S16（collect 供给核+链条逐环核——写时抓"spec 真断链",本条管"链齐必须走通",两半合拢消灭静默地带）。
 - collect 收割点从"轮末"移到"子实例终态时"——串行步骤产出的单项仍轮末收，标注步骤产出的单项随收割收（两通道汇入同一 collect 缓冲，按迭代序排）；
-- **退化窗口的 collect 等价（BUG-B `^todo-bug-parallel-collect-serial` 修复落点）**：`getAsyncUnitVars` 把 parallel 标注步骤的输出判为"异步"（轮末传送带跳过，值须经 `__reaped_<listVar>` 缓冲汇入）。派发路径由 `reapParallelCall/Subtask` 喂该缓冲；**退化窗口（unifiedDispatch 关/配 1 同步退化）下 parallel subtask 按普通容器串行执行、无 reap 可喂**——故串行完成时引擎把其声明输出按 `[iter, value]` 喂最近 loop 的 `__reaped_` 缓冲（与收割同一通道），保证"顺序模拟等价性"成立（串行驱动下 collect 不空）。call parallel 的同步退化由 `completeCallStep` 喂同缓冲，先例对称。**失败路径同语义（B 裁决 2026-08-11 作者定：调度形态不得改变执行语义）**：退化窗口失败路径同样按部分失败集合语义——parallel subtask 重试耗尽（`markSubtaskFailed`）/parallel call 子实例终态失败（`failCallStep` 同步退化分支）时**就地消化不升级宿主**：记 reap 事件+warn、不贡献元素（collect 列表变短），主线照常推进——与派发路径"派发即推进+失败收割不贡献"同构。**此条仅限 loop collect 位**（2026-08-13 随"收割即 fail"收窄）：兄弟位具名输出失败在两种调度形态下都=边界容器该步 fail 走 retry/升级链（原"输出缺席走 None 传播"作废——等价性以新语义为基准两侧同改，调度形态不改语义的裁决不破）。**worker 子实例执行 parallel subtask 自身（subtreeRoot=该步）不适用**：那是子实例内部视角，须正常终态失败交父实例收割（否则失败被吞、父实例收到假 completed）。**升级链围栏（hopissues/0018 实装违约补条款）**：worker 内失败升级链**不得越过 subtreeRoot**——找重试预算的祖先 walk 以 subtreeRoot 为界,subtreeRoot 自身耗尽=实例终局 failed（走'无事务边界祖先'终止分支）;越界找到子树外祖先 subtask 的后果链=resetSubtaskForRetry 把 executeSubtreeOnly 预标 skipped 的子树外步骤整树放活→worker 越围栏重跑全 spec（拿空数据跑成假 completed）→内祖先 loop 轮末传送带把 unitVar 复位 null 写 root→父收割 completed+vars 含 null→collect 收 null 占位（hopkb 11 讲批实录 marked=[null×6]——'全失败'伪装成'合法空产出',正是本条要防的假 completed 的实现形态;orphan recordStepDone/Failed 同根——子树外步骤从未记 start）。凭据不丢：内层失败步骤的 FailRecord 已在同实例账上（派发路径对应物=子实例目录的 FailRecord）。三条实现契约（2026-08-11 review 探针实撞定形）：**①账面形态=done+FailRecord 凭据**（镜像派发"派发即推进、收割另账"——标 failed 会让宿主 loop 提前终态化吃掉后续迭代，与主线继续矛盾）；**②失败报告过状态门**（failCallStep 退化分支同 failStep 的 running 前置检查——绕门后 driver 重复报败会把下一轮 pending 的同 id 步骤再消费一次，loop 双倍推进静默吞迭代）；**③重试预算按迭代独立**（派发路径每子实例=全新实例各自预算；退化窗口同一节点跨迭代复用，就地消化时清 retryCounters/retryHistory——否则 iter N 耗尽的残留计数让 iter M 首败即判死，本可重试成功的迭代被吞）。矩阵行 16"配 1 与配 5 语义等价"在失败输入下恢复成立。
-- **收割/收齐入轨（P1 ✅ 设计定形，观测完整性）** ^anc-exec-parallel-reap-log：`reap:` 块（child/status/at，随到随收逐条流式 append——对称 dispatch 块先例）+ `settle:` 块（容器终态化时刻+已收清单）。记录点在引擎 reapParallelCall/Subtask 与 settleHostAfterReap（两模式共用）。合理性：派发已入轨而收割不入轨=G11 对收割段全盲（真机 audit 断言只能靠账面反推）；流式 append 与缩进机制全现成。落点归 [[spec-observability]] 登记同批锚点。**全灭警示线的演进**：2026-09-01 首立为 hoplog warn（"可见性不改行为"——5/5 全灭与 0 派发账面原不可分辨）;2026-09-06 升为行为面 fail（集合语义节全灭条款）——warn 保留作观测轨迹,处置权威归集合语义节,本契约只管入轨。
+- **退化窗口的 collect 等价（BUG-B `^todo-bug-parallel-collect-serial` 修复落点）**：调度形态不得改变执行语义（B 裁决 2026-08-11 作者定）——退化窗口（unifiedDispatch 关/配 1 同步退化）下 parallel 步骤串行执行时,collect 的成功/失败行为必须与派发路径等价。矩阵行 16"配 1 与配 5 语义等价"在成功与失败输入下都成立。
+  - **成功路径喂缓冲**：`getAsyncUnitVars` 把 parallel 标注步骤的输出判为"异步"（轮末传送带跳过,值须经 `__reaped_<listVar>` 缓冲汇入）。派发路径由 `reapParallelCall/Subtask` 喂该缓冲;
+    - 退化窗口下 parallel subtask 按普通容器串行执行、无 reap 可喂——故串行完成时引擎把其声明输出按 `[iter, value]` 喂最近 loop 的 `__reaped_` 缓冲（与收割同一通道）,保证串行驱动下 collect 不空。call parallel 的同步退化由 `completeCallStep` 喂同缓冲,先例对称;
+  - **失败路径同语义**：退化窗口失败同样按部分失败集合语义——parallel subtask 重试耗尽（`markSubtaskFailed`）/parallel call 子实例终态失败（`failCallStep` 同步退化分支）时**就地消化不升级宿主**：记 reap 事件+warn、不贡献元素（collect 列表变短）,主线照常推进——与派发路径"派发即推进+失败收割不贡献"同构;
+  - **此条仅限 loop collect 位**（2026-08-13 随"收割即 fail"收窄）：兄弟位具名输出失败在两种调度形态下都=边界容器该步 fail 走 retry/升级链（原"输出缺席走 None 传播"作废——等价性以新语义为基准两侧同改,调度形态不改语义的裁决不破）;
+  - **worker 子实例执行 parallel subtask 自身（subtreeRoot=该步）不适用**：那是子实例内部视角,须正常终态失败交父实例收割（否则失败被吞、父实例收到假 completed）;
+  - **升级链围栏（hopissues/0018 实装违约补条款）**：worker 内失败升级链**不得越过 subtreeRoot**——找重试预算的祖先 walk 以 subtreeRoot 为界,subtreeRoot 自身耗尽=实例终局 failed（走"无事务边界祖先"终止分支）。
+    - 越界的后果链：找到子树外祖先 subtask→resetSubtaskForRetry 把 executeSubtreeOnly 预标 skipped 的子树外步骤整树放活→worker 越围栏重跑全 spec（拿空数据跑成假 completed）→内祖先 loop 轮末传送带把 unitVar 复位 null 写 root→父收割 completed+vars 含 null→collect 收 null 占位；
+      - 实录：hopkb 11 讲批实录 marked=[null×6]——"全失败"伪装成"合法空产出";orphan recordStepDone/Failed 同根——子树外步骤从未记 start；
+    - 凭据不丢：内层失败步骤的 FailRecord 已在同实例账上（派发路径对应物=子实例目录的 FailRecord）;
+  - **三条实现契约**（2026-08-11 review 探针实撞定形）：
+    - ①账面形态=done+FailRecord 凭据（镜像派发"派发即推进、收割另账"——标 failed 会让宿主 loop 提前终态化吃掉后续迭代,与主线继续矛盾）;
+    - ②失败报告过状态门（failCallStep 退化分支同 failStep 的 running 前置检查——绕门后 driver 重复报败会把下一轮 pending 的同 id 步骤再消费一次,loop 双倍推进静默吞迭代）;
+    - ③重试预算按迭代独立（派发路径每子实例=全新实例各自预算;退化窗口同一节点跨迭代复用,就地消化时清 retryCounters/retryHistory——否则 iter N 耗尽的残留计数让 iter M 首败即判死,本可重试成功的迭代被吞）。
+- **收割/收齐入轨（P1 ✅ 设计定形，观测完整性）** ^anc-exec-parallel-reap-log：`reap:` 块（child/status/at，随到随收逐条流式 append——对称 dispatch 块先例）+ `settle:` 块（容器终态化时刻+已收清单）。记录点在引擎 reapParallelCall/Subtask 与 settleHostAfterReap（两模式共用）。
+  - 合理性：派发已入轨而收割不入轨=G11 对收割段全盲（真机 audit 断言只能靠账面反推）；流式 append 与缩进机制全现成。落点归 [[spec-observability]] 登记同批锚点；
+  - **全灭警示线的演进**：2026-09-01 首立为 hoplog warn（"可见性不改行为"——5/5 全灭与 0 派发账面原不可分辨）;2026-09-06 升为行为面 fail（集合语义节全灭条款）——warn 保留作观测轨迹,处置权威归集合语义节,本契约只管入轨。
 - 独立模式等待原语=进程内 Promise（泳道池先例 [[step-dispatcher#^anc-exec-standalone-parallel]] 改造）；复用模式=`dispatch_ready` 介入形态交 driver（P2，先例 `fanout-next` 的 wait 响应）；
-- **单活超时腾名额（P1 ✅ 设计定形）** ^anc-exec-parallel-timeout：`resource_limits.parallel_child_timeout_seconds`（**缺省不超时**——显式配置才生效，与"paused 永久有效"哲学共存：超时管 running 卡死的活性检测，不管等人）。判定=惰性：引擎在名额检查/收齐检查时按 `now - dispatched_at` 判超时项 → 判 failed 收割腾名额（FailRecord reason 注明 timeout，fail_kind=error）。**启动窗口让位**（2026-08-11 review 探针抓漏）：子实例目录未建且账龄 ≤ `DISPATCH_GRACE_SECONDS` 的项不判超时——目录未建谈不上 running 卡死，启动窗口归宽限期管（否则 timeout<grace 配置下启动中的活被超时误杀，与 U2 判死路同一竞态的第二条进路）；目录已建的项照常按账龄判。**两模式语义差（如实声明）**：独立模式 drain 等待带轮询 timer（配置了超时才轮询——卡死的活句柄永不 settle,timer 让下轮 sweep 有机会收割,粒度=min(timeout,5s)）；复用模式的活是外部会话、引擎无法主动打断——只能在下次被调用时按账判，"超时的活"若后续真回来，reap 撞已收割账幂等丢弃（同 killed 短路哲学）。合理性：dispatched_at 已在账，判定零新状态；缺省关闭零行为变化。正反例：超时收割腾名额继续派发/未配置永不超时/迟到结果丢弃。
+- **单活超时腾名额（P1 ✅ 设计定形）** ^anc-exec-parallel-timeout：`resource_limits.parallel_child_timeout_seconds`（**缺省不超时**——显式配置才生效，与"paused 永久有效"哲学共存：超时管 running 卡死的活性检测，不管等人）。判定=惰性：引擎在名额检查/收齐检查时按 `now - dispatched_at` 判超时项 → 判 failed 收割腾名额（FailRecord reason 注明 timeout，fail_kind=error）。
+  - **启动窗口让位**（2026-08-11 review 探针抓漏）：子实例目录未建且账龄 ≤ `DISPATCH_GRACE_SECONDS` 的项不判超时——目录未建谈不上 running 卡死，启动窗口归宽限期管（否则 timeout<grace 配置下启动中的活被超时误杀，与 U2 判死路同一竞态的第二条进路）；目录已建的项照常按账龄判；
+  - **两模式语义差（如实声明）**：独立模式 drain 等待带轮询 timer（配置了超时才轮询——卡死的活句柄永不 settle,timer 让下轮 sweep 有机会收割,粒度=min(timeout,5s)）；复用模式的活是外部会话、引擎无法主动打断——只能在下次被调用时按账判，"超时的活"若后续真回来，reap 撞已收割账幂等丢弃（同 killed 短路哲学）；
+  - 合理性：dispatched_at 已在账，判定零新状态；缺省关闭零行为变化。正反例：超时收割腾名额继续派发/未配置永不超时/迟到结果丢弃。
 - **收割命令分工判据（2026-08-31 hopissues/0046 教学面归因后立正面条款——此前判据全库无正面陈述,连报告方 runbook 都归纳错成"loop/非loop"）** ^anc-exec-reap-scope：`reap_and_fetch_next` 与 `submit_and_fetch_next --child-instance` 按**有无 parallel 标注**分工,不按 loop/非 loop 分：
   - **带 `parallel` 标注的 [call]/[subtask]**（引擎 dispatchParallelCall/Subtask 派发、dispatch_ready 吐给 driver 的 child）→ `reap_and_fetch_next` 收割——它依赖派发时登记的在飞名册（inflight）,收割走 reapParallelCall/Subtask 喂 collect 缓冲;
   - **无 parallel 标注的 [call]**（普通 call、串行 for-each loop 体内的 call 都是——串行 for-each 不触发派发,无在飞名册）→ `submit_and_fetch_next <call步骤号> --child-instance <子实例>` 收割——走 completeCallStep(无门控)按 output_mapping 回填父变量,loop 场景由 completeStep 级联做 collect 累积与迭代推进（串行语义:一轮收完才起下一轮,与 Python for 循环同构;迭代账全在父实例,子实例目录只是单轮作业本）。
 - **reap 对无名册调用响亮拒（2026-08-31 hopissues/0046 修——原静默 no-op:reapFromChildDir 找不到 inflight 条目直接 return,误用方以为收割成功实则输出全丢,报告方在 hopbuild2 调试链上烧 30 分钟定位;误用是文档教出来的——本文档与 hop-cli.md/driver skill 均只教"通知到达就 reap"未教前提,上条判据同批补）** ^anc-exec-reap-misuse-reject：`reapFromChildDir` 找不到在飞条目时区分两种缺席——
-  - **真幂等**（该 child 已被收割——判据=父账 exec_events 有该 child 的 parallel_reap 记录,**匹配带分隔符边界**:detail 形如 `<child> ok`/`<child> failed: …`,判 `startsWith(child + ' ')` 防前缀撞名——'1.1.1 ok' 不得让误用步骤号 '1.1' 的 reap 被误判幂等〔2026-08-31 review 面二推演+面三探针双实证后收紧〕）→ 保留静默 return（重复 reap 是协议允许的,幂等语义不破）。**killed 半边不在本分支**（2026-08-31 review 面一/面二抓判定位置失实后收准）：killed 条目仍挂在 inflight 账上,外层 find（不筛状态）找得到,由 reapParallelCall/Subtask 的 killed 早返回消化——缺席分支永远见不到 killed,只判"已收割"半边;
-  - **误用**（无该 child 的 parallel_reap 收割记录——判据与代码同源〔2026-08-31 review 面二抓两侧不同源后对齐:设计原写"无派发记录",代码判"无收割记录";U4b paused 恢复移账路〔出账不记 reap〕存在"派发过但按收割判据算误用"的窄窗口,该形态下响亮拒的报文措辞偏严但拒收本身安全——迟到通知的 child 已无在飞账,正确出路同样是不收〕）→ 抛结构化错误 `REAP_NOT_PARALLEL`,报文指路:「reap_and_fetch_next 只服务带 parallel 标注的派发(dispatch_ready 吐出的 child);无 parallel 标注的 [call] 用 submit_and_fetch_next <步骤号> --child-instance <子实例> 收割」。CLI 层按既有 errorExit 结构化输出。
-- **subtask parallel 派发门（P0.5）**：引擎 `unifiedDispatch` 开关（独立模式 dispatcher 置位；复用模式恒关→subtask parallel 按普通容器串行下钻=退化窗口零专门代码）。开启时 dfsNextStep 遇 pending subtask parallel 不进子树，吐 `dispatch_ready`（NextResponse 第八形态，P0.5 仅独立模式消费，P2 复用模式 driver 接同一形态）；子实例=同 spec 子树收窄（executeSubtreeOnly 现成），入参=resolveChildParams 快照；收割：loop 体内经 collect 缓冲按 iter 序，兄弟位声明输出直写扁平命名空间。
+  - **真幂等**（该 child 已被收割——判据=父账 exec_events 有该 child 的 parallel_reap 记录）→ 保留静默 return（重复 reap 是协议允许的,幂等语义不破）。
+    - **匹配带分隔符边界**:detail 形如 `<child> ok`/`<child> failed: …`,判 `startsWith(child + ' ')` 防前缀撞名——'1.1.1 ok' 不得让误用步骤号 '1.1' 的 reap 被误判幂等〔2026-08-31 review 面二推演+面三探针双实证后收紧〕；
+    - **killed 半边不在本分支**（2026-08-31 review 面一/面二抓判定位置失实后收准）：killed 条目仍挂在 inflight 账上,外层 find（不筛状态）找得到,由 reapParallelCall/Subtask 的 killed 早返回消化——缺席分支永远见不到 killed,只判"已收割"半边;
+  - **误用**（无该 child 的 parallel_reap 收割记录）→ 抛结构化错误 `REAP_NOT_PARALLEL`,报文指路:「reap_and_fetch_next 只服务带 parallel 标注的派发(dispatch_ready 吐出的 child);无 parallel 标注的 [call] 用 submit_and_fetch_next <步骤号> --child-instance <子实例> 收割」。CLI 层按既有 errorExit 结构化输出。
+    - 判据与代码同源〔2026-08-31 review 面二抓两侧不同源后对齐:设计原写"无派发记录",代码判"无收割记录";U4b paused 恢复移账路〔出账不记 reap〕存在"派发过但按收割判据算误用"的窄窗口,该形态下响亮拒的报文措辞偏严但拒收本身安全——迟到通知的 child 已无在飞账,正确出路同样是不收〕。
+- **subtask parallel 派发门（P0.5）**：引擎 `unifiedDispatch` 开关（独立模式 dispatcher 置位；复用模式恒关→subtask parallel 按普通容器串行下钻=退化窗口零专门代码）。
+  - 开启时 dfsNextStep 遇 pending subtask parallel 不进子树，吐 `dispatch_ready`（NextResponse 第八形态，P0.5 仅独立模式消费，P2 复用模式 driver 接同一形态）；
+  - 子实例=同 spec 子树收窄（executeSubtreeOnly 现成），入参=resolveChildParams 快照；收割：loop 体内经 collect 缓冲按 iter 序，兄弟位声明输出直写扁平命名空间。
 
 ### U4. 失败路径杀活【契约】 ^anc-exec-parallel-kill
 
 - **主线步骤 fail → 引擎立即终止本容器全部在飞子实例**（✅ 作者拍板：不留幻影，失败=停）；被杀记 `killed` 终态：不算 failed、不产出、resume 不复活；容器随即按既有失败升级链处置；
 - 作者面无 cancel 语法（凭据不暴露不变）；break 是正常路径——照常收齐不杀；
-- 独立模式：中止子 Dispatcher 执行循环——**协作式步间中断（P1 ✅ 设计定形）** ^anc-exec-parallel-abort：父杀活时对在飞子 Dispatcher 置 abort 标志，子 executionLoop 每轮迭代（取下一介入点前）检查标志，置位即返回 failed(aborted)，不打断执行中的单步（无抢占——保持简单，单步内最多再烧一步的 token）。P0 已有的账面权威（killed 迟到结果 reap 短路丢弃）作为兜底不变。合理性：executionLoop 是唯一循环点，一处检查全覆盖；抢占式中断（AbortController 贯穿 LLM/工具调用）复杂度不成比例，步间粒度够用；
+- 独立模式：中止子 Dispatcher 执行循环——**协作式步间中断（P1 ✅ 设计定形）** ^anc-exec-parallel-abort：父杀活时对在飞子 Dispatcher 置 abort 标志，子 executionLoop 每轮迭代（取下一介入点前）检查标志，置位即返回 failed(aborted)，不打断执行中的单步（无抢占——保持简单，单步内最多再烧一步的 token）。P0 已有的账面权威（killed 迟到结果 reap 短路丢弃）作为兜底不变。
+  - 合理性：executionLoop 是唯一循环点，一处检查全覆盖；抢占式中断（AbortController 贯穿 LLM/工具调用）复杂度不成比例，步间粒度够用；
 - 复用模式：引擎记 killed 为账面权威 + 把"该杀清单"（kill_list）交 driver 协议执行——外部会话即使苟活，账面已终态不再被收割，语义面无幻影；
 - 在飞子实例自身 fail → 部分失败集合语义（列表变短/FailRecord，概念层既有唯一例外原样）；
 - 在飞 paused → 收齐照等（无超时哲学）；多子实例同时 paused 必然出现——见下节 HITL 队列契约。
@@ -141,9 +184,29 @@ struct: InflightCall
 1. **暂停即让名额**：子实例 paused → 在飞账 `status: 'inflight'→'paused'`（新枚举值）——paused 不占并发名额（hasFreeSlot 只数 inflight）,等人期间其余派发照跑;**收齐门照等**（hasInflightFor 数 inflight+paused——等人的活没完,容器不许闭合）;
 2. **问题卡即队列**：子实例暂停时其引擎已按 0028 契约落卡（calls/<child>/ 或 parallel/<child>/paused.json,零新码）——**35 轮临时清卡撤除**,卡保留即入队;dispatcher 内存队列 `pausedChildren: Map<child_instance, {pause, dispatcher}>` 持子句柄等应答;
 3. **呈现全量**（方案 A）：run_status 增 `paused_queue: [{child_instance, ...ExecutionPaused}]`——全部待答卡数组,每张携 child_instance 寻址;run 整体 status:主线还能推进 → `running`+队列附带,主线只剩等人 → `paused`+队列附带（单值 paused 字段兼容:队首卡照填,老 caller 零破坏）;
-4. **应答按子路由**：resume/`resume_run` 携 `child_instance`（可选参——缺省走既有顶层/call_path 路由零破坏）→ dispatcher 从 pausedChildren 取句柄,子 dispatcher.resume(step_id, answer) 续跑;续跑即**二次占名额**（paused→inflight 回置;名额满时等空位不超员）;答完照常终态收割;**跨进程应答**（37 轮 review——server 重启后队列空,caller 拿旧卡 child 来答）：队列 miss 但账上该 child 为 paused → 先走 resumeSpec 对账重派发（第 6 条恢复路）,同名 child（<step_id>.<iter> 确定性）新卡入队后按原答继续;重派发后仍无同名卡 → 结构化 rejected（CHILD_NOT_IN_QUEUE 指路重看队列,不 throw——throw 会被 mcp 錘成 failed 终态毁可恢复态,0016 同哲学）;**队列 miss 且在飞账上也无该 child 的 paused 项**（三形态:卡已答过/已终态清场/串行 call 停点被误带 child_instance——串行 call 的挂起帧走 call_path 路由本就不入本队列,caller 从卡面无从判别停点类型〔卡的 call_path 与 child_instance 字段对串行 call 停点均空〕）→ **同样结构化 rejected 不 throw**（CHILD_NOT_IN_QUEUE 指引带"若为串行 call 停点去掉 child_instance 重答"——hopissues/0094 实撞:此分支原 throw,一次可修正的参数错误把整个可恢复 run 锤成 failed 终态,41K tokens 报废;同函数跨进程恢复分支早按 0016 改结构化拒,本分支是同族漏改半边）;
+4. **应答按子路由**：resume/`resume_run` 携 `child_instance`（可选参——缺省走既有顶层/call_path 路由零破坏）→ dispatcher 从 pausedChildren 取句柄,子 dispatcher.resume(step_id, answer) 续跑;续跑即**二次占名额**（paused→inflight 回置;名额满时等空位不超员）;答完照常终态收割;
+   - **跨进程应答**（37 轮 review——server 重启后队列空,caller 拿旧卡 child 来答）：队列 miss 但账上该 child 为 paused → 先走 resumeSpec 对账重派发（第 6 条恢复路）,同名 child（<step_id>.<iter> 确定性）新卡入队后按原答继续;重派发后仍无同名卡 → 结构化 rejected（CHILD_NOT_IN_QUEUE 指路重看队列,不 throw——throw 会被 mcp 錘成 failed 终态毁可恢复态,0016 同哲学）;
+   - **队列 miss 且在飞账上也无该 child 的 paused 项**（三形态:卡已答过/已终态清场/串行 call 停点被误带 child_instance——串行 call 的挂起帧走 call_path 路由本就不入本队列,caller 从卡面无从判别停点类型〔卡的 call_path 与 child_instance 字段对串行 call 停点均空〕）→ **同样结构化 rejected 不 throw**；
+     - 拒因供给:CHILD_NOT_IN_QUEUE 指引带"若为串行 call 停点去掉 child_instance 重答"——hopissues/0094 实撞:此分支原 throw,一次可修正的参数错误把整个可恢复 run 锤成 failed 终态,41K tokens 报废;同函数跨进程恢复分支早按 0016 改结构化拒,本分支是同族漏改半边;
+   - **MCP 入口同步前置核对（todo/0105 缺陷 B,2026-09-25）**：上面两条是 dispatcher.resume 的异步拒收,但 MCP 的 resume_run 在调 dispatcher 之前就已把 run 置 running 并同步返回 `{status:'running'}`——拒收异步到达后才复原 paused,调用方只看得见假 running（hopissues/0094 期望行为第 ② 条"resume_run 对拒收不返回假 running",0094 结案时只修了"不锤死 run",同步假 running 仍在;0105 实撞时观察方带错 child_instance 应答串行调用停点,看到 running 却不动）。改为 resume_run 在状态翻转之前同步核对,核对不中当场返回错误、run 原样保持 paused。dispatcher 的异步拒收分支保留（非 MCP 调用方与竞态兜底）。关键逻辑：
+     ```
+     resume_run(run_id, step_id, answer, child_instance?):
+     1. 既有状态核对照旧（非 paused 且非"带 child_instance 且待答队列非空" → INVALID_STATE）
+     2. child_instance 在场时:
+        2.1 待答队列（dispatcher.getPausedChildren）里有这个键 → 放行
+        2.2 否则引擎在飞账（getInflight）里有 child_instance 相同且 status='paused' 的项 → 放行（跨进程恢复路,走上面的重派发）
+        2.3 两者都没有 → 返回 { error: { code: 'CHILD_NOT_IN_QUEUE', message: childNotInQueueMessage(child_instance) } };
+            run 状态、暂停载荷、失败记录一概不动
+     3. 往下照旧（step_id 预检、置 running、异步透传 dispatcher.resume）
+     ```
+     - 拒因文字单一来源:dispatcher 导出 `childNotInQueueMessage(childInstance)`,异步拒收分支与 MCP 同步核对共用——两处各写一份文字会漂移（agent 自定,实现细节不请拍）;
 5. **杀活连坐**：主线失败杀活时 paused 子实例同杀（killed——主线死了答案无处安放;卡随杀清除,同 35 轮死卡纪律）;stop_run 级联同理;
-6. **跨进程恢复（重派发重暂停,36 轮 review 修正原'队列重建';分派判据 2026-08-29 随子实例落盘批再修——[[step-dispatcher#^anc-exec-call-child-persist]] 使子目录恒在,原"目录在=stale 重建"判据失效）**：paused 状态随在飞账入 state.json;crash-resume 对账时 paused 项按**退火标记**分派——子实例**无已执行 commit** → 清账+标注步骤回 pending 重派发+**残目录清场**（重跑到暂停点重新入队:subtask/call 是事务边界重跑合法,人还没答过零损失;残目录不清会误导下轮对账）;**有已执行 commit** → 走 stale 续跑（load 重建后**先复位悬空态再** runSpec 推进——盘上暂停中的 confirm/ask 步是 running 态,不复位则 runSpec 撞 WAITING_WRITEBACK 防线直接 failed,paused 分支成死代码〔0830 review 变异核证实锤:删该分支 2293 全绿,顺藤摸出分支不可达〕;复位用 recoverDanglingRunning〔悬空 running→pending,幂等重跑到暂停点重新暂停〕,已完成步骤由持久化状态跳过;重派发=commit 重放,恰是落盘要防的第④坑,此形态是"目录在场才能续"的真消费方）。stale 重建路径的 runSpec 三态分派补 paused 分支（重建后到暂停点=重新入队,与首派发 paused 分支同款——原只兜 completed/failed,paused 被 else 当失败收割:该洞在子实例纯内存时代不可达,落盘通电当场露头,U4b 重启钉 vals=[] 实锤）。配套:ExecutionEngine.load 尽力回填 rawSource（从 state.json 的 spec_path 重读原文——重派发需原文重建子实例,原 null 让恢复路直判 failed）。
+6. **跨进程恢复（重派发重暂停,36 轮 review 修正原'队列重建';分派判据 2026-08-29 随子实例落盘批再修——[[step-dispatcher#^anc-exec-call-child-persist]] 使子目录恒在,原"目录在=stale 重建"判据失效）**：paused 状态随在飞账入 state.json;crash-resume 对账时 paused 项按**退火标记**分派——
+   - 子实例**无已执行 commit** → 清账+标注步骤回 pending 重派发+**残目录清场**（重跑到暂停点重新入队:subtask/call 是事务边界重跑合法,人还没答过零损失;残目录不清会误导下轮对账）;
+   - **有已执行 commit** → 走 stale 续跑（load 重建后**先复位悬空态再** runSpec 推进——盘上暂停中的 confirm/ask 步是 running 态,不复位则 runSpec 撞 WAITING_WRITEBACK 防线直接 failed,paused 分支成死代码〔0830 review 变异核证实锤:删该分支 2293 全绿,顺藤摸出分支不可达〕）;
+     - 复位用 recoverDanglingRunning〔悬空 running→pending,幂等重跑到暂停点重新暂停〕,已完成步骤由持久化状态跳过;重派发=commit 重放,恰是落盘要防的第④坑,此形态是"目录在场才能续"的真消费方;
+   - stale 重建路径的 runSpec 三态分派补 paused 分支（重建后到暂停点=重新入队,与首派发 paused 分支同款——原只兜 completed/failed,paused 被 else 当失败收割:该洞在子实例纯内存时代不可达,落盘通电当场露头,U4b 重启钉 vals=[] 实锤）;
+   - 配套:ExecutionEngine.load 尽力回填 rawSource（从 state.json 的 spec_path 重读原文——重派发需原文重建子实例,原 null 让恢复路直判 failed）。
 
 **范围注记**：v1 覆盖独立模式两形态（subtask parallel/call parallel）;复用模式 driver 逐请求问人的协议扩展另批（driver 现走 stale 对账兜底不受损）。
 
@@ -213,7 +276,7 @@ Constraints:
 
 **类型约定（HopType）**——cli-types 增量：
 
-- `DispatchReady` 补 `launch_command: string`（复用模式引擎拼好；独立模式缺省——dispatcher 进程内直起不需要）与 `dispatch_kind: 'subtask' | 'call'`；
+- `DispatchReady` 补 `launch_command: string`（复用模式引擎拼好；独立模式缺省——dispatcher 进程内直起不需要;命令里 `--params` 恒为 `"@<参数文件绝对路径>"`,参数表由引擎写进父实例目录 `cmd_args/`,命令行不含数据值——[[exec-engine#^anc-exec-cmd-args-file]],hopissues/0097）与 `dispatch_kind: 'subtask' | 'call'`；
 - `ExecutionFailed` 补 `kill_list?: string[]`（主线失败时在飞被杀清单，driver 尽力终止）；
 - 新 CLI 命令 `reap_and_fetch_next <child-instance> --status <s>`：引擎读子实例目录收割（reapParallelSubtask/Call 既有 API）+ advanceToCaller 返回下一介入点——一次原子往返（对称 submit_and_fetch_next）；
 - 新 CLI 命令 `advance`：dispatch_ready 后续推主线（advanceToCaller 薄壳——run/submit 之外主线推进的第三入口，仅此场景使用）。
@@ -224,15 +287,20 @@ Constraints:
 
 ### U7. 迁移与分期【决策】（作者已拍板：旧通道退役）
 
-- **P0 ✅（2026-08-11 交付）**（独立模式先通，派发单位=call parallel）：文法（call 属性尾巴）、S12 call parallel 新子条+S13、inflight 记账、派发/收割/收齐（drain_wait 介入形态）、杀活（账面 killed+结果丢弃——进程内子执行无强中断点，协作式中断归 P1，账面终态保证语义面无幻影，同复用模式哲学）、矩阵 1（call 形态）/2/4/5/6/7/9/10/11/12/16（测试落位：parser.test.ts 5 例/validator.test.ts 6 例/dispatcher.test.ts 7 例）。**工程偏差两条（2026-08-10 实现时标注）**：①loop 头 parallel 废除（矩阵 8）移入 P0.5——旧通道迁移前既有 for-each fan-out 仍靠它跑，P0 先加 S12 互斥子条（call parallel 不得处于旧 parallel 容器域内）防两通道混用；②派出的活内 HITL（paused）P0 判 failed 并报 PARALLEL_HITL_TODO（作者定暂不实现，见 TODO），矩阵 13 挂起；
+- **P0 ✅（2026-08-11 交付）**（独立模式先通，派发单位=call parallel）：文法（call 属性尾巴）、S12 call parallel 新子条+S13、inflight 记账、派发/收割/收齐（drain_wait 介入形态）、杀活（账面 killed+结果丢弃——进程内子执行无强中断点，协作式中断归 P1，账面终态保证语义面无幻影，同复用模式哲学）。
+  - 矩阵覆盖：矩阵 1（call 形态）/2/4/5/6/7/9/10/11/12/16（测试落位：parser.test.ts 5 例/validator.test.ts 6 例/dispatcher.test.ts 7 例）。
+  - **工程偏差两条（2026-08-10 实现时标注）**：①loop 头 parallel 废除（矩阵 8）移入 P0.5——旧通道迁移前既有 for-each fan-out 仍靠它跑，P0 先加 S12 互斥子条（call parallel 不得处于旧 parallel 容器域内）防两通道混用；②派出的活内 HITL（paused）P0 判 failed 并报 PARALLEL_HITL_TODO（作者定暂不实现，见 TODO），矩阵 13 挂起；
 - **P0.5 ✅（2026-08-11 交付）**（语义全库统一+旧通道整体删除，作者裁定修正——原"旧消息格式留作复用模式适配层"方案废弃：旧信封表达不了新语义〔渐进派发/收齐/杀活〕，硬塞是自欺）：
   - 文法：loop 头 parallel 废除（parser 报错+迁移提示，矩阵 8）；`LoopStep.parallel` 字段删除；`[subtask parallel]` 全库改读统一模型（异步派发申报）；
   - 引擎：subtask parallel 接入统一通道（子实例=同 spec 子树收窄，与 call 派发共用 inflight/名额/收割/收齐/杀活；兄弟位收齐点=最近封闭容器，`host_loop` 泛化为 `host_container`）；**旧通道代码整体删除**（collectParallelBatch/nextParallelBatch/joinParallel/fanoutSchedule/runParallelBatch 泳道池、CLI join_parallel/fanout-plan/fanout-next 命令）——文法废除后旧通道无触发入口，是死码；
   - **复用模式退化窗口（作者定，接受）**：新 driver 协议（P2）实装前，复用模式下 parallel 标注一律**同步执行**（call 本就 step_ready 交 caller 串行驱动、subtask 按普通容器下钻——退化天然发生，零专门代码，引擎记 warn 提示）。语义正确性由顺序模拟等价性（决策 4）兜底，仅暂无并发加速；anchor-audit 等复用模式 fan-out 消费方暂时串行，P2 恢复。**故 P2 优先级提升**；
   - 存量迁移：7 份 spec（examples ×5 + scripts/audit ×2）迁新写法；driver 文档（hopspec-skill fanout 协议段删除、hopbuild 三份"静态并行组"读法改统一口径）；全部既有 parallel 测试改造/删除回归（机制测试随通道删、语义测试迁统一通道）；矩阵行 3（兄弟混排）/15（嵌套）此时补正反例；
   - §1-§10 旧通道设计随代码删除归档；
-- **P1**（生产可靠，2026-08-11 作者确认四件——原第三件「paused 让名额+多 paused 队列」摘除归 ^todo-parallel-hitl〔其前提=子实例内 HITL 被支持，作者已裁暂不实现，P1 做它无意义〕）：①crash-resume 在飞对账（矩阵 14，^anc-exec-parallel-inflight-reconcile）②单活超时腾名额（^anc-exec-parallel-timeout）③协作式杀活中断（^anc-exec-parallel-abort）④HopLog reap/settle 事件块（^anc-exec-parallel-reap-log）；附带清理：cli-types 旧类型 ParallelReady/FanoutScheduleResult/FanoutWorker/ParallelChildSpec 删除（P2 承诺）、canFanout/dispatched 旧字段评估；
-- **P2 ✅（2026-08-11 交付，见 §U8）**：dispatch_ready（launch_command 引擎拼好/dispatch_kind 分派）+drain_wait 交 driver、reap_and_fetch_next/advance 两 CLI 命令、kill_list 载荷、CC 后台 subagent 编排/Codex 串行消费两载体 skill 改造；名额判定上收引擎（满员吐 drain_wait=派发点阻塞，配1同步退化 fallthrough）。**未含**：真机验收（cc:anchor-audit 并发恢复+部分失败+杀活场景，作者跑）；run_status 在飞树状进度（挂 mcp-server 增强，非协议件）。
+- **P1**（生产可靠，2026-08-11 作者确认四件——原第三件「paused 让名额+多 paused 队列」摘除归 ^todo-parallel-hitl〔其前提=子实例内 HITL 被支持，作者已裁暂不实现，P1 做它无意义〕）：
+  - ①crash-resume 在飞对账（矩阵 14，^anc-exec-parallel-inflight-reconcile）②单活超时腾名额（^anc-exec-parallel-timeout）③协作式杀活中断（^anc-exec-parallel-abort）④HopLog reap/settle 事件块（^anc-exec-parallel-reap-log）；
+  - 附带清理：cli-types 旧类型 ParallelReady/FanoutScheduleResult/FanoutWorker/ParallelChildSpec 删除（P2 承诺）、canFanout/dispatched 旧字段评估；
+- **P2 ✅（2026-08-11 交付，见 §U8）**：dispatch_ready（launch_command 引擎拼好/dispatch_kind 分派）+drain_wait 交 driver、reap_and_fetch_next/advance 两 CLI 命令、kill_list 载荷、CC 后台 subagent 编排/Codex 串行消费两载体 skill 改造；名额判定上收引擎（满员吐 drain_wait=派发点阻塞，配1同步退化 fallthrough）。
+  - **未含**：真机验收（cc:anchor-audit 并发恢复+部分失败+杀活场景，作者跑）；run_status 在飞树状进度（挂 mcp-server 增强，非协议件）。
 
 ---
 
@@ -488,7 +556,10 @@ node {cli_path} join_parallel {parallel_step_id} --state-dir .hopstate --instanc
 
 ### 8e-1. 含暂停点（confirm/ask）的 child 引擎级排除【契约】 ^anc-exec-parallel-confirm-exclude
 
-含**暂停点步骤（confirm 或 ask）**的 child 子树**不能并行**——多个 worker subagent 同时跑、若各自子树都暂停在 HITL 介入点，会产生多个并发的介入请求，driver 无法干净地串行问人。这条理由对 confirm 与 ask 同等成立（两者都产生 `paused`，见 [[../concepts/HopSpec V3配套HopJIT运行时能力#^anc-exec-mode-invariants]] 第 3 条）——原谓词只查 confirm 是 ask 步骤后来才引入的历史遗留，2026-08-10 随独立模式真并行推演补全（由既有排除理由一步推演，非新决策）。原设计让 **driver 静态预检排除**（grep 子树找 confirm），但这是软约束（靠 driver 自觉，同 `@_w.json` 竞态、doc-ref 挂错层一类"靠主体记得"的脆弱性）。**改为引擎结构性排除**：
+含**暂停点步骤（confirm 或 ask）**的 child 子树**不能并行**——多个 worker subagent 同时跑、若各自子树都暂停在 HITL 介入点，会产生多个并发的介入请求，driver 无法干净地串行问人。
+
+- 这条理由对 confirm 与 ask 同等成立（两者都产生 `paused`，见 [[../concepts/HopSpec V3配套HopJIT运行时能力#^anc-exec-mode-invariants]] 第 3 条）——原谓词只查 confirm 是 ask 步骤后来才引入的历史遗留，2026-08-10 随独立模式真并行推演补全（由既有排除理由一步推演，非新决策）；
+- 原设计让 **driver 静态预检排除**（grep 子树找 confirm），但这是软约束（靠 driver 自觉，同 `@_w.json` 竞态、doc-ref 挂错层一类"靠主体记得"的脆弱性）。**改为引擎结构性排除**：
 
 - **collectParallelBatch 过滤**：收集 parallel 的 `pendingChildren` 时，对每个 child **静态扫其子树**（`subtreeContainsPausePoint`，2026-08-10 由 `subtreeContainsConfirm` 更名扩展），含 confirm/ask 的 child **不进 batch**、保持 pending。返回的 batch 只含无暂停点的 child。
 - **被排除 child 的执行**：parallel 容器仍标 running。无 confirm 的 child 并行跑完、`join_parallel` 合并后，主循环 `dfsNextStep` 下钻该（仍 running 的）parallel 容器，把剩余 pending 的含 confirm child **串行推进**（走到 confirm 自然 paused 介入点）。即"并行的归并行、要审批的归串行"，时序上并行批先行、串行批随后。
@@ -541,17 +612,23 @@ parallel 容器支持 `for-each` 动态展开：spec 中定义一个 child 模�
 
 #### 9b'. fan-out 探测必须先于 nextStep 树遍历（for-each parallel 屏障） ^anc-exec-parallel-foreach-barrier
 
-> **承接注记（原条款字面废止，屏障语义由 §U7 承担）**：实装已无 `nextParallelBatch`——旧 fan-out 探测通道随 P0.5 退役（src/engine.ts:1522-1523、1657 注释自陈删除），`advanceToCaller` 不再先探批。本条款守的目标——**parallel 未 join 前不得推进其下游 sibling**——现由统一派发门承担：`nextStep` 内 `unifiedDispatch` 门对 pending 的 parallel 标注步产 `dispatch_ready`、派发即入账（inflight 名册），下游 sibling 在收割（reap）齐之前不会被当作下一个可执行步返回（见 §U7）。下文保留作沿革与失效形态记录（"抢跑→No executable step found"的病理分析仍有效）。
+> **承接注记（原条款字面废止，屏障语义由 §U7 承担）**：实装已无 `nextParallelBatch`——旧 fan-out 探测通道随 P0.5 退役（src/engine.ts:1522-1523、1657 注释自陈删除），`advanceToCaller` 不再先探批。
+> - 本条款守的目标——**parallel 未 join 前不得推进其下游 sibling**——现由统一派发门承担：`nextStep` 内 `unifiedDispatch` 门对 pending 的 parallel 标注步产 `dispatch_ready`、派发即入账（inflight 名册），下游 sibling 在收割（reap）齐之前不会被当作下一个可执行步返回（见 §U7）；
+> - 下文保留作沿革与失效形态记录（"抢跑→No executable step found"的病理分析仍有效）。
 
 **`advanceToCaller`（can_fanout=true，顶层 driver）必须先调 `nextParallelBatch`，命中则返回 `ParallelReady`；只有未命中才走 `nextStep` 树遍历。顺序不可颠倒。**
 
-**为什么**：`dfsNextStep` 遇到 for-each parallel 时标 running 后 **不进子树、`continue`**（模板 child 不可执行，见 §9b）。这个 `continue` 会让循环落到 parallel 的**同级后续步骤**（如汇聚 `reason`），把它当下一个 executable 返回。若 `advanceToCaller` 先调 `nextStep`，该下游步就被 `nextStep` 标 `running` 并持久化——可它其实依赖 parallel 尚未产出的聚合输出，是**抢跑**。随后 join 完成、`advanceToCaller` 再遍历时，`dfsNextStep` 跳过已 `running` 的非容器步（既非终态也非 pending），导致**找不到可执行步 → `No executable step found`**，整条链在汇聚步前断裂。
+**为什么**：`dfsNextStep` 遇到 for-each parallel 时标 running 后 **不进子树、`continue`**（模板 child 不可执行，见 §9b）。这个 `continue` 会让循环落到 parallel 的**同级后续步骤**（如汇聚 `reason`），把它当下一个 executable 返回。
+- 若 `advanceToCaller` 先调 `nextStep`，该下游步就被 `nextStep` 标 `running` 并持久化——可它其实依赖 parallel 尚未产出的聚合输出，是**抢跑**；
+- 随后 join 完成、`advanceToCaller` 再遍历时，`dfsNextStep` 跳过已 `running` 的非容器步（既非终态也非 pending），导致**找不到可执行步 → `No executable step found`**，整条链在汇聚步前断裂。
 
-**修复（顺序而非屏障）**：把 `nextParallelBatch` 探测提到 `nextStep` **之前**。`collectParallelBatch` 能直接命中 *pending* 的最外层 parallel 并自行标 running（engine.ts `nextParallelBatch` 内），无需 `nextStep` 先把它转 running。fan-out 命中即 `return ParallelReady`，下游步根本没机会被 `nextStep` 越过、误标——屏障效果由"先探 batch"达成，`dfsNextStep` 本身不改（改它会破坏 worker 下钻子树，见下）。
+**修复（顺序而非屏障）**：把 `nextParallelBatch` 探测提到 `nextStep` **之前**。`collectParallelBatch` 能直接命中 *pending* 的最外层 parallel 并自行标 running（engine.ts `nextParallelBatch` 内），无需 `nextStep` 先把它转 running。
+- fan-out 命中即 `return ParallelReady`，下游步根本没机会被 `nextStep` 越过、误标——屏障效果由"先探 batch"达成，`dfsNextStep` 本身不改（改它会破坏 worker 下钻子树，见下）。
 
 **与静态 parallel 的对比**：静态 parallel 标 running 后 `dfsNextStep` **进子树**返回某个真实 child，不会 `continue` 到下游 sibling，天然不越界——本问题是 for-each "不进子树 + continue" 特有。
 
-**为什么不在 dfsNextStep 立屏障**：worker 子实例（can_fanout=false）退化串行，**依赖** `dfsNextStep` 下钻 running 的 for-each parallel 模板子树来执行 `{P}.1.*`（见 §9e + executeSubtreeOnly 把 parallel 祖先标 running）。若在 `dfsNextStep` 对 for-each parallel `return none`，worker 自己的子树也被挡死。故屏障只能落在 `advanceToCaller` 的 can_fanout 分支（顶层 driver 专属），不能落在共享的 `dfsNextStep`。
+**为什么不在 dfsNextStep 立屏障**：worker 子实例（can_fanout=false）退化串行，**依赖** `dfsNextStep` 下钻 running 的 for-each parallel 模板子树来执行 `{P}.1.*`（见 §9e + executeSubtreeOnly 把 parallel 祖先标 running）。
+- 若在 `dfsNextStep` 对 for-each parallel `return none`，worker 自己的子树也被挡死。故屏障只能落在 `advanceToCaller` 的 can_fanout 分支（顶层 driver 专属），不能落在共享的 `dfsNextStep`。
 
 **屏障解除时机**：parallel 经 `joinParallel` 标 `done` 后，`nextParallelBatch` 不再命中（children 全终态），`advanceToCaller` 落到 `nextStep`，`dfsNextStep` 对 done 容器正常 `continue`、循环落到后续 sibling——此时汇聚步才被推进。即"屏障"只在 parallel `running`（fan-out 中、未 join）期间生效。
 
@@ -654,10 +731,18 @@ for-each 动态 child 的 step_id 是**合成 ID**（`{P}.{idx+1}`），spec AST
 
    ⚠️ 静态 parallel 的 child ID 在 AST 中真实存在，`findStepById` 直接命中，不走此分支。仅 for-each 合成 ID（命中失败）才需解析。
 
-2. **备料清单=子树内 `- ←` 声明（串行可见 ≠ 并行可见）**：worker 是独立子实例不共享父变量空间——fan-out 只备子树内声明过的输入。子树引用未声明变量时串行跑全对（扁平空间随手可得）、parallel 后 worker 缺值且**不报错**（执行 LLM 拿不到值就靠猜——2026-08-09 anchor-audit 实撞:5.2.1 漏声明 project_root,batch 文件被写到猜的位置;历史真跑因 project_root 恰=cwd 巧合掩盖,fixture 分离两目录后现形）。机检三档已立（叶子输入声明完备性:body B4 error/ask P14 error/散文 V11 warn——散文档终审归语义审计）,作者写 spec 的处方=worker 子树引用的每个外部变量都在用它的步骤 `- ←` 声明。
-3. **完整 child 入参来源：引擎单一权威，fan-out 落盘 + worker init 按 cid 回填，driver 零参与**：父引擎为每个静态/for-each child 算定完整 `params_for_child`；for-each 额外包含 `params_for_child[itemVar] = listVal[idx]`（见 [[#^anc-exec-parallel-foreach-join]] 邻接的 fan-out 逻辑）。同一次 fan-out，父引擎把每个 child 的完整 `params_for_child`（**内部真值，不 deflate**）写到该 child 的 subinstance 目录下 `params.json`（`<parentDir>/parallel/<childId>/params.json`）。worker 起 `run --parallel-parent <pid> --parallel-child <cid>` 时，其子实例目录恰好是同一路径（worker 的 instanceId = cid），init 时按自己的 cid 读取该 `params.json`，把**全部缺失键**注入 root scope；显式 `--params` 键优先，不被回填覆盖。这样静态 parallel 的外部依赖与 for-each 的 itemVar 都走同一通道。**driver 无需构造、无需透传任何参数**——`--params` 降级为可选覆盖（测试/调试注入）。
+2. **备料清单=子树内 `- ←` 声明（串行可见 ≠ 并行可见）**：worker 是独立子实例不共享父变量空间——fan-out 只备子树内声明过的输入。
+   - 病理：子树引用未声明变量时串行跑全对（扁平空间随手可得）、parallel 后 worker 缺值且**不报错**（执行 LLM 拿不到值就靠猜——2026-08-09 anchor-audit 实撞:5.2.1 漏声明 project_root,batch 文件被写到猜的位置;历史真跑因 project_root 恰=cwd 巧合掩盖,fixture 分离两目录后现形）；
+   - 机检三档已立（叶子输入声明完备性:body B4 error/ask P14 error/散文 V11 warn——散文档终审归语义审计）,作者写 spec 的处方=worker 子树引用的每个外部变量都在用它的步骤 `- ←` 声明。
+3. **完整 child 入参来源：引擎单一权威，fan-out 落盘 + worker init 按 cid 回填，driver 零参与**：父引擎为每个静态/for-each child 算定完整 `params_for_child`；for-each 额外包含 `params_for_child[itemVar] = listVal[idx]`（见 [[#^anc-exec-parallel-foreach-join]] 邻接的 fan-out 逻辑）。
+   - 落盘：同一次 fan-out，父引擎把每个 child 的完整 `params_for_child`（**内部真值，不 deflate**）写到该 child 的 subinstance 目录下 `params.json`（`<parentDir>/parallel/<childId>/params.json`）；
+   - 回填：worker 起 `run --parallel-parent <pid> --parallel-child <cid>` 时，其子实例目录恰好是同一路径（worker 的 instanceId = cid），init 时按自己的 cid 读取该 `params.json`，把**全部缺失键**注入 root scope；显式 `--params` 键优先，不被回填覆盖；
+   - 这样静态 parallel 的外部依赖与 for-each 的 itemVar 都走同一通道。**driver 无需构造、无需透传任何参数**——`--params` 降级为可选覆盖（测试/调试注入）。
 
-   **为何这不是"翻父自播种"**（区别在"谁决策拿哪份"）：撤销的 v1 误设计是 worker **代码自己**反解 idx、`readVars(父实例)` 读**整个父 vars**、自己挑 `listVal[idx]`——worker 替引擎做了"该拿哪份"的决策，且读到兄弟数据。而此处：(a) **权威**：拿哪份由**引擎** fan-out 时按 cid 算定并落盘，worker 只按自己的 cid 取回引擎备好的那一份，决策权仍在引擎；(b) **隔离**：worker 只读 `parallel/<自己cid>/params.json`（仅自己那份 item），**不碰父实例 vars、不碰兄弟**，[[#^anc-exec-parallel-subinstance]]「worker 与父/兄弟完全隔离」不破。worker 仍是哑执行体——区别是从"哑执行体+哑搬运的 driver 手工中转"简化为"引擎直接备料到位"。
+   **为何这不是"翻父自播种"**（区别在"谁决策拿哪份"）：撤销的 v1 误设计是 worker **代码自己**反解 idx、`readVars(父实例)` 读**整个父 vars**、自己挑 `listVal[idx]`——worker 替引擎做了"该拿哪份"的决策，且读到兄弟数据。而此处：
+   - (a) **权威**：拿哪份由**引擎** fan-out 时按 cid 算定并落盘，worker 只按自己的 cid 取回引擎备好的那一份，决策权仍在引擎；
+   - (b) **隔离**：worker 只读 `parallel/<自己cid>/params.json`（仅自己那份 item），**不碰父实例 vars、不碰兄弟**，[[#^anc-exec-parallel-subinstance]]「worker 与父/兄弟完全隔离」不破；
+   - worker 仍是哑执行体——区别是从"哑执行体+哑搬运的 driver 手工中转"简化为"引擎直接备料到位"。
 
    **❌ 禁止 worker 翻父实例自播种**（原 v1 误设计，已撤，仍然禁止）：worker 代码**不得** `readVars(父实例)` 自行反解 idx 挑 item——那违反上述权威与隔离两原则。回填只能读引擎备好的 `params/<cid>.json`（引擎单一权威落点），不是 worker 自己去父 vars 捞。
 
@@ -665,13 +750,15 @@ for-each 动态 child 的 step_id 是**合成 ID**（`{P}.{idx+1}`），spec AST
 
 **为什么 worker 偶然能跑通模板 ID = 合成 ID 的情况**：idx=0 时合成 ID `{P}.1` 恰好等于模板真实 ID，`findStepById` 命中、scope 掩码生效——但这是巧合，idx≥1 的 worker（`{P}.2`/`{P}.3`...）必然命中 null 分支，必须靠本节的解析逻辑救回。
 
-**worker 形态下父 loop 不误入轮进（本锚在代码里的另一处落点）**：worker 子实例内子树跑完、`propagateCompletion` 级联到父 for-each loop 时，**不得**走串行迭代推进分支（`resetChildrenToPending` 会让 worker 无限重跑同一 batch——2026-08-08 真机审计实撞：worker 内 loop_counters 5.2:3、同批审 3 遍后 'No executable step found' failed）。守卫由两件构成：executeSubtreeOnly 的 **scope 掩码**（子树外兄弟预标 skipped、祖先标 running，见 [[#^anc-exec-parallel-subinstance]]）+ **收齐门**（`hasInflightFor` 有在飞即 return 不 finalize，engine-traverse.ts:351）；病理注释与 `@a:` 落点在 src/engine-traverse.ts:305-312。
+**worker 形态下父 loop 不误入轮进（本锚在代码里的另一处落点）**：worker 子实例内子树跑完、`propagateCompletion` 级联到父 for-each loop 时，**不得**走串行迭代推进分支（`resetChildrenToPending` 会让 worker 无限重跑同一 batch——2026-08-08 真机审计实撞：worker 内 loop_counters 5.2:3、同批审 3 遍后 'No executable step found' failed）。
+- 守卫由两件构成：executeSubtreeOnly 的 **scope 掩码**（子树外兄弟预标 skipped、祖先标 running，见 [[#^anc-exec-parallel-subinstance]]）+ **收齐门**（`hasInflightFor` 有在飞即 return 不 finalize，engine-traverse.ts:351）；病理注释与 `@a:` 落点在 src/engine-traverse.ts:305-312。
 
 ## 10. fan-out 调度：CLI 顾问出决策、主 agent 持句柄执行【契约】 ^anc-exec-parallel-fanout-advisor
 
 ### 10a. 问题：调度算法散在 skill NL，主 agent"读散文自己算"
 
-fan-out 的**满额滑动窗口调度**（初始起 `max_concurrent` 个 worker、任一完成即补位、批间无屏障、全部终态后 join）此前完全写在 skill 的自然语言里（`parallel-worker.md`），由主 agent 读散文**自己在脑子里维护窗口状态并拼 worker 启动命令**。这是一类 flaky 失效的温床——实测事故（ppt-html e2e）反复暴露：主 agent 漏拼 `--params`、漏加 doc-ref 所需 `cd <VAULT>`、原始串台（worker 自选 `/tmp` 输出路径互相覆盖）。根因统一为：**纯机械的调度计算被写成散文交给 LLM"发挥"**。
+fan-out 的**满额滑动窗口调度**（初始起 `max_concurrent` 个 worker、任一完成即补位、批间无屏障、全部终态后 join）此前完全写在 skill 的自然语言里（`parallel-worker.md`），由主 agent 读散文**自己在脑子里维护窗口状态并拼 worker 启动命令**。
+- 这是一类 flaky 失效的温床——实测事故（ppt-html e2e）反复暴露：主 agent 漏拼 `--params`、漏加 doc-ref 所需 `cd <VAULT>`、原始串台（worker 自选 `/tmp` 输出路径互相覆盖）。根因统一为：**纯机械的调度计算被写成散文交给 LLM"发挥"**。
 
 ### 10b. 载体决策：为何调度器不能是 subagent、只能是"主 agent + 无状态 CLI 顾问"
 
@@ -692,15 +779,20 @@ CLI 每命令一进程、吐完即退（[[reuse-mode-prompt-flow#^anc-exec-reuse
 
 - **应起的全集**：fan-out 时 `recordParallelFanout` + 父 `state.json` 记录了 parallel 的全部 child_step_id 与 `max_concurrent`。
 - **已完成/失败的子集**：每个 worker 子实例 `parallel/<cid>/state.json` 的 `step_states` 独立记着该 child 是 `done`/`failed`（worker submit 到终态时落盘，`writeAtomic` 原子写）。
-- **已派发的子集（显式态，非目录推断）**：CLI 决定派发某 child 的**那一刻**，原子地在父 state 记 `dispatched:<cid>`——**不靠"子目录是否出现"推断**。原因见 10g：worker 的 `parallel/<cid>/` 目录由 worker run 进程创建，滞后于"CLI 决定派发"，若靠目录存在判断会在空窗里重复派发。**派发那一刻同时流式记 dispatch 事件到父 hoplog**（`recordParallelDispatch`，见下 10d + [[spec-observability#^anc-obs-parallel-dispatch]]）：`dispatched_at` = 引擎决定派发的时刻（"引擎动作时刻"，如实反映滑动窗口的**持续派发过程**，非 fanout 一瞬间塌缩），顾问进程 `load` 已 `HopLog.resume` 重建父句柄故能 append。
+- **已派发的子集（显式态，非目录推断）**：CLI 决定派发某 child 的**那一刻**，原子地在父 state 记 `dispatched:<cid>`——**不靠"子目录是否出现"推断**。
+  - 原因见 10g：worker 的 `parallel/<cid>/` 目录由 worker run 进程创建，滞后于"CLI 决定派发"，若靠目录存在判断会在空窗里重复派发；
+  - **派发那一刻同时流式记 dispatch 事件到父 hoplog**（`recordParallelDispatch`，见下 10d + [[spec-observability#^anc-obs-parallel-dispatch]]）：`dispatched_at` = 引擎决定派发的时刻（"引擎动作时刻"，如实反映滑动窗口的**持续派发过程**，非 fanout 一瞬间塌缩），顾问进程 `load` 已 `HopLog.resume` 重建父句柄故能 append。
 - **待起 = 全集 − 已派发**；**在跑 = 已派发 − 已终态**；**可补位 = `max_concurrent` − 在跑**。三者皆父 state 与子实例 state 的纯函数。
 
 即"窗口状态"是 `.hopstate` 的**纯函数**，任一进程可无状态复原——这正是把它从"主 agent 脑内 NL 维护"移进 CLI 的依据。**派发权威归 CLI 落盘**（非从副作用推断），是并发正确性的基石（10g）。
 
 ### 10d. 接口契约（两个子命令）
 
-- **`fanout-plan <parallel_step_id> --instance <id> --state-dir <dir>`**：`parallel_ready` 后主 agent 调一次。CLI 读父 state 全集，选出初始 `max_concurrent` 个 child，**原子标 `dispatched`**（10g），返回：`{ workers: [{ child_step_id, launch_command }], max_concurrent, remaining: [...] }`。`launch_command` 是可直接执行的完整 worker 启动命令（含 `cd <VAULT> &&`、全局 `--json`、`--parallel-parent/--parallel-child`、log-dir；**不含 `--params`**——完整 `params_for_child` 已由引擎按 cid 落盘并在 worker init 回填，见 [[#^anc-exec-parallel-foreach-worker]]）。全部终态时返回的 join command 同样自带全局 `--json`；driver 必须原样执行，不补 flag。
-- **`fanout-next <parallel_step_id> --done <child_step_id> --status <completed|failed> --instance <id> --state-dir <dir>`**：主 agent 每收到一个 worker 完成通知即调，传该 child 的 id 与通知里的 `status`（`completed`/`failed`/`killed`→failed）。CLI 无状态复原窗口，若有待起 child 则选一个、**原子标 dispatched**，返回下一动作：`{ action: "launch", workers: [...] }`（补位）/ `{ action: "join", command: "join_parallel ..." }`（全部终态、该收敛）/ `{ action: "wait" }`（仍有在跑、队列已空）。
+- **`fanout-plan <parallel_step_id> --instance <id> --state-dir <dir>`**：`parallel_ready` 后主 agent 调一次。CLI 读父 state 全集，选出初始 `max_concurrent` 个 child，**原子标 `dispatched`**（10g），返回：`{ workers: [{ child_step_id, launch_command }], max_concurrent, remaining: [...] }`。
+  - `launch_command` 是可直接执行的完整 worker 启动命令（含 `cd <VAULT> &&`、全局 `--json`、`--parallel-parent/--parallel-child`、log-dir；**不含 `--params`**——完整 `params_for_child` 已由引擎按 cid 落盘并在 worker init 回填，见 [[#^anc-exec-parallel-foreach-worker]]）；
+  - 全部终态时返回的 join command 同样自带全局 `--json`；driver 必须原样执行，不补 flag。
+- **`fanout-next <parallel_step_id> --done <child_step_id> --status <completed|failed> --instance <id> --state-dir <dir>`**：主 agent 每收到一个 worker 完成通知即调，传该 child 的 id 与通知里的 `status`（`completed`/`failed`/`killed`→failed）。CLI 无状态复原窗口，若有待起 child 则选一个、**原子标 dispatched**，返回下一动作：
+  - `{ action: "launch", workers: [...] }`（补位）/ `{ action: "join", command: "join_parallel ..." }`（全部终态、该收敛）/ `{ action: "wait" }`（仍有在跑、队列已空）。
   - **child_step_id 从哪来**（通知只带 task-id）：`launch_command` 里已含 `--parallel-child <cid>`，主 agent 起 worker 时以 `<cid>` 作 subagent label；完成通知的 summary/result 自带该 label，主 agent 回读即得 → **映射靠命名，不靠脑内记忆**（否则又是 flaky 点）。
 - **主 agent 侧极薄**：`parallel_ready` → `fanout-plan` → 起返回的 workers（后台 subagent，label=cid）→ 每个完成通知 → `fanout-next --done <cid> --status <s>` → 照 action 起补位 / 执行 join。主 agent 全程不拼命令、不数窗口、不记映射。
 
@@ -740,7 +832,8 @@ CLI 每命令一进程、吐完即退（[[reuse-mode-prompt-flow#^anc-exec-reuse
 
 - **忘 `--params`**：命令由 CLI 拼，`--params` 本已由 itemVar 回填废弃（§9e），CLI 生成的命令不含它——结构性消除。
 - **漏 `cd <VAULT>`**：`cd` 由 CLI 拼进 `launch_command`——结构性消除。
-- **路径含空格拆裂参数**：`launch_command` 里所有路径插值（vault/cli/spec/state-dir/log-dir）**必须双引号包裹**——工作区绝对路径常含空格（如 iCloud `Mobile Documents`），裸插值会被 shell 拆成多参数（实测：`cd /Users/…/Mobile Documents && node …` 拆成 cd 到 `Mobile`、run 失败，worker 误报"引擎缺陷"）。`buildWorkerLaunchCommand` 对每个路径 `"${path}"` 加引号——结构性消除。这是[[ARCHITECTURE#^anc-string-escape]]（字符串转义规范·强制）shell 命令通道的落点。
+- **路径含空格拆裂参数**：`launch_command` 里所有路径插值（vault/cli/spec/state-dir/log-dir）**必须双引号包裹**——工作区绝对路径常含空格（如 iCloud `Mobile Documents`），裸插值会被 shell 拆成多参数（实测：`cd /Users/…/Mobile Documents && node …` 拆成 cd 到 `Mobile`、run 失败，worker 误报"引擎缺陷"）。
+  - `buildWorkerLaunchCommand` 对每个路径 `"${path}"` 加引号——结构性消除。这是[[ARCHITECTURE#^anc-string-escape]]（字符串转义规范·强制）shell 命令通道的落点。
 - **`@file` 含空格拆裂参数**：driver/worker 的提交模板必须把 `@` 与完整路径作为**同一个双引号参数**，写成 `--output "@<output_path>"` / `--answer "@<answer_path>"`。只给路径部分加引号或完全不加引号都会让含空格工作区被 shell 拆参。`@` 仍须位于参数值首字符，CLI 才会读文件。
 - **原始串台（worker 写 /tmp 互覆盖）**：worker 提交走引擎给的 `output_path`（work_zone 内、越界拒绝，见 [[exec-engine#^anc-exec-work-zone]]）；CLI 调度不改变这层，双保险仍在。
 - **不变量**：① 句柄仍归主 agent（载体约束，10b）；② join 仍单进程（[[#^anc-exec-parallel-join-merge]]）；③ confirm 子树仍被引擎 batch 排除（[[#^anc-exec-parallel-confirm-exclude]]），CLI 顾问只调度引擎返回的 children；④ 满额窗口语义不变（初始 `max_concurrent`、任一完成补位、无批屏障），只是计算主体从 NL 变 CLI。

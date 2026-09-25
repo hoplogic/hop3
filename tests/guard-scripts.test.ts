@@ -923,11 +923,12 @@ describe('check-spec-syntax skills 面判据回归', () => {
 
   it('正例：skills/ 下非 spec.md 的教学件不进 validate 面（首扩误伤四件当场收窄的回归钉）', () => {
     // 真仓库直跑:primer 族在 skills/hopbuild/ 且无 Steps——若被收进面,S8/S10 必红;通过=收窄生效。
-    // 真仓库全量 validate 本身 ~5s,缺省 5s 测试阈值贴边——机器有负载即假红（2026-08-31 连撞数轮）,放宽到 20s。
+    // 真仓库全量 validate 随仓库 spec 数增长:2026-08-31 约 5s 时放宽到 20s;2026-09-26 实测单跑已要
+    // 约 19s 纯 CPU（real 22.6s）,全量测试里 12~25s,20s 线在负载下必撞——放宽到 60s。
     const r = runGuard('check-spec-syntax.mjs', REPO);
     expect(r.code).toBe(0);
     expect(r.out).toContain('skills');
-  }, 20_000);
+  }, 60_000);
 
   it('反例：skills/ 下 spec.md 坏语法 → 红（替身仓库注入坏 spec.md）', () => {
     const root = mkdtempSync(join(tmpdir(), 'ss-skills-'));
@@ -1009,16 +1010,21 @@ describe('check-spec-syntax skills 面判据回归', () => {
 // maintainers/ "不出公开面"由四处独立声明兑现,任一静默漂移其余不报警——第九轮工程链 review
 // 变异核证实锤三处全穿透（INCLUDE_DIRS 偷加/MISS_EXPECTED 删项/NONRELEASE_RE 删项,全库零机检红）。
 // 发布脚本不被 vitest 跑,守卫形态=静态文本断言（与上方 release.sh 快照制断言组同款成例）。
+// 公开快照标记（design [[release-engineering#^anc-release-github-snapshot]] 公开快照自洽节）：
+// scripts/check-hopissues.mjs 在快照剔除清单里、内网恒在（check:fast 要调它）——它不在即当前是公开快照。
+// 读被剔除文件的测试按此标记跳过。不按"被读文件在不在"判：那样内网误删被测脚本会跟着静默跳过，防线退化。
+const PUBLIC_SNAPSHOT = !existsSync(join(REPO, 'scripts', 'check-hopissues.mjs'));
+
 // @v: anc-release-boundary-guards
 describe('发布防线四断言（maintainers/ 不出公开面）', () => {
-  it('github-publish.sh 出闸白名单 INCLUDE_DIRS 不含 maintainers（误配即整目录进公开快照,词表对其现内容零命中,白名单是唯一有效防线——变异:偷加 maintainers 本例红）', () => {
+  it.skipIf(PUBLIC_SNAPSHOT)('github-publish.sh 出闸白名单 INCLUDE_DIRS 不含 maintainers（误配即整目录进公开快照,词表对其现内容零命中,白名单是唯一有效防线——变异:偷加 maintainers 本例红）', () => {
     const sh = readFileSync(join(REPO, 'scripts', 'github-publish.sh'), 'utf-8');
     const line = sh.split('\n').find(l => l.trimStart().startsWith('INCLUDE_DIRS=('));
     expect(line).toBeDefined();
     expect(line).not.toContain('maintainers');
   });
 
-  it('github-verify.sh 验闸清单 MISS_EXPECTED 含 maintainers（删项后 verify 照报全过,验闸静默退化——变异:删 maintainers 项本例红;断言取括号内数组体,防行尾注释里的 maintainers 字样假绿〔首拍实撞〕）', () => {
+  it.skipIf(PUBLIC_SNAPSHOT)('github-verify.sh 验闸清单 MISS_EXPECTED 含 maintainers（删项后 verify 照报全过,验闸静默退化——变异:删 maintainers 项本例红;断言取括号内数组体,防行尾注释里的 maintainers 字样假绿〔首拍实撞〕）', () => {
     const sh = readFileSync(join(REPO, 'scripts', 'github-verify.sh'), 'utf-8');
     const line = sh.split('\n').find(l => l.trimStart().startsWith('MISS_EXPECTED=('));
     expect(line).toBeDefined();
@@ -1039,5 +1045,175 @@ describe('发布防线四断言（maintainers/ 不出公开面）', () => {
     expect(files.length).toBeGreaterThan(0);
     expect(files.some(f => f.includes('maintainers'))).toBe(false);
     expect(files.some(f => f.includes('RELEASING'))).toBe(false);
+  });
+});
+
+// ── GitHub 公开快照远端立基（design [[release-engineering#^anc-release-github-snapshot]],todo/0094）──
+// 旧脚本只看本地 .git 目录在不在就决定"追加还是 git init"——临时目录被系统清理后盲建出与远端不同宗的孤立历史,
+// 推送时才被 fast-forward 保护拒绝(0.16.0/0.17.0 两撞);.git 只剩半截(没有 HEAD)时直接在坏仓上报错(0.18.0 撞)。
+// 行为测试:本地裸仓当远端(HOP3_GITHUB_URL),只立基不导出(HOP3_PUBLISH_BASE_ONLY=1),覆盖立基规则表第 1/2/4/5/6/7 行。
+// @v: anc-release-github-snapshot
+describe.skipIf(PUBLIC_SNAPSHOT)('github-publish.sh 远端立基（立基规则表）', () => {
+  const PUBLISH = join(REPO, 'scripts', 'github-publish.sh');
+  const GIT_ENV = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com',
+    GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com',
+  };
+  function git(args: string[], cwd?: string): string {
+    return execFileSync('git', ['-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf-8', env: GIT_ENV, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  }
+  /** 建一个裸仓当远端;withMain=true 时推入一个快照形态提交,返回其提交号 */
+  function remote(withMain: boolean): { root: string; url: string; main: string } {
+    const root = mkdtempSync(join(tmpdir(), 'gh-snap-'));
+    const url = join(root, 'remote.git');
+    git(['init', '-q', '--bare', url]);
+    if (!withMain) return { root, url, main: '' };
+    const seed = join(root, 'seed');
+    git(['init', '-q', '-b', 'main', seed]);
+    git(['commit', '-q', '--allow-empty', '-m', 'hoplogic 0.0.1 (snapshot of internal abc1234)'], seed);
+    git(['push', '-q', url, 'main'], seed);
+    return { root, url, main: git(['rev-parse', 'HEAD'], seed) };
+  }
+  function publish(url: string, snap: string): { code: number; out: string } {
+    const r = spawnSync('bash', [PUBLISH, snap], {
+      encoding: 'utf-8',
+      env: { ...GIT_ENV, HOP3_GITHUB_URL: url, HOP3_PUBLISH_BASE_ONLY: '1' },
+    });
+    return { code: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+  }
+  const head = (snap: string) => git(['--git-dir', join(snap, '.git'), 'rev-parse', 'HEAD']);
+
+  it('① 快照目录不存在、远端有 main → 按远端 main 立基,本地 HEAD 等于远端 main（修前盲 init 产孤立根提交,本例红）', () => {
+    const r0 = remote(true);
+    const snap = join(r0.root, 'snap');
+    const r = publish(r0.url, snap);
+    expect(r.code, r.out).toBe(0);
+    expect(head(snap)).toBe(r0.main);
+  }, 60_000);
+
+  it('② 快照目录里 .git 损坏（只剩 objects 目录、没有 HEAD）→ 删坏仓后按远端 main 立基（0.18.0 实况形态）', () => {
+    const r0 = remote(true);
+    const snap = join(r0.root, 'snap');
+    mkdirSync(join(snap, '.git', 'objects'), { recursive: true });
+    const r = publish(r0.url, snap);
+    expect(r.code, r.out).toBe(0);
+    expect(head(snap)).toBe(r0.main);
+  }, 60_000);
+
+  it('③ 远端不可达 → 退出非零、报"远端探测失败"、快照目录零改动（不创建 .git,不退回盲建）', () => {
+    const r0 = remote(false);
+    const snap = join(r0.root, 'snap');
+    const r = publish(join(r0.root, 'no-such-remote.git'), snap);
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain('远端探测失败');
+    expect(existsSync(join(snap, '.git'))).toBe(false);
+    expect(existsSync(snap)).toBe(false);
+  }, 60_000);
+
+  it('④ 远端空仓（没有 main）→ 真首建,输出点明首次发布', () => {
+    const r0 = remote(false);
+    const snap = join(r0.root, 'snap');
+    const r = publish(r0.url, snap);
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).toContain('首次发布');
+    expect(git(['--git-dir', join(snap, '.git'), 'symbolic-ref', 'HEAD'])).toBe('refs/heads/main');
+  }, 60_000);
+
+  it('⑤ 本地 HEAD 已包含远端 main（本地多一个没推的提交）→ 沿用本地 HEAD 不重立', () => {
+    const r0 = remote(true);
+    const snap = join(r0.root, 'snap');
+    git(['clone', '-q', r0.url, snap]);
+    git(['commit', '-q', '--allow-empty', '-m', 'hoplogic 0.0.2 (snapshot of internal def5678)'], snap);
+    const local = head(snap);
+    const r = publish(r0.url, snap);
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).toContain('沿用本地');
+    expect(head(snap)).toBe(local);
+  }, 60_000);
+
+  it('⑥ 本地历史与远端分叉（远端 main 不是本地 HEAD 的祖先）→ 按远端 main 立基', () => {
+    const r0 = remote(true);
+    const snap = join(r0.root, 'snap');
+    git(['init', '-q', '-b', 'main', snap]);
+    git(['commit', '-q', '--allow-empty', '-m', 'orphan'], snap);
+    const r = publish(r0.url, snap);
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).toContain('分叉');
+    expect(head(snap)).toBe(r0.main);
+  }, 60_000);
+
+  it('⑦ 全流程:本地仓与远端分叉且带上一轮导出留下的旧 tag → 新快照提交以远端 main 为父,本地 tag 移到新提交（修前"已存在不重打"留旧 tag 在孤立提交上,本例红）', () => {
+    const r0 = remote(true);
+    // 替身内网仓库:脚本按自身位置找仓库根,放一份脚本副本 + 白名单全部目录与文件的最小占位 + 净度词表
+    const repo = join(r0.root, 'repo');
+    mkdirSync(join(repo, 'scripts'), { recursive: true });
+    cpSync(PUBLISH, join(repo, 'scripts', 'github-publish.sh'));
+    writeFileSync(join(repo, 'scripts', 'github-purity-words.txt'), '# 替身词表\nzz-never-matches-zz\n');
+    for (const d of ['src', 'tests', 'docs', 'driver', 'skills', 'examples', 'editors', 'model-gearbox']) {
+      mkdirSync(join(repo, d), { recursive: true });
+      writeFileSync(join(repo, d, 'placeholder.txt'), `${d}\n`);
+    }
+    writeFileSync(join(repo, 'examples', 'README.md'), '# examples\n');
+    for (const f of ['README.md', 'USAGE.md', 'ARCHITECTURE.md', 'Doctree.md', 'TRACEABILITY.md', 'STATUS.md', 'LICENSE', 'package-lock.json', 'tsconfig.json', 'vitest.config.ts']) {
+      writeFileSync(join(repo, f), `${f}\n`);
+    }
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'x', version: '9.9.9', scripts: { 'check:fast': 'tsc' } }, null, 2) + '\n');
+    git(['init', '-q', '-b', 'main', repo]);
+    git(['add', '-A'], repo);
+    git(['commit', '-q', '-m', 'internal'], repo);
+    // 快照目录:与远端分叉的本地仓,旧 tag v9.9.9 打在孤立提交上
+    const snap = join(r0.root, 'snap');
+    git(['init', '-q', '-b', 'main', snap]);
+    git(['commit', '-q', '--allow-empty', '-m', 'orphan'], snap);
+    git(['tag', 'v9.9.9'], snap);
+    const orphan = head(snap);
+    const r = spawnSync('bash', [join(repo, 'scripts', 'github-publish.sh'), snap], {
+      encoding: 'utf-8',
+      env: { ...GIT_ENV, HOP3_GITHUB_URL: r0.url },
+    });
+    const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+    expect(r.status, out).toBe(0);
+    const newHead = head(snap);
+    expect(newHead).not.toBe(orphan);
+    expect(git(['--git-dir', join(snap, '.git'), 'rev-parse', 'HEAD^'])).toBe(r0.main);
+    expect(git(['--git-dir', join(snap, '.git'), 'rev-parse', 'v9.9.9^{commit}'])).toBe(newHead);
+    expect(out).toContain('已移到');
+  }, 60_000);
+});
+
+// release.sh 两条静态断言（同上设计节）:⑦b 轮询总时长与收尾指路 GitHub 快照步。
+// @v: anc-release-github-snapshot
+describe('release.sh registry 轮询时长与 GitHub 快照指路', () => {
+  const sh = readFileSync(join(REPO, 'scripts', 'release.sh'), 'utf-8');
+
+  it('⑦b 轮询等待数组 POLL_SLEEPS 合计不少于 540 秒（0.18.0 实撞 publish 后约 5 分钟才可见,原 210 秒判了假失败）', () => {
+    const line = sh.split('\n').find(l => l.trimStart().startsWith('POLL_SLEEPS=('));
+    expect(line).toBeDefined();
+    const body = line!.slice(line!.indexOf('(') + 1, line!.indexOf(')'));
+    const total = body.trim().split(/\s+/).map(Number).reduce((a, b) => a + b, 0);
+    expect(total).toBeGreaterThanOrEqual(540);
+  });
+
+  it('"✅ 发版完成" 那行之后紧跟指向 github-publish.sh 的下一步提示', () => {
+    const lines = sh.split('\n');
+    const i = lines.findIndex(l => l.includes('✅ 发版完成'));
+    expect(i).toBeGreaterThan(-1);
+    expect(lines.slice(i + 1, i + 4).some(l => l.includes('github-publish.sh'))).toBe(true);
+  });
+});
+
+// chain-enforcement §5 第 5 条：测试运行器的进度回报不许被同步起子进程的用例饿死。
+// 去掉让出钩子后,单跑 cli.test.ts 三次复现 `Timeout calling "onTaskUpdate"`（测试全过、退出码 1）——
+// 钩子本身不经任何行为测试可见,只能钉挂载关系,防有人当成冗余配置删掉。
+// @v: anc-meta-guard-trust
+describe('vitest 进度回报让出钩子', () => {
+  it('vitest.config.ts 的 setupFiles 挂着 tests/setup/yield-event-loop.ts', () => {
+    const cfg = readFileSync(join(REPO, 'vitest.config.ts'), 'utf-8');
+    expect(cfg).toMatch(/setupFiles:\s*\[[^\]]*['"]tests\/setup\/yield-event-loop\.ts['"]/);
+  });
+  it('让出钩子在 afterEach 里用 setImmediate 让出事件循环', () => {
+    const src = readFileSync(join(REPO, 'tests', 'setup', 'yield-event-loop.ts'), 'utf-8');
+    expect(src).toMatch(/afterEach\(\s*\(\)\s*=>\s*new Promise<void>\(\s*\(?resolve\)?\s*=>\s*setImmediate\(resolve\)\s*\)\s*\)/);
   });
 });

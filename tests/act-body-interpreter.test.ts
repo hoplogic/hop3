@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { BodyInterpreter, evalExprSync } from '../src/act-body-interpreter.js';
 import { ACT_BUILTINS } from '../src/act-builtins.js';
+import { runWhitelistedCommand } from '../src/command-exec.js';
 import { parseActBody, parseExpression, serializeActBody } from '../src/act-body-parser.js';
 import type { OutputDecl } from '../src/ast-types.js';
 import type { ParseError } from '../src/errors.js';
@@ -1240,8 +1241,26 @@ describe('subprocess.run 命令行白名单', () => {
   it('反例：白名单内命令但系统不存在 → ENOENT 指路"找不到可执行文件"', async () => {
     const errors2: ParseError[] = [];
     const b2 = parseActBody(['r = subprocess.run(["no-such-cmd-xyz"])'], 1, errors2)!;
-    const interp2 = new BodyInterpreter({ inputs: {}, toolProvider: mockProvider(), allowCommit: false, toolCallLog: [], commandWhitelist: ['no-such-cmd-xyz'], cmdJournal: [] });
-    await expect(interp2.run(b2, [])).rejects.toThrow(/找不到可执行文件|执行失败/);
+    // cwd 给一个真实存在的目录——确保走"命令不存在"半边,不被 cwd 分辨半边劫走
+    const interp2 = new BodyInterpreter({ inputs: {}, toolProvider: mockProvider(), allowCommit: false, toolCallLog: [], commandWhitelist: ['no-such-cmd-xyz'], cmdJournal: [], workZone: process.cwd() });
+    await expect(interp2.run(b2, [])).rejects.toThrow(/找不到可执行文件/);
+  });
+
+  it('反例：cwd 不存在 → ENOENT 分辨为"工作目录不存在"并回显路径,不误指命令（0020 批 review 实撞:占位符 cwd 未替换,报文指向命令误诊"本机无 uv"）', async () => {
+    const errors2: ParseError[] = [];
+    // echo 系统里真实存在——报文若指"命令不存在"即误导,本例钉死分辨半边
+    const b2 = parseActBody(['r = subprocess.run(["echo", "hi"], cwd="<仓库根绝对路径>")'], 1, errors2)!;
+    const interp2 = new BodyInterpreter({ inputs: {}, toolProvider: mockProvider(), allowCommit: false, toolCallLog: [], commandWhitelist: ['echo'], cmdJournal: [] });
+    await expect(interp2.run(b2, [])).rejects.toThrow(/工作目录不存在.*<仓库根绝对路径>/);
+    await expect(interp2.run(b2, [])).rejects.not.toThrow(/命令不存在/);
+  });
+
+  it('反例：cwd 缺省但 workZone 指向不存在目录 → 同走"工作目录不存在"分辨半边（分辨判的 cwd=cwd参数??workZone,与 spawnSync 实际使用同源——联审修复批补钉）', async () => {
+    const errors2: ParseError[] = [];
+    // body 里不写 cwd=,让 spawnSync 落到 workZone;echo 系统里真实存在——报文若指"找不到可执行文件"即分辨源漂移
+    const b2 = parseActBody(['r = subprocess.run(["echo", "hi"])'], 1, errors2)!;
+    const interp2 = new BodyInterpreter({ inputs: {}, toolProvider: mockProvider(), allowCommit: false, toolCallLog: [], commandWhitelist: ['echo'], cmdJournal: [], workZone: '/no/such/dir-联审' });
+    await expect(interp2.run(b2, [])).rejects.toThrow(/工作目录不存在.*no.such.dir/);
   });
 
   it('反例：ENOBUFS 撞顶指路"输出过大用过滤收窄"——不截断是设计翻案后的行为（yes 灌爆 10MB）', async () => {
@@ -1264,5 +1283,42 @@ describe('subprocess.run 命令行白名单', () => {
     const interp2 = new BodyInterpreter({ inputs: {}, toolProvider: mockProvider(), allowCommit: false, toolCallLog: [], commandWhitelist: ['pwd'], cmdJournal: [] });
     const o = await interp2.run(b2, OUT('out'));
     expect(String(o['out']).trim().replace('/private','')).toBe('/tmp');
+  });
+});
+
+// 命令执行原语的 wrapperArgv（v0.24.0,py-sandbox 套系统沙箱用）：前缀只拼在 spawn 最前面,
+// 白名单与 hopjit 恒拒仍只核 argv[0]——前缀里的命令不需要进白名单,argv[0] 不在白名单照拒。
+// @v: anc-exec-command-primitive
+describe('runWhitelistedCommand wrapperArgv', () => {
+  it('正例：前缀拼在 argv 之前一起执行（env 前缀注入变量,被包装的命令看得见）', () => {
+    const r = runWhitelistedCommand(['printenv', 'HOPJIT_WRAP_PROBE'], {
+      whitelist: ['printenv'], timeoutSec: 5, maxBuffer: 65536, label: 't',
+      wrapperArgv: ['env', 'HOPJIT_WRAP_PROBE=wrapped'],
+    });
+    expect(r.returncode).toBe(0);
+    expect(r.stdout.trim()).toBe('wrapped');
+  });
+
+  it('正例：前缀命令不进白名单照样可用（白名单只核 argv[0]）', () => {
+    const r = runWhitelistedCommand(['echo', 'x'], {
+      whitelist: ['echo'], timeoutSec: 5, maxBuffer: 65536, label: 't', wrapperArgv: ['env'],
+    });
+    expect(r.stdout.trim()).toBe('x');
+  });
+
+  it('反例：argv[0] 不在白名单 → 有前缀也照拒;hopjit 恒拒同样不因前缀放行', () => {
+    expect(() => runWhitelistedCommand(['cat', '/etc/hosts'], {
+      whitelist: ['env'], timeoutSec: 5, maxBuffer: 65536, label: 't', wrapperArgv: ['env'],
+    })).toThrow(/不在白名单/);
+    expect(() => runWhitelistedCommand(['hopjit', 'status'], {
+      whitelist: ['hopjit'], timeoutSec: 5, maxBuffer: 65536, label: 't', wrapperArgv: ['env'],
+    })).toThrow(/不得调用 hopjit/);
+  });
+
+  it('正例：无前缀时行为不变（缺席与空数组都直接 spawn argv）', () => {
+    for (const wrapperArgv of [undefined, []]) {
+      const r = runWhitelistedCommand(['echo', 'plain'], { whitelist: ['echo'], timeoutSec: 5, maxBuffer: 65536, label: 't', wrapperArgv });
+      expect(r.stdout.trim()).toBe('plain');
+    }
   });
 });

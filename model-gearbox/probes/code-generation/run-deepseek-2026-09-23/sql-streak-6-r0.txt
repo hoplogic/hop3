@@ -1,0 +1,44 @@
+```sql
+WITH distinct_days AS (
+  SELECT DISTINCT user_id, login_date
+  FROM logins
+),
+numbered AS (
+  SELECT
+    user_id,
+    login_date,
+    julianday(login_date) - ROW_NUMBER() OVER (
+      PARTITION BY user_id
+      ORDER BY login_date
+    ) AS grp
+  FROM distinct_days
+),
+streaks AS (
+  SELECT
+    user_id,
+    grp,
+    MIN(login_date) AS streak_start,
+    COUNT(*) AS streak_len
+  FROM numbered
+  GROUP BY user_id, grp
+),
+ranked AS (
+  SELECT
+    user_id,
+    streak_start,
+    streak_len,
+    ROW_NUMBER() OVER (
+      PARTITION BY user_id
+      ORDER BY streak_len DESC, streak_start ASC
+    ) AS rn
+  FROM streaks
+)
+SELECT
+  user_id,
+  streak_len AS longest_streak,
+  streak_start
+FROM ranked
+WHERE rn = 1
+  AND streak_len >= 3
+ORDER BY longest_streak DESC, user_id ASC;
+```

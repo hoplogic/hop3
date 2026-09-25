@@ -94,7 +94,9 @@
 
 ## 作者体验工具（跨里程碑，非引擎能力）
 
-- **hopbuild skill**（自身为自然语言 skill，`.claude/skills/hopbuild/`）：把一个自然语言 skill 翻译成 HopSpec 规约（hopskill）。价值 = 把自然语言原文里"靠 LLM 记住"的纪律升级为引擎结构化强制，三焦点：循环不漏（for-each）、审核不跳（confirm 人审 + check 产出核验）、试错不 commit（act 可逆 / commit 隔离）。**纯 skill 层、零引擎改动**，故不占里程碑特性槽——它是**创作侧作者体验工具**，与 anchor-audit / hopspec 同层。golden sample：`scripts/audit/test-coverage-audit.md`（由 test-coverage-audit 自然语言 skill 经 /hopbuild 翻译，validate 通过）。
+- **hopbuild skill**（自身为自然语言 skill，`.claude/skills/hopbuild/`）：把一个自然语言 skill 翻译成 HopSpec 规约（hopskill）。价值 = 把自然语言原文里"靠 LLM 记住"的纪律升级为引擎结构化强制，三焦点：循环不漏（for-each）、审核不跳（confirm 人审 + check 产出核验）、试错不 commit（act 可逆 / commit 隔离）。
+  - **纯 skill 层、零引擎改动**，故不占里程碑特性槽——它是**创作侧作者体验工具**，与 anchor-audit / hopspec 同层；
+  - golden sample：`scripts/audit/test-coverage-audit.md`（由 test-coverage-audit 自然语言 skill 经 /hopbuild 翻译，validate 通过）。
 
 ## 归属存疑项（待随实现确认）
 

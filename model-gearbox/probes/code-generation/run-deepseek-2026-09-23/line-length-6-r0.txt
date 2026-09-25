@@ -1,0 +1,23 @@
+```python
+import sys
+
+path = sys.argv[1]
+handle = open(path, 'r', encoding='utf-8')
+lines = handle.readlines()
+handle.close()
+
+has_error = 0
+for line_number, line in enumerate(lines, 1):
+    if line.endswith('\n'):
+        line = line[:-1]
+    if line.endswith('\r'):
+        line = line[:-1]
+    length = len(line)
+    if length > 100:
+        print('第 ' + str(line_number) + ' 行长度为 ' + str(length) + '，超过 100 个字符')
+        has_error = 1
+
+if has_error:
+    sys.exit(1)
+sys.exit(0)
+```

@@ -59,13 +59,26 @@ export interface ToolDef {
   returns?: string;
 }
 
-/** 引擎内建特殊族名单——复用模式 L4 通道指引档按它分道：名单内恒教 hopjit tool-call
- * （引擎实现是唯一语义源）,名单外教 caller 原生能力优先（^anc-exec-tool-manifest-source
- * 第 4 条）。住共享层供 prompt(层1) 消费（tools.ts 在层2,层1 不得反向 import）;
- * 与 DefaultToolProvider.list() 的特殊件同源性由 tools 测试钉住,内建族扩员两处同改。 */
+/** 唯一语义源族名单——复用模式 L4 通道指引档按它分道:名单内恒教 hopjit tool-call
+ * （HopSpec 的树编辑与校验语义只活在引擎实现里,caller 用自己的工具模仿=语义漂移）,
+ * 名单外教 caller 原生能力优先（^anc-exec-tool-manifest-source 第 4 条）。住共享层供
+ * prompt(层1) 消费（tools.ts 在层2,层1 不得反向 import）。
+ * 分族判据是"引擎实现是不是这件事的唯一语义源",不是"是不是内建件"——2026-09-22 随
+ * run_script 落地收窄:它是内建件却该走原生优先（跑 .py 不是 HopSpec 专有语义）。 */
 // @a: anc-exec-tool-manifest-source
 export const ENGINE_BUILTIN_SPECIAL_TOOL_NAMES: ReadonlySet<string> = new Set([
   'validate_spec', 'insert_node', 'replace_node', 'replace_children', 'renumber_steps', 'read_spec_tree',
+]);
+
+/** 原生优先族里的**内建**成员名单——语义通用、caller 自己的等价能力跑出来结果一样的内建件。
+ * 现只 run_script 一员:caller 的 Bash 跑 `python3 <脚本>` 与引擎跑它等价,且教 tool-call 为主
+ * 会把 caller 指向一条依赖它那侧 hopjit.yaml commands 白名单（复用模式多半没配）的路。
+ * 渲染上本名单不参与判定（buildToolManifest 的 else 分支本就兜住非唯一语义源件）——它存在
+ * 是为了守卫的牙:同源钉判"两族并集 == 注册面 special 全集",新增 special 内建件不登记任一族
+ * 即红,迫使加件的人显式做一次分族判断（单名单+隐式兜底会让新件静默全绿,分道被替他做了）。 */
+// @a: anc-exec-tool-manifest-source
+export const NATIVE_FIRST_BUILTIN_SPECIAL_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'run_script',
 ]);
 
 /** KnowledgeProvider：知识检索接口——引擎经此按 query 检索宿主知识片段供 prompt 注入。见 [[shared-providers#^anc-provider-knowledge]] */

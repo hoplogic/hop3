@@ -1,0 +1,147 @@
+```python
+import ast
+import re
+import sys
+
+def extract_function_args(func_node):
+    args = []
+    # Positional only arguments (before /)
+    for arg in func_node.args.posonlyargs:
+        if arg.arg not in ['self', 'cls']:
+            args.append(arg.arg)
+    
+    # Regular arguments
+    for arg in func_node.args.args:
+        if arg.arg not in ['self', 'cls']:
+            args.append(arg.arg)
+    
+    # Var args (*args)
+    if func_node.args.vararg:
+        if func_node.args.vararg.arg not in ['self', 'cls']:
+            args.append(func_node.args.vararg.arg)
+    
+    # Keyword only arguments (* after which keywords must be specified)
+    for arg in func_node.args.kwonlyargs:
+        if arg.arg not in ['self', 'cls']:
+            args.append(arg.arg)
+    
+    # Kw args (**kwargs)
+    if func_node.args.kwarg:
+        if func_node.args.kwarg.arg not in ['self', 'cls']:
+            args.append(func_node.args.kwarg.arg)
+    
+    return args
+
+def is_mentioned(param_name, docstring):
+    # Use word boundaries to check if param_name is mentioned as a whole word
+    pattern = r'\b' + re.escape(param_name) + r'\b'
+    return bool(re.search(pattern, docstring))
+
+def check_function_compliance(node, context_stack, violations_list):
+    docstring = ast.get_docstring(node)
+    
+    if docstring is None:
+        violations_list.append((node.lineno, f"Function '{node.name}' missing docstring"))
+        return
+    
+    required_args = extract_function_args(node)
+    
+    for arg in required_args:
+        if not is_mentioned(arg, docstring):
+            violations_list.append((node.lineno, f"Function '{node.name}' docstring does not mention parameter '{arg}'"))
+
+def walk_ast_and_check(tree):
+    violations = []
+    # Stack to keep track of contexts - tuples of (type, name) where type is 'function' or 'class'
+    context_stack = []
+    
+    # Define a custom walker using the AST walk functionality
+    def traverse_node(node):
+        if isinstance(node, ast.FunctionDef):
+            # Add current function to stack
+            context_stack.append(('function', node.name))
+            
+            # Check if function should be validated based on context
+            inside_function_not_class = False
+            for ctx_type, ctx_name in context_stack[:-1]:  # exclude current function
+                if ctx_type == 'function':
+                    inside_function_not_class = True
+                    break
+
+            if not inside_function_not_class:
+                if not node.name.startswith('_'):
+                    check_function_compliance(node, context_stack, violations)
+            
+            # Process children
+            for child in ast.iter_child_nodes(node):
+                traverse_node(child)
+                
+            # Remove from stack after processing
+            context_stack.pop()
+        
+        elif isinstance(node, ast.AsyncFunctionDef):
+            # Similar logic for async functions
+            context_stack.append(('function', node.name))
+            
+            inside_function_not_class = False
+            for ctx_type, ctx_name in context_stack[:-1]:  # exclude current function
+                if ctx_type == 'function':
+                    inside_function_not_class = True
+                    break
+
+            if not inside_function_not_class:
+                if not node.name.startswith('_'):
+                    check_function_compliance(node, context_stack, violations)
+            
+            # Process children
+            for child in ast.iter_child_nodes(node):
+                traverse_node(child)
+                
+            # Remove from stack after processing
+            context_stack.pop()
+        
+        elif isinstance(node, ast.ClassDef):
+            # Add class to stack
+            context_stack.append(('class', node.name))
+            
+            # Process children
+            for child in ast.iter_child_nodes(node):
+                traverse_node(child)
+                
+            # Remove from stack after processing
+            context_stack.pop()
+        else:
+            # For other node types, just process their children
+            for child in ast.iter_child_nodes(node):
+                traverse_node(child)
+    
+    traverse_node(tree)
+    return violations
+
+def check_file(filename):
+    with open(filename, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    if not content.strip():
+        # Empty file is compliant
+        return []
+
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        print(f"Syntax error in {filename}")
+        sys.exit(1)
+
+    violations = walk_ast_and_check(tree)
+    
+    return violations
+
+violations = check_file(sys.argv[1])
+
+if violations:
+    for line_no, reason in violations:
+        print(f"{line_no}: {reason}")
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

@@ -1,0 +1,129 @@
+```python
+import ast
+import re
+import sys
+
+def extract_function_args(func_node):
+    args = []
+    # Get regular arguments
+    for arg in func_node.args.args:
+        if arg.arg not in ['self', 'cls']:
+            args.append(arg.arg)
+    
+    # Get vararg (e.g., *args)
+    if func_node.args.vararg:
+        args.append(func_node.args.vararg.arg)
+    
+    # Get kwonly args (e.g., * after which keywords only)
+    for arg in func_node.args.kwonlyargs:
+        if arg.arg not in ['self', 'cls']:
+            args.append(arg.arg)
+    
+    # Get kwarg (e.g., **kwargs)
+    if func_node.args.kwarg:
+        args.append(func_node.args.kwarg.arg)
+    
+    # Include posonly args (arguments before /)
+    for arg in func_node.args.posonlyargs:
+        if arg.arg not in ['self', 'cls']:
+            args.append(arg.arg)
+            
+    return args
+
+def is_mentioned_in_docstring(param_name, docstring):
+    if not docstring:
+        return False
+    
+    # Use word boundaries to check if param_name appears as a whole word
+    # The pattern ensures that param_name is surrounded by non-word characters or string boundaries
+    pattern = r'\b' + re.escape(param_name) + r'\b'
+    return bool(re.search(pattern, docstring))
+
+def validate_file(filepath):
+    with open(filepath, 'r', encoding='utf-8') as f:
+        content = f.read()
+        
+    if not content.strip():
+        # Empty file is compliant
+        return True, []
+
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        # If there's a syntax error, let it raise normally
+        raise
+
+    violations = []
+    
+    # Stack to track current scope context (to know if we're inside a function/class)
+    # Elements will be tuples like ('function', node) or ('class', node)
+    scope_stack = []
+    
+    # We need to walk through the AST and identify all top-level functions and class methods
+    # We'll do a recursive walk, tracking the stack of scopes we are in
+    
+    def process_node(node, parent=None):
+        nonlocal violations
+        
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # Check if this is a nested function (inside another function/class body at this level)
+            # Only consider functions defined at module level or directly in class
+            
+            # A function is nested if its parent is another function or we're already inside a function in stack
+            is_nested = any(isinstance(item[1], (ast.FunctionDef, ast.AsyncFunctionDef)) for item in scope_stack)
+            
+            # Check if it's a public function (doesn't start with underscore)
+            if not node.name.startswith('_'):
+                if not is_nested:  # Only process top-level functions or class methods
+                    docstring = ast.get_docstring(node)
+                    
+                    args = extract_function_args(node)
+                    
+                    missing_args = []
+                    for arg in args:
+                        if not is_mentioned_in_docstring(arg, docstring):
+                            missing_args.append(arg)
+                    
+                    if docstring is None:
+                        violations.append(f"{node.lineno}: Function '{node.name}' has no docstring")
+                    elif missing_args:
+                        violations.append(f"{node.lineno}: Function '{node.name}' docstring does not mention parameter(s): {', '.join(missing_args)}")
+            
+            # Push function to scope stack, process children, then pop
+            scope_stack.append(('function', node))
+            for child in ast.iter_child_nodes(node):
+                process_node(child, node)
+            scope_stack.pop()
+        
+        elif isinstance(node, ast.ClassDef):
+            # Process class: push to stack, process children, pop
+            scope_stack.append(('class', node))
+            for child in ast.iter_child_nodes(node):
+                process_node(child, node)
+            scope_stack.pop()
+        
+        else:
+            # For other nodes, just process their children
+            for child in ast.iter_child_nodes(node):
+                process_node(child, node)
+
+    # Start processing from root
+    for node in ast.iter_child_nodes(tree):
+        process_node(node)
+
+    if violations:
+        for violation in violations:
+            print(violation)
+        return False, violations
+    else:
+        return True, []
+
+# Main execution logic
+filepath = sys.argv[1]
+is_valid, violations = validate_file(filepath)
+
+if is_valid:
+    sys.exit(0)
+else:
+    sys.exit(1)
+```

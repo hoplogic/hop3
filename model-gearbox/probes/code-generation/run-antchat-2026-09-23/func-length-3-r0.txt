@@ -1,0 +1,132 @@
+```python
+import ast
+import sys
+
+
+def get_func_length(node):
+    return node.end_lineno - node.lineno + 1
+
+
+class Checker(ast.NodeVisitor):
+    def __init__(self, source):
+        self.source = source
+        self.violations = []
+        self.stack = []
+
+    def visit(self, node):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            self._visit_function(node)
+        else:
+            super().visit(node)
+
+    def _visit_function(self, func):
+        length = get_func_length(func)
+        if length > 40:
+            self.violations.append((func.lineno, length))
+        nested = []
+        for child in ast.iter_child_nodes(func):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                nested.append(child)
+        for child in func.body:
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                func.body.remove(child)
+        for child in nested:
+            self._visit_function(child)
+        for child in func.body:
+            if isinstance(child, ast.ClassDef):
+                for item in child.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        self._visit_function(item)
+            else:
+                self.visit(child)
+
+
+def get_function_length_accurate(source, func_node):
+    if not func_node.body:
+        return 1
+    end_line = func_node.body[-1].end_lineno
+    decorator_len = len(func_node.decorator_list)
+    if decorator_len > 0:
+        first_dec = min(dec.name for dec in func_node.decorator_list if hasattr(dec, 'name'))
+        first_dec_line = None
+        for line in source.splitlines():
+            if f"@{func_node.name}" in line or any(
+                str(i) == str(dec.lineno) for dec in func_node.decorator_list if hasattr(dec, 'lineno')
+            ):
+                try:
+                    first_dec_line = dec.lineno
+                except Exception:
+                    pass
+                break
+    end_line = max(
+        (node.end_lineno for node in [func_node] + list(ast.walk(func_node)) if hasattr(node, 'end_lineno')),
+        default=func_node.lineno
+    )
+    if not func_node.decorator_list:
+        start = func_node.lineno
+    else:
+        start = func_node.lineno
+        end_from_body = func_node.body[-1].end_lineno if func_node.body else start
+        end_line = start + (end_from_body - func_node.body[0].lineno) if func_node.body else start
+    return end_line - start + 1
+
+
+def remove_decorator_lines(source, func):
+    lines = source.splitlines()
+    start = func.lineno - 1
+    end = func.end_lineno
+    if func.decorator_list:
+        dec_end = max((d.end_lineno for d in func.decorator_list), default=start)
+        start = dec_end
+    return lines[start:end], func.lineno + start
+
+
+class LengthChecker(ast.NodeVisitor):
+    def __init__(self, source):
+        self.source = source
+        self.violations = []
+
+    def visit(self, node):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            self._check(node)
+            self.generic_visit(node)
+        elif isinstance(node, ast.ClassDef):
+            for item in node.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    self._check(item)
+            self.generic_visit(node)
+        else:
+            self.generic_visit(node)
+
+    def _check(self, func):
+        body_start = func.lineno
+        if func.decorator_list:
+            decorator_ends = [d.end_lineno for d in func.decorator_list]
+            if decorator_ends:
+                body_start = max(body_start, max(decorator_ends) + 1)
+        body_end = func.body[-1].end_lineno if func.body else body_start
+        length = body_end - body_start + 1
+        if length > 40:
+            self.violations.append((body_start, length))
+
+
+def main():
+    path = sys.argv[1]
+    with open(path, 'r', encoding='utf-8') as f:
+        source = f.read()
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as e:
+        print(f"{e.lineno}: syntax error")
+        sys.exit(1)
+    checker = LengthChecker(source)
+    checker.visit(tree)
+    if checker.violations:
+        for lineno, length in checker.violations:
+            print(f"line {lineno}: function is {length} lines long (exceeds 40)")
+        sys.exit(1)
+    sys.exit(0)
+
+
+main()
+```

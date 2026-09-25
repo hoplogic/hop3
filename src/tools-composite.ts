@@ -17,7 +17,11 @@ interface Member {
   label: string;                       // 来源标签（错误与 HopLog 记账用：builtin-file / server:<name> / host-injected）
   provider: ToolProvider;
   specs: Map<string, ToolSpec>;        // wire name → spec（内置组与宿主注入无声明条目=空表）
+  perChildEntry?: ToolServerEntry;     // 来自 per_parallel_child 打开的注册条目时携带（派生视图据此新建实例;其余成员缺席）
 }
+
+// 派生视图构造口令（模块私有——外部拿不到,构造派生视图只能经 forkForParallelChild）
+const FORK_OF = Symbol('forkOf');
 
 /** CompositeToolProvider：按名路由到成员；list()=并集；同名冲突装配期 fail-fast。
  * 双端校验（输入 schema 拦发/输出 shape 偏差入升级链/多余裁剪/unwrap 解包）见
@@ -48,8 +52,15 @@ export class CompositeToolProvider implements ToolProvider {
   private toolIdToName = new Map<string, string>();   // tool_id（语言面标识符）→ wire name
   private warnSink?: (msg: string) => void;
   private bareWarned = new Set<string>();             // 裸奔 warn 每工具一次（不逐调用刷屏）
+  // 并行子任务派生（todo/0112,tool-interface ^anc-exec-tool-composite forkForParallelChild）：
+  private makeExternal: (entry: ToolServerEntry) => ToolProvider = () => { throw new Error('unreachable'); };  // 注册条目 → 成员实例（构造时定;派生视图沿用父的,测试替身工厂随之继承）
+  private owned: Member[] = [];                       // 本视图新建、归本视图关的成员（顶层=全部;派生=只有开关打开的那几个）
+  private forks = new Set<CompositeToolProvider>();   // 从本视图派生、还没关闭的视图（close 兜底）
+  private parent?: CompositeToolProvider;             // 派生视图的父视图（closeOwned 时从父的 forks 摘掉自己）
 
-  constructor(hostConfig: HostConfig, options?: { registry?: ToolServerEntry[]; externalProviderFor?: (entry: ToolServerEntry) => ToolProvider; warn?: (msg: string) => void }) {
+  constructor(hostConfig: HostConfig, options?: { registry?: ToolServerEntry[]; externalProviderFor?: (entry: ToolServerEntry) => ToolProvider; warn?: (msg: string) => void; [FORK_OF]?: CompositeToolProvider }) {
+    const forkOf = options?.[FORK_OF];
+    if (forkOf) { this.assembleFork(forkOf); return; }
     this.warnSink = options?.warn;
     // ① 内置成员表遍历装配（^anc-exec-builtin-member-table,2026-08-31 随 dingtalk-notify 改造
     // ——原硬编码单成员 builtin-file 改表驱动:新增内置通道=表里添一行,构造器零改动。内置不是
@@ -66,17 +77,53 @@ export class CompositeToolProvider implements ToolProvider {
     // ② 外部注册：options.registry 显式传入 > hostConfig.tool_registry（tool_servers 节加载产物经
     // 宿主契约贯穿）;缺省 McpBindingMember,externalProviderFor 注入口保留（测试替身）
     const registry = options?.registry ?? (hostConfig.tool_registry as ToolServerEntry[] | undefined);
+    this.makeExternal = (entry: ToolServerEntry) => options?.externalProviderFor?.(entry)
+      ?? (entry.binding.kind === 'in-process'
+        ? new InProcessBindingMember(entry)   // 隔离模块装载 // @a: anc-exec-inprocess-binding
+        : new McpBindingMember(entry, options?.warn ? { warn: options.warn } : {}));
     for (const entry of registry ?? []) {
-      const provider = options?.externalProviderFor?.(entry)
-        ?? (entry.binding.kind === 'in-process'
-          ? new InProcessBindingMember(entry)   // 隔离模块装载 // @a: anc-exec-inprocess-binding
-          : new McpBindingMember(entry, options?.warn ? { warn: options.warn } : {}));
-      this.addMember({ label: `server:${entry.name}`, provider, specs: new Map(entry.tools.map(t => [t.name, t])) });
+      this.addMember({ label: `server:${entry.name}`, provider: this.makeExternal(entry), specs: new Map(entry.tools.map(t => [t.name, t])), ...(entry.per_parallel_child ? { perChildEntry: entry } : {}) });
     }
     // ③ 宿主 programmatic 注入：并入成员（原"整体替换"语义废——tool-interface ^anc-exec-tool-composite）
     if (hostConfig.tool_provider) {
       this.addMember({ label: 'host-injected', provider: hostConfig.tool_provider, specs: new Map() });
     }
+    this.owned = [...this.members];   // 顶层视图:全部成员归自己关
+  }
+
+  /** 并行子任务派生视图（todo/0112）：per_parallel_child 打开的 server 换新成员实例（懒连接——
+   * 第一次调用才起进程）,其余成员与父视图同一实例;没有打开开关的 server 时返回自身（与 0021
+   * 共享形态逐字节相同）。warn 汇与裸奔 warn 记录表与父共用。 // @a: anc-exec-tool-composite */
+  forkForParallelChild(): ToolProvider {
+    if (!this.members.some(m => m.perChildEntry)) return this;
+    const view = new CompositeToolProvider({} as HostConfig, { [FORK_OF]: this });
+    this.forks.add(view);
+    return view;
+  }
+
+  // 派生装配：按父成员顺序,开关成员新建实例（记入 owned）,其余复用父实例;名字检查同路径过
+  // （名字与父完全相同必然通过——走同一路径是为了路由表同法生成）。// @a: anc-exec-tool-composite
+  private assembleFork(parent: CompositeToolProvider): void {
+    this.parent = parent;
+    this.warnSink = parent.warnSink;
+    this.bareWarned = parent.bareWarned;
+    this.makeExternal = parent.makeExternal;
+    for (const m of parent.members) {
+      if (m.perChildEntry) {
+        const fresh: Member = { ...m, provider: this.makeExternal(m.perChildEntry) };
+        this.addMember(fresh);
+        this.owned.push(fresh);
+      } else {
+        this.addMember(m);
+      }
+    }
+  }
+
+  /** 派生视图收场：只关本视图新建的成员与再派生出去的视图,父视图的成员一个不碰;从父的 forks
+   * 摘掉自己。清理尽力而为,失败不抛。 // @a: anc-exec-tool-composite */
+  async closeOwned(): Promise<void> {
+    this.parent?.forks.delete(this);
+    await this.close();
   }
 
   // 装配期名字检查：wire name 与 tool_id 合并判重——冲突=配置错误 fail-fast // @a: anc-exec-tool-composite
@@ -110,10 +157,12 @@ export class CompositeToolProvider implements ToolProvider {
   /** run 终态收：逐成员 close（仅 mcp 成员有实义——tool-interface ^anc-exec-mcp-binding 三段收）。
    * 清理尽力而为，失败不抛（run 已终态）。 // @a: anc-exec-mcp-binding */
   async close(): Promise<void> {
-    for (const m of this.members) {
+    for (const m of this.owned) {
       const c = (m.provider as { close?: () => Promise<void> }).close;
-      if (typeof c === 'function') await c.call(m.provider);
+      if (typeof c === 'function') { try { await c.call(m.provider); } catch { /* 尽力而为 */ } }
     }
+    // 兜底：连带关还没关的派生视图（主线失败时暂停中的子任务等走不到自身收场点的路径）// @a: anc-exec-tool-composite
+    for (const f of [...this.forks]) await f.closeOwned();
   }
 
   async execute(tool_name: string, tool_args: Record<string, unknown>, write_scope?: import('./provider-types.js').WriteScope): Promise<ToolResult> {

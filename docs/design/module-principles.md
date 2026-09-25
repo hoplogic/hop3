@@ -9,7 +9,10 @@
 
 # 模块设计与实现原则
 
-> **本文定位**：元规范已定义模块的**通用**原则（[[../concepts/工程实现链规范#^anc-meta-module-spec]] 封闭子域四要求 + **设计层必备件清单** `^anc-meta-module-design-artifacts`（2026-08-06 作者定：设计层面必须明确模块的设计与要求——定位章节/出口清单/契约锚点成对/架构视图在场，四件缺一即模块环不完整）、[[../concepts/工程实现链规范#^anc-meta-module-evolution]] 版本演进、[[../concepts/工程实现链规范#^anc-meta-module-trace]] 归属标注）。本文把它们**推演到本库的具体判据**：什么算一个健康模块、依赖只许朝哪个方向、什么信号出现才拆、物理边界走什么演进路线。**先有原则，重构才有判据——不为拆而拆**（2026-08-04 作者定调：模块拆分不着急，先从设计和代码层面对焦清楚）。本库的"架构视图在场"落点 = Doctree 模块索引 + ARCHITECTURE 组件/双态表 + 本文 §7 盘点（审计契约见 §6b）。
+> **本文定位**：元规范已定义模块的**通用**原则——[[../concepts/工程实现链规范#^anc-meta-module-spec]] 封闭子域四要求、[[../concepts/工程实现链规范#^anc-meta-module-evolution]] 版本演进、[[../concepts/工程实现链规范#^anc-meta-module-trace]] 归属标注；
+> 外加**设计层必备件清单** `^anc-meta-module-design-artifacts`（2026-08-06 作者定：设计层面必须明确模块的设计与要求——定位章节/出口清单/契约锚点成对/架构视图在场，四件缺一即模块环不完整）。
+>
+> 本文把它们**推演到本库的具体判据**：什么算一个健康模块、依赖只许朝哪个方向、什么信号出现才拆、物理边界走什么演进路线。**先有原则，重构才有判据——不为拆而拆**（2026-08-04 作者定调：模块拆分不着急，先从设计和代码层面对焦清楚）。本库的"架构视图在场"落点 = Doctree 模块索引 + ARCHITECTURE 组件/双态表 + 本文 §7 盘点（审计契约见 §6b）。
 
 ## 文档结构与内容分级
 
@@ -48,7 +51,7 @@
    ↑ 只依赖 CLI 的 JSON 契约（cli-types），不 import 任何实现
 驱动适配层：hop-cli · step-dispatcher · tools（含 tools-notify.ts 钉钉通道——不可逆工具通道属工具面适配层,与 mcp-binding 同位） · persistence(File)
    ↑ 可 import 引擎核心与共享层
-引擎核心层：exec-engine · spec-parser · spec-ast（含 spec-tree-edit.ts——AST 级树编辑核心,仅依赖 ast-types;契约归 tools 模块 ^anc-exec-builtin-edit-tree-tool 两层结构之第一层,文件定层按依赖事实归核心层） · prompt-assembler · act-body · doc-ref · hoplog
+引擎核心层：exec-engine · spec-parser · spec-ast（含 spec-tree-edit.ts——AST 级树编辑核心,仅依赖 ast-types;契约归 tools 模块 ^anc-exec-builtin-edit-tree-tool 两层结构之第一层,文件定层按依赖事实归核心层） · act-body（含 command-exec.ts——命令执行原语,仅依赖 node 内置;两个消费口分处两层〔本模块的 subprocess.run + 适配层 tools 的 run_script〕,文件按依赖事实归核心层,适配层向下 import 是合规方向） · py-sandbox（Python 语法沙箱——产物脚本白名单静态审查+受控执行;仅依赖 node 内置与同层 command-exec,被适配层 tools 的 run_script 调,见 [[py-sandbox#^anc-struct-py-sandbox]]） · prompt-assembler · doc-ref · hoplog
    ↑ 可 import 共享层；【禁止】import 驱动适配层
 共享层：shared-types · shared-providers · shared-errors
    【禁止】import 任何上层
@@ -118,13 +121,21 @@
 
 ## 6b. 模块架构工程链审计【契约】 ^anc-meta-module-arch-audit
 
-概念层必备件④（[[../concepts/工程实现链规范#^anc-meta-module-design-artifacts]]）在本库的可核查判据：**src 全部 `@module:` 声明的模块名集合，必须逐名出现在三处全局视图**——[[../../Doctree|Doctree]]「模块索引」、[[../../ARCHITECTURE|ARCHITECTURE]]（组件/双态表）、本文 §7 盘点。新建/改名模块时三视图与模块本体**同一次改动**更新。守卫 `check-module-arch-audit.mjs`（`check:fast` 内）缺名即红；判据源为空时显式失败不静默跳过。实撞背景：2026-08-06 mcp-server 代码/纵向锚点全齐而三视图滞后数轮提交无红灯，靠人盘出（G10 当日销账）。
+概念层必备件④（[[../concepts/工程实现链规范#^anc-meta-module-design-artifacts]]）在本库的可核查判据：**src 全部 `@module:` 声明的模块名集合，必须逐名出现在三处全局视图**——[[../../Doctree|Doctree]]「模块索引」、[[../../ARCHITECTURE|ARCHITECTURE]]（组件/双态表）、本文 §7 盘点。新建/改名模块时三视图与模块本体**同一次改动**更新。
+
+- 守卫 `check-module-arch-audit.mjs`（`check:fast` 内）缺名即红；判据源为空时显式失败不静默跳过；
+- 实撞背景：2026-08-06 mcp-server 代码/纵向锚点全齐而三视图滞后数轮提交无红灯，靠人盘出（G10 当日销账）。
 
 **模块登记的操作环节（2026-08-06 作者定"需要有一个明确的环节"，并纠正归属：这是 agent 收链把关的工作，不是人的操作手册项）**：新建模块的登记是 **agent 建模块时的收链八件单**，权威在 [[chain-enforcement#^anc-meta-module-checklist]]（守卫链主线 §1c-2；CLAUDE.md 仅汇聚摘要）——设计先行→定层→锚点类别→写码→测试→三视图→立卡→全检，**一次改动交齐**、不许散落多 commit 事后补。本节守卫兜底其中三视图在场性；人侧（RELEASING 分诊表）只核"agent 是否交齐"。
 
 ## 7. 现状盘点【说明·快照 2026-08-06】
 
-15 模块规模（`npm run check:audit` 产物 module_scale，过期以实测为准）：exec-engine 1923 行 / spec-parser 1558 / prompt-assembler 893 / hop-cli 697 / step-dispatcher 627 / act-body 601 / spec-ast 493 / hoplog 421 / **mcp-server 389**（2026-08-06 新增，standalone MCP 协议壳，适配层）/ doc-ref 163 / persistence 155 / shared-providers 132 / tools 122 / shared-errors 47 / anchor-audit-scripts（纯脚本）。
+16 模块规模（`npm run check:audit` 产物 module_scale，过期以实测为准）：
+
+- exec-engine 1923 行 / spec-parser 1558 / prompt-assembler 893 / hop-cli 697 / step-dispatcher 627 / act-body 601 / spec-ast 493 / hoplog 421；
+- **mcp-server 389**（2026-08-06 新增，standalone MCP 协议壳，适配层）；
+- doc-ref 163 / persistence 155 / shared-providers 132 / tools 122 / shared-errors 47 / anchor-audit-scripts（纯脚本）；
+- **py-sandbox**（2026-09-23 新增，Python 语法沙箱，核心层；src 一件 + 随包检查器脚本 `scripts/pysb/pysb_check.py`；^anc-struct-py-sandbox 定位+边界声明✓、@module 归属✓、专属 py-sandbox.test.ts✓）。
 
 - 健康：≤900 行的 12 个模块全部满足 §1 四判据（mcp-server：^anc-struct-mcp-server 定位+边界声明✓、@module 归属✓、独立收链✓、专属 mcp-server.test.ts✓）；
 - 观察名单：exec-engine（T1 接近线，T3 到来时拆）、spec-parser（parser+validator 1558 行，关注点尚单一，无信号）；

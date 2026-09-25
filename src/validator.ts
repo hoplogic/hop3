@@ -1524,10 +1524,15 @@ export const B9_WRITE_TOOLS = new Set(['write', 'append', 'create', 'edit_file',
 // requires_commit 恒真,commit body 直执合法）。// @a: anc-rule-b2
 export const B2_BUILTIN_NOTIFY_TOOLS = new Set(['dingtalk_notify', 'notify']);
 /** B2 内置文件/编辑工具名单——引擎恒注册零声明,静态已知认得不报（与 tools.ts 文件工具组同源,B9 同款先例:validator 核心层不 import 适配层）。// @a: anc-rule-b2 */
+// run_script 入列（2026-09-22,理由全文在 spec-parser ^anc-rule-b2"名单收的是注册面全员"）:
+// 本名单管"validator 认不认得这个 callee",category='special' 只管无 body act 的下发面——body
+// 调用走解释器 ToolProvider 通路不看 category,故 body 里调 run_script 合法且零声明,不入列会让
+// commit body 跑脚本被 error 拒载、参数名笔误退回运行期才炸。// @a: anc-exec-builtin-run-script
 export const B2_BUILTIN_FILE_TOOLS = new Set([
   'read', 'write', 'append', 'edit_file', 'search_file', 'exists', 'listdir',
   'create', 'makedirs', 'move', 'remove',
   'validate_spec', 'insert_node', 'replace_node', 'replace_children', 'renumber_steps', 'read_spec_tree',
+  'run_script',
 ]);
 /** B2 内置工具签名表:合法参数名集+必填集——与 tools.ts 各 ToolDef input_schema 的 properties/
  * required 同源（对账钉参数名级机检,tools.test.ts——名单同源三姊妹的纵深半边）。2026-09-16 作者拍
@@ -1552,6 +1557,7 @@ export const B2_BUILTIN_TOOL_SIGS: ReadonlyMap<string, { props: readonly string[
   ['replace_children', { props: ['spec_text', 'spec_is_fragment', 'work_items', 'node_path', 'fragment'], required: ['spec_text', 'node_path', 'fragment'] }],
   ['renumber_steps', { props: ['spec_text', 'spec_is_fragment', 'work_items'], required: ['spec_text'] }],
   ['read_spec_tree', { props: ['spec_text', 'mode', 'node_path', 'spec_is_fragment'], required: ['spec_text', 'mode'] }],
+  ['run_script', { props: ['path', 'args'], required: ['path'] }],
 ]);
 function b9LeftmostLiteral(e: ActExpr): boolean {
   if (e.type === 'literal') return (e as { literal_kind?: string }).literal_kind === 'string';   // LiteralExpr 系 spec-ast 表外内部符号,经 ActExpr 联合暴露不单独 import——内联收窄
@@ -2375,22 +2381,57 @@ export function recoverFencedValue(value: unknown, expectKey?: string): unknown 
 // 输入渲染语法 `名: 类型 = 值` 逐字回声进输出:交付值字面成 "line = 'P4'"/"text = '原文'"。
 // 毒值过校验不炸〔line 收任意字符串〕,炸在下游机械对账:污染 id 与干净 id 算集合,同一点
 // 同时落进两个互斥清单——矛盾靠改产物修不平,重试必死〔单 run 355 处全污染〕。
-// 判据从紧:字符串**整串**匹配 `内建类型词 = 值`（` = ` 空格形态与渲染器逐字一致）才剥,
-// 引号包裹去引号;递归进结构（对象字段/列表元素——毒住在嵌套字段里,顶层档够不着）。
-// 整串匹配是安全闸:text 字段装的代码恰好整串形如 `text = '...'` 会误剥——特异形态×整串
-// 把误伤面压到可忽略。// @a: anc-exec-output-fence-recovery
+// 判据从紧:字符串**整串**匹配才剥,引号包裹去引号;递归进结构（对象字段/列表元素——毒住在
+// 嵌套字段里,顶层档够不着）。整串匹配是安全闸:text 字段装的代码恰好整串形如 `text = '...'`
+// 会误剥——特异形态×整串把误伤面压到可忽略。
+//
+// 三种回声形态都收（2026-09-22 扩,作者定"有 % 的时候直接按 hopschema 来剥壳"）:
+//   ① `内建类型词 = 值`——渲染面只给类型与值,模型抄走类型那半截;
+//   ② `名 % 内建类型词 = 值`——整条渲染行照抄,名位一并剥掉。**名位只在 `%` 形态下剥**:
+//      `%` 紧邻内建类型词这个组合业务值几乎不可能长成,整串匹配即可判"这是回抄不是数据";
+//      冒号形态 `名: 类型 = 值` 不剥名位——`clause_id: line = 1` 同时是一条合法 YAML,
+//      剥名位会把真值就是 `"line = 1"` 的合法数据改写掉（换 `%` 的直接收益:名位从不可判变可判）;
+//   ③ `=|` 同行块式——渲染器教"字符串值恒在下方缩进块",模型写在同一行即回声。
+//
+// 剥完按**壳自带的类型词**还原类型（`bool = false` → 布尔 false、`int = 9` → 数字 9）:
+// 壳里的类型词就是权威,不依赖槽位声明,故 `[yaml]` 这类无字段级声明的槽位同样治得住。
+// 不还原会留下字符串 `"false"`,而 hop_python 的 isTruthy 按设计判非空字符串为真〔见
+// ast-runtime.ts〕——todo/0108 T8 合同评审 9 个 false 被数成 9 个 true,结论从"可签"翻成
+// "不可签",两道 check 闸全绿、run 报 completed。// @a: anc-exec-output-fence-recovery
 const ECHO_TYPE_WORDS = ['bool', 'int', 'float', 'line', 'text', 'markdown', 'yaml', 'prompt', 'HopSpec', 'enum'];
-const ECHO_RE = new RegExp(`^(?:${ECHO_TYPE_WORDS.join('|')})(?:\\([^)]*\\))? = ([\\s\\S]*)$`);
+const ECHO_TYPE_ALT = ECHO_TYPE_WORDS.join('|');
+/** 形态①②合体:名位（`名 % `）可选,捕获组 1=类型词 2=值。形态③的 `=|` 与 `=` 同槽收。 */
+const ECHO_RE = new RegExp(
+  `^(?:[^\\s%]+ % )?(${ECHO_TYPE_ALT})(?:\\([^)]*\\))? =\\|?[ ]?([\\s\\S]*)$`,
+);
+/** 按壳自带的类型词把剥出的字面值还原成该类型;类型词管不着的（line/text/…）留字符串。 */
+function restoreByEchoType(typeWord: string, literal: string): unknown {
+  const s = literal.trim();
+  if (typeWord === 'bool') {
+    if (/^true$/i.test(s)) return true;
+    if (/^false$/i.test(s)) return false;
+    return literal;
+  }
+  if (typeWord === 'int' || typeWord === 'float') {
+    if (!/^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(s)) return literal;
+    const n = Number(s);
+    if (!Number.isFinite(n)) return literal;
+    return typeWord === 'int' ? Math.trunc(n) : n;
+  }
+  return literal;
+}
 function stripSchemaEcho(value: unknown): unknown {
   if (typeof value === 'string') {
     const m = value.match(ECHO_RE);
     if (!m) return value;
-    let inner = m[1];
+    const typeWord = m[1];
+    let inner = m[2];
     // 引号包裹去引号（渲染器值位常见 'v' 或 "v" 形态;成对才剥）
     if (inner.length >= 2 && ((inner.startsWith("'") && inner.endsWith("'")) || (inner.startsWith('"') && inner.endsWith('"')))) {
       inner = inner.slice(1, -1);
+      return inner;   // 引号在场=值显式为字符串,不按类型词还原
     }
-    return inner;
+    return restoreByEchoType(typeWord, inner);
   }
   // 结构档保引用同一性——零污染时返回原引用（既有阶梯测试以 toBe 钉"不碰即原对象",
   // 新建等值副本会假触发"恢复留痕"）。// @a: anc-exec-output-fence-recovery

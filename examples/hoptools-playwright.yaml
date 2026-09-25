@@ -2,22 +2,45 @@
 # server=微软官方 @playwright/mcp（npx 免装直跑,零自建）;文法权威 docs/reference/配置参考 ^anc-ref-tool-servers。
 # 抄进系统级 ~/.hopjit/config.yaml 或项目级 hopjit.yaml 的 tool_servers: 节。
 #
-# 白名单三档（server 报 24 个工具,只放行声明的——按副作用分级,0040 卡"交互受 requires_commit 语境约束"）：
+# 白名单分档（server 报 24 个工具,只放行声明的——按副作用分级,0040 卡"交互受 requires_commit 语境约束"）：
 # ① 只读观察（requires_commit: false,act 步随便用）：navigate/snapshot/screenshot/find/wait
+# 登录态搬运（requires_commit: false,要 args 带 --caps=storage 才开放;下文用法二）：storage_state/set_storage_state
 # ② 页面交互（requires_commit: true——点击/填表可能触发提交等不可逆动作,只许 commit 步或
 #    预授权语境;要翻页等确定可逆的交互,按需把单个工具改 false 自担语境判断）
 # ③ 不入白名单：evaluate/run_code_unsafe（任意 JS 执行,风险面大）/network 系（调试面）
 #
 # 冷启动注意：npx 首跑下载 server 包+chromium(~150MB)——先手动预热:
 #   npx -y @playwright/mcp@latest --version && npx playwright install chromium
+#
+# 三种用法（下面参数按 @playwright/mcp 0.0.82 核实；todo/0112）：
+#
+# 一、多路并发、各自独立（缺省形态,即本文件原样）
+#    per_parallel_child: true + --isolated。每个并行子任务（[subtask parallel] 或 [call … parallel]
+#    的子实例）第一次用浏览器工具时各起一个自己的 playwright 进程、子任务结束就关;--isolated 让
+#    浏览器档案只放内存,进程之间什么都不共享。为什么必须一个子任务一个进程：一个 playwright 进程
+#    只有一个"当前页面",几个子任务共用会页面串台、报 "Browser is already in use"——只加
+#    --isolated 不加开关解决不了（实测:同一进程三个调用方同时开页,加不加 --isolated 都串台）。
+#
+# 二、先登录、再并行探索
+#    同一份配置（开关打开 + --isolated + --caps=storage）。串行步骤用的是整个 run 共用的那个进程:
+#    父流程先在串行步骤里登录,然后调 browser_storage_state 把 cookie 与 localStorage 存成一个文件;
+#    每个并行子任务第一步调 browser_set_storage_state 载入这个文件,之后就带着登录态各自探索。
+#    文件路径建议写绝对路径（相对路径按 playwright 进程的当前目录解析,也就是启动引擎的目录）;
+#    状态文件里是登录凭证,放临时目录或 run 的工作目录,不要提交进仓库。
+#
+# 三、跨 run 保持登录（持续任务,所有步骤串行）
+#    删掉 per_parallel_child,把 --isolated 换成 --user-data-dir=<固定目录>:浏览器档案落盘,
+#    下次 run 还在。持久档案同一时刻只能被一个浏览器进程用（独占锁）,所以这种用法不能开开关、
+#    不能在并行子任务里用浏览器——需要并行时改用第二种。
 tool_servers:
   - name: playwright
+    per_parallel_child: true           # 每个并行子任务独占一个进程（用法一、二;用法三删掉这行）
     binding:
       kind: mcp
       transport: stdio
       command: npx
-      args: [-y, "@playwright/mcp@latest", --headless]
-      env_passthrough: [HOME, PATH]   # npx/chromium 运行必需
+      args: [-y, "@playwright/mcp@latest", --headless, --isolated, --caps=storage]
+      env_passthrough: [HOME, PATH, TMPDIR]   # npx/chromium 运行必需;TMPDIR 让 chromium 把临时档案放进宿主指定的临时区
     call_timeout_ms: 120000            # 页面加载可能慢于缺省 60s
     tools:
       # ── ① 只读观察 ──
@@ -44,6 +67,26 @@ tool_servers:
       - name: browser_wait_for
         requires_commit: false
         notes: 等待文本出现/消失或定时（动态渲染页取内容前先等稳定）
+      # ── 登录态搬运（要 --caps=storage 才开放;用法二）──
+      - name: browser_storage_state
+        requires_commit: false
+        notes: 把当前浏览器的 cookie 与 localStorage 存成文件（只读——不改页面,不对外产生动作）。用法二里父流程登录后调它
+        params:
+          - name: filename
+            type: line
+            description: 状态文件路径（建议绝对路径;省略则存到 playwright 输出目录下自动命名）
+        input_schema:   # 显式写出是为了把 filename 标成可选——只写 params 时引擎把每个参数都当必填
+          type: object
+          properties:
+            filename: {type: string}
+          required: []
+      - name: browser_set_storage_state
+        requires_commit: false
+        notes: 从文件载入 cookie 与 localStorage（先清空当前浏览器已有的再载入;只改本进程的浏览器,不对外产生动作）。用法二里每个并行子任务第一步调它
+        params:
+          - name: filename
+            type: line
+            description: 父流程存下的状态文件路径
       # ── ② 页面交互（不可逆风险语境——commit 步或预授权）──
       - name: browser_click
         requires_commit: true

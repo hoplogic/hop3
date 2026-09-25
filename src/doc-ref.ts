@@ -295,8 +295,10 @@ export function checkDocRefExists(workspaceDir: string, sandbox: SandboxConfig, 
 
 /**
  * 运行期解析一组 doc-ref 为章节内容片段。同文件只读一次（按 path 缓存）。
- * 大节超 DEFLATE_THRESHOLD 时写 workZone/docref/ 并返 file_path 指针；
- * workZone 空串（独立模式）时不卸载、内联全文。
+ * 大节处置按通道分三档（inlineMode,^anc-exec-llm-inline-context v3）:缺省=agent 通道,超
+ * DEFLATE_THRESHOLD 写 workZone/docref/ 返 file_path 指针（workZone 空串时内联全文）;
+ * 'preview'=standalone 且本步能 read,超 INLINE_PREVIEW_MAX 给头部节选+全文落盘;
+ * 'full'=standalone 且本步不能 read,一律全文内联。
  * 文件/章节找不到 → 抛 DocRefError（dispatcher 据此 failStep）。// @a: anc-exec-doc-ref-resolve
  */
 export function resolveDocRefs(
@@ -306,7 +308,7 @@ export function resolveDocRefs(
   workZone: string,
   hopEnv?: Record<string, string>,
   specDir?: string,
-  inlinePreview?: boolean,   // inline 通道（standalone 裸 API LLM）:大节不产指针,改预览形态（^anc-exec-llm-inline-context v2）
+  inlineMode?: 'preview' | 'full',   // inline 通道（standalone 裸 API LLM）两档都不产指针:preview=超限给节选,full=全文（^anc-exec-llm-inline-context v3）
 ): DocRefFragment[] {
   const fileCache = new Map<string, string[]>();
   const fragments: DocRefFragment[] = [];
@@ -353,8 +355,10 @@ export function resolveDocRefs(
       matched: slice.matched as DocRefFragment['matched'],
     };
 
-    // inline 预览通道:超限大节头部节选+全文落盘（值位真内容非死引用）// @a: anc-exec-llm-inline-context
-    if (inlinePreview && slice.content.length > INLINE_PREVIEW_MAX) {
+    // inline 预览通道:超限大节头部节选+全文落盘（值位真内容非死引用）;只给能 read 的步骤——
+    // 'full' 档〔本步没有 read〕不进本分支,也不进下面的 deflate,落到末尾全文内联
+    // （v3 todo/0115:读不了文件的步骤拿到"全文在某文件"是死路）// @a: anc-exec-llm-inline-context
+    if (inlineMode === 'preview' && slice.content.length > INLINE_PREVIEW_MAX) {
       if (workZone) {
         const docrefDir = join(workZone, 'docref');
         mkdirSync(docrefDir, { recursive: true, mode: 0o700 });
@@ -369,7 +373,7 @@ export function resolveDocRefs(
     }
     // deflate: 大节卸载到 work_zone 文件（agent 通道专属——inline 通道禁入:中节(4K-20K)在
     // inline 下必须全文内联,掉进本分支产 $file 指针即 BUG-H 复发）
-    if (!inlinePreview && workZone && Buffer.byteLength(slice.content, 'utf-8') > DEFLATE_THRESHOLD) {
+    if (!inlineMode && workZone && Buffer.byteLength(slice.content, 'utf-8') > DEFLATE_THRESHOLD) {
       const docrefDir = join(workZone, 'docref');
       mkdirSync(docrefDir, { recursive: true, mode: 0o700 });
       const safe = `${ref.doc}__${ref.section}`.replace(/[^\w一-龥.-]+/g, '_');

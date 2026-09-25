@@ -235,7 +235,10 @@ export interface VarsResponse { // @a: anc-cli-vars-response
 
 /** hopjit status 响应：实例执行状态与步骤计数（总/完成/失败/待执行/当前）。见 [[hop-cli#^anc-cli-status-response]]
  * paused 档（todo/0081）：停驻等外部应答时如实转述——此前枚举缺 paused 停驻报 running,
- * 看护方接此通道感知不到"引擎在等人"。pause_reason/paused_step_id 仅 paused 时在场。 */
+ * 看护方接此通道感知不到"引擎在等人"。pause_reason/paused_step_id 仅 paused 时在场。
+ * todo/0105：网络暂停与嵌套串行调用子流程里的停点也报 paused——此时 pause_reason/paused_step_id
+ * 取最深那层的值,call_path 记逐层调用步号（与 ExecutionPaused.call_path 同语义,仅嵌套时在场）。
+ * 见 [[hop-cli#^anc-cli-status-nested-pause]] */
 export interface StatusResponse { // @a: anc-cli-status-response
   status: 'ok';
   instance_id: string;
@@ -248,6 +251,7 @@ export interface StatusResponse { // @a: anc-cli-status-response
   current_step?: string;
   pause_reason?: string;
   paused_step_id?: string;
+  call_path?: string[];   // 嵌套串行调用停点的逐层调用步号（todo/0105）// @a: anc-cli-status-nested-pause
 }
 
 import { homedir } from 'node:os';/** hopjit abort 响应：实例主动中止（用户"不要了"的暗管——[[exec-engine#^anc-exec-abort]]）。

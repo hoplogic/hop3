@@ -24,6 +24,9 @@ export class McpBindingMember implements ToolProvider {
   private closed = false;   // 终态闸（四十九审——close 后惰性重连会 spawn 新进程且 run 已终态无人再收=复活泄漏;共享 provider 下被杀 worker 的末次工具调用可踩此竞态）// @a: anc-exec-tool-server-lifecycle
   private discovered = new Map<string, { inputSchema?: Record<string, unknown> }>();
   private warnSink?: (msg: string) => void;
+  // 连接进行中的等待句柄（todo/0112 测试撞出:原实装无此状态,共享成员被并行子任务同时首调时各起一个进程,
+  // 被覆盖的 client 无人关=泄漏）。并发首调等同一个句柄;成功或失败后清空。// @a: anc-exec-mcp-binding
+  private connecting: Promise<void> | null = null;
 
   constructor(private entry: ToolServerEntry, options?: { warn?: (msg: string) => void }) {
     this.warnSink = options?.warn;
@@ -100,8 +103,16 @@ export class McpBindingMember implements ToolProvider {
   /** 审计归属：本成员的 server 逻辑名（Composite 组装 ToolCallRecord 的 server 字段源）。 */
   get serverName(): string { return this.entry.name; }
 
+  // 并发首调共用同一次连接（design HopSop 连接第 5 步）// @a: anc-exec-mcp-binding
   private async ensureConnected(): Promise<void> {
     if (this.client) return;
+    if (!this.connecting) {
+      this.connecting = this.connectOnce().finally(() => { this.connecting = null; });
+    }
+    await this.connecting;
+  }
+
+  private async connectOnce(): Promise<void> {
     const b = this.entry.binding;
     const client = new Client({ name: 'hopjit', version: '0.0.0' });
     try {
@@ -113,6 +124,12 @@ export class McpBindingMember implements ToolProvider {
       // @a: anc-exec-mcp-binding
       try { await client.close(); } catch { /* 收尸失败不遮主因 */ }
       throw err;
+    }
+    // 连接期间被关闭（design HopSop 连接第 6 步）：close() 已返回,刚连好的进程无人再收——当场关掉、
+    // 该次调用失败,不存为句柄（与终态闸同一病:复活泄漏）。// @a: anc-exec-mcp-binding, anc-exec-tool-server-lifecycle
+    if (this.closed) {
+      try { await client.close(); } catch { /* 尽力而为 */ }
+      throw new Error(`server '${this.entry.name}' 在连接期间已随收场关停——刚连好的进程已关掉`);
     }
     this.client = client;
     await this.discover(client);

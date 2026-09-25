@@ -13,9 +13,11 @@ shared-providers 的 `PersistenceProvider` 契约（见 [[shared-providers#^anc-
 
 ## persistence 模块定位【契约】 ^anc-provider-persistence
 
-> **模块版本**：persistence 模块（`persistence.ts`：FilePersistence/MemoryPersistence + readState/readVars/writeAtomic） `v0.3.0`（2026-08-20）。0.x 未承诺稳定。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
+> **模块版本**：persistence 模块（`persistence.ts`：FilePersistence/MemoryPersistence + readState/readVars/writeAtomic） `v0.4.0`（2026-09-24）。0.x 未承诺稳定。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
 >
-> **vars.json format_version=2（2026-07-04）**：vars.json 从扁平变量字典（v1）升级为**完整 scope 树**（v2，结构与迁移见 [[exec-engine#^anc-exec-vars-scope-persist]]）——修复扁平序列化下兄弟 scope 同名变量跨进程互覆盖的静默数据损坏。`readVars`/`fromJSON` 按 `format_version` 分支兼容旧 v1（扁平塞 root）。scope 树的序列化/重建逻辑在 `ast-runtime.ts` VariableStore.toJSON/fromJSON，persistence 层只透传读写。
+> **vars.json format_version=2（2026-07-04）**：vars.json 从扁平变量字典（v1）升级为**完整 scope 树**（v2，结构与迁移见 [[exec-engine#^anc-exec-vars-scope-persist]]）——修复扁平序列化下兄弟 scope 同名变量跨进程互覆盖的静默数据损坏。
+>
+> `readVars`/`fromJSON` 按 `format_version` 分支兼容旧 v1（扁平塞 root）。scope 树的序列化/重建逻辑在 `ast-runtime.ts` VariableStore.toJSON/fromJSON，persistence 层只透传读写。
 
 **对外接口清单【封闭】** ^anc-provider-persistence-exports：
 
@@ -32,8 +34,11 @@ shared-providers 的 `PersistenceProvider` 契约（见 [[shared-providers#^anc-
 | `writeChildParams` | 函数 | persistence.ts | fan-out 时落盘某 child 的 params_for_child 到其子实例目录（engine 写，for-each worker 参数通道，见 [[parallel-execution#^anc-exec-parallel-foreach-worker]]；+kind 第四参 parallel/calls——call 子实例落 calls/<cid>,0020 修:原写死 parallel 且 engine 侧 dead import 从未调用） | stable |
 | `readSpec` | 函数 | persistence.ts | 读实例目录 spec.json 重建 AST（cli 跨进程恢复面——load 之外的轻量读取口） | stable |
 | `readChildParams` | 函数 | persistence.ts | worker init 按 cid 回读自己那份 params（engine 调，同上通道的读侧） | stable |
+| `writeAtomic` | 函数 | persistence.ts | 原子写文件（先写 .tmp、fsync、再 rename 覆盖）。FilePersistence 内部落快照用;engine 写命令参数文件也用它（`<父实例目录>/cmd_args/`,每次拼命令都覆盖,见 [[exec-engine#^anc-exec-cmd-args-file]]——hopissues/0097） | stable |
 
-> **内部（表外即内部）**：`writeAtomic`（原子写，被 FilePersistence 内部调）、`ensureStateDir` / `writeState` / `writeVars` / `writeSpec`（快照读写细节，仅 FilePersistence 内部调用。readSpec 不在此列——它在上表公开面,cli 跨进程恢复消费;2026-09-12 0088 批清双登矛盾,原文两处同时把它记成公开与内部）。**测试可达面口径**：内部件带 export 供 tests/ 直测（writeAtomic/writeState 被 persistence.test.ts import 属正当测试消费,不算越出内部边界——与 hop-cli 出口清单"测试可达面"同款口径,2026-09-12 补记）。
+> **内部（表外即内部）**：`ensureStateDir` / `writeState` / `writeVars` / `writeSpec`（快照读写细节，仅 FilePersistence 内部调用。readSpec 不在此列——它在上表公开面,cli 跨进程恢复消费;2026-09-12 0088 批清双登矛盾,原文两处同时把它记成公开与内部）。
+>
+> **测试可达面口径**：内部件带 export 供 tests/ 直测（writeState 被 persistence.test.ts import 属正当测试消费,不算越出内部边界——与 hop-cli 出口清单"测试可达面"同款口径,2026-09-12 补记）。
 >
 > **2026-08-01 清单补登**：`flattenVars` / `writeChildParams` / `readChildParams` 三者早已被 cli/engine 跨模块使用（各有完整注释与用途），但清单未登记 → anchor-audit 报 `symbol_not_public` 边界违规。核实为**清单滞后于实现**（清单增量引入时只列了主要符号），非代码越界，故补登记为公开接口。
 
@@ -43,4 +48,6 @@ shared-providers 的 `PersistenceProvider` 契约（见 [[shared-providers#^anc-
 - 职责边界：只管快照存取。crash recovery 的状态修复逻辑（running→pending 重置、branch 选择保留）属 Engine 业务，留在 `ExecutionEngine.resume()`。
 
 > **实装状态（2026-06-13）**：接口族已实装。`FilePersistence`/`MemoryPersistence` 于 persistence.ts，ExecutionEngine 经 `EngineOptions.persistence` 注入（不传则 stateDir→FilePersistence，再无则 MemoryPersistence 默认）。
-> **已登记债**：saveSnapshot 当前分 writeVars+writeState+writeSpec 三次 writeAtomic，相邻写之间崩溃窗口存在（合并单文件快照，见 [[todo/0002_DEBT-06-saveSnapshot双写崩溃窗口_open|DEBT-06]]）。HostConfig 完整恢复不经持久化——Provider 是运行时对象，由宿主 resume 时重新注入（DEBT-05,早期债——锚已随 TODO.md 退役,相关语境见 [[todo/0002_DEBT-06-saveSnapshot双写崩溃窗口_open|DEBT-06 卡]]触发条件）。
+> **已登记债**：saveSnapshot 当前分 writeVars+writeState+writeSpec 三次 writeAtomic，相邻写之间崩溃窗口存在（合并单文件快照，见 [[todo/0002_DEBT-06-saveSnapshot双写崩溃窗口_open|DEBT-06]]）。
+>
+> HostConfig 完整恢复不经持久化——Provider 是运行时对象，由宿主 resume 时重新注入（DEBT-05,早期债——锚已随 TODO.md 退役,相关语境见 [[todo/0002_DEBT-06-saveSnapshot双写崩溃窗口_open|DEBT-06 卡]]触发条件）。

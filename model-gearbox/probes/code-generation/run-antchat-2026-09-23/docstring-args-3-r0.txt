@@ -1,0 +1,101 @@
+```python
+import ast
+import re
+import sys
+
+def main():
+    path = sys.argv[1]
+    with open(path, 'r', encoding='utf-8') as f:
+        source = f.read()
+
+    if not source.strip():
+        sys.exit(0)
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as e:
+        print(f"1: Parse error: {e}")
+        sys.exit(1)
+
+    violations = []
+
+    def extract_docstring_and_params(node):
+        docstring = ast.get_docstring(node)
+        if docstring is None:
+            return None, set()
+
+        params = set()
+        all_args = list(node.args.posonlyargs) + list(node.args.args) + list(node.args.kwonlyargs)
+        for arg in all_args:
+            if arg.arg not in ('self', 'cls'):
+                params.add(arg.arg)
+        if node.args.vararg:
+            if node.args.vararg.arg not in ('self', 'cls'):
+                params.add(node.args.vararg.arg)
+        if node.args.kwarg:
+            if node.args.kwarg.arg not in ('self', 'cls'):
+                params.add(node.args.kwarg.arg)
+
+        return docstring, params
+
+    def is_under_nested_function(current_node, target_node):
+        for parent in reversed(target_node.parent_stack[:-1]):
+            if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return True
+        return False
+
+    def is_under_nested_class(current_node, target_node):
+        for parent in reversed(target_node.parent_stack[:-1]):
+            if isinstance(parent, ast.ClassDef):
+                return True
+        return False
+
+    def check_node(node):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name.startswith('_'):
+                return
+
+            if is_under_nested_function(node, node):
+                return
+
+            docstring, params = extract_docstring_and_params(node)
+            lineno = node.lineno
+
+            if docstring is None:
+                violations.append(f"{lineno}: {node.name} has no docstring")
+            else:
+                for param in params:
+                    pattern = r'(?<!\w)' + re.escape(param) + r'(?!\w)'
+                    if not re.search(pattern, docstring):
+                        violations.append(f"{lineno}: {node.name} docstring misses parameter {param}")
+
+        elif isinstance(node, ast.ClassDef):
+            if node.name.startswith('_'):
+                return
+
+            if is_under_nested_function(node, node):
+                return
+            if is_under_nested_class(node, node):
+                return
+
+            for child in ast.iter_child_nodes(node):
+                child.parent_stack = getattr(node, 'parent_stack', []) + [node]
+                check_node(child)
+            return
+
+        for child in ast.iter_child_nodes(node):
+            child.parent_stack = getattr(node, 'parent_stack', []) + [node]
+            check_node(child)
+
+    tree.parent_stack = []
+    check_node(tree)
+
+    if violations:
+        for v in violations:
+            print(v)
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+main()
+```

@@ -4,7 +4,9 @@
 	source_id: hopjit-tools
 	type: extract
 	last_sync: 2026-08-31T00:10+0800
-	note: spec 内容工具族模块设计（读/写/验三面+族总览）——2026-08-31 自 tools.md 拆出（作者定"文件工具、spectree工具，都应该成为模块"）。四锚原名随迁不改（^anc-exec-spec-tools-family / ^anc-exec-builtin-edit-tree-tool / ^anc-exec-builtin-read-tree-tool / ^anc-exec-builtin-validate-tool）。AST 核心 spec-tree-edit.ts 归 spec-ast 模块（2026-08-30 cd8c4d1 定——纯 AST 操作与 ast-helpers 同性质,出口登记在 spec-ast.md）,此处是工具壳契约。
+	note: spec 内容工具族模块设计（读/写/验三面+族总览）——2026-08-31 自 tools.md 拆出（作者定"文件工具、spectree工具，都应该成为模块"）。
+		四锚原名随迁不改（^anc-exec-spec-tools-family / ^anc-exec-builtin-edit-tree-tool / ^anc-exec-builtin-read-tree-tool / ^anc-exec-builtin-validate-tool）。
+		AST 核心 spec-tree-edit.ts 归 spec-ast 模块（2026-08-30 cd8c4d1 定——纯 AST 操作与 ast-helpers 同性质,出口登记在 spec-ast.md）,此处是工具壳契约。
 %%
 
 # spec 内容工具族（读/写/验）
@@ -28,11 +30,16 @@ tools 模块的 spec 内容工具组（装配层本体见 [[../tools]]——本�
 | `parse_json`（hop_python 内置函数,非工具）     | 解码   | 工具返回的 JSON 文本→结构值,body 里接工具输出用                                                                                     | [[../act-body#^anc-exec-parse-json]]            |                                  |
 | `subprocess.run`（hop_python 内置函数,非工具） | 外部命令 | 白名单命令行调用（argv 结构化,sandbox.runtime.available 白名单强制）——不属 spec 内容族,此处只给指针防找错文档                                        | [[../act-body#^anc-exec-subprocess-run]]        |                                  |
 
-**典型用法链**（hopbuild2 拼装步实战形态）：`read_spec_tree(skeleton)` 定位 → `replace_node`/`insert_node` 定向改 → `parse_json` 取回 spec_text → `validate_spec` 验 → write 落盘。编辑代数的上层裁定权威在 D44（[[../step-dispatcher]] replan 编辑序列条目——delete/replace/insert 三原子,未提及=保留;本工具的 insert 语义即其裁定①的兑现）;教学面见 [[../../tutorials/D11-维护spec的内置工具]]。
+**典型用法链**（hopbuild2 拼装步实战形态）：`read_spec_tree(skeleton)` 定位 → `replace_node`/`insert_node` 定向改 → `parse_json` 取回 spec_text → `validate_spec` 验 → write 落盘。
+编辑代数的上层裁定权威在 D44（[[../step-dispatcher]] replan 编辑序列条目——delete/replace/insert 三原子,未提及=保留;本工具的 insert 语义即其裁定①的兑现）;教学面见 [[../../tutorials/D11-维护spec的内置工具]]。
 
 ## 内置 spec 树编辑函数组【契约】 ^anc-exec-builtin-edit-tree-tool
 
-**函数化重构（2026-08-30 作者两连拍板）**：①"edit_spec_tree 的逻辑不成立，那些都是应该被调用的函数干的事情，而不是这么丑陋的挤在一起"——原单工具四操作靠 op 参数分发的形态废除，拆成**四个独立注册工具**（insert_node / replace_node / replace_children / renumber_steps），各自签名各自文档各自可调；②replan 编辑序列的机械拼装统一到同一组树编辑核心（见下"两层结构"与 [[../step-dispatcher]] D44 条目拼装段）——库内一套编辑代数一处实现。旧 `edit_spec_tree` 入口**废除不留兼容壳**（唯一真实调用点 hopbuild2 拼装步 body 随批迁移，0.x 未承诺稳定；留兼容壳=被否形态换门牌活着）。
+**函数化重构（2026-08-30 作者两连拍板）**：
+
+- ①"edit_spec_tree 的逻辑不成立，那些都是应该被调用的函数干的事情，而不是这么丑陋的挤在一起"——原单工具四操作靠 op 参数分发的形态废除，拆成**四个独立注册工具**（insert_node / replace_node / replace_children / renumber_steps），各自签名各自文档各自可调；
+- ②replan 编辑序列的机械拼装统一到同一组树编辑核心（见下"两层结构"与 [[../step-dispatcher]] D44 条目拼装段）——库内一套编辑代数一处实现；
+- 旧 `edit_spec_tree` 入口**废除不留兼容壳**（唯一真实调用点 hopbuild2 拼装步 body 随批迁移，0.x 未承诺稳定；留兼容壳=被否形态换门牌活着）。
 
 **两层结构**：
 
@@ -80,18 +87,28 @@ tools 模块的 spec 内容工具组（装配层本体见 [[../tools]]——本�
      ```
 
      **待办跟着它指的那个步骤走，不被中间插队的新步骤带偏。**同一份清单里若还有 `1 | 补充输入说明 | light`（指『取数』——它在插入点之前，编号没变，映射里没有 `"1"` 键）和 `root | 终检整棵树 | light`（`root` 指整棵树不指具体步骤），这两行原样保留。
-2. **工具入口**（src/tools.ts，四个独立注册工具）——各自薄文本壳，**行级手术形态**（hopissues/0048 作者拍定方案 A，契约细则见下"行级手术"节）：parse（全文或 spec_is_fragment 裸片段,**只用于定位与记账,不用于产出文本**）→ **片段节点打临时唯一号**（`__frag` 前缀——片段自带 1..n 相对号会与原树 step_id 撞号,撞号会把『片段相对号→最终号』污染进 renumber_map,进而让 syncWorkItems 误改写指向未移动步骤的队列项;与 dispatcher replan 拼装的 tagTemp 同法,2026-08-30 review 面二/面三同源实证后补）→ 调核心函数（AST 结构编辑,供重编号记账与合法性判定）→ renumberSteps → **从返回映射剔除临时键**（renumber_map 只含真实旧树号,『旧号→新号全映射』语义才成立）→ syncWorkItems → **在原文行数组上做行级手术产出文本**（不走 serializeSpec/serializeFragment 全文重建）。四工具返回形态一致 `{status, spec_text, renumber_map}`（传了 work_items 则多返回改写后的 work_items——TreeEditResult 四字段见下 HopType,work_items 是"传入才出现"的条件字段）。
+2. **工具入口**（src/tools.ts，四个独立注册工具）——各自薄文本壳，**行级手术形态**（hopissues/0048 作者拍定方案 A，契约细则见下"行级手术"节）。管线七步：
+   - parse（全文或 spec_is_fragment 裸片段,**只用于定位与记账,不用于产出文本**）；
+   - **片段节点打临时唯一号**（`__frag` 前缀——片段自带 1..n 相对号会与原树 step_id 撞号,撞号会把『片段相对号→最终号』污染进 renumber_map,进而让 syncWorkItems 误改写指向未移动步骤的队列项;与 dispatcher replan 拼装的 tagTemp 同法,2026-08-30 review 面二/面三同源实证后补）；
+   - 调核心函数（AST 结构编辑,供重编号记账与合法性判定）→ renumberSteps；
+   - **从返回映射剔除临时键**（renumber_map 只含真实旧树号,『旧号→新号全映射』语义才成立）→ syncWorkItems；
+   - **在原文行数组上做行级手术产出文本**（不走 serializeSpec/serializeFragment 全文重建）。
+   四工具返回形态一致 `{status, spec_text, renumber_map}`（传了 work_items 则多返回改写后的 work_items——TreeEditResult 四字段见下 HopType,work_items 是"传入才出现"的条件字段）。
 
 **四工具各自契约**：
 
-- `insert_node(spec_text: …, node_path: …, fragment: …[, spec_is_fragment: …][, work_items: …])`——片段插到 node_path 写定的序号位置，该位置原有步骤（及后继兄弟连同子树）自动后移，全局连锁重编号；嵌套层同法（如 2 的子层现有 2.1-2.3，插尾写 node_path="2.4"）。（insert 语义 2026-08-30 作者定："insert 直接写定序号就行"——原 insert_before/insert_after 双操作系未经拍板复活 D44 裁定①否掉的"add after"语义，已废；名字与 replace_node 对齐定 insert_node。）
-- `replace_node(spec_text: …[, node_path: …, fragment: …][, replacements: …][, spec_is_fragment: …][, work_items: …])`——占位叶子替换（2026-08-21 hopbuild2 压测补：replace_children 会把脚手架行本体留在树里）。批量 `replacements: [{node_path, fragment}]` 与单项二选一（批量在场忽略单项）——各目标按**调用前**步骤号定位，全部替换后统一重编号，目标须互不嵌套不重复（违约响亮拒不裸崩——嵌套判定是**主动的双向检查**:第一阶段解引用后对目标两两判祖先-后代关系,任一方向嵌套即拒;不靠『外层先执行内层恰好离树』的次序巧合,[内,外] 次序同样拒〔2026-08-30 review 实证该次序原静默吞掉内层编辑〕）。
+- `insert_node(spec_text: …, node_path: …, fragment: …[, spec_is_fragment: …][, work_items: …])`——片段插到 node_path 写定的序号位置，该位置原有步骤（及后继兄弟连同子树）自动后移，全局连锁重编号；嵌套层同法（如 2 的子层现有 2.1-2.3，插尾写 node_path="2.4"）。
+  - insert 语义 2026-08-30 作者定："insert 直接写定序号就行"——原 insert_before/insert_after 双操作系未经拍板复活 D44 裁定①否掉的"add after"语义，已废；名字与 replace_node 对齐定 insert_node。
+- `replace_node(spec_text: …[, node_path: …, fragment: …][, replacements: …][, spec_is_fragment: …][, work_items: …])`——占位叶子替换（2026-08-21 hopbuild2 压测补：replace_children 会把脚手架行本体留在树里）。
+  - 批量 `replacements: [{node_path, fragment}]` 与单项二选一（批量在场忽略单项）——各目标按**调用前**步骤号定位，全部替换后统一重编号，目标须互不嵌套不重复;
+  - 违约响亮拒不裸崩——嵌套判定是**主动的双向检查**:第一阶段解引用后对目标两两判祖先-后代关系,任一方向嵌套即拒;不靠『外层先执行内层恰好离树』的次序巧合,[内,外] 次序同样拒〔2026-08-30 review 实证该次序原静默吞掉内层编辑〕。
 - `replace_children(spec_text: …, node_path: …, fragment: …[, spec_is_fragment: …][, work_items: …])`——容器展开：节点行保留子树换血；node_path='root' 替换整个 Steps。
 - `renumber_steps(spec_text: …[, spec_is_fragment: …][, work_items: …])`——不改结构只重刷编号（修复错位草稿）。
 
 ### 行级手术：编辑落在原文行数组上,不做全文重建【契约】 ^anc-exec-tree-edit-line-surgery
 
-**为什么（hopissues/0048,2026-08-31 作者拍定方案 A）**：原形态"parse→改 AST→serializeSpec 全文重建"结构性有损——parser 在建 AST 前就丢弃了四类载体（`%% @trace %%` 头块 / `<!-- @a: anc-* -->` HTML 注释锚 / 声明行的多行续行注释 / `Goal:`·`Constraints:` 行式头形态），serialize 无从回写。实测对 hopkb 891 行真规约干跑一次 renumber_steps（理论零 diff 操作）丢 213 行。工具立项本意是"维护序号一致性"，修一处伤全文等于不可用于存量规约维护。
+**为什么（hopissues/0048,2026-08-31 作者拍定方案 A）**：原形态"parse→改 AST→serializeSpec 全文重建"结构性有损——parser 在建 AST 前就丢弃了四类载体（`%% @trace %%` 头块 / `<!-- @a: anc-* -->` HTML 注释锚 / 声明行的多行续行注释 / `Goal:`·`Constraints:` 行式头形态），serialize 无从回写。
+实测对 hopkb 891 行真规约干跑一次 renumber_steps（理论零 diff 操作）丢 213 行。工具立项本意是"维护序号一致性"，修一处伤全文等于不可用于存量规约维护。
 
 **手术底账（HopType）**——parse 后立的行级手术工作台账,四字段是契约四条的落地骨架：
 
@@ -113,13 +130,17 @@ struct: TreeEditSurgeryLedger        # 实现载体 src/tools.ts TreeEditParsed(
    - **编号改写**：重编号只改步骤行**行首编号 token**（含标题风 `### N.` 前缀形态），行内其余字节一律不碰；
    - **首尾原样**：Steps 区之前的全部行（标题/声明区/`%%` 块/任何东西）与 Steps 区之后的行原样进出，字节不动。
 3. **片段按原文字节插入**：fragment 的行进树时同样只改编号 token（相对号→最终号），缩进与注释原样保留（树结构由编号决定，缩进纯外观——parser 不看缩进建树）。
-4. **尾部叙事节钳位**：Steps 区之后的非关键字 `##` 节（任务卡的 `## 背景`/`## 处置记录` 等）在 parser 账面上归入末步行区间（section 边界所致），行级手术**把末步区间钳在第一个尾部 `##` 标题行之前**。节头判据两条与 parser 侧同构：①行内容 trim 后以 `## ` 开头才算节头（带前导空格的 `  ## 背景` 同判——parser 的节切分同样按 trim 后判,两侧不同构会让缩进的尾部标题钳不住）;②代码围栏内的 `## ` 行不判节头（逐行翻转围栏态,围栏内是内容不是结构）。编辑末步不得把叙事节一起搬走或删除。已知边界：末步自带的标题风契约分区（`## Task` 类,与叙事节文法不可分辨）同受钳位，此形态与树编辑工具混用时分区行留在原地不随步搬移，属接受的取舍（任务卡叙事节不丢权重更高）。
+4. **尾部叙事节钳位**：Steps 区之后的非关键字 `##` 节（任务卡的 `## 背景`/`## 处置记录` 等）在 parser 账面上归入末步行区间（section 边界所致），行级手术**把末步区间钳在第一个尾部 `##` 标题行之前**。
+   - 节头判据两条与 parser 侧同构：①行内容 trim 后以 `## ` 开头才算节头（带前导空格的 `  ## 背景` 同判——parser 的节切分同样按 trim 后判,两侧不同构会让缩进的尾部标题钳不住）;②代码围栏内的 `## ` 行不判节头（逐行翻转围栏态,围栏内是内容不是结构）;
+   - 编辑末步不得把叙事节一起搬走或删除。已知边界：末步自带的标题风契约分区（`## Task` 类,与叙事节文法不可分辨）同受钳位，此形态与树编辑工具混用时分区行留在原地不随步搬移，属接受的取舍（任务卡叙事节不丢权重更高）。
 
 **正反例**：无错位 spec 干跑 `renumber_steps` → 输出与输入**逐字节相同**（幂等是本契约的机检形态）＝正；往返后 `%% @trace` 块/HTML 注释锚/续行注释/行式 `Goal:` 任一蒸发＝反（回到重建病）；replace 末步后 `## 背景` 节消失＝反（钳位失效）。
 
 **engine 侧不适用**：`serializeSpec` 单向有损的既有警示不因此解除——engine 留存 rawSource 供重建的纪律照旧（本契约只管四件树编辑工具的文本产出通道）。dispatcher replan 的内存路径（AST 进 AST 出经 serializeFragment 生成展开片段）不在本契约面内——replan 产出的是**新生成**的步骤文本,无"保存量字节"命题。
 
-> **调用形态**：hop_python body 里工具调用**恒用命名参数**——每个实参带参数名（`insert_node(spec_text: full_text, node_path: "2", fragment: new_step)`；`name=value` 的 Python kwargs 形态等价）。裸位置传参会被解释器拒（报错文案"调用须用命名参数"——2026-08-31 review 核实况:该报错无 TOOL_EXEC_ERROR 前缀,文案自身可辨识,设计随实况改文不动代码）。上面签名里的方括号表示『可省略的参数』——省略就整个不写，写就带名字，没有裸传位置实参这个选项。
+> **调用形态**：hop_python body 里工具调用**恒用命名参数**——每个实参带参数名（`insert_node(spec_text: full_text, node_path: "2", fragment: new_step)`；`name=value` 的 Python kwargs 形态等价）。
+>
+> 裸位置传参会被解释器拒（报错文案"调用须用命名参数"——2026-08-31 review 核实况:该报错无 TOOL_EXEC_ERROR 前缀,文案自身可辨识,设计随实况改文不动代码）。上面签名里的方括号表示『可省略的参数』——省略就整个不写，写就带名字，没有裸传位置实参这个选项。
 
 **入参/返回（HopType）**：
 

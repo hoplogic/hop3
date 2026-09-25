@@ -45,6 +45,7 @@ HopJIT 分为引擎核心 + 两个驱动适配层，通过 Provider 接口解耦
 | ExecutionEngine | 状态机、变量作用域、retry/adaptive、None 传播 |
 | PromptAssembler | 6 层 context 组装、token 预算管理 |
 | BodyInterpreter（act-body 模块） | hop_python 受限编排语言：parser/解释器/内置函数，确定性执行零 LLM |
+| PySandbox（py-sandbox 模块） | Python 语法沙箱：模型写出的产物脚本按白名单静态审查,审过才由独立 python3 子进程执行（可叠加系统沙箱） |
 | 错误模型（shared-errors 模块） | 错误码枚举与分类——全组件共享词汇（共享层） |
 
 **复用模式适配**——CLI 进程壳 + 文件持久化：
@@ -202,7 +203,7 @@ CC（推理 + 工具执行，全程在场）
 
 | 出境通道 | 再解析层 | 转义手段 | 落点 |
 |---|---|---|---|
-| shell 命令（launch_command/join command，交 agent 照抄进 Bash） | shell 分词 | 路径/参数 `"${x}"` 双引号包裹 | engine.ts buildWorkerLaunchCommand/buildJoinCommand |
+| shell 命令（launch_command/init_command/stale_launch，交 agent 照抄进 Bash） | shell 分词与展开 | 路径 `"${x}"` 双引号包裹;**数据值（参数表、反馈文本）不进命令行**——引擎写进父实例目录 `cmd_args/` 下的文件,命令里只放 `"@<路径>"`（双引号内 shell 照样解释反引号与 `$`,JSON 转义管不住,hopissues/0097 实撞） | engine.ts buildDispatchLaunchCommand/buildCallProtocol（数据值落文件=cmdArgValue,[[docs/design/exec-engine#^anc-exec-cmd-args-file]]） |
 | hoplog YAMLL 写盘（main.yaml） | YAML 解析 | 过 `toYaml()`（引号/block scalar） | hoplog.ts 所有值字段 |
 | CLI 响应（返 driver 的 JSON） | JSON 解析 | `JSON.stringify`（禁手拼 JSON 串） | cli.ts output() |
 | prompt 注入（给 LLM 的 context） | LLM 读取 | 结构化分区/围栏，防截断混淆 | prompt.ts |

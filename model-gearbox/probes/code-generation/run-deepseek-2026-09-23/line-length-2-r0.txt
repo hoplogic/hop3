@@ -1,0 +1,28 @@
+```python
+import sys
+
+path = sys.argv[1]
+f = open(path, 'r', encoding='utf-8')
+lineno = 1
+bad = 0
+
+while 1:
+    line = f.readline()
+    if line == '':
+        break
+    if line.endswith('\n'):
+        line = line[:-1]
+        if line.endswith('\r'):
+            line = line[:-1]
+    length = len(line)
+    if length > 100:
+        print('line ' + str(lineno) + ': length ' + str(length) + ' exceeds 100')
+        bad = 1
+    lineno = lineno + 1
+
+f.close()
+
+if bad:
+    sys.exit(1)
+sys.exit(0)
+```

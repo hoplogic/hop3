@@ -1,0 +1,37 @@
+```python
+import ast
+import sys
+
+def check_file(path):
+    try:
+        f = open(path, 'r', encoding='utf-8')
+        source = f.read()
+        f.close()
+    except Exception:
+        print("Error reading file")
+        sys.exit(1)
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        print("Syntax error in file")
+        sys.exit(1)
+    violations = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+            length = node.end_lineno - node.lineno + 1
+            if length > 40:
+                violations.append((node.lineno, node.name, length))
+    if len(violations) > 0:
+        violations.sort()
+        for item in violations:
+            print("Line " + str(item[0]) + ": function '" + item[1] + "' length " + str(item[2]) + " exceeds 40")
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+if len(sys.argv) > 1:
+    check_file(sys.argv[1])
+else:
+    print("Usage: python script.py <file>")
+    sys.exit(1)
+```

@@ -1,0 +1,14 @@
+```python
+import sys
+
+path = sys.argv[1]
+text = open(path, 'r', encoding='utf-8').read()
+lines = text.splitlines(keepends=False)
+violations = 0
+for idx, line in enumerate(lines, start=1):
+    length = len(line)
+    if length > 100:
+        violations += 1
+        print(f"Line {idx}: {length} characters (exceeds 100)")
+sys.exit(0 if violations == 0 else 1)
+```

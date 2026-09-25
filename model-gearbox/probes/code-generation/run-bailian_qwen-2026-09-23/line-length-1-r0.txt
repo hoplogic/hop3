@@ -1,0 +1,29 @@
+```python
+import sys
+
+file_path = sys.argv[1]
+
+with open(file_path, 'r', encoding='utf-8') as f:
+    content = f.read()
+
+lines = content.splitlines()
+has_violation = False
+
+for idx, line in enumerate(lines):
+    if len(line) > 100:
+        print(f"Line {idx + 1}: exceeds 100 characters (length: {len(line)})")
+        has_violation = True
+
+# Check if the file ends with a newline
+if content and not content.endswith('\n'):
+    # The last line is not terminated by a newline, we need to check it separately
+    last_line = content.splitlines()[-1]
+    if len(last_line) > 100:
+        print(f"Line {len(lines) + 1}: exceeds 100 characters (length: {len(last_line)})")
+        has_violation = True
+
+if has_violation:
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

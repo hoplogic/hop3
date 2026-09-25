@@ -63,12 +63,29 @@ CM6 `foldService` 注册：步骤行的折叠域 = 该行行尾 → 下一个**�
 
 ## 落点高亮【契约】 ^anc-viz-mark-highlight
 
-CM6 装饰（`ViewPlugin` + `Decoration.mark`）：行尾 `→ traverse`/`→ verify`/`→ commit`/`→ hitl` 四标记着色（遍历=蓝/核验=绿/提交=橙/研判=紫——commit 用警示暖色:不可逆落点一眼可辨）。同色点复用于大纲项。**语法元素分族上色**（v0.5.0 扩）：步骤类型词五语义族——动脑（reason）蓝紫/动手可逆（act）青/把关族（check/confirm/ask）绿与 verify 落点同系/不可逆（commit）警示橙与落点同色/结构流控（subtask/loop/branch/case/call/break/continue/exit）灰蓝，双语词同族同色；数据流行前缀 `- ←` 青（入）/`+ →` 蓝紫（出）；头部关键字（Goal:/Constraints:/Inputs:/Outputs:/Types:/Id: 双语）洋红加粗——契约区一眼可辨；类型位（声明行 `name: type` 的 type 段）暗金——类型是接口承诺,与说明绿区分,按位置着色（Types 自定义类型词汇开放,词表白名单必漏）,限定声明上下文防普通列表误着；行内 `#` 说明**独立着色不淡化**（作者纠 v0.5.1——`#` 说明是写给后继执行 LLM 的接口文档、语义面契约要件『新定义变量的说明必选』,不是可有可无的注释;淡化斜体=把承重件当装饰,视觉语言撒谎）。颜色全部经 CSS 变量暴露（用户主题可覆盖）。
+CM6 装饰（`ViewPlugin` + `Decoration.mark`）：行尾 `→ traverse`/`→ verify`/`→ commit`/`→ hitl` 四标记着色（遍历=蓝/核验=绿/提交=橙/研判=紫——commit 用警示暖色:不可逆落点一眼可辨）。同色点复用于大纲项。本节四标记色与下方语法元素分族色在内的全部颜色经 CSS 变量暴露（用户主题可覆盖）。
+
+**语法元素分族上色**（v0.5.0 扩）：
+
+- 步骤类型词五语义族——动脑（reason）蓝紫/动手可逆（act）青/把关族（check/confirm/ask）绿与 verify 落点同系/不可逆（commit）警示橙与落点同色/结构流控（subtask/loop/branch/case/call/break/continue/exit）灰蓝，双语词同族同色；
+- 数据流行前缀 `- ←` 青（入）/`+ →` 蓝紫（出）；
+- 头部关键字（Goal:/Constraints:/Inputs:/Outputs:/Types:/Id: 双语）洋红加粗——契约区一眼可辨；
+- 类型位（声明行 `name: type` 的 type 段）暗金——类型是接口承诺,与说明绿区分,按位置着色（Types 自定义类型词汇开放,词表白名单必漏）,限定声明上下文防普通列表误着；
+- 行内 `#` 说明**独立着色不淡化**（作者纠 v0.5.1——`#` 说明是写给后继执行 LLM 的接口文档、语义面契约要件『新定义变量的说明必选』,不是可有可无的注释;淡化斜体=把承重件当装饰,视觉语言撒谎）。
 
 ## 阅读视图支持【契约】 ^anc-viz-reading-view
 
-编辑视图三能力归 CM6 扩展（含 **7+ 级井号前缀隐藏**——Live Preview 惯例:光标不在该行时 Decoration.replace 隐藏字面 `#######`,光标进入即显示可编辑性不丢;真机实撞:7+ 级不是 markdown 标题,渲染器不吃井号编辑视图照露）；**阅读视图走 markdown post-processor 管线**（另一条渲染路径，CM6 扩展不生效——真机首用实撞：7+ 级步骤在阅读视图渲染为字面 `#######` 段落+节点体圆点列表）。post-processor 把字面井号段落重塑为分级步骤行：隐藏井号前缀、按深度（编号段数）缩进、类型词与落点标记着色（同一 MARK_CLASS 色系）。大纲跳转在阅读视图同样工作（openFile eState.line 视图中立）。折叠不做进阅读视图（阅读视图无行折叠 UI 位——编辑视图专属能力，如实边界）。
+编辑视图三能力归 CM6 扩展（含 **7+ 级井号前缀隐藏**——Live Preview 惯例:光标不在该行时 Decoration.replace 隐藏字面 `#######`,光标进入即显示可编辑性不丢;真机实撞:7+ 级不是 markdown 标题,渲染器不吃井号编辑视图照露）。
+
+**阅读视图走 markdown post-processor 管线**（另一条渲染路径，CM6 扩展不生效——真机首用实撞：7+ 级步骤在阅读视图渲染为字面 `#######` 段落+节点体圆点列表）：
+
+- post-processor 把字面井号段落重塑为分级步骤行：隐藏井号前缀、按深度（编号段数）缩进、类型词与落点标记着色（同一 MARK_CLASS 色系）；
+- 大纲跳转在阅读视图同样工作（openFile eState.line 视图中立）；
+- 折叠不做进阅读视图（阅读视图无行折叠 UI 位——编辑视图专属能力，如实边界）。
 
 ## 分发布局【契约】 ^anc-viz-plugin-layout
 
-`editors/obsidian/` 目录：`manifest.json` + `main.ts` + `styles.css` + 独立 `package.json`/`esbuild` 构建（Obsidian 插件生态标准形态；不入引擎包 workspace——发布通道不同:引擎走 npm,插件走 Obsidian 社区插件目录/手动安装）。安装/卸载做进命令（作者定——手工拷贝/删目录=易错手工活）：`npm run install-vault -- <vault路径>`（build+三件拷入 `<vault>/.obsidian/plugins/hopspec/`）/`npm run uninstall-vault -- <vault路径>`（只删本插件目录——受管边界,vault 其余零触碰）;路径可经 `HOPSPEC_VAULT` 环境变量;非 vault 目标（无 .obsidian/）拒。识别器单测随目录自带，`npm test` 于该目录内跑——不并入根 vitest（依赖面隔离,根面 vitest.config 测试与覆盖率分母双排 editors/**——插件源留在覆盖率分母=以 0% 计入拉低引擎覆盖基线,0.4.0 发版闸实撞）。
+`editors/obsidian/` 目录：`manifest.json` + `main.ts` + `styles.css` + 独立 `package.json`/`esbuild` 构建（Obsidian 插件生态标准形态；不入引擎包 workspace——发布通道不同:引擎走 npm,插件走 Obsidian 社区插件目录/手动安装）。
+
+- 安装/卸载做进命令（作者定——手工拷贝/删目录=易错手工活）：`npm run install-vault -- <vault路径>`（build+三件拷入 `<vault>/.obsidian/plugins/hopspec/`）/`npm run uninstall-vault -- <vault路径>`（只删本插件目录——受管边界,vault 其余零触碰）;路径可经 `HOPSPEC_VAULT` 环境变量;非 vault 目标（无 .obsidian/）拒；
+- 识别器单测随目录自带，`npm test` 于该目录内跑——不并入根 vitest（依赖面隔离,根面 vitest.config 测试与覆盖率分母双排 editors/**——插件源留在覆盖率分母=以 0% 计入拉低引擎覆盖基线,0.4.0 发版闸实撞）。

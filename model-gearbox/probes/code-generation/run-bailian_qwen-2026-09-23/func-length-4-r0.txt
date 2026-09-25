@@ -1,0 +1,46 @@
+```python
+import ast
+import sys
+
+def check_function_lengths(file_path):
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        # If syntax error occurs, we can't properly analyze the file
+        # But according to requirements, we're only checking valid Python files
+        # So let's just continue with our logic - if there's a syntax error,
+        # it will be caught in AST processing
+        raise
+    
+    violations = []
+    
+    # Walk through all function definitions (including nested ones)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # Calculate the length of the function
+            func_start_line = node.lineno
+            
+            # Find the end line of the function by examining its body
+            func_end_line = node.end_lineno
+            
+            # Length is inclusive of both start and end lines
+            func_length = func_end_line - func_start_line + 1
+            
+            if func_length > 40:
+                violations.append((func_start_line, f"Function '{node.name}' is {func_length} lines long, exceeding the 40-line limit"))
+    
+    return violations
+
+file_path = sys.argv[1]
+violations = check_function_lengths(file_path)
+
+if violations:
+    for line_no, reason in violations:
+        print(f"Line {line_no}: {reason}")
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

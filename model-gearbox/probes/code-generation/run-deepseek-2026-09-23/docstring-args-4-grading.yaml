@@ -1,0 +1,8 @@
+- round: 0
+  outcome: truncated
+- round: 1
+  outcome: ran
+  public_pass: true
+  hidden_pass: true
+  hidden_failed: []
+  crashed_files: 0

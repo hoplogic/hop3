@@ -1,0 +1,21 @@
+```python
+import sys
+
+path = sys.argv[1]
+content = open(path, mode="rt", encoding="utf-8").read()
+lines = content.split("\n")
+file_length_ok = True
+if content == "":
+    sys.exit(0)
+line_number = 0
+for line_content in lines:
+    line_number += 1
+    line_length = len(line_content)
+    if line_length > 100:
+        file_length_ok = False
+        print("line %d: has length %d, exceeds 100" % (line_number, line_length), file=sys.stderr)
+if file_length_ok is True:
+    sys.exit(0)
+else:
+    sys.exit(1)
+```

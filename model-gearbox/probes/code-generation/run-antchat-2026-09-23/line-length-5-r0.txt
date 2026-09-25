@@ -1,0 +1,16 @@
+```python
+import sys
+f = open(sys.argv[1], 'r', encoding='utf-8')
+c = f.read()
+f.close()
+n = 1
+bad = False
+if not c:
+    sys.exit(0)
+for l in c.split('\n'):
+    if len(l) > 100:
+        print("Line %d: length %d exceeds 100 characters" % (n, len(l)))
+        bad = True
+    n += 1
+sys.exit(1 if bad else 0)
+```

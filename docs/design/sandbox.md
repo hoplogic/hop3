@@ -74,7 +74,8 @@ struct: SandboxConfig
 3. **DefaultToolProvider 只有 read/write，无 bash**——内置工具仅提供 `read`/`write` 两个可逆基础能力。bash/script 是高危工具，等价于放弃沙箱保护，仅 commit 步骤可用（`requires_commit: true`），且不建议使用。
 4. **act 逻辑都是受控代码**——act 步骤中 LLM 的唯一能力是从预注册工具列表选一个调用并传参，不是任意代码执行。沙箱完备性建立在"无任意代码执行"之上。
 5. **database 临时库 temp_databases 在 act 可写**——临时库可重建，写入可逆，因此允许 act 步骤自由读写；生产库写入不可逆，必须经 commit。这是"可安全重做"原则在数据库维度的具体落地。
-5b. **默认沙箱 denied 基线**（2026-08-08 语义审计 ❌ 后补契约;2026-08-27 #50 扩 .hoplog）：cli/mcp-server 构造的缺省 HostConfig 沙箱，denied 必须含 `['.env', '.env.*', '*.key', '*.pem', '.hopstate/**', '.hoplog/**']`——密钥/凭证/执行状态/执行日志（含变量值与 API 响应）即使在 workspace 内也默认拒读，显式配置可覆盖。两次实撞：原实现 denied=[] 使默认部署下凭证文件对 LLM read 工具可读；.hoplog 缺席使 act free 工具环的 LLM 可 listdir 逛日志树、read 几 MB 级 main.yaml 把自己上下文灌爆（dr19 实撞：灌到 1096042 tokens 超 1048576 上限 400 确定性死烧尽子树,同型复发 21 处——引擎内务区不是作业材料,LLM 读执行账本=自食尾巴）。
+5b. **默认沙箱 denied 基线**（2026-08-08 语义审计 ❌ 后补契约;2026-08-27 #50 扩 .hoplog）：cli/mcp-server 构造的缺省 HostConfig 沙箱，denied 必须含 `['.env', '.env.*', '*.key', '*.pem', '.hopstate/**', '.hoplog/**']`——密钥/凭证/执行状态/执行日志（含变量值与 API 响应）即使在 workspace 内也默认拒读，显式配置可覆盖。
+   - 两次实撞：原实现 denied=[] 使默认部署下凭证文件对 LLM read 工具可读；.hoplog 缺席使 act free 工具环的 LLM 可 listdir 逛日志树、read 几 MB 级 main.yaml 把自己上下文灌爆（dr19 实撞：灌到 1096042 tokens 超 1048576 上限 400 确定性死烧尽子树,同型复发 21 处——引擎内务区不是作业材料,LLM 读执行账本=自食尾巴）。
 
 6. **filesystem 读权限优先级 denied > confirm_required > workspace > allowed**——多个读权限规则冲突时，禁止规则优先于放行规则，确保密钥/敏感文件即使落在 workspace 或 allowed 范围内也被拦截。
 
@@ -167,12 +168,15 @@ network:
 struct: RuntimeSandbox
   Id: runtime-sandbox
   Fields:
-    - available: [line]  # subprocess.run 命令白名单——引擎强制(2026-08-29 语义升格,原"声明性文档"退役)
+    - available: [line]  # 命令白名单——引擎强制(2026-08-29 语义升格,原"声明性文档"退役)。两个消费口共用:body 的 subprocess.run + 工具面的 run_script(2026-09-22)
 ```
 
 ### 拦截规则【契约】
 
-- **available = hop_python `subprocess.run` 的命令白名单（2026-08-29 作者定 todo/0033,字段语义升格——原"可用运行时声明,文档性不校验"升为引擎强制;存量零破坏:该字段此前引擎零消费）**：body 里 `subprocess.run(argv)` 的 argv[0] 必须 ∈ available,否则运行期 TOOL_EXEC_ERROR 点名拒;**名单空/未配置=能力关死**（缺省安全——引擎不内置任何命令）。执行契约权威 [[act-body#^anc-exec-subprocess-run]]
+- **available = 引擎执行本地命令的唯一白名单（2026-08-29 作者定 todo/0033,字段语义升格——原"可用运行时声明,文档性不校验"升为引擎强制;存量零破坏:该字段此前引擎零消费）**：命令名（argv[0]）必须 ∈ available,否则运行期点名拒;**名单空/未配置=能力关死**（缺省安全——引擎不内置任何命令）。
+  - **两个消费口共用这一份名单（2026-09-22 随 run_script 批扩）**：① body 里的 `subprocess.run(argv)`——规约作者写死的命令,执行契约权威 [[act-body#^anc-exec-subprocess-run]];② 工具面的 `run_script(path, args?)`——执行步里模型按任务需要跑的脚本,**模型只供给脚本路径,解释器由引擎按扩展名定**（`.py` → `python3`）,契约权威 [[tools/run-script#^anc-exec-builtin-run-script]]。
+  - **为什么共用一份名单**：操作者只需在一处表达"这台机器上允许跑什么"。两个口的核对逻辑（含 hopjit 恒拒与两拒报文的配置指路）也是同一份实现,见 [[act-body#^anc-exec-command-primitive]];
+  - **run_script 的真实边界要如实认**：白名单管住的是解释器,管不住脚本内容能再 spawn 什么（一个 `.py` 脚本自己可以 `subprocess.call` 任何东西）。它的边界是两道人的授权叠加——操作者放行 `python3` + 规约作者在那一步写 `- 工具: run_script`。这是 spawn 通道的物理边界,与下面工程偏差同性质,不是 run_script 引入的新洞。
 - 白名单按命令名收口,参数不设白名单（参数是数据,参数列表制直接 spawn 不经 shell——注入无门）
 - 安装新包（pip install / npm install / apt install）→ 需 commit 步骤（操作者不应把包管理器放进白名单供 act 用——放了=自担 act 位可重跑后果,v1 无机器拦,见 act-body 工程偏差①）
 - 修改系统级依赖或全局配置 → 需 commit 步骤（同上）

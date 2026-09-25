@@ -1,0 +1,70 @@
+```python
+import ast
+import sys
+
+
+def main():
+    tree = ast.parse(open(sys.argv[1], encoding="utf-8").read())
+    violations = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name.startswith("_"):
+                continue
+            if not isinstance(node.body, list) or len(node.body) == 0:
+                violations.append((node.lineno, "no docstring"))
+                continue
+            first_stmt = node.body[0]
+            if not isinstance(
+                first_stmt, (ast.Constant, ast.Str)
+            ) and not (
+                isinstance(first_stmt, ast.Expr)
+                and isinstance(first_stmt.value, (ast.Constant, ast.Str))
+            ):
+                violations.append((node.lineno, "no docstring"))
+                continue
+            doc_node = (
+                first_stmt.value
+                if isinstance(first_stmt, ast.Expr)
+                else first_stmt
+            )
+            docstring = (
+                doc_node.value
+                if isinstance(doc_node, ast.Constant) and isinstance(
+                    doc_node.value, str
+                )
+                else getattr(doc_node, "s", None)
+            )
+            if docstring is None:
+                violations.append((node.lineno, "no docstring"))
+                continue
+            required = set(
+                a.arg
+                for a in node.args.args
+                if a.arg not in ("self", "cls")
+            )
+            required.update(a.arg for a in node.args.posonlyargs if a.arg not in ("self", "cls"))
+            if node.args.vararg is not None:
+                required.add(node.args.vararg.arg)
+            required.update(
+                a.arg
+                for a in node.args.kwonlyargs
+                if a.arg not in ("self", "cls")
+            )
+            if node.args.kwarg is not None:
+                required.add(node.args.kwarg.arg)
+            found = set()
+            for name in required:
+                pattern = r"(?<![a-zA-Z0-9_])" + re.escape(name) + r"(?![a-zA-Z0-9_])"
+                if re.search(pattern, docstring) is not None:
+                    found.add(name)
+            missing = required - found
+            for m in sorted(missing):
+                violations.append((node.lineno, "missing docstring argument: %s" % m))
+    if violations:
+        for lineno, reason in violations:
+            print("Line %d: %s" % (lineno, reason), file=sys.stderr)
+        sys.exit(1)
+
+
+main()
+```

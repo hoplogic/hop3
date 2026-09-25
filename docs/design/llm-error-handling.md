@@ -3,13 +3,13 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-08-31T19:45+0800
+	last_sync: 2026-09-26T00:02+0800
 	note: LLM 节点错误处理机制总览（2026-08-31 作者要求"应该有汇总的 design doc,设计上要考虑到 subtask-retry 完整的生命周期,以及 llm prompt 组装"——lack_of_info 死路等三路排查实证:教条面/解析面/承接面三份文档各自为政,没有一张图画出失败信号从模型嘴里到 failStep 的完整旅程,每一环的作者都以为别的环接住了）。枢纽文档:各机制权威留原锚点原位,本文只汇总。体例同 tool-channels。
 %%
 
 # LLM 节点错误处理机制总览
 
-> **模块版本**：llm-error-handling `v0.2.0`（2026-09-01）。枢纽文档——本文只汇总不定义，各环节条款权威在原锚点；冲突以权威为准。**逐版演进史归 git log**。
+> **模块版本**：llm-error-handling `v0.2.1`（2026-09-26）。本版=旅程表第 4 关补"正文疑似工具调用"附加提示一句（todo/0110 probe 3）。枢纽文档——本文只汇总不定义，各环节条款权威在原锚点；冲突以权威为准。**逐版演进史归 git log**。
 
 ## 文档结构与内容分级
 
@@ -28,7 +28,10 @@
 
 ## 为什么要这份文档【说明】
 
-2026-08-31 三路排查（reason/commit/ask-confirm-call）实证的结构性病根：**一个失败信号要活着走完"模型输出 → 解析 → 分流 → 承接 → 记账 → 重试供给"六站，每一站的条款住在不同文档里**（prompt-assembler 管教条、step-dispatcher 管解析与算子重试、exec-engine 管校验与升级链、shared-errors 管错误码），没有任何一份文档对整条旅程负责。实锤形态：lack_of_info 教学在发（prompt-assembler）、承接在场（exec-engine 早判+dispatcher 分流），但**解析站把键杀了**（parseStepOutput 按声明 schema 收键，设计写了"自动追加可选字段"没人实装）——三份文档各自都"对"，链条整体是死的。本文的职责：把六站画在一张表上，每站标权威锚，新增/修改任何一站时先来这里看上下游。
+2026-08-31 三路排查（reason/commit/ask-confirm-call）实证的结构性病根：**一个失败信号要活着走完"模型输出 → 解析 → 分流 → 承接 → 记账 → 重试供给"六站，每一站的条款住在不同文档里**（prompt-assembler 管教条、step-dispatcher 管解析与算子重试、exec-engine 管校验与升级链、shared-errors 管错误码），没有任何一份文档对整条旅程负责。
+
+- 实锤形态：lack_of_info 教学在发（prompt-assembler）、承接在场（exec-engine 早判+dispatcher 分流），但**解析站把键杀了**（parseStepOutput 按声明 schema 收键，设计写了"自动追加可选字段"没人实装）——三份文档各自都"对"，链条整体是死的；
+- 本文的职责：把六站画在一张表上，每站标权威锚，新增/修改任何一站时先来这里看上下游。
 
 ## 失败信号的完整旅程【说明——each 站权威在锚】
 
@@ -39,7 +42,7 @@ LLM 响应从收到到定稿，按序过以下关卡。**每一关只有三种�
 | 1 | **截断闸** | stop_reason=max_tokens（thinking 烧穿/工具参数半截） | 抛 OUTPUT_TRUNCATED → 算子级重试 | [[step-dispatcher#^anc-exec-output-truncation-loud]] |
 | 2 | **解析阶梯**（parseStepOutput） | 形态噪声：围栏包裹/散文导语+围栏/散文+裸 YAML 尾部键块/思考散文+尾部自标签；**全空响应**（第四形态,方向相反——内容真缺不放行） | 全空 → 抛 EMPTY_OUTPUT 算子级重试（`^anc-exec-output-empty-loud`）；形态噪声三档单解+单输出尾部收窄，解出即放行（内容完好提取层不判死）；解不出回退逐行，仍无 → 键落 null 进 4 | [[step-dispatcher#^anc-exec-output-fence-content-retry]] / `^anc-exec-output-tail-yaml-retry` / 单输出自标注 `^anc-exec-output-parse-self-labeled` |
 | 3 | **语义性自报分流**（两通道：lack_of_info 仅 reason / tool_failure 归 reason+无 body act） | 模型自报"信息不足无法推理"（lack_of_info：材料本来就缺）或"工具故障无法完成本步"（tool_failure：取材料/干活的手段坏了——语义分界，两键不互替） | lack_of_info——standalone：有 knowledge_provider → 补充检索重跑一次，仍缺 → failStep(kind='lack_of_info')；无 provider → 直接 failStep(kind='lack_of_info')。tool_failure——两模式恒 failStep(kind='tool_failure')（承接=容器缺省重试治瞬时故障，无检索半边）。两通道同点：standalone 解析前置探测（extractSelfReportKey 公共体，键活过解析站）+ engine.completeStep 早判（先于 schema 校验）→ failStep 携各自 kind | lack_of_info：本文 `^anc-exec-lack-of-info-chain`；tool_failure：[[step-dispatcher#^anc-exec-tool-failure-report]]（五站同构，站位对照见 lack_of_info 链节尾注）；早判 [[exec-engine#^anc-exec-none-propagation]] |
-| 4 | **schema 校验+恢复阶梯+归一**（validateOutputValues/recoverOutputValues/coerceOutputValues 不动点循环） | 缺键/null/类型谎报/自嵌套壳/跨类型值 | 恢复得出真值 → 放行留痕（warn）；恢复不了 → SCHEMA_MISMATCH → 算子级重试（注入形态反馈）；耗尽 → failStep(kind='error') | [[exec-engine#^anc-exec-output-fence-recovery]] / `^anc-exec-output-coerce` |
+| 4 | **schema 校验+恢复阶梯+归一**（validateOutputValues/recoverOutputValues/coerceOutputValues 不动点循环） | 缺键/null/类型谎报/自嵌套壳/跨类型值 | 恢复得出真值 → 放行留痕（warn）；恢复不了 → SCHEMA_MISMATCH → 算子级重试（注入形态反馈）；耗尽 → failStep(kind='error')。被拒且本步终轮正文里有疑似工具调用文字（如 `<tool_call>bash`）时，重做反馈与耗尽原因各在原文后追加一段条件式提示（工具在不在本步可用清单、可用的有哪些），通过校验的产出不碰 | [[exec-engine#^anc-exec-output-fence-recovery]] / `^anc-exec-output-coerce` / 附加提示 [[step-dispatcher#^anc-exec-text-toolcall-hint]] |
 | 5 | **check 判定**（业务把关） | 判 false | failStep(reason='CHECK_FAILED: '+说明槽) → 容器升级链 | [[exec-engine]] check 节 |
 | 6 | **容器升级链**（failStep → 最近 subtask/case retry） | 一切 failStep | 预算内 → 带反馈重跑（反馈进 L5，见下节）；耗尽 → adaptive 重规划 / 传播 / on fail 兜底 | [[exec-engine#^anc-exec-retry-adaptive]] |
 | 旁 | **API 层错误**（限流/网络/超时/认证） | 传输层故障，非产出问题 | 分类重试（网络 6 次退避）；网络耗尽 → paused(network) 不 fail（步骤回置） | [[step-dispatcher#^anc-exec-api-retry]] / `^anc-exec-network-pause` |
@@ -63,7 +66,13 @@ LLM 响应从收到到定稿，按序过以下关卡。**每一关只有三种�
 
 **全链测试契约**：必须有从**响应文本**起步的全链钉（文本 → parseStepOutput → hasLackOfInfo → failStep 且 fail_kind='lack_of_info'），单/多输出各一，含"思考散文+lack_of_info 尾键"形态；直喂 completeStep 的钉只护第 5 站，护不住 2-4 站。
 
-**tool_failure 通道的五站对照**（[[step-dispatcher#^anc-exec-tool-failure-report]] 2026-09-01——与本链同构，站位逐一对应）：教条站=L4 工具清单教条句（[[prompt-assembler#^anc-exec-tool-manifest-supply]] 第 4 面——真身档渲染，实际只有无 body act 组清单）+ driver 执行规则 reason 段与无 body act 段；解析站=extractSelfReportKey 前置探测（与 extractLackOfInfo 同一公共体——reason 路径与工具循环终轮各探一次）；分流站=无检索半边，探中即返 `{tool_failure: 值}`；承接站=completeStep 早判（reason + 无 body act；commit 不设——作者定"commit必须通过body"，B7 error 级下无 body commit 进不了引擎，通道天然够不着）。语义分界教学：缺信息（材料本来就没有）走 lack_of_info、工具故障（取材料的手段坏了）走 tool_failure——driver 教条明写两出口不互替。
+**tool_failure 通道的五站对照**（[[step-dispatcher#^anc-exec-tool-failure-report]] 2026-09-01——与本链同构，站位逐一对应）：
+
+- 教条站=L4 工具清单教条句（[[prompt-assembler#^anc-exec-tool-manifest-supply]] 第 4 面——真身档渲染，实际只有无 body act 组清单）+ driver 执行规则 reason 段与无 body act 段；
+- 解析站=extractSelfReportKey 前置探测（与 extractLackOfInfo 同一公共体——reason 路径与工具循环终轮各探一次）；
+- 分流站=无检索半边，探中即返 `{tool_failure: 值}`；
+- 承接站=completeStep 早判（reason + 无 body act；commit 不设——作者定"commit必须通过body"，B7 error 级下无 body commit 进不了引擎，通道天然够不着）；
+- 语义分界教学：缺信息（材料本来就没有）走 lack_of_info、工具故障（取材料的手段坏了）走 tool_failure——driver 教条明写两出口不互替。
 
 ## subtask-retry 生命周期与 prompt 供给面【说明——权威在各锚】
 

@@ -32,7 +32,9 @@
 
 ## 为什么要这个工具【决策】
 
-缘起：anchor-audit spec 做 standalone 化时连跑十趟、撞出九个坑（详见任务卡与 git log 9cd982eb/27c78b33），作者问"怎么这么多问题""validate都没用么"。九坑归类后发现一半的坑**静态文法根本判不了**——它们的病理是"步骤说明文字教的动作 × 目标执行环境的真实能力面"对不上：说明教 standalone 判官"用 test -s 判文件"（判官没有文件工具）、说明教 LLM 亲手转写 395 条锚点清单（必烧穿 max_tokens）、body 里的命令依赖环境里没有的库。这些都要**理解说明的语义、对照执行环境的能力面**才能判——是推理活，不是文法活。
+缘起：anchor-audit spec 做 standalone 化时连跑十趟、撞出九个坑（详见任务卡与 git log 9cd982eb/27c78b33），作者问"怎么这么多问题""validate都没用么"。
+
+九坑归类后发现一半的坑**静态文法根本判不了**——它们的病理是"步骤说明文字教的动作 × 目标执行环境的真实能力面"对不上：说明教 standalone 判官"用 test -s 判文件"（判官没有文件工具）、说明教 LLM 亲手转写 395 条锚点清单（必烧穿 max_tokens）、body 里的命令依赖环境里没有的库。这些都要**理解说明的语义、对照执行环境的能力面**才能判——是推理活，不是文法活。
 
 作者拍板（2026-09-01，两拍逐字）：
 
@@ -73,7 +75,11 @@ Constraints:
 - 不阻断:产出建议性风险报告,不设强制闸
 ```
 
-**环境事实的供给方式**（硬约束二的实现细节）：执行模式工具面与写域规则**写死在知识文档里作为教材**（`scripts/deep-validate/deep-validate-knowledge.md` 环境事实教材节——standalone 十件工具清单照 DefaultToolProvider 形态抄、写域规则条款照 [[tools/file-tools#^anc-exec-write-scope]] 抄）；命令白名单是项目级事实，经备料步 read 项目 `hopjit.yaml` 取（文件可缺席，缺席=零白名单如实入料）。教材是**快照**，引擎工具面演进后须刷新（刷新义务见判据台账管理节）。
+**环境事实的供给方式**（硬约束二的实现细节）：
+
+- 执行模式工具面与写域规则**写死在知识文档里作为教材**（`scripts/deep-validate/deep-validate-knowledge.md` 环境事实教材节——standalone 十件工具清单照 DefaultToolProvider 形态抄、写域规则条款照 [[tools/file-tools#^anc-exec-write-scope]] 抄）；
+- 命令白名单是项目级事实，经备料步 read 项目 `hopjit.yaml` 取（文件可缺席，缺席=零白名单如实入料）；
+- 教材是**快照**，引擎工具面演进后须刷新（刷新义务见判据台账管理节）。
 
 ## 关键逻辑（HopSop）【契约】 ^anc-meta-deep-validate-sop
 

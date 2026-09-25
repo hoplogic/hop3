@@ -32,26 +32,26 @@ Outputs:
 
 ### 1. [subtask retry=2] 判定：顺序——能不能按明确的先后段落拆（判定+行号覆盖机械核同一事务,漏行打回重产计划）
 + → seq_hit: bool  # 顺序判定命中与否（判据见 1.1 执行说明）
-+ → seq_plan: text  # 命中时=子节点清单,每行"任务描述 | 原文行号段 | 类型或 NL"（任务描述=一句概括;行号段从 node_source 行首号直接读,形如 L120-L185,不连续用 + 连接）;未命中时=一句为什么不明确
++ → seq_plan: text  # 命中时=子节点清单,每行"任务描述 | 原文行号段 | 类型或 NL"（任务描述=一句概括;行号段从 node_source 行首号直接读,形如 L120-L185,单行引用写 L27 即可〔等价 L27-L27〕,不连续用 + 连接——机械对账按 + 拆成独立段各自核;无流程语义行免归属不入对账——纯空白行/裸代码围栏行〔```〕/markdown 标题行〔#起头〕/纯框线行〔ASCII 框绘字符〕/框内全大写横幅行〔│ INCIDENT RESPONSE │这类,剥框线后无小写字母〕,都是排版与导航记号,动作不住在里面）;未命中时=一句为什么不明确
 
 #### 1.1. [reason] 顺序判定并产分拆计划
-- ← node_task, node_source, parent_context, depth, max_depth, header_final
+- ← node_task, node_source, parent_context, depth, max_depth, header_final, judgement_log
 + → seq_hit: bool  # 顺序判定命中与否（判据见下方执行说明）
 + → seq_plan: text  # 同容器头声明——命中=计划清单,未命中=一句理由
 
 只回答"能不能按明确的先后段落拆"这一个问题。判据逐条：
 
-- **命中**：原文有明确的先后段落序——"先…再…"的显式衔接,或段落天然承接;
+- **命中**：原文有明确的先后段落序——"先…再…"的显式衔接,或段落天然承接（阶段标题排队——Phase 1/2/3、"分诊→沟通→缓解→复盘"这类编号或箭头串——就是最显白的先后段落序,认出了阶段就是命中）;
 - **"做X并核验,不合格就重做"也算命中**：切成干活段+验收段（这是 subtask-check-retry 的事务形态,不算含糊）;
-- **不命中**：段落边界含糊、先后顺序有歧义;
-- **零进展不算命中**：方案里只剩一个 NL 子节点、且它的范围和本节点几乎一样大——这样递归会对同一段落无限重拆,判 false 落下一个判定。
+- **不命中只有四种,判 false 必须点名其一**——plan 槽首行写 `不命中: <判据名>`,判据名只许取:**边界含糊**（段落之间分不出先后,或同一内容属于哪段有歧义——须指认原文哪两段分不开）/ **零进展**（方案里只剩一个 NL 子节点且范围和本节点几乎一样大——递归会无限重拆）/ **小节点**（原文少于约 800 字,不值得再拆）/ **材料节点**（整个范围是被动作使用的材料——表格/模板/清单,没有动作序列可切）。说明从第二行起写,须指认原文特征（行号或原句）;
+- **四条全不成立,结论就是命中**——"原文结构复杂""拆分会损失语义完整性""更适合按别的结构拆"都不是判据:复杂恰是要拆的理由（拆完每段就不复杂了,切段规矩管怎么拆好）,语义完整性由行号全覆盖保证（每行都有归属,不存在拆丢),别的结构归它自己的判定步管——本步只答本题。你识别出了多个阶段/多个段落,却想判 false？先对着四条清单找:哪条成立？一条都套不上,那就是命中,别发明第五条。
 
 切段规矩：
 
 - **计划必须覆盖原文全部行——行号段并集当场对账**：把清单各条的行号段并起来,对照 node_source 的行号全集做减法——每一行都要有归属条目,漏行=那段流程执行时不会发生。对账是行号算术不是语义搜检：范围标记就是行号段,并集盖没盖住全部行一算便知（下游机械对账还会再算一遍同一道减法,漏行/越界当场打回——你在产计划时先自己算,省一轮打回）。**任务描述只写一句概括**,动作细节不抄进描述——切片按行号机械提取逐字保真,子层拿到的切片里动作清单完整在场,子层骨架对照切片自查覆盖（历史沿革:旧形态曾要求"每个规定动作单独确认落进某条计划的任务描述",清单膨胀成几百字点名清单;行号化后覆盖性由行号并集保证,动作级对账下移子层——子层有权修自己骨架,查出漏项当场补,不存在"无权修计划"的死锁）。有缺口当场补条目或并入邻条,**不许带缺口交出去**。材料节（表格/清单/模板）也要有行号归属——归属形式是并入消费它的条目的行号段;
 - **一次拆分不超过 5 个子节点,范围内尽量当场拆到位**——能定型的子节点直接写类型,不切成两半留 NL 等下一层;**本节点原文少于约 800 字的,不再分拆**（整节点判 false 落叶,走叶子分型按三件套落定——小节点再递归一层的成本比直接写完还高;这是主动停拆判据不只是防切香肠下限,详见知识库"拆分粒度四条硬规则"）;**本节点 depth 距 max_depth 只剩一层时,倾向当场全部定型、不留 NL 占位**——留了占位,子层片段的顶层步骤就落在超限层,会被 split-structure 1.3 深度闸机械打回（教学在此,硬闸在机械检;定型不了的直接落自然语言步骤,不再递归）;
 - **只切流程,材料不拆**——流程=要执行的动作序列;材料=被动作使用的内容（规格/示例/模板/清单）,不进子节点清单但不丢,随所属步骤的执行说明引用走;一段里两种成分并存时,只把动作切出来（概念与实例见注入的知识库节）;**材料段与附属文件里的门禁句例外**——"必须…才能/不得…除非/通过…后方可"这类有过/不过语义的句子是流程性内容,所在段落再像材料也要让它有行号归属、后续拎成显式 check 落点（细节留材料,拎的只是把关句）。**门禁与排障心法分得开**：同是文件尾清单,有过/不过语义的是门禁要拎;"遇到 X 可以试试 Y"的经验心法是参考材料,随执行说明引用即可不拎——按语义分不按位置分;
-- **计划条目点名具体外部工具时,先对照 header_final.tools_available**——工具在清单内才可写进计划;不在清单内（含清单为空）,这段动作就是作者在对齐门裁掉的能力,按"header_final 盖过原文"跳过该段,记 log_notes 一条"原文含 X,已按对齐契约裁剪"（实撞:tools_available 已被作者清空,计划仍写"用 Puppeteer 导出"——下游骨架照计划成文无权自裁,被裁能力一路活进最终产物）;
+- **计划条目点名具体外部工具时,先对照 header_final.tools_available**——工具在清单内才可写进计划;不在清单内（含清单为空）,这段动作就是作者在对齐门裁掉的能力（实撞:tools_available 已被作者清空,计划仍写"用 Puppeteer 导出"——下游骨架照计划成文无权自裁,被裁能力一路活进最终产物）。**被裁段落的行号归属走"裁剪条目"**,格式固定:`已裁剪 | L<起>-L<止> | 原文含 <能力名>,按对齐契约不产步骤,记台账`——行号有归属（覆盖对账过）,条目不产任何步骤（骨架层见"已裁剪"开头即整条跳过,不判缺口不判越界）。**两头都不许**:把被裁能力写成执行条目=越界;干脆不写这段行号=漏行——裁剪条目是唯一正解（实撞:连接器段 L140-L153 盖=被判越界、不盖=被判漏行,模型在两堵墙间烧掉 31 个子实例——出口就是这条格式,照抄）;
 - 含不可逆动作/达标要求的段落：commit 段单列、放在验收段之后（形态细则归 split-structure,此处只管切段）;**门禁+补救动作的复合句**（"抽查发现系统性错误后重跑同类全部记录"这类判定与补救连写的句子）——判定半边拎成 check,补救半边优先落 retry 容器回路（check 不过带反馈整组重跑,补救语义由重跑承载）;容器粒度粗于原文动作粒度时如实记研判点台账,不硬造步骤也不静默丢弃;
 - 子节点"当场可定型写类型"从紧：一步一动作、描述一两句装得下、无内部交互闸门,才直接写类型;**阶段级段落（含多个规定子步骤/问人闸门/复合序）必标 NL** 交给递归——标单个类型等于把一章压成一行;拿不准标 NL。
 
@@ -63,24 +63,37 @@ Outputs:
 + → seq_cov_ok: bool  # 判定槽（未命中恒过——无计划即无对账对象）
 + → seq_cov_note: text  # 说明槽（坏段/漏行/越界清单回填,重跑轮重产计划）
 
-纯机械判定,body 由引擎直接执行、不经 LLM。计划各条行号段并集必须盖住 node_source 全部行：从计划文本扫出全部 `L<起>-L<止>` 形态的行号段,与 node_source 各行行首号做减法——漏行=那段原文没有归属条目,下游那段流程不会被翻译;越界=引用了本节点原文里不存在的行号,切片会切空。命中却扫不出任何行号段、或段格式坏（非 L数字-L数字）同判不过：
+纯机械判定,body 由引擎直接执行、不经 LLM。双判:**命中路**核行号覆盖——计划各条行号段并集必须盖住 node_source 全部行：从计划文本扫出全部 `L<起>-L<止>` 形态的行号段,与 node_source 各行行首号做减法——漏行=那段原文没有归属条目,下游那段流程不会被翻译;越界=引用了本节点原文里不存在的行号,切片会切空。命中却扫不出任何行号段、或段格式坏（非 L数字-L数字）同判不过。**未命中路**核封闭形态——plan 首行必须是 `不命中: <列举判据名>`（全角冒号归一后核）,判据名不在枚举内=自造判据当场打回（D100 枚举闸——判 false 不再是自由文本）：
 > ```hop_python
-> toks = [strip(t) for t in split(replace(replace(seq_plan, "|", " "), "\n", " "), " ")]
+> plain = replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(seq_plan, "|", " "), "\n", " "), "+", " "), "(", " "), ")", " "), "（", " "), "）", " "), ",", " "), "，", " "), "、", " "), ":", " "), "：", " "), "[", " "), "]", " "), "【", " "), "】", " ")
+> toks = [strip(t) for t in split(plain, " ")]
 > raw_segs = [t for t in toks if startswith(t, "L") and "-L" in t]
 > stripped = [replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(s, "0", ""), "1", ""), "2", ""), "3", ""), "4", ""), "5", ""), "6", ""), "7", ""), "8", ""), "9", "") for s in raw_segs]
 > halves = [split(s, "-") for s in raw_segs]
 > well_formed = [len(h) == 2 and len(strip(replace(h[0], "L", ""))) > 0 and len(strip(replace(h[1], "L", ""))) > 0 for h in halves]
-> segs = [raw_segs[i] for i in range(len(raw_segs)) if stripped[i] == "L-L" and well_formed[i]]
+> singles = [t for t in toks if startswith(t, "L") and "-" not in t and len(t) > 1 and replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(t, "0", ""), "1", ""), "2", ""), "3", ""), "4", ""), "5", ""), "6", ""), "7", ""), "8", ""), "9", "") == "L"]
+> segs = [raw_segs[i] for i in range(len(raw_segs)) if stripped[i] == "L-L" and well_formed[i]] + [s + "-" + s for s in singles]
 > bad_segs = [raw_segs[i] for i in range(len(raw_segs)) if stripped[i] != "L-L" or not well_formed[i]]
 > src_nums = [int(split(split(l, ":")[0], "L")[1]) for l in split(node_source, "\n") if startswith(l, "L") and ":" in l]
+> src_lines = [l for l in split(node_source, "\n") if startswith(l, "L") and ":" in l]
+> contents = [strip(replace(strip(l), split(l, ":")[0] + ":", "")) for l in src_lines]
+> boxless = [replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(c, "│", ""), "─", ""), "┌", ""), "┐", ""), "└", ""), "┘", ""), "├", ""), "┤", ""), "═", ""), "║", "") for c in contents]
+> nolower = [replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(b, "a", ""), "b", ""), "c", ""), "d", ""), "e", ""), "f", ""), "g", ""), "h", ""), "i", ""), "j", ""), "k", ""), "l", ""), "m", ""), "n", ""), "o", ""), "p", ""), "q", ""), "r", ""), "s", ""), "t", ""), "u", ""), "v", ""), "w", ""), "x", ""), "y", ""), "z", "") for b in boxless]
+> blank_nums = [int(split(split(src_lines[i], ":")[0], "L")[1]) for i in range(len(src_lines)) if contents[i] == "" or startswith(contents[i], "```") or startswith(contents[i], "#") or strip(boxless[i]) == "" or (startswith(contents[i], "│") and nolower[i] == boxless[i]) or (startswith(contents[i], ">") and not ("必须" in contents[i]) and not ("不得" in contents[i]) and not ("除非" in contents[i]) and not ("才能" in contents[i]) and not ("must" in lower(contents[i])) and not ("never" in lower(contents[i])))]
 > seg_starts = [int(split(split(s, "-")[0], "L")[1]) for s in segs]
 > seg_ends = [int(split(split(s, "-")[1], "L")[1]) for s in segs]
-> missing = [n for n in src_nums if not any([(seg_starts[i] <= n) and (n <= seg_ends[i]) for i in range(len(segs))])]
+> missing = [n for n in src_nums if (n not in blank_nums) and not any([(seg_starts[i] <= n) and (n <= seg_ends[i]) for i in range(len(segs))])]
 > alien = [segs[i] for i in range(len(segs)) if (seg_starts[i] not in src_nums) or (seg_ends[i] not in src_nums)]
 > # @a: anc-build-shallow-split —— D92 迭代闸豁免判(D93 勘误:原对 seq_hit 的赋值是死写——check 步只收割声明输出,变量空间不回写;闸真身在 case 条件位,此处仅算覆盖对账豁免——闸压住的轮次结构路不走,计划质量无对账义务)
 > gated_seq_hit = seq_hit and (iteration <= 2)
-> seq_cov_ok = (not gated_seq_hit) or (len(raw_segs) > 0 and len(bad_segs) == 0 and len(missing) == 0 and len(alien) == 0)
-> seq_cov_note = "" if seq_cov_ok else ("计划里扫不出任何行号段——每条计划的范围位必须写 L<起>-L<止> 形态,行号从 node_source 行首直接读" if len(raw_segs) == 0 else "") + (" | 格式坏的行号段(须 L数字-L数字 形态): " + join(bad_segs, ", ") if bad_segs else "") + (" | 无归属的原文行号(漏行——补条目或并入邻条): " + str(missing) if missing else "") + (" | 越界行号段(引用了本节点原文没有的行): " + join(alien, ", ") if alien else "")
+> cov_ok = (not gated_seq_hit) or (len(raw_segs) + len(singles) > 0 and len(bad_segs) == 0 and len(missing) == 0 and len(alien) == 0)
+> # @a: anc-build-judge-closure —— D100 枚举闸:判 false 首行须"不命中: <列举判据名>",自造判据打回
+> plan_head = strip(split(replace(seq_plan, "：", ":"), "\n")[0])
+> false_form_ok = seq_hit or (iteration > 2) or (startswith(plan_head, "不命中:") and any([n in plan_head for n in ["边界含糊", "零进展", "小节点", "材料节点"]]))
+> plan_entries = [l for l in split(seq_plan, "\n") if len(strip(l)) > 1 and any([startswith(strip(l), d) for d in ["1", "2", "3", "4", "5", "6", "7", "8", "9"]]) and not ("已裁剪" in l)]
+> too_many_entries = gated_seq_hit and len(plan_entries) > 5
+> seq_cov_ok = cov_ok and false_form_ok and (not too_many_entries)
+> seq_cov_note = "" if seq_cov_ok else ("计划里扫不出任何行号段——每条计划的范围位必须写 L<起>-L<止> 形态,行号从 node_source 行首直接读" if gated_seq_hit and len(raw_segs) == 0 else "") + (" | 格式坏的行号段(须 L数字-L数字 形态): " + join(bad_segs, ", ") if gated_seq_hit and bad_segs else "") + (" | 无归属的原文行号(漏行——把行号写进某条条目的行号位,区间 L<a>-L<b> 或单行号 L<n> 皆可;被裁能力段与纯导航行的归属写裁剪条目「已裁剪 | L<起>-L<止> | 原因」;散文声明『已归入』不算数,机器只读行号 token): " + join([strip(l) for l in split(node_source, "\n") if startswith(l, "L") and ":" in l and int(split(split(l, ":")[0], "L")[1]) in missing], " ┃ ") if gated_seq_hit and missing else "") + (" | 越界行号段(引用了本节点原文没有的行): " + join(alien, ", ") if gated_seq_hit and alien else "") + (" | 计划非裁剪条目数 " + str(len(plan_entries)) + " 超 5——一次拆分不超过 5 个子节点(切段规矩),把相邻小段合并成更大的块;裁剪条目不计数" if too_many_entries else "") + ("" if false_form_ok else " | 判 false 首行必须是「不命中: <判据名>」且判据名只许取:边界含糊/零进展/小节点/材料节点——「结构复杂」「损失语义完整性」「更适合按别的结构拆」都不是判据,四条列举全不成立结论就是命中(把 seq_hit 改 true 并产全覆盖分拆计划)")
 > ```
 
 ### 2. [branch] 顺序命中 → 分拆并返回
@@ -94,15 +107,15 @@ Outputs:
 ##### 2.1.2. [exit] 判完即返回
 
 ### 3. [subtask retry=2] 判定：分支——能不能按明确的条件路径拆（判定+行号覆盖机械核同一事务）
-+ → branch_hit: bool  # **原文存在互斥的多条路径即 true**——条件路径（如果…否则…）、并列可选用法（方式一/方式二）、多种任务模式（生成/修改）都算;条件现不现成不是判定门槛,取值技法（输入判空/ask 收选择/前置 reason）归成文期,见注入的分支与循环判据。确实不进产物的路径（如纯手工用法）可以不翻译,但必须在 log_notes 记一条"什么路径没翻译、为什么",留给作者终审时决定——不许悄悄判 false 吞掉
++ → branch_hit: bool  # **原文存在互斥的多条路径即 true**——条件路径（如果…否则…）、并列可选用法（方式一/方式二）、多种任务模式（生成/修改）都算;条件现不现成不是判定门槛,取值技法（输入判空/ask 收选择/前置 reason）归成文期,见注入的分支与循环判据。确实不进产物的路径（如纯手工用法）可以不翻译,但必须往研判点台账（judgement_log,append）记一条"什么路径没翻译、为什么",留给作者终审时决定——不许悄悄判 false 吞掉
 + → branch_plan: text  # true：case 清单,每行"条件表达式 | 任务描述 | 原文行号段 | 类型或 NL"（任务描述=一句概括;行号段从 node_source 行首号直接读）;false：一句理由
 
 #### 3.1. [reason] 分支判定并产 case 清单
-- ← node_task, node_source, parent_context, header_final
+- ← node_task, node_source, parent_context, header_final, judgement_log
 + → branch_hit: bool  # 同容器头声明
 + → branch_plan: text  # 同容器头声明
 
-只回答这一个问题。case 清单里的"类型"按探索范式的步骤定型认领,拿不准标 NL。**产完清单同样当场对账覆盖**（各 case 行号段并起来+分支公共前置,对照 node_source 行号全集算减法——缺口不下发,规矩同判定 1 切段规矩首条;1.2 同款机械对账在 3.2 再算一遍,漏行当场打回）。引擎已自动注入（doc-ref）：
+只回答这一个问题。**"多种工作模式/多个入口"就是互斥路径**——一次执行走其中一条（用户这回要么 new 要么 update 要么 postmortem）,这正是 branch 的定义;"各模式共享同一套底层流程"不构成 false 理由（共享的公共段上提为 branch 前置步骤,是成文技法不是判定障碍）。判 false 必须点名列举判据之一,plan 槽首行写 `不命中: <判据名>`,判据名只许取:**单一路径**（原文从头到尾只有一条执行路径,没有任何条件分道/模式可选——须指认"全文无 if/模式/可选用法"）/ **零进展**（唯一 case 的范围和本节点几乎一样大）/ **小节点**（原文少于约 800 字）/ **材料节点**（整个范围是材料无动作）。"更像不同入口而非互斥分支""更适合按顺序拆"都不是判据——入口就是分支,顺序归顺序判管且它已经判过了(能走到本步说明顺序判没中,把球踢回去=两判都不认领,节点塌成叶子)。四条全不成立,结论就是命中。case 清单里的"类型"按探索范式的步骤定型认领,拿不准标 NL。**产完清单同样当场对账覆盖**（各 case 行号段并起来+分支公共前置,对照 node_source 行号全集算减法——缺口不下发,规矩同判定 1 切段规矩首条;1.2 同款机械对账在 3.2 再算一遍,漏行当场打回）。引擎已自动注入（doc-ref）：
 [[split-patterns#分支与循环判据]]
 [[split-patterns#subtask 探索范式（步骤定型与事务形态）]]
 
@@ -113,22 +126,33 @@ Outputs:
 
 纯机械判定,body 由引擎直接执行、不经 LLM（判定逻辑与 1.2 逐行同款,输入换 branch_hit/branch_plan）：
 > ```hop_python
-> toks = [strip(t) for t in split(replace(replace(branch_plan, "|", " "), "\n", " "), " ")]
+> plain = replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(branch_plan, "|", " "), "\n", " "), "+", " "), "(", " "), ")", " "), "（", " "), "）", " "), ",", " "), "，", " "), "、", " "), ":", " "), "：", " "), "[", " "), "]", " "), "【", " "), "】", " ")
+> toks = [strip(t) for t in split(plain, " ")]
 > raw_segs = [t for t in toks if startswith(t, "L") and "-L" in t]
 > stripped = [replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(s, "0", ""), "1", ""), "2", ""), "3", ""), "4", ""), "5", ""), "6", ""), "7", ""), "8", ""), "9", "") for s in raw_segs]
 > halves = [split(s, "-") for s in raw_segs]
 > well_formed = [len(h) == 2 and len(strip(replace(h[0], "L", ""))) > 0 and len(strip(replace(h[1], "L", ""))) > 0 for h in halves]
-> segs = [raw_segs[i] for i in range(len(raw_segs)) if stripped[i] == "L-L" and well_formed[i]]
+> singles = [t for t in toks if startswith(t, "L") and "-" not in t and len(t) > 1 and replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(t, "0", ""), "1", ""), "2", ""), "3", ""), "4", ""), "5", ""), "6", ""), "7", ""), "8", ""), "9", "") == "L"]
+> segs = [raw_segs[i] for i in range(len(raw_segs)) if stripped[i] == "L-L" and well_formed[i]] + [s + "-" + s for s in singles]
 > bad_segs = [raw_segs[i] for i in range(len(raw_segs)) if stripped[i] != "L-L" or not well_formed[i]]
 > src_nums = [int(split(split(l, ":")[0], "L")[1]) for l in split(node_source, "\n") if startswith(l, "L") and ":" in l]
+> src_lines = [l for l in split(node_source, "\n") if startswith(l, "L") and ":" in l]
+> contents = [strip(replace(strip(l), split(l, ":")[0] + ":", "")) for l in src_lines]
+> boxless = [replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(c, "│", ""), "─", ""), "┌", ""), "┐", ""), "└", ""), "┘", ""), "├", ""), "┤", ""), "═", ""), "║", "") for c in contents]
+> nolower = [replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(b, "a", ""), "b", ""), "c", ""), "d", ""), "e", ""), "f", ""), "g", ""), "h", ""), "i", ""), "j", ""), "k", ""), "l", ""), "m", ""), "n", ""), "o", ""), "p", ""), "q", ""), "r", ""), "s", ""), "t", ""), "u", ""), "v", ""), "w", ""), "x", ""), "y", ""), "z", "") for b in boxless]
+> blank_nums = [int(split(split(src_lines[i], ":")[0], "L")[1]) for i in range(len(src_lines)) if contents[i] == "" or startswith(contents[i], "```") or startswith(contents[i], "#") or strip(boxless[i]) == "" or (startswith(contents[i], "│") and nolower[i] == boxless[i]) or (startswith(contents[i], ">") and not ("必须" in contents[i]) and not ("不得" in contents[i]) and not ("除非" in contents[i]) and not ("才能" in contents[i]) and not ("must" in lower(contents[i])) and not ("never" in lower(contents[i])))]
 > seg_starts = [int(split(split(s, "-")[0], "L")[1]) for s in segs]
 > seg_ends = [int(split(split(s, "-")[1], "L")[1]) for s in segs]
-> missing = [n for n in src_nums if not any([(seg_starts[i] <= n) and (n <= seg_ends[i]) for i in range(len(segs))])]
+> missing = [n for n in src_nums if (n not in blank_nums) and not any([(seg_starts[i] <= n) and (n <= seg_ends[i]) for i in range(len(segs))])]
 > alien = [segs[i] for i in range(len(segs)) if (seg_starts[i] not in src_nums) or (seg_ends[i] not in src_nums)]
 > # @a: anc-build-shallow-split —— D92 迭代闸豁免判(D93 勘误:原对 branch_hit 的赋值是死写——check 步只收割声明输出,变量空间不回写;闸真身在 case 条件位,此处仅算覆盖对账豁免——闸压住的轮次结构路不走,计划质量无对账义务)
 > gated_branch_hit = branch_hit and (iteration <= 2)
-> br_cov_ok = (not gated_branch_hit) or (len(raw_segs) > 0 and len(bad_segs) == 0 and len(missing) == 0 and len(alien) == 0)
-> br_cov_note = "" if br_cov_ok else ("计划里扫不出任何行号段——每条计划的范围位必须写 L<起>-L<止> 形态,行号从 node_source 行首直接读" if len(raw_segs) == 0 else "") + (" | 格式坏的行号段(须 L数字-L数字 形态): " + join(bad_segs, ", ") if bad_segs else "") + (" | 无归属的原文行号(漏行——补条目或并入邻条): " + str(missing) if missing else "") + (" | 越界行号段(引用了本节点原文没有的行): " + join(alien, ", ") if alien else "")
+> cov_ok = (not gated_branch_hit) or (len(raw_segs) + len(singles) > 0 and len(bad_segs) == 0 and len(missing) == 0 and len(alien) == 0)
+> # @a: anc-build-judge-closure —— D100 枚举闸(与 1.2 同款,枚举换分支清单)
+> plan_head = strip(split(replace(branch_plan, "：", ":"), "\n")[0])
+> false_form_ok = branch_hit or (iteration > 2) or (startswith(plan_head, "不命中:") and any([n in plan_head for n in ["单一路径", "零进展", "小节点", "材料节点"]]))
+> br_cov_ok = cov_ok and false_form_ok
+> br_cov_note = "" if br_cov_ok else ("计划里扫不出任何行号段——每条计划的范围位必须写 L<起>-L<止> 形态,行号从 node_source 行首直接读" if gated_branch_hit and len(raw_segs) == 0 else "") + (" | 格式坏的行号段(须 L数字-L数字 形态): " + join(bad_segs, ", ") if gated_branch_hit and bad_segs else "") + (" | 无归属的原文行号(漏行——把行号写进某条条目的行号位,区间 L<a>-L<b> 或单行号 L<n> 皆可;被裁能力段与纯导航行的归属写裁剪条目「已裁剪 | L<起>-L<止> | 原因」;散文声明『已归入』不算数,机器只读行号 token): " + join([strip(l) for l in split(node_source, "\n") if startswith(l, "L") and ":" in l and int(split(split(l, ":")[0], "L")[1]) in missing], " ┃ ") if gated_branch_hit and missing else "") + (" | 越界行号段(引用了本节点原文没有的行): " + join(alien, ", ") if gated_branch_hit and alien else "") + ("" if false_form_ok else " | 判 false 首行必须是「不命中: <判据名>」且判据名只许取:单一路径/零进展/小节点/材料节点——「更像不同入口而非互斥分支」「更适合按顺序拆」都不是判据(入口就是分支;顺序判已判过没中),原文有多种模式/条件路径/可选用法,四条列举全不成立,结论就是命中(把 branch_hit 改 true 并产 case 清单)")
 > ```
 
 ### 4. [branch] 分支命中 → 分拆并返回
@@ -146,11 +170,11 @@ Outputs:
 + → loop_plan: text  # true 时首行标形态:"for-each | 遍历对象 | 列表来源（不明则注明需前置取数步）"或"repeat | 继续/停止条件 | 轮数上限",次行循环体"任务描述 | 原文行号段"（任务描述=一句概括;行号段从 node_source 行首号直接读）;false：一句理由
 
 #### 5.1. [reason] 循环判定并产计划
-- ← node_task, node_source, parent_context, header_final
+- ← node_task, node_source, parent_context, header_final, judgement_log
 + → loop_hit: bool  # 同容器头声明
 + → loop_plan: text  # 同容器头声明
 
-只回答这一个问题。限定词（"所有/未处理的/本周的"）落到列表来源,不落体内过滤。**结构替代排除（遍历被下层确定性代码承载时不判循环）**：原文"逐个处理 X 族成员"的遍历若由被引代码结构在进程内完成（原文点名"由 registry/总入口统一调度""新增成员只需注册"这类信号）,判 false——产物该落一步 act 调那个总入口,硬拆成 loop 是杜撰不是忠实（拆出来的成员清单是代码某一刻的快照,代码侧增删成员后 spec 即失真;实撞:检测器族语料的遍历由 registry.js 承载,正确产物是一步 act 调总入口,判 false 理由写"遍历被 <入口> 结构承载"并记研判点台账）。**产完计划同样当场对账覆盖**（遍历对象+循环体行号段对照 node_source 行号全集算减法——缺口不下发,规矩同判定 1 切段规矩首条;5.2 机械对账再算一遍,漏行当场打回）。引擎已自动注入（doc-ref）：
+只回答这一个问题。判 false 必须点名列举判据之一,plan 槽首行写 `不命中: <判据名>`,判据名只许取:**无重复**（全文既无同类条目批处理也无多轮推进语义——线性流程一次走完确实属此类,但先扫两处:原文"每个/逐个/各"字样与 header inputs 的列表型输入）/ **结构替代**（遍历被下层确定性代码承载,见下方排除条款——理由里写明承接入口）/ **小节点**（原文少于约 800 字）/ **零进展**（循环体范围和本节点几乎一样大）。四条全不成立,结论就是命中。限定词（"所有/未处理的/本周的"）落到列表来源,不落体内过滤。**结构替代排除（遍历被下层确定性代码承载时不判循环）**：原文"逐个处理 X 族成员"的遍历若由被引代码结构在进程内完成（原文点名"由 registry/总入口统一调度""新增成员只需注册"这类信号）,判 false——产物该落一步 act 调那个总入口,硬拆成 loop 是杜撰不是忠实（拆出来的成员清单是代码某一刻的快照,代码侧增删成员后 spec 即失真;实撞:检测器族语料的遍历由 registry.js 承载,正确产物是一步 act 调总入口,判 false 理由写"遍历被 <入口> 结构承载"并记研判点台账）。**产完计划同样当场对账覆盖**（遍历对象+循环体行号段对照 node_source 行号全集算减法——缺口不下发,规矩同判定 1 切段规矩首条;5.2 机械对账再算一遍,漏行当场打回）。引擎已自动注入（doc-ref）：
 [[split-patterns#分支与循环判据]]
 
 #### 5.2. [check] 行号覆盖机械对账（与 1.2 同款）
@@ -160,22 +184,33 @@ Outputs:
 
 纯机械判定,body 由引擎直接执行、不经 LLM（判定逻辑与 1.2 逐行同款,输入换 loop_hit/loop_plan）：
 > ```hop_python
-> toks = [strip(t) for t in split(replace(replace(loop_plan, "|", " "), "\n", " "), " ")]
+> plain = replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(loop_plan, "|", " "), "\n", " "), "+", " "), "(", " "), ")", " "), "（", " "), "）", " "), ",", " "), "，", " "), "、", " "), ":", " "), "：", " "), "[", " "), "]", " "), "【", " "), "】", " ")
+> toks = [strip(t) for t in split(plain, " ")]
 > raw_segs = [t for t in toks if startswith(t, "L") and "-L" in t]
 > stripped = [replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(s, "0", ""), "1", ""), "2", ""), "3", ""), "4", ""), "5", ""), "6", ""), "7", ""), "8", ""), "9", "") for s in raw_segs]
 > halves = [split(s, "-") for s in raw_segs]
 > well_formed = [len(h) == 2 and len(strip(replace(h[0], "L", ""))) > 0 and len(strip(replace(h[1], "L", ""))) > 0 for h in halves]
-> segs = [raw_segs[i] for i in range(len(raw_segs)) if stripped[i] == "L-L" and well_formed[i]]
+> singles = [t for t in toks if startswith(t, "L") and "-" not in t and len(t) > 1 and replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(t, "0", ""), "1", ""), "2", ""), "3", ""), "4", ""), "5", ""), "6", ""), "7", ""), "8", ""), "9", "") == "L"]
+> segs = [raw_segs[i] for i in range(len(raw_segs)) if stripped[i] == "L-L" and well_formed[i]] + [s + "-" + s for s in singles]
 > bad_segs = [raw_segs[i] for i in range(len(raw_segs)) if stripped[i] != "L-L" or not well_formed[i]]
 > src_nums = [int(split(split(l, ":")[0], "L")[1]) for l in split(node_source, "\n") if startswith(l, "L") and ":" in l]
+> src_lines = [l for l in split(node_source, "\n") if startswith(l, "L") and ":" in l]
+> contents = [strip(replace(strip(l), split(l, ":")[0] + ":", "")) for l in src_lines]
+> boxless = [replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(c, "│", ""), "─", ""), "┌", ""), "┐", ""), "└", ""), "┘", ""), "├", ""), "┤", ""), "═", ""), "║", "") for c in contents]
+> nolower = [replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(b, "a", ""), "b", ""), "c", ""), "d", ""), "e", ""), "f", ""), "g", ""), "h", ""), "i", ""), "j", ""), "k", ""), "l", ""), "m", ""), "n", ""), "o", ""), "p", ""), "q", ""), "r", ""), "s", ""), "t", ""), "u", ""), "v", ""), "w", ""), "x", ""), "y", ""), "z", "") for b in boxless]
+> blank_nums = [int(split(split(src_lines[i], ":")[0], "L")[1]) for i in range(len(src_lines)) if contents[i] == "" or startswith(contents[i], "```") or startswith(contents[i], "#") or strip(boxless[i]) == "" or (startswith(contents[i], "│") and nolower[i] == boxless[i]) or (startswith(contents[i], ">") and not ("必须" in contents[i]) and not ("不得" in contents[i]) and not ("除非" in contents[i]) and not ("才能" in contents[i]) and not ("must" in lower(contents[i])) and not ("never" in lower(contents[i])))]
 > seg_starts = [int(split(split(s, "-")[0], "L")[1]) for s in segs]
 > seg_ends = [int(split(split(s, "-")[1], "L")[1]) for s in segs]
-> missing = [n for n in src_nums if not any([(seg_starts[i] <= n) and (n <= seg_ends[i]) for i in range(len(segs))])]
+> missing = [n for n in src_nums if (n not in blank_nums) and not any([(seg_starts[i] <= n) and (n <= seg_ends[i]) for i in range(len(segs))])]
 > alien = [segs[i] for i in range(len(segs)) if (seg_starts[i] not in src_nums) or (seg_ends[i] not in src_nums)]
 > # @a: anc-build-shallow-split —— D92 迭代闸豁免判(D93 勘误:原对 loop_hit 的赋值是死写——check 步只收割声明输出,变量空间不回写;闸真身在 case 条件位,此处仅算覆盖对账豁免——闸压住的轮次结构路不走,计划质量无对账义务)
 > gated_loop_hit = loop_hit and (iteration <= 2)
-> lp_cov_ok = (not gated_loop_hit) or (len(raw_segs) > 0 and len(bad_segs) == 0 and len(missing) == 0 and len(alien) == 0)
-> lp_cov_note = "" if lp_cov_ok else ("计划里扫不出任何行号段——每条计划的范围位必须写 L<起>-L<止> 形态,行号从 node_source 行首直接读" if len(raw_segs) == 0 else "") + (" | 格式坏的行号段(须 L数字-L数字 形态): " + join(bad_segs, ", ") if bad_segs else "") + (" | 无归属的原文行号(漏行——补条目或并入邻条): " + str(missing) if missing else "") + (" | 越界行号段(引用了本节点原文没有的行): " + join(alien, ", ") if alien else "")
+> cov_ok = (not gated_loop_hit) or (len(raw_segs) + len(singles) > 0 and len(bad_segs) == 0 and len(missing) == 0 and len(alien) == 0)
+> # @a: anc-build-judge-closure —— D100 枚举闸(与 1.2 同款,枚举换循环清单)
+> plan_head = strip(split(replace(loop_plan, "：", ":"), "\n")[0])
+> false_form_ok = loop_hit or (iteration > 2) or (startswith(plan_head, "不命中:") and any([n in plan_head for n in ["无重复", "结构替代", "小节点", "零进展"]]))
+> lp_cov_ok = cov_ok and false_form_ok
+> lp_cov_note = "" if lp_cov_ok else ("计划里扫不出任何行号段——每条计划的范围位必须写 L<起>-L<止> 形态,行号从 node_source 行首直接读" if gated_loop_hit and len(raw_segs) == 0 else "") + (" | 格式坏的行号段(须 L数字-L数字 形态): " + join(bad_segs, ", ") if gated_loop_hit and bad_segs else "") + (" | 无归属的原文行号(漏行——把行号写进某条条目的行号位,区间 L<a>-L<b> 或单行号 L<n> 皆可;被裁能力段与纯导航行的归属写裁剪条目「已裁剪 | L<起>-L<止> | 原因」;散文声明『已归入』不算数,机器只读行号 token): " + join([strip(l) for l in split(node_source, "\n") if startswith(l, "L") and ":" in l and int(split(split(l, ":")[0], "L")[1]) in missing], " ┃ ") if gated_loop_hit and missing else "") + (" | 越界行号段(引用了本节点原文没有的行): " + join(alien, ", ") if gated_loop_hit and alien else "") + ("" if false_form_ok else " | 判 false 首行必须是「不命中: <判据名>」且判据名只许取:无重复/结构替代/小节点/零进展——四条列举全不成立,结论就是命中(把 loop_hit 改 true 并产循环计划)")
 > ```
 
 ### 6. [branch] 循环命中 → 分拆并返回
@@ -189,12 +224,14 @@ Outputs:
 ##### 6.1.2. [exit] 判完即返回
 
 ### 7. [reason] 叶子分型：按内容定三档成文方案（三结构判全不中即叶子,一律三件套落定——不做单步认领判定 ^anc-build-shallow-split）
-- ← node_task, node_source, parent_context, target_profile, header_final
-+ → leaf_plan: text  # 叶子分型方案（首行"档位:1|2|3";档1/档2 必须列出要剥出单独成步的动作原句——"剥出commit: <原文那句>"/"剥出ask: <原文那句>";再一行说明其余部分落什么形态——探索半边落 act free 还是纯推理 reason、核验 check 的判据要点;target_profile 非空时按「目标执行档规则」节加写该节要求的方案行）
+- ← node_task, node_source, parent_context, target_profile, header_final, judgement_log
++ → leaf_plan: text  # 叶子分型方案（首行"档位:1|2|3";档1/档2 必须列出要剥出单独成步的动作原句——"剥出commit: <原文那句>"/"剥出ask: <原文那句>";再一行说明其余部分落什么形态——探索半边落 act free 还是纯推理 reason、核验 check 的判据要点;**末节必带"材料清点:"——node_source 里的每个材料节〔表格/清单/模板/示例〕一行"材料: <名称> | L<起>-L<止> | 落点<哪个步骤的执行说明或原文附注>",无材料写"材料清点: 无"**;target_profile 非空时按「目标执行档规则」节加写该节要求的方案行）
 
 三结构判全不中的节点就是**叶子**——本步不再问"是不是自足单步"（不做单步认领判定:那种形态四问过了就产裸 [reason]/[act] 单步零核验,门禁 check 数低的结构性病根在此）,只做一件事:按内容出三档分型方案。每个叶子一律走步骤 8 的三件套成文（探索-核验-提交/闸门形态——每个叶子天然带把关）。**分型与成文分两步,但判断只在本步做一次**:档位与要剥出的动作句本步定死,步骤 8 照方案渲染不重判（实撞:旧形态判定与分型分两步各自独立分析,前步明写"含不可逆写盘须剥 commit",后步重新判断时却交了无 commit 的单步 [act free]——同一实例前后自相矛盾;解剖只做一次,矛盾在结构上就不会发生）。
 
 **leaf_plan 三档分型判据**（按内容定档,自上而下第一个命中即是——档位判据的细节与成文模板见步骤 8,本步只出方案）：档1=含不可逆动作或交付写盘（header 约束点名"不可撤销",或原文点名发送/支付/写生产/删除,**或原文承诺把交付物保存为文件**）→ 剥 commit;**判"本节点无需 commit"之前必须先回 node_source 扫交付动词**（正典词表=主流程机械体检的交付动词表,举例:写入/保存/落盘/发送/提交/部署/删除/发布/输出到）——不回原文扫,"无"是猜的不是查的（实撞两轮:原文明写"保存为 presentation.html",判定器两次判"原文无写盘动作"放行,交付语义蒸发到终检才现形）;扫到动词而交付确实由兄弟/父层节点承接的,记研判点台账点名承接处,不许静默判无;**剥出的 commit 命令生成期定不死时**（哪台机器/跑什么要看现场）,方案写备料/提交分离形态——备料段产精确执行清单文件（交付路径变量）,剥出行写「剥出commit: 按人批清单执行 <原文那句>」并加一行「剥出confirm: 呈清单人批」（confirm 前置机械读步把清单文件读入文本变量作 confirm 输入——present_inputs 是 ask 专属属性 confirm 不收,confirm 呈人的就是它声明的输入值）（形态样板见 split-patterns「备料/提交分离」节——commit body 仍静态定死为读清单逐条执行,不许因定不死就把提交语义留在 free 的描述里;**原文命令会中途停下来问人的**,按 split-patterns「交互式命令的三分处置」节办:机械确认预喂应答/中途真决策拆步走 ask 停点/拆不开的呈报用户不硬编）;**范围含门禁句时**（「必须 X 才能 Y」形态,动作句台账的门禁语汇行为底册）,方案加写证据契约：原子交付物加结构化门禁证据（检查名/PASS-FAIL/证据路径,体量大走 work_zone 文件交付路径变量）,并写明「骨架需补 [check] 步消费证据判定」——门禁判定回引擎强制,执行细节留原子后延（形态样板见 split-patterns「门禁证据分离」节）;档2=含交互闸门（AskUserQuestion/人工确认/问人要值）→ 剥 ask/confirm;档3=其余（探索 act free+核验 check 成对,纯推理的探索半边才落 reason——首轮探索半边不写 body,body 写作归定向优化轮;commit 例外必带 body,见步骤 8 档1）。
+
+**材料清点（D100——统称句不许承载材料）**：方案末节逐件清点 node_source 里的材料节——表格（如严重度分级表）、模板（如状态更新/复盘模板）、清单、示例,每件一行"材料: <名称> | 行号段 | 落点"。落点=消费它的步骤的执行说明（原文附注形态,数值/枚举逐字保真——D88 禁软化）。**"其余部分落 act free 探索"这类统称句只许承载动作,不许承载材料**——清点里没点名的材料等于宣布丢失（实撞:incident 语料叶子方案一句"其余部分落 act free 探索+check 核验"把 SEV1-4 分级表、状态更新模板、事后复盘模板全部业务知识吞进一句话,产物 12 步里这些内容零在场——执行期 LLM 手里没有分级表,"确认严重级别"就是让它现编判据）。**材料体量分道（dv 风险 4 当场补）**：小件材料（约 30 行以内——一张分级表/一段模板）逐字落进落点步骤的执行说明;大件材料（超约 30 行）落点写行号段引用 `⟦材料:<名称> L<a>-L<b>⟧`,由二轮 expand 按 B0 范围注记机械携带——LLM 逐字重述大材料=输出体量随材料线性增长,撞 output_tokens 上限整叶报废。真无材料的节点写"材料清点: 无",这行必须在——缺席与"无"要区分开。
 
 **禁令与义务句的落型（定型时消费——两类句子的产物形态不同,混落即语义降档）**：原文的**禁令**（"绝不/永远不要/Never"）按强度三档认领——最强=结构性禁止（产物形态上写不出违规,如不给那一步声明工具面/不设那条路径——引擎跳不过的结构强于任何提醒）;次强=check 判据（违规产出过不了验收）;最弱=步骤说明里的强语气提醒（仅当前两档形态上落不了才用,并记研判点台账）。**义务句与门禁句分开双落点**：义务句（"必须做 X"——规定一个动作要发生）落执行步,门禁句（"必须 X 才能 Y"——规定一个前置条件）落 check 判据——义务句错落成 check 就变成了"查有没有做"而不是"做",门禁句错落成执行步就变成了"无条件做 Y"。
 
@@ -217,7 +254,7 @@ Outputs:
 - ← node_task, node_source, parent_context, target_profile, header_final, leaf_plan
 + → fragment: text  # 叶子片段（裸片段直出——首字符即 `1`,不加围栏）
 
-**照 leaf_plan 成文,不重新判档**：档位与要剥出的动作句步骤 7 已定,你的活是按方案套对应模板写出片段——方案说"剥出commit: <某句>",片段里就必须有以那句为描述的 [commit] 步;方案说剥 ask 同理（实撞:旧形态本步独立重判,前判明写"须剥 commit"本步却交无 commit 的单步——判断只在步骤 7 做一次,本步照方案渲染,矛盾在结构上灭绝）。**target_profile 非空时,check 步的判据文本与步骤尺寸按上方「目标执行档规则」节写**——判据写成逐条封闭小题,超过 4 项判定对象的把关按该节三段形态展开;方案里已写的档规则行照办不重判。方案与你读到的 node_source 明显冲突时（如方案要剥的句子原文里不存在）,按原文修正并在片段成文后继续——不空转不打回。**leaf_plan 是空或占位符**（正常执行不该出现——重跑轮变量留存可能带进来）：不把占位符当方案,按步骤 7 写明的三档判据对 node_source 现判现写,判出哪档就套哪档的模板成文。
+**照 leaf_plan 成文,不重新判档**：档位与要剥出的动作句步骤 7 已定,你的活是按方案套对应模板写出片段——方案说"剥出commit: <某句>",片段里就必须有以那句为描述的 [commit] 步;方案说剥 ask 同理（实撞:旧形态本步独立重判,前判明写"须剥 commit"本步却交无 commit 的单步——判断只在步骤 7 做一次,本步照方案渲染,矛盾在结构上灭绝）。**target_profile 非空时,check 步的判据文本与步骤尺寸按上方「目标执行档规则」节写**——判据写成逐条封闭小题,超过 4 项判定对象的把关按该节三段形态展开;方案里已写的档规则行照办不重判。**照方案的"材料清点"节逐件把材料落进片段**——每件材料在其落点步骤的执行说明里以原文附注形态在场（表格/模板/枚举逐字或语义等价,数值禁软化——D88）;清点里点了名的材料在片段里找不到落处=成文没完成,不许交。方案与你读到的 node_source 明显冲突时（如方案要剥的句子原文里不存在）,按原文修正并在片段成文后继续——不空转不打回。**leaf_plan 是空或占位符**（正常执行不该出现——重跑轮变量留存可能带进来）：不把占位符当方案,按步骤 7 写明的三档判据对 node_source 现判现写,判出哪档就套哪档的模板成文。
 
 拆不动的节点以自然语言步骤落定,但**落成什么类型要看节点内容,不是一律 [reason]**（把含工具操作/外部影响的任务落成 reason,等于把它的工具面全部吞掉——reason 无工具,执行期干不了活）。**范围注记通则（B0,设计 ^anc-build-expand）**：三档任一模板成文时,片段顶层步骤（subtask 或单步）的说明末尾加一行 `⟦源:L<a>-L<b>⟧`——a/b 取 node_source 首末行的行号（行首 L 前缀直接读）。注记是构建期材料非执行语义（执行 LLM 零消费,与研判点台账同性质）,二轮展开 expand 按它机械定位本原子对应的原文范围。三档成文模板：
 

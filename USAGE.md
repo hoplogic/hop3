@@ -43,7 +43,7 @@ hopjit install-skill
 > cfuse 内置载体：cfuse 内置窗口表现为原生 Claude Code 或 Codex,按该载体的原生命令跑即可（环境变量 `CLAUDE_CONFIG_DIR`/`CODEX_HOME` 自动装到 `~/.codefuse/engine/{cc,codex}/skills/`）。裸终端预装（目标 agent 未启动）用显式 carrier:
 >   - `hopjit install-skill --carrier cfuse-cc`（装到 `~/.codefuse/engine/cc/skills/`——cfuse 内置 cc 读取的目录）
 >   - `hopjit install-skill --carrier cfuse-codex`（装到 `~/.codefuse/engine/codex/skills/`——cfuse 内置 codex 读取的目录）
-> OpenCode 载体：`hopjit install-skill --carrier opencode`（装到 `~/.config/opencode/skills/`——opencode 原生发现路径,`OPENCODE_CONFIG_DIR` 在场则优先;驱动件为 `driver/opencode/` 适配版——question 工具问人/subagent 外包,非 CC 原文,2026-09-19 真适配批起）。`--mcp` 注册写用户级 `~/.config/opencode/opencode.json` 的 `mcp.hopjit`（`type:"local"` + `command` 数组 + `environment` 留空靠进程环境透传凭证）。
+> OpenCode 载体：`hopjit install-skill --carrier opencode`（装到 `~/.config/opencode/skills/`——opencode 原生发现路径,`OPENCODE_CONFIG_DIR` 在场则优先;驱动件为 `driver/opencode/` 适配版——question 工具问人/subagent 外包,非 CC 原文,2026-09-19 真适配批起）。`--mcp` 注册写用户级 `~/.config/opencode/opencode.jsonc`（缺省;已有 opencode.json/config.json 则写检测到的那份）的 `mcp.hopjit`（`type:"local"` + `command` 数组 + `environment` 留空靠进程环境透传凭证）。装出的条目**默认 `enabled: false`**（防模型在复用模式下误调独立模式工具）——要走 standalone,先把该值改 `true` 再用。
 > 想覆盖已装的：加 `--force`。
 > 想要开箱演示：加 `--demo`——附装全部演示 skill（统一 `demo-` 前缀防撞名）：CC 为 `/demo-coffee-week`（入门周报）与 `/demo-fact-check`（事实核查，只核一级事实的简化版），Codex 为 `$demo-*` 同名；演示数据均打包在 skill 内。
 

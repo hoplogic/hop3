@@ -1285,6 +1285,16 @@ describe('CLI function unit tests (coverage)', () => {
       // hopbuild 族照旧共装
       expect(existsSync(join(fakeHome, '.config/opencode/skills/hopbuild/SKILL.md'))).toBe(true);
       expect(existsSync(join(fakeHome, '.config/opencode/skills/hopfix/hopfix.md'))).toBe(true);
+      // hopbuild 族 SKILL.md 副本把 /hopspec run 改写为隐式触发（对齐 driver 原语映射 斜杠→隐式 + LLM 消费友好）
+      // opencode 有斜杠命令系统（/hopspec run 可工作）,改写非修功能失效,是一致化;CC 源不改,只改装出副本
+      const hb2Skill = readFileSync(join(fakeHome, '.config/opencode/skills/hopbuild2/SKILL.md'), 'utf-8');
+      expect(hb2Skill).toContain('用 hopspec skill 执行');
+      expect(hb2Skill).not.toContain('/hopspec run');   // 守卫：装出副本不得残留任何 /hopspec run 形态（含无尾空格的边角写法）
+      const hbSkill = readFileSync(join(fakeHome, '.config/opencode/skills/hopbuild/SKILL.md'), 'utf-8');
+      expect(hbSkill).not.toContain('/hopspec run');   // 若 CC 源含 /hopspec run 则改写,不含则无变化
+      const hfSkill = readFileSync(join(fakeHome, '.config/opencode/skills/hopfix/SKILL.md'), 'utf-8');
+      expect(hfSkill).toContain('用 hopspec skill 执行');   // hopfix SKILL.md 原 /hopspec run → 改写
+      expect(hfSkill).not.toContain('/hopspec run');
     });
 
     // @v: anc-cli-stale-skill-scan —— 陈旧副本新鲜度提示（hopissues/0096:旧位置本器产物落后报升级路径,非本器零打扰,不代删）
@@ -1489,9 +1499,11 @@ describe('CLI function unit tests (coverage)', () => {
       expect(oc.mcp.hopjit.type).toBe('local');
       expect(oc.mcp.hopjit.command).toEqual(['hopjit-mcp']);
       expect(oc.mcp.hopjit.environment).toEqual({});
+      expect(oc.mcp.hopjit.enabled).toBe(false);   // 默认 enabled:false 避免 LLM 自决调 hopjit_start_run 劫持 hopspec 复用模式
       const out = JSON.parse(cap.get().trim().split('\n').pop()!);
       expect(out.mcp_registered).toContain('opencode.jsonc');   // 写 opencode.jsonc(candidates[0])
       expect(out.mcp_config_note).toContain('opencode.jsonc');   // 无 model 不自举,note 指明 opencode.jsonc 不存在
+      expect(out.mcp_note).toContain('enabled:false');   // note 明示默认禁用 + 走 standalone 手动改 true
     });
 
     // @v: anc-cli-install-skill — opencode 载体 LLM 自举（2026-09-15,见 todo/0089）
@@ -1532,6 +1544,99 @@ describe('CLI function unit tests (coverage)', () => {
       expect(cfg).toContain('protocol: anthropic');
       expect(cfg).toContain('claude-sonnet-4-6');
       expect(cfg).toContain('ANTHROPIC_API_KEY');
+    });
+
+    // @v: anc-cli-install-skill — opencode npm 字段忠实照抄（0020 批:npm=opencode 的 wire_api 等价物,
+    // @ai-sdk/openai→responses / @ai-sdk/openai-compatible→chat / 缺席回退 id 推断保守 chat）
+    it('正例:provider.npm=@ai-sdk/openai → 忠实学 openai-responses;npm 缺席回退 id 推断保守 chat', async () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'cli-oc-npm-'));
+      const cwd = mkdtempSync(join(tmpdir(), 'cli-oc-npm-cwd-'));
+      const oldCwd = process.cwd();
+      const origHome = process.env.HOME;
+      const origOcDir = process.env.OPENCODE_CONFIG_DIR;
+      const origXdg = process.env.XDG_CONFIG_HOME;
+      process.env.HOME = fakeHome;
+      delete process.env.OPENCODE_CONFIG_DIR;
+      delete process.env.XDG_CONFIG_HOME;
+      process.chdir(cwd);
+      mkdirSync(join(fakeHome, '.config/opencode'), { recursive: true });
+      writeFileSync(join(fakeHome, '.config/opencode/opencode.json'), JSON.stringify({
+        model: 'myproxy/gpt-5.4',
+        provider: { myproxy: { npm: '@ai-sdk/openai', options: { baseURL: 'https://proxy.example/v1' }, env: ['MYPROXY_API_KEY'] } },
+      }), 'utf-8');
+      const dir = mkdtempSync(join(tmpdir(), 'oc-skill-npm-'));
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+      } finally {
+        cap.restore();
+        process.env.HOME = origHome;
+        process.chdir(oldCwd);
+        if (origOcDir === undefined) delete process.env.OPENCODE_CONFIG_DIR; else process.env.OPENCODE_CONFIG_DIR = origOcDir;
+        if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = origXdg;
+      }
+      const cfg = readFileSync(join(fakeHome, '.hopjit/config.yaml'), 'utf-8');
+      expect(cfg).toContain('protocol: openai-responses');   // npm=@ai-sdk/openai 忠实照抄
+      // 同一形态但 npm 缺席 → 回退 id 推断（myproxy 不含 anthropic）保守 chat
+      const fakeHome2 = mkdtempSync(join(tmpdir(), 'cli-oc-npm2-'));
+      const cwd2 = mkdtempSync(join(tmpdir(), 'cli-oc-npm2-cwd-'));
+      process.env.HOME = fakeHome2;
+      delete process.env.OPENCODE_CONFIG_DIR;
+      delete process.env.XDG_CONFIG_HOME;
+      process.chdir(cwd2);
+      mkdirSync(join(fakeHome2, '.config/opencode'), { recursive: true });
+      writeFileSync(join(fakeHome2, '.config/opencode/opencode.json'), JSON.stringify({
+        model: 'myproxy/gpt-5.4',
+        provider: { myproxy: { options: { baseURL: 'https://proxy.example/v1' }, env: ['MYPROXY_API_KEY'] } },
+      }), 'utf-8');
+      const dir2 = mkdtempSync(join(tmpdir(), 'oc-skill-npm2-'));
+      const cap2 = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir2, '--force']);
+      } finally {
+        cap2.restore();
+        process.env.HOME = origHome;
+        process.chdir(oldCwd);
+        if (origOcDir === undefined) delete process.env.OPENCODE_CONFIG_DIR; else process.env.OPENCODE_CONFIG_DIR = origOcDir;
+        if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = origXdg;
+      }
+      const cfg2 = readFileSync(join(fakeHome2, '.hopjit/config.yaml'), 'utf-8');
+      expect(cfg2).toContain('protocol: openai-chat');   // 无 npm 无证据不猜 responses
+    });
+
+    // @v: anc-cli-install-skill — opencode npm 阶梯另两分支（review 批变异5存活后钉死:anthropic 分支删除
+    // 则 Anthropic provider 发 chat/completions 必 404;openai-compatible 归 chat 是官方文档明定）
+    it('正例:npm=@ai-sdk/anthropic → anthropic;npm=@ai-sdk/openai-compatible → openai-chat（阶梯四分支补齐另两枚）', async () => {
+      for (const [npmVal, expected] of [['@ai-sdk/anthropic', 'protocol: anthropic'], ['@ai-sdk/openai-compatible', 'protocol: openai-chat']] as const) {
+        const fakeHome = mkdtempSync(join(tmpdir(), 'cli-oc-npm3-'));
+        const cwd = mkdtempSync(join(tmpdir(), 'cli-oc-npm3-cwd-'));
+        const oldCwd = process.cwd();
+        const origHome = process.env.HOME;
+        const origOcDir = process.env.OPENCODE_CONFIG_DIR;
+        const origXdg = process.env.XDG_CONFIG_HOME;
+        process.env.HOME = fakeHome;
+        delete process.env.OPENCODE_CONFIG_DIR;
+        delete process.env.XDG_CONFIG_HOME;
+        process.chdir(cwd);
+        mkdirSync(join(fakeHome, '.config/opencode'), { recursive: true });
+        writeFileSync(join(fakeHome, '.config/opencode/opencode.json'), JSON.stringify({
+          model: 'prov/m1',
+          provider: { prov: { npm: npmVal, options: { baseURL: 'https://x.example/v1' }, env: ['X_API_KEY'] } },
+        }), 'utf-8');
+        const dir = mkdtempSync(join(tmpdir(), 'oc-skill-npm3-'));
+        const cap = capture();
+        try {
+          await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+        } finally {
+          cap.restore();
+          process.env.HOME = origHome;
+          process.chdir(oldCwd);
+          if (origOcDir === undefined) delete process.env.OPENCODE_CONFIG_DIR; else process.env.OPENCODE_CONFIG_DIR = origOcDir;
+          if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = origXdg;
+        }
+        const cfg = readFileSync(join(fakeHome, '.hopjit/config.yaml'), 'utf-8');
+        expect(cfg).toContain(expected);
+      }
     });
 
     // @v: anc-cli-install-skill — opencode 注册 best-effort（坏 JSON 不阻断 skill 安装,与 cc 分支 .claude.json 同纪律）
@@ -2013,7 +2118,7 @@ describe('CLI function unit tests (coverage)', () => {
         expect(out.mcp_config_note).toContain('ANTHROPIC_AUTH_TOKEN');
       }));
 
-      it('正例:Codex 载体学 config.toml 的 model_provider 链,protocol 钉 openai-chat（responses 未实装不学）', () => withIsolatedEnv(async () => {
+      it('正例:Codex 载体学 config.toml 的 model_provider 链,protocol 忠实照抄 wire_api=responses（0020 批撤强制降级）', () => withIsolatedEnv(async () => {
         const codexDir = join(process.env.HOME!, '.codex');
         mkdirSync(codexDir, { recursive: true });
         writeFileSync(join(codexDir, 'config.toml'), [
@@ -2029,10 +2134,27 @@ describe('CLI function unit tests (coverage)', () => {
         } finally { cap.restore(); }
         const cfg = readFileSync(join(process.env.HOME!, '.hopjit', 'config.yaml'), 'utf-8');
         expect(cfg).toContain('service_id: codex_host');
-        expect(cfg).toContain('protocol: openai-chat');             // 不学 responses（未实装）
+        expect(cfg).toContain('protocol: openai-responses');        // 忠实照抄 wire_api="responses"（0020 批）
         expect(cfg).toContain('base_url: https://prov.example/v1'); // 命中 myprov 节非 other 节
         expect(cfg).toContain('model: vendor/model-z');
         expect(cfg).toContain('api_key_env: MYPROV_API_KEY');
+      }));
+
+      it('反例:Codex wire_api 缺席 → protocol 缺省学 openai-chat（负半边——缺省被改恒 responses 则 chat-only 端点启动即撞,review 批变异4存活后钉死）', () => withIsolatedEnv(async () => {
+        const codexDir = join(process.env.HOME!, '.codex');
+        mkdirSync(codexDir, { recursive: true });
+        writeFileSync(join(codexDir, 'config.toml'), [
+          'model = "vendor/model-z"', 'model_provider = "myprov"', '',
+          '[model_providers.myprov]', 'base_url = "https://prov.example/v1"',
+          'env_key = "MYPROV_API_KEY"', '',
+        ].join('\n'), 'utf-8');   // 无 wire_api 行
+        const dir = mkdtempSync(join(tmpdir(), 'hopboot-nowire-'));
+        const cap = capture();
+        try {
+          await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--mcp', '--carrier', 'codex', '--dir', dir, '--force']);
+        } finally { cap.restore(); }
+        const cfg = readFileSync(join(process.env.HOME!, '.hopjit', 'config.yaml'), 'utf-8');
+        expect(cfg).toContain('protocol: openai-chat');   // 缺省保守 chat,不猜 responses
       }));
 
       it('正例:CC 环境干净但 settings.json env 块有配→第二级学习链命中（终端装配形态）', () => withIsolatedEnv(async () => {
@@ -4350,7 +4472,10 @@ Id: double
     expect(cp.init_command).toContain('<CALLEE_SPEC_PATH:double>');   // 占位符（寻址归 caller）
     expect(cp.init_command).toContain('--parent ' + run.instance_id);
     expect(cp.init_command).toContain('--step 2');
-    expect(cp.init_command).toContain('\\"n\\":21');                  // auto-map 快照（base+1）已折入（shell 双层引形态）
+    // auto-map 快照（base+1）已折入——参数表走参数文件,命令里只有 "@<路径>"（^anc-exec-cmd-args-file）
+    const pm = /--params "@([^"]+)"/.exec(cp.init_command);
+    expect(pm).not.toBeNull();
+    expect(JSON.parse(readFileSync(pm![1], 'utf-8'))).toMatchObject({ n: 21 });
     expect(cp.init_command).toContain('--trace ' + run.instance_id);  // trace 继承已折入
     expect(cp.child_instance).toBe('2');
     expect(cp.child_state_dir).toContain(join(run.instance_id, 'calls'));
@@ -4637,7 +4762,7 @@ describe('readProjectCommands 复用模式配置通路', () => {
 
 // status 停驻如实转述（todo/0081——此前 execution_status 枚举缺 paused,停驻报 running:
 // 看护方接 CLI status 通道感知不到"引擎在等人",停点挂死〔2026-09-09 实撞 30+ 分钟〕。
-// 判定三源与 network 边界见 hop-cli.md ^anc-cli-status-response）
+// 判定三源见 hop-cli.md ^anc-cli-status-response;网络暂停与嵌套串行调用停点两源〔todo/0105〕见 ^anc-cli-status-nested-pause）
 // @v: anc-cli-status-response, anc-cli-vars-response
 describe('status 停驻如实转述（paused 档,0081）', () => {
   const CONFIRM_SPEC = `# ConfirmStatus
@@ -4698,6 +4823,80 @@ g
     runCliJson(`run c.md --state-dir state`, dir);
     const v = runCliJson(`vars --state-dir state`, dir);
     expect(v.execution_status).toBe('paused');
+  });
+
+  // @v: anc-cli-status-nested-pause （todo/0105——快照由引擎在进程内造出,status 命令另起进程读盘:
+  // 与 T5 观察方同一条通道。修前两例都报 running）
+  it('正例：顶层网络暂停快照 → status 报 paused/network,无 call_path;反例：该步重新开始后回 running', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-0105a-'));
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(`# NetCli
+Id: net-cli-0105
+## Goal
+g
+## Outputs
+- r: text  # r
+## Steps
+1. [reason] 想
+  + → r: text  # r
+2. [exit] 交付
+  + → r
+`, HOST, { stateDir: join(dir, 'state') });
+    engine.nextStep();
+    engine.resetStepForNetworkPause('1');   // 落盘:步回 pending + 末事件 network_pause
+    const st = runCliJson(`status --state-dir state --instance ${init.instance_id}`, dir);
+    expect(st.execution_status).toBe('paused');
+    expect(st.pause_reason).toBe('network');
+    expect(st.paused_step_id).toBe('1');
+    expect(st.call_path).toBeUndefined();
+    engine.nextStep();   // 恢复:重新开始该步
+    const st2 = runCliJson(`status --state-dir state --instance ${init.instance_id}`, dir);
+    expect(st2.execution_status).toBe('running');
+    expect(st2.pause_reason).toBeUndefined();
+  });
+
+  it('正例：串行调用子流程网络暂停快照 → status 报 paused/network/子步号 + call_path', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-0105b-'));
+    const parent = new ExecutionEngine();
+    const init = parent.initExecution(`# CallerCli
+Id: caller-cli-0105
+## Goal
+g
+## Inputs
+- x: int  # 入
+## Outputs
+- y: text  # 出
+## Steps
+1. [call leaf(x)] 串行调子
+  + → y: y  # 收
+2. [exit] 交付
+  + → y
+`, HOST, { stateDir: join(dir, 'state'), params: { x: 1 } });
+    parent.nextStep();   // 调用步 running
+    const child = new ExecutionEngine();
+    child.initExecution(`# Leaf
+Id: leaf
+## Goal
+g
+## Inputs
+- x: int  # 入
+## Outputs
+- y: text  # 出
+## Steps
+1. [reason] 想
+  - ← x
+  + → y: text  # 出
+2. [exit] 交付
+  + → y
+`, HOST, { params: { x: 1 }, parentInstanceId: init.instance_id, callStepId: parent.serialCallChildInstance('1'), stateDir: join(parent.getInstanceDir()!, 'calls') });
+    child.nextStep();
+    child.resetStepForNetworkPause('1');
+    const st = runCliJson(`status --state-dir state --instance ${init.instance_id}`, dir);
+    expect(st.execution_status).toBe('paused');
+    expect(st.pause_reason).toBe('network');
+    expect(st.paused_step_id).toBe('1');
+    expect(st.call_path).toEqual(['1']);
+    expect(st.current_step).toBe('1');   // 本层 running 的调用步——current_step 原义不变
   });
 });
 
@@ -4775,6 +4974,174 @@ Goal: g
     const r = runCliEnv(`run spec.md --state-dir state`, dir, ENV_HOOK);   // 假 webhook——即使误发也打不到真群
     expect(JSON.parse(r.stdout).status).toBe('completed');
     expect(r.stderr).not.toContain('[notify]');
+  });
+});
+
+// @v: anc-exec-cmd-args-file — hopissues/0097:命令数据值走参数文件。旧实装把参数表两层
+// JSON.stringify 塞进双引号,反引号与 ${X} 在双引号内照样被 shell 解释——driver 经 /bin/sh 照抄
+// 执行时,带 markdown 代码块的 node_source 被静默吞成空串（子 spec 源腐蚀）。本组真起 shell 验往返。
+describe('call 协议命令数据值走参数文件（0097 shell 元字符防线）', () => {
+  const PAYLOAD = 'A `echo INJECTED` B ${HOME} C $(echo SUB) D "q" E \\ F \'s\' G\n```hop_python\nx = 1\n```';
+  const CALLER = `# Caller
+Id: caller-meta
+
+## Goal
+透传
+
+## Inputs
+- src: text  # 带元字符的源文本
+
+## Outputs
+- result: text  # 回显
+
+## Steps
+1. [call echo(s: src)] 调回显
+  + → result: out  # 映射
+`;
+  const CALLEE = `# Echo
+Id: echo
+
+## Goal
+回显
+
+## Inputs
+- s: text  # 源
+
+## Outputs
+- out: text  # 回显
+
+## Steps
+1. [act] 回显
+  - ← s
+  + → out: text  # 原样
+  > 纯计算
+  > \`\`\`hop_python
+  > out = s
+  > \`\`\`
+`;
+  it('正例：参数值含反引号/${}/$()/引号/反斜杠/代码块——经 shell 照抄 init_command,子实例拿到的值逐字节不变', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-cmdargs-'));
+    writeFileSync(join(dir, 'caller.md'), CALLER);
+    writeFileSync(join(dir, 'echo.md'), CALLEE);
+    writeFileSync(join(dir, 'params.json'), JSON.stringify({ src: PAYLOAD }));
+    const run = runCliJson(`run caller.md --params @params.json --state-dir state`, dir);
+    expect(run.step_type).toBe('call');
+    const cp = run.call_protocol;
+    const { execSync } = require('node:child_process');
+    // driver 唯一动作：填占位符,整串交 /bin/sh（execSync 缺省即 shell 形态——0097 事故现场同款）
+    execSync(cp.init_command.replace('<CALLEE_SPEC_PATH:echo>', join(dir, 'echo.md')), { cwd: dir, stdio: 'pipe' });
+    execSync(cp.child_advance, { cwd: dir, stdio: 'pipe' });
+    const done = runCliJson(cp.report_completed.replace(/^node "[^"]+" --json /, ''), dir);
+    expect(done.status).toBe('completed');
+    expect(done.outputs.result).toBe(PAYLOAD);   // 子实例 s → out → 父 result 往返逐字节不变
+  });
+
+  it('反例：命令串里不出现任何参数原文——数据只在 cmd_args 文件里,文件放父实例目录（不进子实例目录,躲 re-init 净室）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-cmdargs-'));
+    writeFileSync(join(dir, 'caller.md'), CALLER);
+    writeFileSync(join(dir, 'params.json'), JSON.stringify({ src: PAYLOAD }));
+    const run = runCliJson(`run caller.md --params @params.json --state-dir state`, dir);
+    const cmd = run.call_protocol.init_command;
+    expect(cmd).not.toContain('INJECTED');
+    expect(cmd).not.toContain('hop_python');
+    const m = /--params "@([^"]+)"/.exec(cmd);
+    expect(m).not.toBeNull();
+    expect(m![1].startsWith('/')).toBe(true);
+    expect(m![1].endsWith(join('state', run.instance_id, 'cmd_args', 'calls-1.params.json'))).toBe(true);
+    expect(JSON.parse(readFileSync(m![1], 'utf-8'))).toMatchObject({ s: PAYLOAD });
+    expect(m![1]).not.toContain(join(run.instance_id, 'calls'));
+  });
+
+  it('正例：init --upstream-feedback @file 读文件原文（引擎烘焙的反馈形态）;反例：不带 @ 仍按字面文本', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-cmdargs-fb-'));
+    writeFileSync(join(dir, 'echo.md'), CALLEE);
+    writeFileSync(join(dir, 'fb.txt'), PAYLOAD);
+    const a = runCliJson(`init echo.md --params '{"s":"x"}' --upstream-feedback @fb.txt --state-dir state`, dir);
+    const stA = JSON.parse(readFileSync(join(dir, 'state', a.instance_id, 'state.json'), 'utf-8'));
+    expect(stA.upstream_feedback).toBe(PAYLOAD);
+    const b = runCliJson(`init echo.md --params '{"s":"x"}' --upstream-feedback "LITERAL_FB" --state-dir state2`, dir);
+    const stB = JSON.parse(readFileSync(join(dir, 'state2', b.instance_id, 'state.json'), 'utf-8'));
+    expect(stB.upstream_feedback).toBe('LITERAL_FB');
+  });
+});
+
+// @v: anc-exec-call-child-iter-id — hopissues/0098 事故形态真进程重放:loop 两轮串行 call,每轮子实例
+// 把产出写进自己的 work_zone、父层只收路径（同 hopbuild2 child_frag_path）。旧形态两轮共用 calls/<步骤号>/,
+// 第 2 轮 init 的 re-init 净室整目录删除,第 1 轮登记的路径悬空;修后各轮独立目录,两个路径都读得到。
+describe('loop 里的串行 call 子实例按轮次命名（0098 真进程重放）', () => {
+  const CALLER = `# Caller
+Id: caller-0098
+
+## Goal
+逐段拆
+
+## Inputs
+- segs: [text]  # 段
+
+## Outputs
+- paths: [text]  # 各段产出文件路径
+
+## Steps
+1. [loop for-each seg in segs, collect p into paths] 逐段
+  + → paths: [text]  # 收集
+  1.1. [call frag(s: seg)] 拆一段
+    + → p: frag_path  # 只收路径不收内容
+`;
+  const CALLEE = `# Frag
+Id: frag
+
+## Goal
+写片段
+
+## Inputs
+- s: text  # 段
+
+## Outputs
+- frag_path: text  # 片段文件路径
+
+## Steps
+1. [act] 写片段
+  - ← s
+  + → frag_path: text  # 路径
+  > 纯计算
+  > \`\`\`hop_python
+  > frag_path = work_zone_path("fragment.md")
+  > w = write(path: frag_path, content: s)
+  > \`\`\`
+`;
+  it('正例：两轮各落 calls/1.1.1 与 calls/1.1.2,第 1 轮的片段文件在第 2 轮 init 后仍在,内容各是各的', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-0098-'));
+    writeFileSync(join(dir, 'caller.md'), CALLER);
+    writeFileSync(join(dir, 'frag.md'), CALLEE);
+    const { execSync } = require('node:child_process');
+    let resp = runCliJson(`run caller.md --params '{"segs": ["SEG_A", "SEG_B"]}' --state-dir state`, dir);
+    const ids: string[] = [];
+    for (let k = 0; k < 2; k++) {
+      expect(resp.step_type).toBe('call');
+      const cp = resp.call_protocol;
+      ids.push(cp.child_instance);
+      execSync(cp.init_command.replace('<CALLEE_SPEC_PATH:frag>', join(dir, 'frag.md')), { cwd: dir, stdio: 'pipe' });
+      execSync(cp.child_advance, { cwd: dir, stdio: 'pipe' });
+      resp = runCliJson(cp.report_completed.replace(/^node "[^"]+" --json /, ''), dir);
+    }
+    expect(ids).toEqual(['1.1.1', '1.1.2']);
+    expect(resp.status).toBe('completed');
+    const paths: string[] = resp.outputs.paths;
+    expect(paths).toHaveLength(2);
+    expect(paths[0]).toContain(join('calls', '1.1.1', 'work_zone'));
+    expect(paths[1]).toContain(join('calls', '1.1.2', 'work_zone'));
+    expect(readFileSync(paths[0], 'utf-8')).toBe('SEG_A');   // 修前:ENOENT（第 2 轮 init 删了 calls/1.1/）
+    expect(readFileSync(paths[1], 'utf-8')).toBe('SEG_B');
+  });
+
+  it('反例：旧驱动手拼 init 不带 --child-instance → 子实例 ID 回退 --step,目录仍是 calls/<步骤号>/', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-0098b-'));
+    writeFileSync(join(dir, 'caller.md'), CALLER);
+    writeFileSync(join(dir, 'frag.md'), CALLEE);
+    const run = runCliJson(`run caller.md --params '{"segs": ["SEG_A"]}' --state-dir state`, dir);
+    const init = runCliJson(`init frag.md --parent ${run.instance_id} --step 1.1 --params '{"s":"x"}' --state-dir state`, dir);
+    expect(init.instance_id).toBe('1.1');
+    expect(existsSync(join(dir, 'state', run.instance_id, 'calls', '1.1', 'state.json'))).toBe(true);
   });
 });
 

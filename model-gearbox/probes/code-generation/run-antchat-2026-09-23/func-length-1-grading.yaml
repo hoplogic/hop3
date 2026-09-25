@@ -1,0 +1,19 @@
+- round: 0
+  outcome: rejected
+  public_pass: false
+  hidden_pass: false
+  reject_head: 'Python 语法沙箱审查未通过,脚本没有执行。逐条改完再跑: | - 第 12 行 `hasattr`:内置名 hasattr 不在内置名白名单内。替代:直接写 x.属性名,或用 isinstance 先判类型 | - 第 21 行 `.format`:属性 format 不在属性白名单内。替代:拼字符串用 f-string,例如 f''{name}: {count}'''
+- round: 1
+  outcome: rejected
+  public_pass: false
+  hidden_pass: false
+  reject_head: >-
+    Python 语法沙箱审查未通过,脚本没有执行。逐条改完再跑: | - 第 31 行 `.format`:属性 format 不在属性白名单内。替代:拼字符串用 f-string,例如 f'{name}: {count}' | 可用的模块符号:ast.AsyncFunctionDef ast.ClassDef ast.FunctionDef ast.get_docstring
+    ast.iter_child_nodes ast.parse ast.walk re.escape re.findall re.match re.search re.split re.sub json.dumps jso
+- round: 2
+  outcome: ran
+  public_pass: true
+  hidden_pass: false
+  hidden_failed:
+    - bad_method.py(应1实0)
+  crashed_files: 0

@@ -1,0 +1,73 @@
+```python
+import ast
+import re
+import sys
+
+
+def get_func_params(node):
+    params = []
+    args = node.args
+    for a in args.posonlyargs:
+        params.append(a.arg)
+    for a in args.args:
+        params.append(a.arg)
+    if args.vararg:
+        params.append(args.vararg.arg)
+    for a in args.kwonlyargs:
+        params.append(a.arg)
+    if args.kwarg:
+        params.append(args.kwarg.arg)
+    return params
+
+
+def check_docstring(node, path):
+    doc = ast.get_docstring(node, clean=False)
+    errors = []
+    if doc is None:
+        errors.append((node.lineno, "missing docstring"))
+        return errors
+    required = [p for p in get_func_params(node) if p not in ("self", "cls")]
+    for param in required:
+        pattern = r'(?<![A-Za-z0-9_])' + re.escape(param) + r'(?![A-Za-z0-9_])'
+        if not re.search(pattern, doc):
+            errors.append((node.lineno, f"docstring missing parameter '{param}'"))
+    return errors
+
+
+def collect_public_functions(tree):
+    results = []
+    for child in ast.iter_child_nodes(tree):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if not child.name.startswith("_"):
+                results.append((child, "function"))
+        elif isinstance(child, ast.ClassDef):
+            for item in child.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if not item.name.startswith("_"):
+                        results.append((item, "method"))
+                elif isinstance(item, ast.ClassDef):
+                    for sub_item in item.body:
+                        if isinstance(sub_item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            if not sub_item.name.startswith("_"):
+                                results.append((sub_item, "method"))
+    return results
+
+
+def main():
+    file_path = sys.argv[1]
+    with open(file_path, "r", encoding="utf-8") as f:
+        source = f.read()
+    tree = ast.parse(source, filename=file_path)
+    all_errors = []
+    public_funcs = collect_public_functions(tree)
+    for func, kind in public_funcs:
+        all_errors.extend(check_docstring(func, file_path))
+    if all_errors:
+        for lineno, reason in sorted(all_errors, key=lambda e: (e[0], e[1])):
+            print(f"{lineno}: {reason}", file=sys.stderr)
+        sys.exit(1)
+    sys.exit(0)
+
+
+main()
+```

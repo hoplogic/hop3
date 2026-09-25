@@ -356,9 +356,10 @@ describe('loadStandaloneConfig', () => {
     expect(cfg.providers[0].protocol).toBe('openai-chat');
   });
 
-  it('反例：openai-responses 预留枚举 → 拒并指路 openai-chat（未实装不静默降级）', () => {
+  it('正例：protocol openai-responses 放行（0020 批实装 2026-09-20——原预留拒钉翻正:OpenAI 官方生态工具循环正路）', () => {
     const p = writeConfig(JSON.stringify({ providers: [{ ...VALID_PROVIDER, protocol: 'openai-responses' }] }));
-    expect(() => loadStandaloneConfig(p)).toThrow(/openai-responses.*未实装.*openai-chat/s);
+    const cfg = loadStandaloneConfig(p);
+    expect(cfg.providers[0].protocol).toBe('openai-responses');
   });
 
   it('反例：protocol 枚举外乱值 → INVALID（放行 openai 不放行一切）', () => {
@@ -500,6 +501,76 @@ g
     }
     expect(st['status']).toBe('completed');
     expect((st['outputs'] as Record<string, unknown>)['vals']).toEqual([5, 6]);
+  });
+
+  // @v: anc-exec-parallel-hitl-queue （todo/0105 缺陷 B,兑现 hopissues/0094 期望行为第 ② 条:resume_run 带错
+  // child_instance 在状态翻转前同步拒收——修前先回 {status:'running'},dispatcher 异步拒收后才复原 paused,调用方只见假 running）
+  it('0105 B：串行 call 停点带错 child_instance → 同步 CHILD_NOT_IN_QUEUE,run 仍 paused 载荷不变无 failure;反例：不带 child_instance 正确应答照常受理跑完', async () => {
+    const core = new HopjitMcpCore(config);
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-0105b-'));
+    writeFileSync(join(dir, 'leaf.md'), `# Leaf
+Id: leaf
+## Goal
+g
+## Inputs
+- x: int
+
+## Outputs
+- y: int
+
+## Steps
+1. [ask require_human=true] 请给值
+  - ← x
+  + → y: int  # 人值
+2. [exit] 交付
+  + → y
+`);
+    writeFileSync(join(dir, 's.md'), `# T
+Id: t-0105b
+## Goal
+g
+## Inputs
+- x: int
+
+## Outputs
+- y: int
+
+## Steps
+1. [call leaf(x)] 串行调子
+  + → y: y  # 收
+2. [exit] 交付
+  + → y
+`);
+    const sd = mkdtempSync(join(tmpdir(), 'mcp-0105b-state-'));
+    const r = await core.startRun(join(dir, 's.md'), { x: 1 }, sd, dir);
+    const runId = r['run_id'] as string;
+    let st: Record<string, unknown> = {};
+    for (let i = 0; i < 50; i++) {
+      await new Promise(res => setTimeout(res, 100));
+      st = core.runStatus(runId);
+      if (st['status'] === 'paused') break;
+    }
+    expect(st['status']).toBe('paused');
+    const paused = st['paused'] as { step_id: string; call_path?: string[] };
+    expect(paused.call_path).toEqual(['1']);
+    // 正例:带错 child_instance(串行 call 停点本不该带)→ 同步结构化拒
+    const bad = core.resumeRun(runId, paused.step_id, { y: 5 }, undefined, '1');
+    expect((bad as { error?: { code: string } }).error?.code).toBe('CHILD_NOT_IN_QUEUE');
+    expect((bad as { status?: string }).status).toBeUndefined();   // 修前=running
+    const st2 = core.runStatus(runId);   // 同步读——不等异步复原
+    expect(st2['status']).toBe('paused');
+    expect((st2['paused'] as { step_id: string }).step_id).toBe(paused.step_id);
+    expect(st2['failure']).toBeUndefined();
+    // 反例:按拒因指引去掉 child_instance 重答 → 受理并跑完
+    const ok = core.resumeRun(runId, paused.step_id, { y: 5 });
+    expect((ok as { status?: string }).status).toBe('running');
+    for (let i = 0; i < 50; i++) {
+      await new Promise(res => setTimeout(res, 100));
+      st = core.runStatus(runId);
+      if (['completed', 'failed'].includes(st['status'] as string)) break;
+    }
+    expect(st['status']).toBe('completed');
+    expect((st['outputs'] as Record<string, unknown>)['y']).toBe(5);
   });
 
   // @v: anc-exec-parallel-hitl-queue, anc-exec-call-child-persist（37轮review:server重启后队列是空的,

@@ -1,0 +1,60 @@
+```python
+import ast
+import re
+import sys
+
+violation_found = False
+
+def check_function(node):
+    global violation_found
+    name = node.name
+    if name.startswith('_'):
+        return
+    doc = ast.get_docstring(node)
+    if doc is None:
+        print(f"{node.lineno}: function '{name}' is missing docstring")
+        violation_found = True
+        return
+    params = []
+    args = node.args
+    for arg in args.posonlyargs:
+        params.append(arg.arg)
+    for arg in args.args:
+        params.append(arg.arg)
+    if args.vararg is not None:
+        params.append(args.vararg.arg)
+    for arg in args.kwonlyargs:
+        params.append(arg.arg)
+    if args.kwarg is not None:
+        params.append(args.kwarg.arg)
+    for p in params:
+        if p == 'self' or p == 'cls':
+            continue
+        pattern = r'\b' + re.escape(p) + r'\b'
+        if re.search(pattern, doc) is None:
+            print(f"{node.lineno}: function '{name}' docstring does not mention parameter '{p}'")
+            violation_found = True
+
+def traverse(node, in_function):
+    if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+        if not in_function:
+            check_function(node)
+        return
+    if isinstance(node, ast.ClassDef):
+        if in_function:
+            return
+        for child in ast.iter_child_nodes(node):
+            traverse(child, False)
+        return
+    for child in ast.iter_child_nodes(node):
+        traverse(child, in_function)
+
+path = sys.argv[1]
+with open(path, 'r', encoding='utf-8') as f:
+    content = f.read()
+tree = ast.parse(content)
+traverse(tree, False)
+
+if violation_found:
+    sys.exit(1)
+```

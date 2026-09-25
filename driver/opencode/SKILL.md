@@ -8,8 +8,8 @@ description: Drive HopSpec structured execution specs with the hopjit engine (re
 	source: [[opencode-driver-carrier]]
 	source_id: hopjit-opencode-driver-carrier
 	type: extract
-	last_sync: 2026-09-19T15:40+0800
-	note: opencode 复用模式驱动件——派生自 driver/hopspec-skill.md（CC 源）,按 opencode-driver-carrier 原语映射表适配:AskUserQuestion→question 工具/Agent 工具 driver subagent→opencode subagent（无 subagent 能力时 inline 自跑,与 Codex 载体同款降级）/斜杠触发→隐式触发。执行语义/CLI 协议/介入点纪律与 CC 版逐条同构,CC 源改协议面时本件同批随改（rule-parity 同款"接受两份"）。
+	last_sync: 2026-09-21T11:37+0800
+	note: opencode 复用模式驱动件——派生自 driver/hopspec-skill.md（CC 源）,按 opencode-driver-carrier 原语映射表适配:AskUserQuestion→question 工具/Agent 工具 driver subagent→opencode subagent（无 subagent 能力时 inline 自跑,与 Codex 载体同款降级）/斜杠触发→隐式触发。执行语义/CLI 协议/介入点纪律与 CC 版逐条同构,CC 源改协议面时本件同批随改（rule-parity 同款"接受两份"）。§2 paused:question 工具降级约束贯穿段头+confirm/ask 各分派项——question 工具按 client 类型启用（不按 provider 过滤）,某些 OpenAI 兼容服务端（如 theta）拒收该工具,不可用时降级普通文本消息。
 %%
 
 # hopspec — 驱动 HopJIT 执行 HopSpec 规约（opencode 载体）
@@ -41,7 +41,7 @@ description: Drive HopSpec structured execution specs with the hopjit engine (re
 
 ### 0. 前置：定位 spec + 组装 params
 
-`run` 前先定位 spec 文件、组装 `--params`——完整流程（spec 搜索、recent-dirs 维护、读 `## Inputs` 推断参数 + 用 question 工具向用户确认）见 `references/discovery.md`。这是 run 的**必要前置交互**，不属"自主展开"。
+`run` 前先定位 spec 文件、组装 `--params`——完整流程（spec 搜索、recent-dirs 维护、读 `## Inputs` 推断参数 + 用 question 工具向用户确认；question 工具不可用时用普通文本消息呈现参数表、等用户下条消息回答后再 run）见 `references/discovery.md`。这是 run 的**必要前置交互**，不属"自主展开"。
 
 ### 0.5 跨通道防线（引擎硬闸,你只认报错）
 
@@ -77,12 +77,12 @@ subagent **一直跑到下一个介入点**（paused / adaptive_needed / tool_re
 
 #### `paused` → **必须停下问人，禁止自己替答**（主 agent 专属）
 
-⚠️ **硬约束（违反即错误）**：paused 是 spec 作者**显式声明的介入点**——作者特意放了 confirm/ask，就是要**外部决策者**（人）来定。你**必须**用 **question 工具**向用户展示问题、等用户回答，**禁止**自己推理出答案就 submit。（这也是为什么 paused 归主 agent 而非 subagent——subagent 无权、也无法问真人。）
+⚠️ **硬约束（违反即错误）**：paused 是 spec 作者**显式声明的介入点**——作者特意放了 confirm/ask，就是要**外部决策者**（人）来定。你**必须停下问人**——优先用 **question 工具**向用户展示问题、等用户回答；question 工具不可用时（如服务端拒收该工具）用普通文本消息呈现问题与选项，等用户下条消息回答后再注入。**禁止**自己推理出答案就 submit。（paused 归主 agent 而非 subagent——subagent 无权、也无法问真人。）
 
 按 `pause_reason` 分派：
 
 **`confirm`（审批闸门）→ 必须问人批不批**：
-1. **必须**用 question 工具展示 `presented_data.question` + `response_options`（approve/reject），等用户选
+1. 用 question 工具展示 `presented_data.question` + `response_options`（approve/reject），等用户选（question 工具不可用时按段头降级——用普通文本消息呈现问题与 approve/reject 选项，等用户下条消息回答后再注入）
 2. 用户选定后注入（**带 `--instance <id>` 跨进程定位**）：
 ```bash
 <CLI> --json submit_and_fetch_next <step_id> --answer '{"value":"<用户选择>"}' --state-dir .hopstate --instance <instance_id>
@@ -98,7 +98,7 @@ subagent **一直跑到下一个介入点**（paused / adaptive_needed / tool_re
    - **`{$file, preview}` 复合**（≥ 5K 字符，引擎自动卸载）：preview = 头 5K 字符 + "...[完整内容见文件]"。完整 dump preview 给用户，**并提示**"完整内容见 `{$file 路径}`"。用户想看完整时你读该文件再展示
 
    **禁止二次摘要**：preview 已经是引擎按"人友好阈值"卸载的产物，你不应再压缩它。
-2. **必须**用 question 工具展示 `presented_data.question`，并把 `output_schema`（要填的变量+类型）、`default_value`（前序推断默认值）、`context`（候选来源）一并呈现
+2. 用 question 工具展示 `presented_data.question`，并把 `output_schema`（要填的变量+类型）、`default_value`（前序推断默认值）、`context`（候选来源）一并呈现（question 工具不可用时按段头降级——用普通文本消息呈现问题与选项，等用户下条消息回答后再注入）
 3. 选项构造：若有推断默认值，第一项给"采用默认：<default_value>"；再列其它候选（来自 context）；用户可自由输入
 4. 用户给值后注入（用用户提供的**真实值**，不是 approve；带 `--instance`）：
 ```bash

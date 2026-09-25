@@ -1,0 +1,60 @@
+```python
+import ast
+import re
+import sys
+
+def analyze(node, doc_pairs):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if node.name.startswith('_'):
+            return
+        docstring = ast.get_docstring(node)
+        params = set()
+        all_args = list(node.args.posonlyargs) + list(node.args.args) + list(node.args.kwonlyargs)
+        for arg in all_args:
+            if arg.arg not in ('self', 'cls'):
+                params.add(arg.arg)
+        if node.args.vararg is not None and node.args.vararg.arg not in ('self', 'cls'):
+            params.add(node.args.vararg.arg)
+        if node.args.kwarg is not None and node.args.kwarg.arg not in ('self', 'cls'):
+            params.add(node.args.kwarg.arg)
+        doc_pairs.append((node.lineno, node.name, docstring, params))
+    elif isinstance(node, ast.ClassDef):
+        for child in ast.iter_child_nodes(node):
+            analyze(child, doc_pairs)
+    else:
+        for child in ast.iter_child_nodes(node):
+            analyze(child, doc_pairs)
+
+path = sys.argv[1]
+with open(path, 'r', encoding='utf-8') as f:
+    source = f.read()
+if not source.strip():
+    sys.exit(0)
+try:
+    tree = ast.parse(source, filename=path)
+except SyntaxError:
+    print("1: Parse error")
+    sys.exit(1)
+
+doc_pairs = []
+for child in ast.iter_child_nodes(tree):
+    analyze(child, doc_pairs)
+
+violations = []
+for lineno, name, docstring, params in doc_pairs:
+    if docstring is None:
+        violations.append(str(lineno) + ": function " + name + " has no docstring")
+    else:
+        for param in params:
+            pattern = r'(?<!\w)' + re.escape(param) + r'(?!\w)'
+            if not re.search(pattern, docstring):
+                violations.append(str(lineno) + ": function " + name + " docstring misses parameter " + param)
+
+for v in violations:
+    print(v)
+
+if len(violations) == 0:
+    sys.exit(0)
+else:
+    sys.exit(1)
+```

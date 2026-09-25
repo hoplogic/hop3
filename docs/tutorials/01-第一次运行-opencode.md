@@ -85,7 +85,9 @@ opencode run "用 hopspec skill 执行 coffee-week.md,参数 sales_data_path=cof
 hopjit install-skill --mcp --carrier opencode
 ```
 
-这一条做两件事：把 hopjit MCP server 注册进 `~/.config/opencode/opencode.jsonc`（保留你文件里的注释与格式）；并从 opencode 的配置里学习你的模型设置自举 standalone 缺省配置（只记凭证的环境变量名，不抄值）。之后说"用 hopspec-mcp 跑某某 spec"即走独立模式。配置详情见 `USAGE.md` §6。同一份 spec 两种模式通用，零修改。
+这一条做两件事：把 hopjit MCP server 注册进 `~/.config/opencode/opencode.jsonc`（保留你文件里的注释与格式）；并从 opencode 的配置里学习你的模型设置自举 standalone 缺省配置（只记凭证的环境变量名，不抄值）。配置详情见 `USAGE.md` §6。同一份 spec 两种模式通用，零修改。
+
+注意：装出来的 `mcp.hopjit` 条目**默认是 `enabled: false`**——这是有意的：防止模型在复用模式（hopspec skill）下看到 hopjit 的 MCP 工具就自作主张去调独立模式工具，劫持本该走复用协议的执行。所以要真走独立模式，先打开 `~/.config/opencode/opencode.jsonc`，把 `mcp.hopjit.enabled` 改成 `true`，再对 opencode 说"用 hopspec-mcp 跑某某 spec"。
 
 ## 下一步
 

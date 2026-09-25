@@ -1733,6 +1733,159 @@ probe
   });
 });
 
+describe('lang 转换识别面对齐 parser 接受面——裸键段头与标题形态步骤行（todo/0109,^anc-i18n-convert-surface）', () => {
+  // @v: anc-i18n-convert-surface
+  const BARE_EN = [
+    '# Spec: bare',
+    'Id: bare',
+    '',
+    'Goal: 把事做完',
+    'Constraints:',
+    '- 约束一',
+    'Types:',
+    '- Item:',
+    '    name: text',
+    'Inputs:',
+    '- doc: text  # 文档',
+    'Outputs:',
+    '- report: markdown  # 报告',
+    '',
+    '## Steps',
+    '### 1. [act free] 读文档',
+    '  + → notes: text',
+    '### 2. [subtask retry=2] 汇总',
+    '#### 2.1. [reason] 写报告',
+    '  + → report: markdown',
+    '#### 2.2. [check final] 核对',
+    '  + → ok: bool',
+    '  + → note: text',
+    '',
+    '## 背景',
+    'Goal: 叙事节里的字样',
+    '',
+  ].join('\n');
+
+  it('正: 裸键段头英转中——Goal/Constraints/Types/Inputs/Outputs 五键,冒号后原样', () => {
+    const zh = convertSpecKeywords(BARE_EN, 'zh').split('\n');
+    expect(zh).toContain('目标: 把事做完');
+    expect(zh).toContain('约束:');
+    expect(zh).toContain('类型:');
+    expect(zh).toContain('输入:');
+    expect(zh).toContain('输出:');
+    expect(zh).toContain('- doc: text  # 文档');   // 条目行不动
+  });
+
+  it('正: 裸键段头中转英——五键反向', () => {
+    const src = '# Spec: z\n标识: z\n\n目标: 做事\n约束:\n- a\n类型:\n输入:\n- x: text\n输出:\n- y: text\n\n## 步骤\n1. [探索] 干\n';
+    const en = convertSpecKeywords(src, 'en').split('\n');
+    for (const l of ['Goal: 做事', 'Constraints:', 'Types:', 'Inputs:', 'Outputs:', 'Id: z', '## Steps', '1. [act] 干']) expect(en).toContain(l);
+  });
+
+  it('正: 标题形态步骤行 ### 与 #### 双向转换,带属性方括号亦转', () => {
+    const zh = convertSpecKeywords(BARE_EN, 'zh').split('\n');
+    expect(zh).toContain('### 1. [探索 开放] 读文档');
+    expect(zh).toContain('### 2. [子任务 重试=2] 汇总');
+    expect(zh).toContain('#### 2.1. [推理] 写报告');
+    expect(zh).toContain('#### 2.2. [检查 终检] 核对');
+    const en = convertSpecKeywords(zh.join('\n'), 'en').split('\n');
+    expect(en).toContain('### 2. [subtask retry=2] 汇总');
+    expect(en).toContain('#### 2.2. [check final] 核对');
+  });
+
+  it('正: 规范形单语言源(裸键+标题步骤混排) en→zh→en 逐字节一致,且转换前后 parse 同构', () => {
+    const zh = convertSpecKeywords(BARE_EN, 'zh');
+    expect(convertSpecKeywords(zh, 'en')).toBe(BARE_EN);
+    const a = parseSpec(BARE_EN), b = parseSpec(zh);
+    expect(b.errors.length).toBe(a.errors.length);
+    expect(a.ast.header.goal).toBe('把事做完');
+    expect(b.ast.header.goal).toBe(a.ast.header.goal);
+    expect(b.ast.header.inputs?.length).toBe(1);
+    expect(b.ast.steps.length).toBe(2);
+    expect(JSON.stringify(b.ast)).toBe(JSON.stringify(a.ast));
+  });
+
+  it('正: 非规范大小写 goal:/GOAL:/INPUTS:/## goal/## outputs/## steps 转出规范形(作者拍甲案)', () => {
+    const src = '# Spec: c\nId: c\n\ngoal: g\nINPUTS:\n- x: text\n## outputs\n- y: text\n\n## steps\n1. [act] a\n';
+    const zh = convertSpecKeywords(src, 'zh').split('\n');
+    expect(zh).toContain('目标: g');
+    expect(zh).toContain('输入:');
+    expect(zh).toContain('## 输出');
+    expect(zh).toContain('## 步骤');
+    const en = convertSpecKeywords(zh.join('\n'), 'en').split('\n');
+    expect(en).toContain('Goal: g');
+    expect(en).toContain('## Outputs');
+    // 全大写裸键与小写二级段头(同种类在一份源里只转第一次,故分两份源)
+    const upper = convertSpecKeywords('# Spec: c\nId: c\n\nGOAL: g\n\n## Steps\n1. [act] a\n', 'zh').split('\n');
+    expect(upper).toContain('目标: g');
+    const lowerHead = convertSpecKeywords('# Spec: c\nId: c\n\n## goal\ng\n\n## Steps\n1. [act] a\n', 'zh').split('\n');
+    expect(lowerHead).toContain('## 目标');
+    expect(convertSpecKeywords(lowerHead.join('\n'), 'en').split('\n')).toContain('## Goal');
+  });
+
+  it('正: 裸键与二级段头混排各自转换', () => {
+    const src = '# Spec: m\nId: m\n\nGoal: g\n\n## Inputs\n- x: text\n\nOutputs:\n- y: text\n\n## Steps\n1. [act] a\n';
+    const zh = convertSpecKeywords(src, 'zh').split('\n');
+    expect(zh).toContain('目标: g');
+    expect(zh).toContain('## 输入');
+    expect(zh).toContain('输出:');
+  });
+
+  it('反: 步骤段之后叙事节里的 Goal: 不动——## Steps 与裸键 Steps: 两种步骤段起点各一', () => {
+    const zh = convertSpecKeywords(BARE_EN, 'zh').split('\n');
+    expect(zh).toContain('Goal: 叙事节里的字样');
+    const src2 = '# Spec: s\nId: s\n\nGoal: g\nSteps:\n1. [act] a\n\n## 背景\nConstraints: 叙事\n';
+    const zh2 = convertSpecKeywords(src2, 'zh').split('\n');
+    expect(zh2).toContain('步骤:');
+    expect(zh2).toContain('Constraints: 叙事');
+  });
+
+  it('反: 同种类第二次出现的裸键行不动——含先 ## Goal 后 Goal: 的跨形态重复', () => {
+    const src = '# Spec: d\nId: d\n\n## Goal\n目的\nGoal: 第二次\nInputs:\nInputs: 又一次\n\n## Steps\n1. [act] a\n';
+    const zh = convertSpecKeywords(src, 'zh').split('\n');
+    expect(zh).toContain('## 目标');
+    expect(zh).toContain('Goal: 第二次');
+    expect(zh).toContain('输入:');
+    expect(zh).toContain('Inputs: 又一次');
+  });
+
+  it('反: "- Goal: x" 条目行与缩进的 "  Goal:" 不当裸键段头', () => {
+    const src = '# Spec: i\nId: i\n\nConstraints:\n- Goal: 条目\n  Goal: 缩进\n\n## Steps\n1. [act] a\n';
+    const zh = convertSpecKeywords(src, 'zh').split('\n');
+    expect(zh).toContain('- Goal: 条目');
+    expect(zh).toContain('  Goal: 缩进');
+    expect(zh).toContain('约束:');
+  });
+
+  it('反: 全角冒号 "Goal：" 不动(parser 不认)', () => {
+    const src = '# Spec: w\nId: w\n\nGoal：全角\n\n## Steps\n1. [act] a\n';
+    expect(convertSpecKeywords(src, 'zh').split('\n')).toContain('Goal：全角');
+  });
+
+  it('反: 段区开启前(无一级标题/Id/关键字段头)的 Goal: 不动', () => {
+    const src = 'Goal: 前言\n\n# Spec: p\nGoal: 正文\n\n## Steps\n1. [act] a\n';
+    const zh = convertSpecKeywords(src, 'zh').split('\n');
+    expect(zh[0]).toBe('Goal: 前言');
+    expect(zh).toContain('目标: 正文');
+  });
+
+  it('反: 围栏内的标题形态步骤行与 Goal: 不动', () => {
+    const src = '# Spec: f\nId: f\n\n```\nGoal: 围栏\n### 1. [act free] 围栏步骤\n```\nGoal: g\n\n## Steps\n### 1. [act free] 真步骤\n';
+    const zh = convertSpecKeywords(src, 'zh').split('\n');
+    expect(zh).toContain('Goal: 围栏');
+    expect(zh).toContain('### 1. [act free] 围栏步骤');
+    expect(zh).toContain('目标: g');
+    expect(zh).toContain('### 1. [探索 开放] 真步骤');
+  });
+
+  it('反: 非关键字裸键 Note:/说明: 不动', () => {
+    const src = '# Spec: n\nId: n\n\nNote: x\n说明: y\nGoal: g\n\n## Steps\n1. [act] a\n';
+    const zh = convertSpecKeywords(src, 'zh').split('\n');
+    expect(zh).toContain('Note: x');
+    expect(zh).toContain('说明: y');
+    expect(zh).toContain('目标: g');
+  });
+});
+
 describe('serializeSpec — full round-trip with all sections', () => {
   it('serializes and re-parses types, config, subtask/loop attrs, children', () => {
     const md = `# Full Round Trip

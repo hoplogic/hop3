@@ -163,7 +163,7 @@ if [ -z "$RESUME" ]; then
   STEP="步骤4b-tarball资产核对"
   echo "④b tarball 资产核对（快照区打包,缺一即停——0.1.5 实坑：发版早于资产入库）..."
   PACKLIST=$(in_wt npm pack --dry-run 2>&1)
-  for MUST in "driver/hopspec-skill.md" "examples/coffee-week.md" "coffee-sales.json" "examples/data-quality.md" "demo-data.json" "examples/e2e-failure/e2e-adaptive.md"; do
+  for MUST in "driver/hopspec-skill.md" "examples/coffee-week.md" "coffee-sales.json" "examples/data-quality.md" "demo-data.json" "examples/e2e-failure/e2e-adaptive.md" "scripts/pysb/pysb_check.py"; do
     echo "$PACKLIST" | grep -q "$MUST" || { echo "❌ tarball 缺 $MUST"; exit 1; }
   done
   echo "   tarball 内容 OK"
@@ -253,13 +253,21 @@ if [ "$RESUME" != "published" ]; then
     STEP="步骤7b-发布核验"
     echo "${STEP}：轮询 registry（传播有延迟——0.1.7 实测 3s 仍读到旧版，假阴性中断过一次）..."
     OK=""
-    for i in 1 2 3 4 5 6; do
+    # 两次查询之间的等待秒数,合计 570s(约 9.5 分钟)——0.18.0 实撞 publish 后约 5 分钟才可见,原 210s 判了假失败
+    # @a: anc-release-github-snapshot —— 轮询时长(静态断言钉合计 ≥540s)与收尾指路 github-publish.sh 两处
+    POLL_SLEEPS=(10 20 30 40 50 60 60 60 60 60 60 60)
+    NPMV=$(npm view "@hoplogic/hopjit@$PKGV" version 2>/dev/null || echo "")
+    [ "$NPMV" = "$PKGV" ] && OK=1
+    i=0
+    for wait_s in "${POLL_SLEEPS[@]}"; do
+      [ -n "$OK" ] && break
+      i=$((i+1))
+      echo "   第 $i 次未见 $PKGV (当前读到 '${NPMV:-空}'), ${wait_s}s 后重试..."
+      sleep "$wait_s"
       NPMV=$(npm view "@hoplogic/hopjit@$PKGV" version 2>/dev/null || echo "")
-      [ "$NPMV" = "$PKGV" ] && { OK=1; break; }
-      echo "   第 $i 次未见 $PKGV (当前读到 '${NPMV:-空}'), ${i}0s 后重试..."
-      sleep $((i*10))
+      [ "$NPMV" = "$PKGV" ] && OK=1
     done
-    [ -n "$OK" ] || { echo "❌ 轮询 210s 后 registry 仍无 $PKGV -- 若上方确有 '+ @hoplogic/hopjit@$PKGV' 则是传播极慢，稍后重跑续发即可；否则 publish 未生效。"; exit 1; }
+    [ -n "$OK" ] || { echo "❌ 轮询 570s 后 registry 仍无 $PKGV -- 若上方确有 '+ @hoplogic/hopjit@$PKGV' 则是传播极慢，稍后重跑续发即可；否则 publish 未生效。"; exit 1; }
     echo "   registry 确认 $PKGV ✅"
   else
     echo "⑦ [dry-run] 跳过 publish 与 registry 核验（不可逆外向动作,演练不发）"
@@ -325,3 +333,5 @@ echo "◦ 快照区已弃置（版本提交由 tag 与主区 cherry-pick 双持,
 
 STEP="完成"
 echo "✅ 发版完成: @hoplogic/hopjit@$PKGV (引擎+driver+examples 成对分发, 快照 $SNAP)"
+echo "➡️  下一步: 同步 GitHub 公开快照——./scripts/github-publish.sh(产快照并打印推送命令,推送由人手敲)"
+echo "   完整流程(publish → push main → push tag → verify)见 maintainers/RELEASING.md §6"

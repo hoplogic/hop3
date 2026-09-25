@@ -9,7 +9,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ExecutionEngine } from '../src/engine.js';
-import { PromptAssembler, formatPromptText } from '../src/prompt.js';
+import { PromptAssembler, formatPromptText, SCHEMA_KICK_MARKER, TEXT_TOOLCALL_HINT_MARKER } from '../src/prompt.js';
 import type { OutputDecl } from '../src/ast-types.js';
 import type { HostConfig } from '../src/provider-types.js';
 import type { AssembledContext } from '../src/runtime-types.js';
@@ -18,9 +18,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const openaiCreateMock = vi.fn();
+const openaiResponsesCreateMock = vi.fn();
 vi.mock('openai', () => {
   const MockOpenAI = vi.fn().mockImplementation(() => ({
     chat: { completions: { create: openaiCreateMock } },
+    responses: { create: openaiResponsesCreateMock },
   }));
   for (const k of ['RateLimitError', 'InternalServerError', 'APIConnectionTimeoutError', 'APIConnectionError', 'AuthenticationError', 'BadRequestError', 'APIError']) {
     (MockOpenAI as any)[k] = class extends Error { };
@@ -586,6 +588,111 @@ Test schema retry
     });
   });
 
+  // @v: anc-exec-text-toolcall-hint —— 产出被拒时正文疑似工具调用的附加提示（todo/0110 probe 3:
+  // Ling 在无 bash 的 act free 步里 9 轮把 `<tool_call>bash` 写成正文,反馈只有校验报文与"重点检查形态"）
+  describe('产出被拒时正文疑似工具调用的附加提示', () => {
+    const LING_TEXT = [
+      '[thinking]',
+      '现在跑校验脚本验证三个要点：能跑、区分合规/违规、确实在查该条款。',
+      '<tool_call>bash',
+      '<arg_key>command</arg_key>',
+      '<arg_value>cd .hopstate/x/work_zone && python3 guard_clause1.py test_compliant.py</arg_value>',
+      '</tool_call>',
+    ].join('\n');
+    const actSpec = (outType: string) => `# T\nId: t-tth\n## Goal\ng\n## Outputs\n- n: ${outType}  # o\n## Steps\n1. [act free] 跑校验\n  + → n: ${outType}  # o\n  > 跑脚本\n`;
+    const REASON_SPEC = `# T\nId: t-tth-r\n## Goal\ng\n## Outputs\n- score: int  # o\n## Steps\n1. [reason] 打分\n  + → score: int  # o\n  > 给分\n`;
+    const resp = (text: string) => ({ content: [{ type: 'text', text }], usage: { input_tokens: 5, output_tokens: 5 } });
+    // 装一个 dispatcher,并在两处抄实物:每次执行时的指令原文（instrs）、每次 completeStep 的回执报文（msgs）
+    function mk(spec: string, toolNames: string[]) {
+      const engine = new ExecutionEngine();
+      engine.initExecution(spec, HOST);
+      const d = new StepDispatcher(engine, HOST);
+      (d as any).sleep = () => Promise.resolve();
+      (d as any).toolProvider = {
+        list: () => toolNames.map(name => ({ name, description: name, input_schema: { type: 'object', properties: {} }, requires_commit: false, category: 'basic' })),
+        execute: async () => ({ result: 'ok', success: true }),
+      };
+      const instrs: string[] = [];
+      const origExec = (d as any).executeStepWithTimeout.bind(d);
+      (d as any).executeStepWithTimeout = async (s: any) => { instrs.push(s.context.instruction); return origExec(s); };
+      const msgs: string[] = [];
+      const origComplete = engine.completeStep.bind(engine);
+      vi.spyOn(engine, 'completeStep').mockImplementation(((id: string, out: any) => {
+        const r = origComplete(id, out) as any;
+        if (r.code === 'SCHEMA_MISMATCH') msgs.push(r.message);
+        return r;
+      }) as any);
+      const failSpy = vi.spyOn(engine, 'failStep');
+      const mockCreate = (d as any).defaultClient.messages.create;
+      const handleReady = (d as any).handleStepReady.bind(d);
+      return { engine, d, instrs, msgs, failSpy, mockCreate, handleReady };
+    }
+
+    it('正例：Ling 实撞回放——act 步只有 write/listdir,三次都把 bash 写成正文 → 重做指令原报文在场其后追加提示,耗尽原因带提示标记', async () => {
+      const { engine, d, instrs, msgs, failSpy, mockCreate, handleReady } = mk(actSpec('int'), ['write', 'listdir']);
+      mockCreate.mockResolvedValue(resp(LING_TEXT));
+      const next = engine.nextStep();
+      expect(next.status).toBe('step_ready');
+      if (next.status !== 'step_ready') return;
+      await handleReady(next);
+      expect(mockCreate).toHaveBeenCalledTimes(3);   // 不新增重试预算
+      expect(msgs.length).toBe(3);
+      const hint = instrs[1].slice(`${instrs[0]}\n\n${SCHEMA_KICK_MARKER}\n${msgs[0]}`.length);
+      expect(instrs[1].startsWith(`${instrs[0]}\n\n${SCHEMA_KICK_MARKER}\n${msgs[0]}\n\n${TEXT_TOOLCALL_HINT_MARKER}\n`)).toBe(true);   // 原报文一字不动,提示只追加在后
+      expect(hint).toContain('如果你本意是调用工具 bash');
+      expect(hint).toContain('bash 不在你这一步的可用工具清单里，可用的有：write、listdir');
+      expect(hint.endsWith('如果这段是产出内容本身，忽略本提示。')).toBe(true);
+      expect(failSpy).toHaveBeenCalledTimes(1);
+      const reason = failSpy.mock.calls[0][1] as string;
+      expect(reason.startsWith(`${msgs[2]} (after 3 attempts)\n\n${TEXT_TOOLCALL_HINT_MARKER}\n`)).toBe(true);
+      expect(reason).toContain('bash 不在你这一步的可用工具清单里');
+      expect((d as any).lastFinalTurn.size).toBe(0);   // 收尾清掉本步记录
+    });
+
+    it('反例：同一段 Ling 文字作为 text 型产出一次通过 → 零提示、只调一次模型', async () => {
+      const { engine, instrs, msgs, failSpy, mockCreate, handleReady } = mk(actSpec('text'), ['write', 'listdir']);
+      mockCreate.mockResolvedValue(resp(LING_TEXT));
+      const next = engine.nextStep();
+      if (next.status !== 'step_ready') throw new Error('expected step_ready');
+      await handleReady(next);
+      expect(engine.getStepStates().get('1')).toBe('done');
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+      expect(msgs.length).toBe(0);
+      expect(failSpy).not.toHaveBeenCalled();
+      expect(instrs.join('\n')).not.toContain('忽略本提示');
+    });
+
+    it('反例：产出被拒但正文无工具调用形态（"not a number"）→ 重做指令与改前逐字相同', async () => {
+      const { engine, instrs, msgs, mockCreate, handleReady } = mk(REASON_SPEC, []);
+      mockCreate.mockResolvedValueOnce(resp('not a number')).mockResolvedValueOnce(resp('87'));
+      const next = engine.nextStep();
+      if (next.status !== 'step_ready') throw new Error('expected step_ready');
+      await handleReady(next);
+      expect(engine.getStepStates().get('1')).toBe('done');
+      expect(instrs[1]).toBe(`${instrs[0]}\n\n${SCHEMA_KICK_MARKER}\n${msgs[0]}`);
+    });
+
+    it('正例：单发 reason 零工具,正文写 <tool_call>read 被拒 → 提示说这一步没有任何可用工具', async () => {
+      const { engine, instrs, msgs, mockCreate, handleReady } = mk(REASON_SPEC, ['write']);   // reason 无工具声明走单发,工具面与它无关
+      mockCreate.mockResolvedValueOnce(resp('<tool_call>read\n<arg_key>path</arg_key>\n<arg_value>a.md</arg_value>\n</tool_call>')).mockResolvedValueOnce(resp('87'));
+      const next = engine.nextStep();
+      if (next.status !== 'step_ready') throw new Error('expected step_ready');
+      await handleReady(next);
+      expect(engine.getStepStates().get('1')).toBe('done');
+      expect(instrs[1]).toBe(`${instrs[0]}\n\n${SCHEMA_KICK_MARKER}\n${msgs[0]}\n\n${TEXT_TOOLCALL_HINT_MARKER}\n如果你本意是调用工具 read：写在正文里的调用引擎收不到；你这一步没有任何可用工具，需要的内容只能从本步输入材料里取。如果这段是产出内容本身，忽略本提示。`);
+    });
+
+    it('正例：写在正文里的工具恰在清单里 → 提示说它在清单里、要通过工具调用功能发起', async () => {
+      const { engine, instrs, msgs, mockCreate, handleReady } = mk(actSpec('int'), ['write', 'listdir']);
+      mockCreate.mockResolvedValueOnce(resp('<tool_call>{"name": "listdir", "arguments": {"path": "."}}</tool_call>')).mockResolvedValueOnce(resp('3'));
+      const next = engine.nextStep();
+      if (next.status !== 'step_ready') throw new Error('expected step_ready');
+      await handleReady(next);
+      expect(engine.getStepStates().get('1')).toBe('done');
+      expect(instrs[1]).toBe(`${instrs[0]}\n\n${SCHEMA_KICK_MARKER}\n${msgs[0]}\n\n${TEXT_TOOLCALL_HINT_MARKER}\n如果你本意是调用工具 listdir：写在正文里的调用引擎收不到；listdir 在你这一步的可用工具清单里，要通过工具调用功能发起，不要写成文字。如果这段是产出内容本身，忽略本提示。`);
+    });
+  });
+
   // @v: anc-exec-cache-control — LLM 前缀缓存注入（B 断点 + C 观测）正反例
   describe('cache_control injection', () => {
     const CACHE_SPEC = `# Cache Test
@@ -1029,6 +1136,69 @@ g
       const r2 = await dispatcher.resume(r.pause!.step_id, {}, r.pause!.call_path);   // call_path 下钻免答
       expect(r2.status).toBe('completed');
       expect(String(r2.outputs?.y)).toContain('修好了');
+      } finally {
+        (Anthropic as any).mockImplementation(origImpl);
+        (StepDispatcher.prototype as any).sleep = origSleep;
+      }
+    });
+
+    // @v: anc-cli-status-nested-pause （todo/0105 缺陷 A 端到端:dispatcher 真跑出嵌套网络暂停,盘上快照
+    // 经 ExecutionEngine.load 读回——命令行 status 同一条路——报 paused/network/call_path;按 call_path 恢复跑完报 completed）
+    it('正例：落盘的串行 call 子层网络暂停 → load 父目录 getStatus 报 paused+network+call_path;反例：按 call_path 恢复跑完报 completed', async () => {
+      const CALLEE = `# Sub3
+Id: sub3
+## Goal
+g
+## Inputs
+- x: int  # 入
+## Outputs
+- y: text  # 出
+## Steps
+1. [reason] 想
+  - ← x
+  + → y: text  # 出
+2. [exit]
+`;
+      const CALLER = `# Ser3
+Id: ser3
+## Goal
+g
+## Inputs
+- x: int  # 入
+## Outputs
+- y: text  # 出
+## Steps
+1. [call sub3(x)] 串行调子
+  + → y: y  # 收
+2. [exit]
+`;
+      const host: HostConfig = { ...HOST, spec_provider: { resolve: async (id: string) => id === 'sub3' ? { spec_id: 'sub3', source: CALLEE } : null } };
+      const origImpl = (Anthropic as any).getMockImplementation();
+      const sharedCreate = vi.fn().mockRejectedValue(new TypeError('fetch failed'));
+      (Anthropic as any).mockImplementation(() => ({ messages: { create: sharedCreate } }));
+      const origSleep = (StepDispatcher.prototype as any).sleep;
+      (StepDispatcher.prototype as any).sleep = () => Promise.resolve();
+      try {
+      const engine = new ExecutionEngine();
+      engine.initExecution(CALLER, host, { stateDir: mkdtempSync(join(tmpdir(), 'np-0105-')), params: { x: 1 } });
+      const dispatcher = new StepDispatcher(engine, host);
+      const r = await dispatcher.runSpec();
+      expect(r.status).toBe('paused');
+      expect(r.pause?.call_path).toEqual(['1']);
+      const parentDir = engine.getInstanceDir()!;
+      const st = ExecutionEngine.load(parentDir).getStatus();   // 盘上快照读回——观察方唯一能拿到的面
+      expect(st.execution_status).toBe('paused');   // 修前=running（T5 实撞形态）
+      expect(st.pause_reason).toBe('network');
+      expect(st.paused_step_id).toBe('1');
+      expect(st.call_path).toEqual(r.pause?.call_path);   // 与 MCP 暂停载荷同语义同值
+
+      sharedCreate.mockReset();
+      sharedCreate.mockResolvedValue({ content: [{ type: 'text', text: 'y: 通了' }], usage: { input_tokens: 5, output_tokens: 5 } });
+      const r2 = await dispatcher.resume(r.pause!.step_id, {}, r.pause!.call_path);
+      expect(r2.status).toBe('completed');
+      const st2 = ExecutionEngine.load(parentDir).getStatus();
+      expect(st2.execution_status).toBe('completed');
+      expect(st2.call_path).toBeUndefined();
       } finally {
         (Anthropic as any).mockImplementation(origImpl);
         (StepDispatcher.prototype as any).sleep = origSleep;
@@ -1535,6 +1705,62 @@ g
         expect(existsSync(join(parentDir, 'calls', '1', 'work_zone'))).toBe(true);
       });
 
+      // @v: anc-exec-call-child-iter-id —— hopissues/0098 独立模式半边:loop 里串行 call 每轮一个子实例目录,
+      // 第 1 轮的 work_zone 产出在第 2 轮建子引擎后仍在（旧形态共用 calls/1.1/,re-init 净室删掉前轮）
+      it('正例：loop 两轮串行 call → 子实例落 calls/1.1.1 与 calls/1.1.2,前轮 work_zone 文件在后轮后仍在;卫星日志目录同名', async () => {
+        const LOOPER = `# LP
+Id: lp
+## Goal
+g
+## Inputs
+- segs: [text]  # 段
+## Outputs
+- paths: [text]  # 路径
+## Steps
+1. [loop for-each seg in segs, collect p into paths] 逐段
+  + → paths: [text]  # 收集
+  1.1. [call frag(s: seg)] 拆一段
+    + → p: frag_path
+2. [exit] 交付
+`;
+        const FRAG = `# F
+Id: frag
+## Goal
+g
+## Inputs
+- s: text  # 段
+## Outputs
+- frag_path: text  # 路径
+## Steps
+1. [act] 写
+  - ← s
+  + → frag_path: text  # 路径
+> 写片段
+> \`\`\`hop_python
+> frag_path = work_zone_path("fragment.md")
+> w = write(path: frag_path, content: s)
+> \`\`\`
+`;
+        const dir = mkdtempSync(join(tmpdir(), 'ccp-0098-'));
+        const hostX: HostConfig = { ...HOST, spec_provider: { resolve: async (id: string) => id === 'frag' ? { spec_id: 'frag', source: FRAG } : null } };
+        const engine = new ExecutionEngine();
+        engine.initExecution(LOOPER, hostX, { stateDir: dir, params: { segs: ['SEG_A', 'SEG_B'] }, logDir: join(dir, 'log') });
+        const d = new StepDispatcher(engine, hostX);
+        (d as any).sleep = () => Promise.resolve();
+        const r = await d.runSpec();
+        expect(r.status).toBe('completed');
+        const parentDir = engine.getInstanceDir()!;
+        expect(existsSync(join(parentDir, 'calls', '1.1.1', 'state.json'))).toBe(true);
+        expect(existsSync(join(parentDir, 'calls', '1.1.2', 'state.json'))).toBe(true);
+        expect(existsSync(join(parentDir, 'calls', '1.1'))).toBe(false);   // 不再落裸步骤号目录
+        const paths = r.outputs?.paths as string[];
+        expect(readFileSync(paths[0], 'utf-8')).toBe('SEG_A');   // 修前:第 2 轮建子引擎时 calls/1.1/ 被整目录删除
+        expect(readFileSync(paths[1], 'utf-8')).toBe('SEG_B');
+        const runDir = engine.getHopLog()!.getRunDir();
+        expect(existsSync(join(runDir, 'calls', '1.1.1', 'log'))).toBe(true);
+        expect(existsSync(join(runDir, 'calls', '1.1.2', 'log'))).toBe(true);
+      });
+
       it('反例：父纯内存 → 子随纯内存,不落任何盘（"无跨进程"假设在纯内存宿主真成立,现状形态保留）', async () => {
         const hostX: HostConfig = { ...HOST, spec_provider: { resolve: async (id: string) => id === 'child' ? { spec_id: 'child', source: CHILD } : null } };
         const engine = new ExecutionEngine();
@@ -1912,7 +2138,108 @@ Test adaptive
       }
     });
 
-    it('断路器反例：同名不同参连续调用 → 不触发（合法逐文件遍历形态）', async () => {
+    // @v: anc-exec-act-evidence-gate —— 执行证据机核（0095 2e:27b 修错步十轮零工具虚构完成——
+  // 读完工单直接编"修了 N 处"交卷,判官点破十轮无效;四与门=重试轮+工具面在场+零调用+无 no_change 自报 → 拒收重做不送判官）
+  describe('执行证据机核（重试轮零工具即声称完成拒收）', () => {
+    const ACT_SPEC = `# T\nId: t-eg\n## Goal\ng\n## Outputs\n- result: text  # o\n## Steps\n1. [act] 修错\n  + → result: text  # o\n  > 按工单修\n`;
+    const mkD = () => {
+      const engine = new ExecutionEngine();
+      engine.initExecution(ACT_SPEC, HOST);
+      const d = new StepDispatcher(engine, HOST);
+      (d as any).sleep = () => Promise.resolve();
+      (d as any).toolProvider = {
+        list: () => [{ name: 'edit_file', description: 'e', input_schema: { type: 'object', properties: {} }, requires_commit: false, category: 'basic' }],
+        execute: async () => ({ result: 'ok', success: true }),
+      };
+      return { engine, d };
+    };
+
+    it('正例：重试轮+工具面在场+零调用 → 拒收带双出口反馈（27b 实撞同型）', async () => {
+      const { engine, d } = mkD();
+      const mockCreate = (d as any).defaultClient.messages.create;
+      mockCreate.mockResolvedValueOnce({
+        content: [{ type: 'text', text: 'result: 修了 8 处' }],
+        usage: { input_tokens: 50, output_tokens: 20 },
+      });
+      const step = engine.nextStep();
+      expect(step.status).toBe('step_ready');
+      if (step.status === 'step_ready') {
+        step.context.retry_feedback = '工单:第 3 步缺 check,修复它';
+        const executeAct = (d as any).executeActWithTools.bind(d);
+        await expect(executeAct(step)).rejects.toThrow(/SCHEMA_MISMATCH.*一次工具都没调.*复述工单不算修复/);
+      }
+    });
+
+    it('反例：首轮零调用不拦（retry_feedback 缺席——零工具合法形态多）', async () => {
+      const { engine, d } = mkD();
+      const mockCreate = (d as any).defaultClient.messages.create;
+      mockCreate.mockResolvedValueOnce({
+        content: [{ type: 'text', text: 'result: done' }],
+        usage: { input_tokens: 50, output_tokens: 10 },
+      });
+      const step = engine.nextStep();
+      if (step.status === 'step_ready') {
+        const executeAct = (d as any).executeActWithTools.bind(d);
+        const out = await executeAct(step);
+        expect(out.result).toBe('done');
+      }
+    });
+
+    it('反例：重试轮但工具面为空 → 不拦（纯推理形态零调用天然合法）', async () => {
+      const { engine, d } = mkD();
+      (d as any).toolProvider = { list: () => [], execute: async () => ({ result: '', success: true }) };
+      const mockCreate = (d as any).defaultClient.messages.create;
+      mockCreate.mockResolvedValueOnce({
+        content: [{ type: 'text', text: 'result: 如实说明未做修改' }],
+        usage: { input_tokens: 50, output_tokens: 10 },
+      });
+      const step = engine.nextStep();
+      if (step.status === 'step_ready') {
+        step.context.retry_feedback = '意见一条';
+        const executeAct = (d as any).executeActWithTools.bind(d);
+        const out = await executeAct(step);
+        expect(out.result).toBe('如实说明未做修改');
+      }
+    });
+
+    it('第二出口：重试轮零调用但产出携顶格 no_change 自报 → 放行留痕（如实声明的机械通道——阅卷抓"双出口第二出口不可达"后补）', async () => {
+      const { engine, d } = mkD();
+      const mockCreate = (d as any).defaultClient.messages.create;
+      mockCreate.mockResolvedValueOnce({
+        content: [{ type: 'text', text: 'no_change: 工单指的问题在上一轮已修复,本轮核对后无需再动\nresult: 未做修改,原因见上' }],
+        usage: { input_tokens: 50, output_tokens: 20 },
+      });
+      const step = engine.nextStep();
+      if (step.status === 'step_ready') {
+        step.context.retry_feedback = '工单一条';
+        const executeAct = (d as any).executeActWithTools.bind(d);
+        const out = await executeAct(step);
+        expect(String(out.result)).toContain('未做修改');
+      }
+    });
+
+    it('反例：重试轮真调了工具 → 不拦（toolCallLog 非空即有执行证据）', async () => {
+      const { engine, d } = mkD();
+      const mockCreate = (d as any).defaultClient.messages.create;
+      mockCreate.mockResolvedValueOnce({
+        content: [{ type: 'tool_use', id: 't1', name: 'edit_file', input: { path: 'a.md' } }],
+        usage: { input_tokens: 50, output_tokens: 20 },
+      });
+      mockCreate.mockResolvedValueOnce({
+        content: [{ type: 'text', text: 'result: 真修了' }],
+        usage: { input_tokens: 60, output_tokens: 10 },
+      });
+      const step = engine.nextStep();
+      if (step.status === 'step_ready') {
+        step.context.retry_feedback = '工单一条';
+        const executeAct = (d as any).executeActWithTools.bind(d);
+        const out = await executeAct(step);
+        expect(out.result).toBe('真修了');
+      }
+    });
+  });
+
+  it('断路器反例：同名不同参连续调用 → 不触发（合法逐文件遍历形态）', async () => {
       const actSpec = `# T\nId: t-iter\n## Goal\ng\n## Outputs\n- result: text  # o\n## Steps\n1. [act] do\n  + → result: text  # o\n  > use tools\n`;
       const engine = new ExecutionEngine();
       engine.initExecution(actSpec, HOST);
@@ -2746,6 +3073,28 @@ Test safe tool
       const text = 'result:\n  - item: 1\n顶格散文尾巴';
       const out = parse(d, text);
       expect(out.result).toBe(text);
+    });
+
+    // @v: anc-exec-output-parse-self-labeled — 第四形态(0106):空值键行+顶格列表。T9 实撞真身:
+    // 27b 照"思考不进产出从键行收"教学交『含 YAML 形清单行的散文+顶格 clauses:+顶格 - 条目』,
+    // 旧"全缩进"判据不认顶格列表→散文全文进值 SCHEMA 误拒合规产出三 attempts 冤死整 run。
+    it('正例(0106 第四形态)：散文含 YAML 形清单行+空值键行+顶格列表 → 标签行起单解收键值,散文弃', () => {
+      const d = mk();
+      const text = '我需要通读标准文档,识别条款。\n让我分析文档内容：\n- 文档标题：示例编码规范 v1\n- 第1节：函数长度 - 单个函数不超过 40 行\n\n从这些内容中,我可以提取出条款：\n\nresult:\n- clause_id: "1"\n  quote: |\n    单个函数不超过 40 行。\n  location: "1. 函数长度"\n- clause_id: "2"\n  quote: |\n    禁止使用 any 类型。\n  location: "2. 类型禁用"';
+      const out = parse(d, text);
+      expect(String(out.result)).not.toContain('我需要通读');
+      expect(String(out.result)).not.toContain('文档标题');
+      const parsed = yamlLoadRaw(String(out.result));
+      expect(Array.isArray(parsed)).toBe(true);
+      expect((parsed as unknown[]).length).toBe(2);
+      expect((parsed as Array<Record<string, unknown>>)[0].clause_id).toBe('1');
+    });
+
+    it('反例(0106)：顶格列表行存在但标签行起非法 YAML → 照旧含糊原样,不误收', () => {
+      const d = mk();
+      const text = 'result:\n- clause_id: "1"\n   quote: [未闭合\n  bad: : 双冒号';
+      const out = parse(d, text);
+      expect(out.result).toBe(text);   // 单解失败走含糊原样,不吞不改
     });
   });
 
@@ -4784,6 +5133,276 @@ describe('worker 共享父 ToolProvider（0021）', () => {
     const d2 = new StepDispatcher(e2, HOST);
     expect(d1.getToolProvider()).not.toBe(d2.getToolProvider());
   });
+});
+
+// per_parallel_child 开关（todo/0112——deep research 5 个并行子任务共用一个 playwright 进程互抢浏览器,
+// 实验证实一个进程只有一个"当前页面",独立会话必须一子任务一进程;开关打开的 server 在并行子任务里
+// 换派生视图独占进程、收场即关,串行步骤与串行 call 照旧共用顶层进程）。夹具=真 stdio MCP server:
+// 起来即在目录里落 pid-<进程号> 文件,whoami 工具回自己的进程号——进程号相同=同一进程。
+// @v: anc-exec-tool-composite, anc-exec-standalone-parallel
+describe('并行子任务独占工具进程（per_parallel_child,0112）', () => {
+  const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  async function waitDead(pids: number[], ms = 5000): Promise<boolean> {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+      if (pids.every(p => !alive(p))) return true;
+      await new Promise(res => setTimeout(res, 50));
+    }
+    return false;
+  }
+  function makeServer(perChild: boolean): { entry: import('../src/tools-registry.js').ToolServerEntry; pidsOnDisk: () => number[] } {
+    const dir = mkdtempSync(join(tmpdir(), 'pc-mcp-'));
+    const script = join(dir, 'whoami-server.cjs');
+    writeFileSync(script, [
+      "const fs = require('fs');",
+      `fs.writeFileSync(${JSON.stringify(dir)} + '/pid-' + process.pid, '');`,
+      "let buf = '';",
+      "process.stdin.on('data', d => {",
+      "  buf += d;",
+      "  let i;",
+      "  while ((i = buf.indexOf('\\n')) >= 0) {",
+      "    const line = buf.slice(0, i); buf = buf.slice(i + 1);",
+      "    if (!line.trim()) continue;",
+      "    let m; try { m = JSON.parse(line); } catch { continue; }",
+      "    if (m.id === undefined) continue;",
+      "    const reply = o => process.stdout.write(JSON.stringify(o) + '\\n');",
+      "    if (m.method === 'initialize') reply({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'w', version: '0' } } });",
+      "    else if (m.method === 'tools/list') reply({ jsonrpc: '2.0', id: m.id, result: { tools: [{ name: 'whoami', inputSchema: { type: 'object' } }] } });",
+      "    else if (m.method === 'tools/call') reply({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: String(process.pid) }] } });",
+      "    else reply({ jsonrpc: '2.0', id: m.id, result: {} });",
+      "  }",
+      "});",
+      "process.stdin.on('end', () => process.exit(0));",
+    ].join('\n'));
+    return {
+      entry: {
+        name: 'who',
+        binding: { kind: 'mcp', transport: 'stdio', command: process.execPath, args: [script] },
+        tools: [{ name: 'whoami', requires_commit: false }],
+        ...(perChild ? { per_parallel_child: true } : {}),
+      },
+      pidsOnDisk: () => readdirSync(dir).filter(f => f.startsWith('pid-')).map(f => Number(f.slice(4))),
+    };
+  }
+  const inMemory = (specs: Record<string, string>) => ({ resolve: async (id: string) => (id in specs ? { spec_id: id, source: specs[id] } : null) });
+
+  const PARALLEL_WHO = `# PW
+Id: pw
+
+## Goal
+每项查一次工具进程号
+
+## Inputs
+- items: [int]  # 列表
+
+## Outputs
+- pids: [text]  # 进程号列表
+
+## Steps
+1. [loop for-each it in items, collect p into pids] 逐项
+  + → pids: [text]  # 收集
+  1.1. [subtask parallel] 查一项
+    + → p: text  # 进程号
+    1.1.1. [act] 调工具
+      - ← it
+      + → p: text  # 进程号
+      > 调 whoami
+      > \`\`\`hop_python
+      > p = whoami(tag: it)
+      > \`\`\`
+2. [exit] 交付
+`;
+  const CHILD_WHO = `# CW
+Id: child_who
+
+## Goal
+子实例查工具进程号
+
+## Outputs
+- p: text  # 进程号
+
+## Steps
+1. [act] 调工具
+  + → p: text  # 进程号
+  > 调 whoami
+  > \`\`\`hop_python
+  > p = whoami(tag: 99)
+  > \`\`\`
+`;
+  const PAUSE_WHO = `# PA
+Id: pa
+
+## Goal
+先调工具再问人
+
+## Inputs
+- items: [int]  # 列表
+
+## Outputs
+- vals: [int]  # 人值列表
+
+## Steps
+1. [loop for-each it in items, collect human_val into vals] 逐项
+  + → vals: [int]  # 收集
+  1.1. [subtask parallel] 一项
+    + → human_val: int  # 人值
+    1.1.1. [act] 先调工具
+      - ← it
+      + → p: text  # 进程号
+      > 调 whoami
+      > \`\`\`hop_python
+      > p = whoami(tag: it)
+      > \`\`\`
+    1.1.2. [ask require_human=true] 请提供数值
+      - ← p
+      + → human_val: int  # 人值
+2. [exit] 交付
+`;
+
+  async function runWith(spec: string, host: HostConfig, params: Record<string, unknown>) {
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(spec, host, { params });
+    expect(init.status).toBe('ok');
+    const dispatcher = new StepDispatcher(engine, host);
+    return { dispatcher, r: await dispatcher.runSpec() };
+  }
+  async function cleanup(dispatcher: StepDispatcher, pids: number[]) {
+    await (dispatcher.getToolProvider() as { close?: () => Promise<void> }).close?.();
+    for (const p of pids) { try { process.kill(p, 'SIGKILL'); } catch { /* 已退出 */ } }
+  }
+
+  it('正例①：开关打开——for-each 三项并行子任务各一个进程（进程号两两不同），run 结束后三个进程都已退出', async () => {
+    const { entry, pidsOnDisk } = makeServer(true);
+    const { dispatcher, r } = await runWith(PARALLEL_WHO, { ...HOST, tool_registry: [entry] }, { items: [1, 2, 3] });
+    try {
+      expect(r.status).toBe('completed');
+      const pids = (r.outputs?.['pids'] as string[]).map(Number);
+      expect(pids).toHaveLength(3);
+      expect(new Set(pids).size).toBe(3);                    // 各自独占
+      expect(new Set(pidsOnDisk())).toEqual(new Set(pids));  // 起过的进程恰是这三个（顶层没起）
+      expect(await waitDead(pids)).toBe(true);               // 子任务收场即关——不等顶层 close
+    } finally { await cleanup(dispatcher, pidsOnDisk()); }
+  }, 30000);
+
+  it('反例②：开关关闭——同样的 spec 三次调用是同一个进程（0021 共享不变）', async () => {
+    const { entry, pidsOnDisk } = makeServer(false);
+    const { dispatcher, r } = await runWith(PARALLEL_WHO, { ...HOST, tool_registry: [entry] }, { items: [1, 2, 3] });
+    try {
+      expect(r.status).toBe('completed');
+      const pids = (r.outputs?.['pids'] as string[]).map(Number);
+      expect(new Set(pids).size).toBe(1);
+      expect(pidsOnDisk()).toHaveLength(1);
+      expect(alive(pids[0])).toBe(true);                     // 共享进程归顶层——run 结束不关,等顶层 close
+      await (dispatcher.getToolProvider() as { close: () => Promise<void> }).close();
+      expect(await waitDead(pids)).toBe(true);
+    } finally { await cleanup(dispatcher, pidsOnDisk()); }
+  }, 30000);
+
+  it('反例③：开关打开时串行 call 子实例照旧用顶层进程（持续登录类任务不受影响）', async () => {
+    const CALLER = `# SC
+Id: sc
+
+## Goal
+顶层与串行子调用各查一次
+
+## Outputs
+- top: text  # 顶层进程号
+- sub: text  # 子实例进程号
+
+## Steps
+1. [act] 顶层调工具
+  + → top: text  # 进程号
+  > 调 whoami
+  > \`\`\`hop_python
+  > top = whoami(tag: 0)
+  > \`\`\`
+2. [call child_who] 串行调子
+  + → sub: p  # 子实例进程号
+3. [exit] 交付
+`;
+    const { entry, pidsOnDisk } = makeServer(true);
+    const { dispatcher, r } = await runWith(CALLER, { ...HOST, tool_registry: [entry], spec_provider: inMemory({ child_who: CHILD_WHO }) }, {});
+    try {
+      expect(r.status).toBe('completed');
+      expect(r.outputs?.['sub']).toBe(r.outputs?.['top']);
+      expect(pidsOnDisk()).toHaveLength(1);
+    } finally { await cleanup(dispatcher, pidsOnDisk()); }
+  }, 30000);
+
+  it('正例④：并行子任务内嵌套的串行 call 用该子任务自己的进程（继承派生视图），子任务之间互不相同', async () => {
+    const NESTED = `# NS
+Id: ns
+
+## Goal
+并行子任务里自己调一次再串行 call 调一次
+
+## Inputs
+- items: [int]  # 列表
+
+## Outputs
+- pairs: [text]  # 每项"自己:子调用"
+
+## Steps
+1. [loop for-each it in items, collect pair into pairs] 逐项
+  + → pairs: [text]  # 收集
+  1.1. [subtask parallel] 一项
+    + → pair: text  # 拼接
+    1.1.1. [act] 自己调工具
+      - ← it
+      + → mine: text  # 进程号
+      > 调 whoami
+      > \`\`\`hop_python
+      > mine = whoami(tag: it)
+      > \`\`\`
+    1.1.2. [call child_who] 嵌套串行调子
+      + → sub: p  # 子实例进程号
+    1.1.3. [act] 拼接
+      - ← mine, sub
+      + → pair: text  # 拼接
+      > 拼
+      > \`\`\`hop_python
+      > pair = mine + ":" + sub
+      > \`\`\`
+2. [exit] 交付
+`;
+    const { entry, pidsOnDisk } = makeServer(true);
+    const { dispatcher, r } = await runWith(NESTED, { ...HOST, tool_registry: [entry], spec_provider: inMemory({ child_who: CHILD_WHO }) }, { items: [1, 2, 3] });
+    try {
+      expect(r.status).toBe('completed');
+      const pairs = (r.outputs?.['pairs'] as string[]).map(s => s.split(':'));
+      expect(pairs).toHaveLength(3);
+      for (const [mine, sub] of pairs) expect(sub).toBe(mine);   // 嵌套 call 与所在子任务同一进程
+      expect(new Set(pairs.map(p => p[0])).size).toBe(3);         // 子任务之间各自独占
+    } finally { await cleanup(dispatcher, pidsOnDisk()); }
+  }, 30000);
+
+  it('正例⑤：并行子任务停在人工提问点时进程保留，回答后子任务收场即退出', async () => {
+    const { entry, pidsOnDisk } = makeServer(true);
+    const { dispatcher, r } = await runWith(PAUSE_WHO, { ...HOST, tool_registry: [entry] }, { items: [1] });
+    try {
+      expect(r.status).toBe('paused');
+      const pids = pidsOnDisk();
+      expect(pids).toHaveLength(1);
+      await new Promise(res => setTimeout(res, 300));
+      expect(alive(pids[0])).toBe(true);                     // 等人期间不关
+      const r2 = await dispatcher.resume(r.pause!.step_id, { human_val: 7 }, undefined, r.pause!.child_instance);
+      expect(r2.status).toBe('completed');
+      expect(await waitDead(pids)).toBe(true);               // 恢复后完成即关——不等顶层 close
+    } finally { await cleanup(dispatcher, pidsOnDisk()); }
+  }, 30000);
+
+  it('正例⑥：中止级联关闭暂停中子任务的进程', async () => {
+    const { entry, pidsOnDisk } = makeServer(true);
+    const { dispatcher, r } = await runWith(PAUSE_WHO, { ...HOST, tool_registry: [entry] }, { items: [1] });
+    try {
+      expect(r.status).toBe('paused');
+      const pids = pidsOnDisk();
+      expect(pids).toHaveLength(1);
+      expect(alive(pids[0])).toBe(true);
+      dispatcher.requestAbortCascade();
+      expect(await waitDead(pids)).toBe(true);
+    } finally { await cleanup(dispatcher, pidsOnDisk()); }
+  }, 30000);
 });
 
 // thinking 路由（形态 B 2026-08-20 作者拍板——推理型端点缺省开 thinking,重档实录 90% 输出
@@ -7391,6 +8010,120 @@ g
     expect((dispatcher as any).defaultClient.protocol).toBe('anthropic');
     expect((dispatcher as any).defaultClient.messages).toBeDefined();   // 直通包装保留 messages 通道
   });
+
+  // @v: anc-exec-protocol-adapter —— openai-responses 集成（0020 批:工具循环原生承载）
+  it('正例：protocol=openai-responses + 无 body act 带工具 → 工具循环全链（function_call 往返两轮到 completed）', async () => {
+    const TOOL_SPEC = `# T
+Id: tool-act-resp
+
+## Goal
+g
+
+## Outputs
+- out: text  # o
+
+## Steps
+1. [act] 无 body 的动作
+  + → out: text  # 结果
+  > 用工具查一下
+`;
+    openaiResponsesCreateMock.mockClear();
+    // 第一轮:模型要工具;第二轮:拿到 tool 结果后产出终答
+    openaiResponsesCreateMock
+      .mockResolvedValueOnce({
+        id: 'r1', model: 'ds', status: 'completed',
+        output: [{ type: 'function_call', call_id: 'call_1', name: 'search', arguments: '{"q":"x"}' }],
+        usage: { input_tokens: 10, output_tokens: 4 },
+      })
+      .mockResolvedValueOnce({
+        id: 'r2', model: 'ds', status: 'completed',
+        output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'out: 查到了' }] }],
+        usage: { input_tokens: 20, output_tokens: 6, input_tokens_details: { cached_tokens: 10 } },
+      });
+    const executed: string[] = [];
+    const host: HostConfig = {
+      ...HOST, protocol: 'openai-responses',
+      tool_provider: {
+        execute: async (name: string) => { executed.push(name); return { result: '查询结果', success: true }; },
+        list: () => [{ name: 'search', description: '搜索', input_schema: { type: 'object' }, requires_commit: false }],
+      },
+    };
+    const engine = new ExecutionEngine();
+    engine.initExecution(TOOL_SPEC, host);
+    const dispatcher = new StepDispatcher(engine, host);
+    const r = await dispatcher.runSpec();
+    expect(r.status).toBe('completed');
+    expect(executed).toEqual(['search']);                       // 工具真被引擎执行
+    expect(openaiResponsesCreateMock).toHaveBeenCalledTimes(2); // 两轮往返
+    // 第二轮请求的 input 含 function_call 回显与 function_call_output（IR 工具往返正确映射）
+    const round2 = openaiResponsesCreateMock.mock.calls[1][0];
+    const types = round2.input.map((i: any) => i.type ?? `msg:${i.role}`);
+    expect(types).toContain('function_call');
+    expect(types).toContain('function_call_output');
+    // 工具形顶层平铺（逐件 name 顶层、不包 chat 的 function 壳——平铺细节另有适配器单测专钉,
+    // 此处断下发面整体形态;下发清单构成归 Composite 装配语义不在本例断言面）
+    expect(round2.tools.length).toBeGreaterThan(0);
+    for (const t of round2.tools) {
+      expect(t.type).toBe('function');
+      expect(typeof t.name).toBe('string');
+      expect('function' in t).toBe(false);
+    }
+  });
+
+  it('正例：带 body 的 act × openai-responses → 引擎直执零 LLM 到 completed（body 工具走白名单通道不经协议面——设计正反例清单声称项,review 批查无后补真身）', async () => {
+    const BODY_SPEC = `# T
+Id: body-act-resp
+
+## Goal
+g
+
+## Outputs
+- out: text  # o
+
+## Steps
+1. [act] 纯计算
+  + → out: text  # 结果
+  > 拼接固定文本。
+  > \`\`\`hop_python
+  > out = "v=" + "42"
+  > \`\`\`
+`;
+    openaiResponsesCreateMock.mockClear();
+    const host: HostConfig = { ...HOST, protocol: 'openai-responses' };
+    const engine = new ExecutionEngine();
+    engine.initExecution(BODY_SPEC, host);
+    const dispatcher = new StepDispatcher(engine, host);
+    const r = await dispatcher.runSpec();
+    expect(r.status).toBe('completed');
+    expect(openaiResponsesCreateMock).not.toHaveBeenCalled();   // 零 LLM 调用——body 不经协议面
+  });
+
+  it('正例：{SERVICE_ID}_PROTOCOL=openai-responses env 通道走 responses 适配器（standalone 多 provider 注入面）', async () => {
+    openaiResponsesCreateMock.mockClear();
+    openaiResponsesCreateMock.mockResolvedValue({
+      id: 'r3', model: 'ds', status: 'completed',
+      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'result: ok' }] }],
+      usage: { input_tokens: 7, output_tokens: 3 },
+    });
+    process.env['DSRESP_API_KEY'] = 'k3';
+    process.env['DSRESP_BASE_URL'] = 'https://api.deepseek.com/v1';
+    process.env['DSRESP_PROTOCOL'] = 'openai-responses';
+    try {
+      const host: HostConfig = {
+        ...HOST,
+        model_engine: { default_service_id: 'dsresp', default_model: 'deepseek-chat' },
+      };
+      const engine = new ExecutionEngine();
+      engine.initExecution(SIMPLE_SPEC, host);
+      const dispatcher = new StepDispatcher(engine, host);
+      const r = await dispatcher.runSpec();
+      expect(r.status).toBe('completed');
+      expect(openaiResponsesCreateMock).toHaveBeenCalled();   // 路由 service 真走 responses 适配器
+      expect(r.cumulative_tokens).toBe(10);                   // usage 同名直取入账
+    } finally {
+      delete process.env['DSRESP_API_KEY']; delete process.env['DSRESP_BASE_URL']; delete process.env['DSRESP_PROTOCOL'];
+    }
+  });
 });
 
 describe('resolveCredential 级0:显式 base_url+api_key 配对优先', () => {
@@ -8814,7 +9547,7 @@ g
   // @v: anc-exec-llm-inline-context v2 预览通道（2026-08-25 作者定"独立模式用类似 yaml 缩进
   // 方式引用+相对宽松限额"——一刀切全内联把 41K 变量反复内联,57% prompt 超线;预览条目值位
   // 真内容节选+明示全文去处,非死引用）
-  it('正例：超 20K 章节 inline 下转预览条目——头部真内容+省略声明+全文落盘路径', () => {
+  it('正例：超 20K 章节 inline 下转预览条目（本步声明了 read）——头部真内容+省略声明+全文落盘路径', () => {
     const dir = mkdtempSync(join(tmpdir(), 'bugh-l2d3-'));
     const bigSection = '## 大节\n' + '内容行。'.repeat(6000);   // 24K chars > INLINE_PREVIEW_MAX
     writeFileSync(join(dir, 'kb.md'), '# KB\n\n' + bigSection + '\n');
@@ -8826,6 +9559,7 @@ g
 - r: line  # r
 ## Steps
 1. [reason] R
+  - 工具: read  # 有读文件工具——预览里的全文路径是活路（v3 判据）
   + → r: line  # r
   > 参照 [[kb#大节]] 完成
 `;
@@ -8847,7 +9581,7 @@ g
     expect(ctx.length).toBeLessThan(24000);              // 预览生效:条目体量被压到限额级
   });
 
-  it('正例：>20K 输入变量 inline 下转 $preview 条目——渲染带节选与全文路径', () => {
+  it('正例：>20K 输入变量 inline 下转 $preview 条目（本步声明了 read）——渲染带节选与全文路径', () => {
     const dir = mkdtempSync(join(tmpdir(), 'bugh-l4p-'));
     const SPEC = `# T
 Id: t
@@ -8859,6 +9593,7 @@ g
 - r: line  # r
 ## Steps
 1. [reason] R
+  - 工具: read  # 有读文件工具——预览里的全文路径是活路（v3 判据）
   - ← material
   + → r: line  # r
   > 基于材料判定
@@ -8883,6 +9618,120 @@ g
     expect(text).toContain('字符节选）')   // 预览元信息并入 =| 头行尾注(2026-08-31 终形);
     expect(text).toContain('材料段。'.repeat(20));               // 值位真内容
     expect(text).not.toContain('$file');
+  });
+
+  // todo/0115（2026-09-23 作者拍 A）:下发面没有 read 的步骤一律全量内联——预览里的
+  // "全文在某文件"对读不了文件的步骤是死路（dr 实撞:零声明 reason 汇总步只拿到 2 万字开头）。
+  // 上两条正例的成对反例。 // @v: anc-exec-llm-inline-context
+  const HOST_0115 = (dir: string): HostConfig => ({
+    workspace_dir: dir,
+    sandbox: { filesystem: { workspace_dir: dir, read_access: { allowed: [dir], denied: [], confirm_required: [] } }, network: { trusted_hosts: [] }, runtime: { available: [] } },
+    api_key: 'k',
+  });
+
+  it('0115 反例：零声明 reason 步 >20K 输入 inline 下全量内联——不给读不了的全文路径', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'inl-0115-in-'));
+    const SPEC = `# T
+Id: t
+## Goal
+g
+## Inputs
+- material: text  # 大料
+## Outputs
+- r: line  # r
+## Steps
+1. [reason] R
+  - ← material
+  + → r: line  # r
+  > 基于材料判定
+`;
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC, HOST_0115(dir), { params: { material: '材料段。'.repeat(6000) }, stateDir: join(dir, '.hopstate') });
+    engine.setInlineLlmContext(true);
+    const next = engine.nextStep();
+    expect(next.status).toBe('step_ready');
+    const inputs = (next as { context: { inputs: Record<string, unknown> } }).context.inputs;
+    expect(typeof inputs['material']).toBe('string');            // 全量内联,非 $preview 对象
+    expect((inputs['material'] as string).length).toBe(24000);   // 一字不截
+    const text = formatPromptText((next as { context: AssembledContext }).context, 'reason');
+    expect(text).not.toContain('字符节选）');
+  });
+
+  it('0115 反例：零声明 reason 步引用 >20K 章节 inline 下全文内联——不落盘不产预览', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'inl-0115-dr-'));
+    const bigSection = '## 大节\n' + '内容行。'.repeat(6000);   // 24K chars
+    writeFileSync(join(dir, 'kb.md'), '# KB\n\n' + bigSection + '\n');
+    const SPEC = `# T
+Id: t
+## Goal
+g
+## Outputs
+- r: line  # r
+## Steps
+1. [reason] R
+  + → r: line  # r
+  > 参照 [[kb#大节]] 完成
+`;
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC, HOST_0115(dir), { stateDir: join(dir, '.hopstate') });
+    engine.setInlineLlmContext(true);
+    const next = engine.nextStep();
+    const ctx = (next as { context: { doc_ref_context?: string } }).context.doc_ref_context ?? '';
+    expect(ctx).toContain('内容行。'.repeat(5000));      // 全文在场
+    expect(ctx).not.toContain('节选预览');
+    expect(ctx).not.toContain('docref');                 // 没有落盘路径——inline 全量档不落进 deflate 分支（BUG-H 不复发）
+    expect(ctx).not.toContain('请 Read 获取完整章节');
+  });
+
+  it('0115 反例：act 步禁 read 后 >20K 输入 inline 下全量内联——禁用优先于"act 恒有基础工具"', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'inl-0115-act-'));
+    const SPEC = `# T
+Id: t
+## Goal
+g
+## Inputs
+- material: text  # 大料
+## Outputs
+- r: line  # r
+## Steps
+1. [act free] A
+  - 禁工具: read
+  - ← material
+  + → r: line  # r
+  > 基于材料干活
+`;
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC, HOST_0115(dir), { params: { material: '材料段。'.repeat(6000) }, stateDir: join(dir, '.hopstate') });
+    engine.setInlineLlmContext(true);
+    const next = engine.nextStep();
+    expect(next.status).toBe('step_ready');
+    const inputs = (next as { context: { inputs: Record<string, unknown> } }).context.inputs;
+    expect(typeof inputs['material']).toBe('string');
+    expect((inputs['material'] as string).length).toBe(24000);
+  });
+
+  it('0115 正例：act 步（恒有 read）>20K 输入 inline 下照旧转预览', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'inl-0115-act2-'));
+    const SPEC = `# T
+Id: t
+## Goal
+g
+## Inputs
+- material: text  # 大料
+## Outputs
+- r: line  # r
+## Steps
+1. [act free] A
+  - ← material
+  + → r: line  # r
+  > 基于材料干活
+`;
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC, HOST_0115(dir), { params: { material: '材料段。'.repeat(6000) }, stateDir: join(dir, '.hopstate') });
+    engine.setInlineLlmContext(true);
+    const next = engine.nextStep();
+    const inputs = (next as { context: { inputs: Record<string, unknown> } }).context.inputs;
+    expect(inputs['material']).toHaveProperty('$preview');
   });
 
   // #53（dr20 实撞）:check 判定步豁免预览截头——判官必须看全文才能销项,截头=假判定
@@ -9840,5 +10689,48 @@ Test ctx degrade
     if (step.status !== 'step_ready') return;
     const executeReason = (dispatcher as any).executeReasonOrCheck.bind(dispatcher);
     await expect(executeReason(step)).rejects.toThrow(/^CONTEXT_OVERFLOW: 激进重组后仍超模型窗/);
+  });
+
+  // 产生点记确定性类别（todo/0116——引擎判档次只看失败原因开头,超窗的类别随失败记录走不靠文字识别;
+  // 修前红:基线 b99231fb 上失败记录类别是 error,容器靠引擎侧前缀判据才直达兜底）
+  // @v: anc-exec-deterministic-no-retry
+  it('正例⑤：执行步真撞超窗二次失败 → 引擎账上失败记录类别是确定性,容器直达兜底不烧预算', async () => {
+    const SPEC = `# OvDet
+Id: ov-det
+## Goal
+g
+## Outputs
+- out: text  # o
+## Steps
+1. [subtask retry=3] 主活
+  + → out: text  # o
+  1.1. [reason] 判断
+    + → out: text  # 产出
+  1.2. [on fail] 兜底
+    1.2.1. [act] 降档
+      + → out: text  # 兜底值
+2. [exit]
+`;
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC, HOST);
+    const dispatcher = new StepDispatcher(engine, HOST);
+    (dispatcher as any).sleep = () => Promise.resolve();
+    const mockCreate = vi.fn();
+    (dispatcher as any).defaultClient.messages.create = mockCreate;
+    const Anthropic = (await import('@anthropic-ai/sdk')).default as any;
+    mockCreate.mockRejectedValue(new Anthropic.BadRequestError('context length exceeded, too many tokens'));
+
+    const step = engine.nextStep();
+    expect(step.status).toBe('step_ready');
+    if (step.status !== 'step_ready') return;
+    expect(step.step_id).toBe('1.1');
+    await (dispatcher as any).handleStepReady(step);
+    const rec = (engine as any).stepFailReasons.get('1.1');
+    expect(rec?.reason).toMatch(/^CONTEXT_OVERFLOW: /);
+    expect(rec?.fail_kind).toBe('deterministic');
+    const fb = engine.nextStep();
+    expect(fb.status).toBe('step_ready');
+    if (fb.status === 'step_ready') expect(fb.step_id).toBe('1.2.1');   // 直达兜底
+    expect((engine as any).retryCounters.has('1')).toBe(false);   // 预算一次没动
   });
 });

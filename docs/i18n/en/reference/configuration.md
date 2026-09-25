@@ -3,7 +3,7 @@
 	source: [[../../../reference/配置参考]]
 	source_id: hopjit-reference-config
 	type: translation
-	last_sync: 2026-08-15T12:55+0800
+	last_sync: 2026-09-25T20:57+0800
 	note: English translation of 配置参考. Consistency direction: translation follows the Chinese source; report source errors, do not fix silently.
 %%
 
@@ -47,7 +47,7 @@ providers:
 | Field | Required | Description |
 |---|---|---|
 | `service_id` | ✓ | Globally unique (case-normalized for dedup); the first half of a `service/model` reference |
-| `protocol` | ✓ | Wire payload format: `anthropic` = Anthropic Messages API compatible; `openai-chat` = OpenAI chat/completions compatible; `openai-responses` = Responses API (**reserved, not implemented** — choosing it errors at startup and points you to openai-chat). openai-chat currently does not support the body-less act tool loop |
+| `protocol` | ✓ | Wire payload format: `anthropic` = Anthropic Messages API compatible; `openai-chat` = OpenAI chat/completions compatible; `openai-responses` = OpenAI Responses API compatible (`/v1/responses` — natively supported by OpenAI, DeepSeek, xAI, vLLM, and Azure). Body-less act tool loop: supported on anthropic and openai-responses; not supported on openai-chat (that combination fails fast with guidance — write a body, reroute, or switch to openai-responses if the endpoint has a `/v1/responses` surface) |
 | `base_url` | ✓ | API endpoint |
 | `model` | ✓ | This provider's default model |
 | `api_key_env` | ✓ | Environment variable name reference; a plaintext key in the file is refused at startup |
@@ -189,7 +189,11 @@ The three binding shapes and field semantics: ^anc-ref-tool-servers
 | \`mcp\` + \`transport: stdio\` | \`command\`, \`args\`, \`env_passthrough\` (whitelisted passthrough) | Local MCP child process (engine-supervised start/stop) |
 | \`in-process\` | \`module\` (module path, relative to the directory of the declaring config file) | Isolated tool library loaded into the engine process |
 
-Server-level optional \`call_timeout_ms\` (per-call hard gate, default 60000). Each tool entry: \`name\` (wire name, Chinese allowed), \`tool_id\` (body call name, required when name is not a legal identifier), \`requires_commit\` (required — irreversibility marker, blocked in act / allowed in commit), \`input_schema\` (JSON Schema; may be omitted for mcp, completed from discovery), \`output_schema\` (HopSchema — field name → type, only the top level is checked), \`unwrap: json-in-text\` (response unwrapping).
+Server-level optional \`call_timeout_ms\` (per-call hard gate, default 60000).
+
+Server-level optional `per_parallel_child` (boolean, default false, `kind: mcp` only) — when on, each parallel sub-task (a child instance of `[subtask parallel]` or of `[call … parallel]`) starts its own process of this server the first time it uses one of its tools (for http transport, its own connection), and closes it when the sub-task ends; top-level steps, serial steps and serial calls keep sharing the run's single process. Turn it on when the server process carries session state that concurrent callers would trample (typically browser automation — one playwright process has a single "current page", so parallel sub-tasks sharing it get cross-talking pages and "Browser is already in use"). Leave it off for stateless servers (search, knowledge-base queries — it would only start extra processes), and for long-running tasks that need a login kept across steps, which rely on the shared process. A non-boolean value, or the field on an in-process entry, is rejected at assembly with TOOLS_FILE_INVALID.
+
+Each tool entry: \`name\` (wire name, Chinese allowed), \`tool_id\` (body call name, required when name is not a legal identifier), \`requires_commit\` (required — irreversibility marker, blocked in act / allowed in commit), \`input_schema\` (JSON Schema; may be omitted for mcp, completed from discovery), \`output_schema\` (HopSchema — field name → type, only the top level is checked), \`unwrap: json-in-text\` (response unwrapping).
 
 **Whitelist semantics**: declared means enabled — a server reporting N tools only gets the declared ones admitted. Implementation behavior (assembly / two-sided validation / lifecycle) is in [[../../../design/tool-interface#^anc-config-tool-registry]]; guided introduction in Tutorial 08.
 
@@ -270,6 +274,7 @@ tool_servers:
       args: ["--kb", "./kb"]
       env_passthrough: [HOPKB_HOME]   # whitelisted passthrough — never leak the whole environment
     call_timeout_ms: 120000           # optional: this server's per-call hard gate (default 60000)
+    # per_parallel_child: true        # optional: each parallel sub-task gets its own process of this server (default false = one per run; not needed for a stateless knowledge base)
     tools:
       - name: kb_search
         requires_commit: false

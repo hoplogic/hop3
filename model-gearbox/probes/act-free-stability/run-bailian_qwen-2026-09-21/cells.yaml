@@ -1,0 +1,310 @@
+service: bailian_qwen
+cells:
+  - cell: mid:5:noise_only
+    rate: 0.8333333333333334
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 8170
+        secs: 10
+      - verdict: pass
+        tokens: 8123
+        secs: 10
+      - verdict: wrong(15≠25)
+        tokens: 7116
+        secs: 5
+      - verdict: pass
+        tokens: 8169
+        secs: 10
+      - verdict: pass
+        tokens: 8130
+        secs: 10
+      - verdict: pass
+        tokens: 8172
+        secs: 10
+  - cell: mid:5:tool_required
+    rate: 0
+    'n': 6
+    results:
+      - verdict: wrong(20≠25)
+        tokens: 4257
+        secs: 5
+      - verdict: wrong(20≠25)
+        tokens: 4256
+        secs: 5
+      - verdict: wrong(20≠25)
+        tokens: 4252
+        secs: 5
+      - verdict: wrong(20≠25)
+        tokens: 4254
+        secs: 5
+      - verdict: wrong(20≠25)
+        tokens: 4253
+        secs: 5
+      - verdict: wrong(20≠25)
+        tokens: 4256
+        secs: 5
+  - cell: mid:10:noise_only
+    rate: 0.8333333333333334
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 8748
+        secs: 10
+      - verdict: pass
+        tokens: 8876
+        secs: 10
+      - verdict: pass
+        tokens: 8700
+        secs: 10
+      - verdict: pass
+        tokens: 8741
+        secs: 10
+      - verdict: wrong(27≠25)
+        tokens: 7692
+        secs: 5
+      - verdict: pass
+        tokens: 8750
+        secs: 10
+  - cell: mid:10:tool_required
+    rate: 0.16666666666666666
+    'n': 6
+    results:
+      - verdict: wrong(20≠25)
+        tokens: 4828
+        secs: 5
+      - verdict: wrong(20≠25)
+        tokens: 4829
+        secs: 5
+      - verdict: wrong(20≠25)
+        tokens: 4830
+        secs: 5
+      - verdict: wrong(20≠25)
+        tokens: 4826
+        secs: 5
+      - verdict: wrong(20≠25)
+        tokens: 4831
+        secs: 5
+      - verdict: pass
+        tokens: 4830
+        secs: 5
+  - cell: long:0:noise_only
+    rate: 0.8333333333333334
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 9127
+        secs: 5
+      - verdict: wrong(36≠50)
+        tokens: 9129
+        secs: 5
+      - verdict: pass
+        tokens: 11186
+        secs: 20
+      - verdict: pass
+        tokens: 11093
+        secs: 15
+      - verdict: pass
+        tokens: 11102
+        secs: 15
+      - verdict: pass
+        tokens: 11140
+        secs: 20
+  - cell: long:0:tool_required
+    rate: 0.3333333333333333
+    'n': 6
+    results:
+      - verdict: wrong(48≠50)
+        tokens: 3377
+        secs: 5
+      - verdict: wrong(48≠50)
+        tokens: 3381
+        secs: 5
+      - verdict: wrong(48≠50)
+        tokens: 3380
+        secs: 5
+      - verdict: pass
+        tokens: 3379
+        secs: 5
+      - verdict: pass
+        tokens: 3381
+        secs: 5
+      - verdict: wrong(48≠50)
+        tokens: 3382
+        secs: 5
+  - cell: long:1:noise_only
+    rate: 0.8333333333333334
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 11483
+        secs: 20
+      - verdict: pass
+        tokens: 9425
+        secs: 5
+      - verdict: wrong(36≠50)
+        tokens: 9430
+        secs: 5
+      - verdict: pass
+        tokens: 11389
+        secs: 20
+      - verdict: pass
+        tokens: 11480
+        secs: 20
+      - verdict: pass
+        tokens: 11480
+        secs: 20
+  - cell: long:1:tool_required
+    rate: 0
+    'n': 6
+    results:
+      - verdict: wrong(36≠50)
+        tokens: 3661
+        secs: 5
+      - verdict: wrong(48≠50)
+        tokens: 3701
+        secs: 5
+      - verdict: wrong(36≠50)
+        tokens: 3664
+        secs: 5
+      - verdict: wrong(48≠50)
+        tokens: 3704
+        secs: 5
+      - verdict: wrong(36≠50)
+        tokens: 3664
+        secs: 5
+      - verdict: wrong(36≠50)
+        tokens: 3668
+        secs: 5
+  - cell: long:3:noise_only
+    rate: 0.5
+    'n': 6
+    results:
+      - verdict: wrong(30≠50)
+        tokens: 9750
+        secs: 5
+      - verdict: pass
+        tokens: 11809
+        secs: 25
+      - verdict: pass
+        tokens: 11715
+        secs: 20
+      - verdict: pass
+        tokens: 11806
+        secs: 20
+      - verdict: wrong(30≠50)
+        tokens: 9751
+        secs: 5
+      - verdict: wrong(48≠50)
+        tokens: 11758
+        secs: 20
+  - cell: long:3:tool_required
+    rate: 0.3333333333333333
+    'n': 6
+    results:
+      - verdict: wrong(36≠50)
+        tokens: 3991
+        secs: 5
+      - verdict: pass
+        tokens: 4021
+        secs: 5
+      - verdict: pass
+        tokens: 4024
+        secs: 5
+      - verdict: wrong(36≠50)
+        tokens: 3985
+        secs: 5
+      - verdict: wrong(36≠50)
+        tokens: 3983
+        secs: 5
+      - verdict: wrong(48≠50)
+        tokens: 4024
+        secs: 5
+  - cell: long:5:noise_only
+    rate: 0.6666666666666666
+    'n': 6
+    results:
+      - verdict: wrong(30≠50)
+        tokens: 10014
+        secs: 5
+      - verdict: pass
+        tokens: 11988
+        secs: 20
+      - verdict: pass
+        tokens: 12073
+        secs: 20
+      - verdict: pass
+        tokens: 11980
+        secs: 20
+      - verdict: wrong(51≠50)
+        tokens: 12119
+        secs: 20
+      - verdict: pass
+        tokens: 12069
+        secs: 20
+  - cell: long:5:tool_required
+    rate: 0
+    'n': 6
+    results:
+      - verdict: wrong(36≠50)
+        tokens: 4253
+        secs: 5
+      - verdict: wrong(36≠50)
+        tokens: 4253
+        secs: 5
+      - verdict: wrong(36≠50)
+        tokens: 4253
+        secs: 5
+      - verdict: wrong(36≠50)
+        tokens: 4253
+        secs: 5
+      - verdict: wrong(36≠50)
+        tokens: 4251
+        secs: 5
+      - verdict: wrong(36≠50)
+        tokens: 4249
+        secs: 5
+  - cell: long:10:noise_only
+    rate: 0.3333333333333333
+    'n': 6
+    results:
+      - verdict: wrong(30≠50)
+        tokens: 10588
+        secs: 5
+      - verdict: pass
+        tokens: 12651
+        secs: 20
+      - verdict: pass
+        tokens: 12650
+        secs: 20
+      - verdict: wrong(30≠50)
+        tokens: 10590
+        secs: 5
+      - verdict: wrong(30≠50)
+        tokens: 10589
+        secs: 5
+      - verdict: wrong(30≠50)
+        tokens: 10594
+        secs: 5
+  - cell: long:10:tool_required
+    rate: 0
+    'n': 6
+    results:
+      - verdict: wrong(36≠50)
+        tokens: 4828
+        secs: 5
+      - verdict: wrong(36≠50)
+        tokens: 4828
+        secs: 5
+      - verdict: wrong(36≠50)
+        tokens: 4831
+        secs: 5
+      - verdict: wrong(36≠50)
+        tokens: 4826
+        secs: 5
+      - verdict: wrong(36≠50)
+        tokens: 4832
+        secs: 5
+      - verdict: wrong(36≠50)
+        tokens: 4834
+        secs: 5

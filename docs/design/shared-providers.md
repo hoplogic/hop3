@@ -13,13 +13,17 @@
 
 HopAnt 作为典型使用方：CapabilityLayer → ToolProvider，KnowledgeLayer → KnowledgeProvider，IdentityLayer → IdentityProvider。
 
-> **里程碑分期（v2 计划，非债）**：概念层 HopAnt 四维度（Knowledge/Capability/Data/Identity）在 v1 落地为 3 个 Provider（ToolProvider/KnowledgeProvider/IdentityProvider）。DataLayer 由 vars.json 扁平 KV 隐式承担，v2 拆分为独立 DataProvider（[[roadmap#v2-2 HopAnt 第四维度]]）；authenticate/audit_log 标 v2。这是计划内的能力分期（非设计↔代码不一致），判据见 [[../concepts/HopSpec V3配套HopJIT运行时能力#^anc-exec-milestone]]。
+> **里程碑分期（v2 计划，非债）**：概念层 HopAnt 四维度（Knowledge/Capability/Data/Identity）在 v1 落地为 3 个 Provider（ToolProvider/KnowledgeProvider/IdentityProvider）。DataLayer 由 vars.json 扁平 KV 隐式承担，v2 拆分为独立 DataProvider（[[roadmap#v2-2 HopAnt 第四维度]]）；authenticate/audit_log 标 v2。
+>
+> 这是计划内的能力分期（非设计↔代码不一致），判据见 [[../concepts/HopSpec V3配套HopJIT运行时能力#^anc-exec-milestone]]。
 
 ## 关键决策【决策】
 
 本模块涉及的不可推演人为决策集中于此，逐个接口章节为这些决策的契约化落地。
 
-**Provider 三件套作为引擎内核↔宿主环境的契约边界**：HopJIT 引擎内核（Engine/Dispatcher）不直接触碰外部系统，一律经 ToolProvider（能力）/ KnowledgeProvider（知识）/ IdentityProvider（身份）三个接口与宿主交互。这是概念层 HopAnt 四维度在 v1 的落地选择——三件套划定了"引擎内核"与"宿主环境"的责任分界，使 HopJIT 既能默认独立运行（DefaultToolProvider + 环境变量身份），又能被 HopAnt 等宿主注入完整能力。DataLayer 维度 v1 由 vars.json 隐式承担，v2+ 拆分为独立 DataProvider。
+**Provider 三件套作为引擎内核↔宿主环境的契约边界**：HopJIT 引擎内核（Engine/Dispatcher）不直接触碰外部系统，一律经 ToolProvider（能力）/ KnowledgeProvider（知识）/ IdentityProvider（身份）三个接口与宿主交互。
+
+这是概念层 HopAnt 四维度在 v1 的落地选择——三件套划定了"引擎内核"与"宿主环境"的责任分界，使 HopJIT 既能默认独立运行（DefaultToolProvider + 环境变量身份），又能被 HopAnt 等宿主注入完整能力。DataLayer 维度 v1 由 vars.json 隐式承担，v2+ 拆分为独立 DataProvider。
 
 **DefaultToolProvider 只提供 Read/Write，不含 bash**：默认实现刻意不暴露 bash——bash 是高危工具（任意命令执行、不可控副作用），仅 commit 步骤可用，且必须由宿主注入的 ToolProvider 显式提供并自行实现 runtime 白名单校验。这道边界保证"开箱即用"的 HopJIT 不会因默认能力过宽而在 act 步骤产生不可逆后果。
 
@@ -29,9 +33,16 @@ HopAnt 作为典型使用方：CapabilityLayer → ToolProvider，KnowledgeLayer
 
 ## shared-providers 模块定位【契约】 ^anc-struct-shared-providers
 
-> **模块版本**：shared-providers `v0.14.0`（2026-09-20）。本版=ProviderEntry 新增可选 thinking 键（provider 级思考缺省显式化——端点缺省互相相反且不可见,同 spec 换模型思考行为静默翻转;作者定'统一'的落点=配置层显式化,0100 批;env 键 {SERVICE_ID}_THINKING 同披,两处清单义务同批履行）。上版 v0.13.0（2026-09-18）=schema 权威补账两键+auth 生效面契约（工程链 review 面一/面二/面四三面同抓:ProviderEntry struct 补 auth 行〔含 defaultClient 生效面与 bearer 双臂关键逻辑——原实装只罩显式路由,缺省 provider 路径漏装同批代码修复〕/StandaloneConfig struct 补 revision_prompt 行/"八节"清单句升十节与配置参考对齐——struct 自称唯一定义处而字段漏登,是 v0.12.1 同型病第三犯,本版起新增顶层键两处清单同批改列为本句执行义务）。上版（v0.12.2）=出口表补 ENGINE_DEFAULT_MODEL 常量（0086 续账:缺省模型单一事实源,两消费点同改）。上版（v0.12.1）0084 批一随批:struct StandaloneConfig 补 resource_limits（九键全列含 max_concurrent_runs）与 language 两权威键（review 面一抓实改未升号,补记）。0.x 未承诺稳定。Provider 三件套接口 + HostConfig/Sandbox 是宿主契约——引擎内核↔宿主的边界，破坏影响所有 caller/宿主注入）。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
+> **模块版本**：shared-providers `v0.14.0`（2026-09-20）。本版=ProviderEntry 新增可选 thinking 键（provider 级思考缺省显式化——端点缺省互相相反且不可见,同 spec 换模型思考行为静默翻转;作者定'统一'的落点=配置层显式化,0100 批;env 键 {SERVICE_ID}_THINKING 同披,两处清单义务同批履行）。
+>
+> - 上版 v0.13.0（2026-09-18）=schema 权威补账两键+auth 生效面契约。工程链 review 面一/面二/面四三面同抓:ProviderEntry struct 补 auth 行〔含 defaultClient 生效面与 bearer 双臂关键逻辑——原实装只罩显式路由,缺省 provider 路径漏装同批代码修复〕/StandaloneConfig struct 补 revision_prompt 行/"八节"清单句升十节与配置参考对齐。
+>   struct 自称唯一定义处而字段漏登,是 v0.12.1 同型病第三犯,本版起新增顶层键两处清单同批改列为本句执行义务；
+> - 上版（v0.12.2）=出口表补 ENGINE_DEFAULT_MODEL 常量（0086 续账:缺省模型单一事实源,两消费点同改）；
+> - 上版（v0.12.1）0084 批一随批:struct StandaloneConfig 补 resource_limits（九键全列含 max_concurrent_runs）与 language 两权威键（review 面一抓实改未升号,补记）；
+> - 0.x 未承诺稳定。Provider 三件套接口 + HostConfig/Sandbox 是宿主契约——引擎内核↔宿主的边界，破坏影响所有 caller/宿主注入。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
 
-**① 自身定位**：shared-providers（`provider-types.ts`）定义**引擎内核↔宿主环境的契约边界**——Provider 三件套接口（Tool/Knowledge/Identity + Persistence/Spec）+ 宿主配置类型（HostConfig/SandboxConfig/ResourceLimits/ModelEngine）。它只声明**契约形状**，不含实现（DefaultToolProvider 等实现在 tools 模块，FilePersistence 等在 persistence 模块）。被 engine/dispatcher/cli/tools/persistence 全员消费。
+**① 自身定位**：shared-providers（`provider-types.ts`）定义**引擎内核↔宿主环境的契约边界**——Provider 三件套接口（Tool/Knowledge/Identity + Persistence/Spec）+ 宿主配置类型（HostConfig/SandboxConfig/ResourceLimits/ModelEngine）。
+它只声明**契约形状**，不含实现（DefaultToolProvider 等实现在 tools 模块，FilePersistence 等在 persistence 模块）。被 engine/dispatcher/cli/tools/persistence 全员消费。
 
 **② 边界**：**负责** Provider 接口 + Config 类型的纯声明；**不碰** 任何实现/运行时行为（实现分散在 tools/persistence/dispatcher）。
 
@@ -177,9 +188,15 @@ struct: ServiceEntry
 
 IdentityProvider 为外部服务调用提供身份凭证（API key、ak/sk、token 等）。StepDispatcher 在调用外部服务前通过 `get_credential(service_id)` 获取凭证。
 
-默认实现（`DefaultIdentityProvider`）：从环境变量继承宿主凭证。解析顺序：`ANTHROPIC_AUTH_TOKEN`（bearer_token）> `ANTHROPIC_API_KEY`（api_key）> `HostConfig.api_key`（仅 programmatic 内存注入）。配置文件只保存 `api_key_env` 名称，由配置加载器解引用后注入 HostConfig；禁止读取配置文件中的明文 key。多服务按 `{SERVICE_ID}_API_KEY` + `{SERVICE_ID}_BASE_URL` 模式扫描环境变量自动注册。provider 可选 `auth: bearer` 档（2026-09-18——anthropic 协议客户端缺省发 x-api-key〔SDK apiKey 通道,authToken:null 切断隐式 Bearer〕,只认 Authorization: Bearer 的网关〔实测百炼 claude-code-proxy〕经此档走 SDK authToken 通道;路由 env 键 `{SERVICE_ID}_AUTH=bearer` 传递,与 _PROTOCOL 同披）。
+默认实现（`DefaultIdentityProvider`）：从环境变量继承宿主凭证。解析顺序：`ANTHROPIC_AUTH_TOKEN`（bearer_token）> `ANTHROPIC_API_KEY`（api_key）> `HostConfig.api_key`（仅 programmatic 内存注入）。
 
-> **里程碑分期（v2 计划，非债）**：`IdentityProvider` 当前仅定义接口形状（`provider-types.ts` 的 `interface IdentityProvider` + `HostConfig.identity_provider` 注入位），`DefaultIdentityProvider` 实现类、`get_credential`/`list_services` 行为、多服务环境变量扫描**均未实装**。原因：当前引擎的执行步骤（reason/check/act/confirm/commit）只走 LLM 调用与 ToolProvider，**没有"调用外部命名服务"的执行路径**，故无 `get_credential(service_id)` 触发点。LLM API 密钥解析由 [[step-dispatcher]] `resolveCredential`（锚点 `anc-exec-model-resolve`）独立承担，与本接口是不同关注点。完整实装随 v2 外部服务调用能力 / HopAnt 宿主注入落地（[[roadmap#v2-1 独立模式（引擎自驱）]]）——属计划内能力分期，判据见 [[../concepts/HopSpec V3配套HopJIT运行时能力#^anc-exec-milestone]]。
+- 配置文件只保存 `api_key_env` 名称，由配置加载器解引用后注入 HostConfig；禁止读取配置文件中的明文 key。多服务按 `{SERVICE_ID}_API_KEY` + `{SERVICE_ID}_BASE_URL` 模式扫描环境变量自动注册；
+- provider 可选 `auth: bearer` 档（2026-09-18——anthropic 协议客户端缺省发 x-api-key〔SDK apiKey 通道,authToken:null 切断隐式 Bearer〕,只认 Authorization: Bearer 的网关〔实测百炼 claude-code-proxy〕经此档走 SDK authToken 通道;路由 env 键 `{SERVICE_ID}_AUTH=bearer` 传递,与 _PROTOCOL 同披）。
+
+> **里程碑分期（v2 计划，非债）**：`IdentityProvider` 当前仅定义接口形状（`provider-types.ts` 的 `interface IdentityProvider` + `HostConfig.identity_provider` 注入位），`DefaultIdentityProvider` 实现类、`get_credential`/`list_services` 行为、多服务环境变量扫描**均未实装**。
+>
+> - 原因：当前引擎的执行步骤（reason/check/act/confirm/commit）只走 LLM 调用与 ToolProvider，**没有"调用外部命名服务"的执行路径**，故无 `get_credential(service_id)` 触发点。LLM API 密钥解析由 [[step-dispatcher]] `resolveCredential`（锚点 `anc-exec-model-resolve`）独立承担，与本接口是不同关注点；
+> - 完整实装随 v2 外部服务调用能力 / HopAnt 宿主注入落地（[[roadmap#v2-1 独立模式（引擎自驱）]]）——属计划内能力分期，判据见 [[../concepts/HopSpec V3配套HopJIT运行时能力#^anc-exec-milestone]]。
 
 ### SpecProvider ^anc-provider-spec
 
@@ -206,9 +223,17 @@ struct: SpecEntry
 - **复用模式**（CC 驱动）：引擎只在 prompt 给出 `callee_spec_id` 文本（[[prompt-assembler]] call 指令），**CC 自行从其 Spec 库定位子 spec**——寻址是 caller 的事，引擎不解析，SpecProvider 非必需（同沙箱"复用模式=契约"）。
 - **独立模式**（引擎驱动递归）：引擎必须拿到子 spec 内容才能嵌套执行 → 调 `spec_provider.resolve(callee_spec_id)` 获取，null 则 fail。SpecProvider 是独立模式 call 递归的前置件（同沙箱"独立模式=Provider 强制"）。
 
-**缺省实现 DirSpecProvider【决策：原则性，作者拍板 2026-08-10】** ^anc-provider-spec-default：standalone 场景（MCP server / 测试）Spec 作者写 `[call text-normalize]` 时，引擎自带的缺省 Provider 按**调用方 spec 同目录**寻址：`<caller spec 所在目录>/<callee_spec_id>.md`。选择理由=语言设计第一原则（普通人易于理解，不必要不增加复杂度）——零配置、所见即所得；不够用时宿主注入自定义 SpecProvider 替换（备选"config.yaml spec_dirs 搜索链"因引入新配置项被排除）。安全约束：callee_spec_id 含路径分隔符或 `..` 一律拒绝（防路径穿越）——名字就是名字，不是路径。实现类落 [[step-dispatcher]] 模块（独立模式专属件，`dispatcher.ts` 出口 `DirSpecProvider`）；挂载=宿主构造 HostConfig 时未注入 `spec_provider` 则由 standalone 入口（mcp-server startRun）以 spec 文件所在目录构造缺省实例。
+**缺省实现 DirSpecProvider【决策：原则性，作者拍板 2026-08-10】** ^anc-provider-spec-default
 
-> **实装状态（2026-08-10）**：SpecProvider 已随「独立模式 call 递归」实装（原 DEBT-04,2026-08-10 还清）——接口消费点在 [[step-dispatcher#^anc-exec-call-recursion]]，null 返回 → `UNKNOWN_SPEC` fail。复用模式 call 不依赖它——CC 自行解析 callee。子实例 id 仍用 callStepId（幂等、落 `calls/<callStepId>/`，见 [[exec-engine]]）。早期探索稿 `rounds/call-addressing-specprovider-草案.md` 已被本节与 step-dispatcher 正文取代。
+standalone 场景（MCP server / 测试）Spec 作者写 `[call text-normalize]` 时，引擎自带的缺省 Provider 按**调用方 spec 同目录**寻址：`<caller spec 所在目录>/<callee_spec_id>.md`。
+
+- 选择理由=语言设计第一原则（普通人易于理解，不必要不增加复杂度）——零配置、所见即所得；不够用时宿主注入自定义 SpecProvider 替换（备选"config.yaml spec_dirs 搜索链"因引入新配置项被排除）；
+- 安全约束：callee_spec_id 含路径分隔符或 `..` 一律拒绝（防路径穿越）——名字就是名字，不是路径；
+- 实现类落 [[step-dispatcher]] 模块（独立模式专属件，`dispatcher.ts` 出口 `DirSpecProvider`）；挂载=宿主构造 HostConfig 时未注入 `spec_provider` 则由 standalone 入口（mcp-server startRun）以 spec 文件所在目录构造缺省实例。
+
+> **实装状态（2026-08-10）**：SpecProvider 已随「独立模式 call 递归」实装（原 DEBT-04,2026-08-10 还清）——接口消费点在 [[step-dispatcher#^anc-exec-call-recursion]]，null 返回 → `UNKNOWN_SPEC` fail。
+>
+> 复用模式 call 不依赖它——CC 自行解析 callee。子实例 id 由引擎算出（不在 loop 里=call 步骤号,在 loop 里带轮次后缀;幂等、落 `calls/<子实例ID>/`，见 [[exec-engine#^anc-exec-call-child-iter-id]]）。早期探索稿 `rounds/call-addressing-specprovider-草案.md` 已被本节与 step-dispatcher 正文取代。
 
 ### ModelEngine ^anc-config-model-engine
 
@@ -230,7 +255,8 @@ struct: ModelRoute
     - model: line       # 目标模型名
 ```
 
-路由优先级（从高到低）：步骤 `@model` 标注 > Spec `Config.models[类别]`（两层分档 2026-08-13——spec 层逐类别继承,commit 无专键吃 act 键） > Spec `Config.model` > `routing_rules` step_type 匹配 > `ModelEngine.default_model` > 宿主 `ANTHROPIC_MODEL` fallback > `HostConfig.model` > 硬编码默认（八级——权威解析链 [[step-dispatcher#^anc-exec-model-resolve]],对外表述 [[../reference/配置参考]]）。显式 ModelEngine 默认高于环境继承，防 standalone 的 `service/model` 被宿主环境静默改回 default service。
+路由优先级（从高到低）：步骤 `@model` 标注 > Spec `Config.models[类别]`（两层分档 2026-08-13——spec 层逐类别继承,commit 无专键吃 act 键） > Spec `Config.model` > `routing_rules` step_type 匹配 > `ModelEngine.default_model` > 宿主 `ANTHROPIC_MODEL` fallback > `HostConfig.model` > 硬编码默认。
+（八级——权威解析链 [[step-dispatcher#^anc-exec-model-resolve]],对外表述 [[../reference/配置参考]]。）显式 ModelEngine 默认高于环境继承，防 standalone 的 `service/model` 被宿主环境静默改回 default service。
 
 ### StandaloneConfig（~/.hopjit/config.yaml 完整 schema） ^anc-config-standalone-schema
 
@@ -269,10 +295,19 @@ Outputs:
 **每 run 重读（reloadProjectConfig,与上同一套文法/引用核）**：数据面节重读项目级赢、providers 恒启动期快照——语义四条与实撞史见下方"项目根定义与每 run 重读"条款。
 
 - **routing_rules 条目可选 `thinking: enabled|disabled`**（形态 B 2026-08-20——权威 [[step-dispatcher#^anc-exec-thinking-routing]],此处 schema 登记）；
-- **两文件同一 schema，十节全部可选**：providers / default_model / routing_rules / tool_servers / env（hop_env_* 环境参数）/ **resource_limits** / **commands**（subprocess.run 白名单,并集合并） / log_level / **language** / **revision_prompt**（与配置参考 §零 清单同源——两处此前各漏各的,review 面一抓成员不同后统一;2026-09-18 review 再抓同型复发〔配置参考先改十节本句停八节〕,新增顶层键两处清单同批改是本句的执行义务）
-- **逐节合并，项目级赢**：providers 按 service_id 合并（项目可加私有后端/覆盖同名）;routing_rules 按 step_type 合并;tool_servers 取并集、工具名跨两级判重 fail-fast（同名不覆盖不遮蔽——Composite 装配同款纪律）;default_model 项目级在场即赢。合并哲学与 spec Config.models 逐键继承同源：项目只写差异；**跨节引用的校验时点=合并后**（2026-08-13 BUG-E 实撞钉死：routing_rules/default_model 的"引用 service 必须在 providers 内"只能对**合并后**的 providers 核——项目级文件合法形态就是只有 routing_rules+tool_servers（providers 归系统级），逐文件核引用必然把合法形态误拒〔实撞:providers undefined 直接崩 server 启动〕。逐文件仍核**文法**（step_type 枚举/条目形状/明文 key 拒绝——单文件自含的错），引用核延后）；
+- **两文件同一 schema，十节全部可选**：providers / default_model / routing_rules / tool_servers / env（hop_env_* 环境参数）/ **resource_limits** / **commands**（subprocess.run 白名单,并集合并） / log_level / **language** / **revision_prompt**。
+  - 十节清单与配置参考 §零 清单同源——两处此前各漏各的,review 面一抓成员不同后统一;2026-09-18 review 再抓同型复发〔配置参考先改十节本句停八节〕,新增顶层键两处清单同批改是本句的执行义务
+- **逐节合并，项目级赢**：providers 按 service_id 合并（项目可加私有后端/覆盖同名）;routing_rules 按 step_type 合并;tool_servers 取并集、工具名跨两级判重 fail-fast（同名不覆盖不遮蔽——Composite 装配同款纪律）;default_model 项目级在场即赢。合并哲学与 spec Config.models 逐键继承同源：项目只写差异；
+  - **跨节引用的校验时点=合并后**（2026-08-13 BUG-E 实撞钉死）：routing_rules/default_model 的"引用 service 必须在 providers 内"只能对**合并后**的 providers 核——项目级文件合法形态就是只有 routing_rules+tool_servers（providers 归系统级），逐文件核引用必然把合法形态误拒〔实撞:providers undefined 直接崩 server 启动〕。逐文件仍核**文法**（step_type 枚举/条目形状/明文 key 拒绝——单文件自含的错），引用核延后；
 - **查找焊死**：两个确定位置都可缺省,不逐级向上搜;`HOPJIT_CONFIG` env 为显式覆盖（指定后只用它不合并——e2e 语义不变）;两级全缺席且要 startRun → STANDALONE_CONFIG_MISSING 照旧；
-- **项目根定义与每 run 重读**（2026-08-17 hopissues/0007②+0012 并单——原设计只写"查找焊死"未定义项目根怎么来,是设计留白）：**项目根 = 该 run 的组合根 cwd**（startRun 时 process.cwd() 一次读取,即 `config_project_dir` 钉进快照的同一值——与 restore 钉根重读对称,startRun/restore 同一套判定）;**项目级 hopjit.yaml 每 run 装配期重读**（数据面节 tool_servers/env/routing_rules 与 server 启动期配置 mergeConfigs 合并项目级赢——个人版迭代场景配置常变,改工具白名单下一个 start_run 即见,不再重启宿主会话;hopkb tidy 四工具注册实撞）;**providers/凭证保持启动期语义**（key 安全面不动——providers 节即使项目级文件写了也以启动期快照为准:凭证解引用发生在 serve 启动期 snapshotProviderKeys,重读换 provider=凭证链重走引入新失败面;**重读收敛为单一函数**（十四审矩阵审计后结构性根治——startRun/restore 两处手写重读三审两审各撞缺陷,'同一语义多路径实现'是缺陷温床:reloadProjectConfig 单函数,两调用点零逻辑）;**合并后引用核照跑**（十四审矩阵格②——项目级 routing_rules 引用拼错的 service 原漂到运行期才炸,BUG-E'加载期核'承诺在重读路径缺位;重读合并后跑 validateMergedRefs,引用核对合并后 providers=启动期快照）;**providers 语义分层著文**（矩阵格③——同一 hopjit.yaml 的 providers 节:server 从项目根**启动**时经两级合并生效〔项目可加私有后端,既有条款〕;server 已跑后**改文件**下一 run 不生效〔恒启动期快照,凭证解引用时点约束〕——用户可见分叉:改 providers 要重启 server,改数据面节不用）;**文件缺席跳过;在场但非法响亮拒**（十二审修正——原'损坏回退'措辞让 0004 凭证闸在重读路径被 catch 吞成静默:项目 env 节塞凭证键,闸抛错被回退吃掉,用户零反馈且同文件合法配置整体丢弃;文件在场=用户意图在场,静默忽略其配置编辑正是 0012 要治的病的倒置——parseConfigFile 抛错〔文法/凭证违规〕转结构化 error CONFIG_INVALID 拒 run,只有文件不存在才跳过重读））;
+- **项目根定义与每 run 重读**（2026-08-17 hopissues/0007②+0012 并单——原设计只写"查找焊死"未定义项目根怎么来,是设计留白）：
+  - **项目根 = 该 run 的组合根 cwd**（startRun 时 process.cwd() 一次读取,即 `config_project_dir` 钉进快照的同一值——与 restore 钉根重读对称,startRun/restore 同一套判定）;
+  - **项目级 hopjit.yaml 每 run 装配期重读**（数据面节 tool_servers/env/routing_rules 与 server 启动期配置 mergeConfigs 合并项目级赢——个人版迭代场景配置常变,改工具白名单下一个 start_run 即见,不再重启宿主会话;hopkb tidy 四工具注册实撞）;
+  - **providers/凭证保持启动期语义**（key 安全面不动——providers 节即使项目级文件写了也以启动期快照为准:凭证解引用发生在 serve 启动期 snapshotProviderKeys,重读换 provider=凭证链重走引入新失败面）;
+  - **重读收敛为单一函数**（十四审矩阵审计后结构性根治——startRun/restore 两处手写重读三审两审各撞缺陷,'同一语义多路径实现'是缺陷温床:reloadProjectConfig 单函数,两调用点零逻辑）;
+  - **合并后引用核照跑**（十四审矩阵格②——项目级 routing_rules 引用拼错的 service 原漂到运行期才炸,BUG-E'加载期核'承诺在重读路径缺位;重读合并后跑 validateMergedRefs,引用核对合并后 providers=启动期快照）;
+  - **providers 语义分层著文**（矩阵格③——同一 hopjit.yaml 的 providers 节:server 从项目根**启动**时经两级合并生效〔项目可加私有后端,既有条款〕;server 已跑后**改文件**下一 run 不生效〔恒启动期快照,凭证解引用时点约束〕——用户可见分叉:改 providers 要重启 server,改数据面节不用）;
+  - **文件缺席跳过;在场但非法响亮拒**（十二审修正——原'损坏回退'措辞让 0004 凭证闸在重读路径被 catch 吞成静默:项目 env 节塞凭证键,闸抛错被回退吃掉,用户零反馈且同文件合法配置整体丢弃;文件在场=用户意图在场,静默忽略其配置编辑正是 0012 要治的病的倒置——parseConfigFile 抛错〔文法/凭证违规〕转结构化 error CONFIG_INVALID 拒 run,只有文件不存在才跳过重读）;
 - **tools_file 指针字段与独立 hoptools.yaml 形态退役**（0.x 干净改）：tool_servers 就是配置的一节,文法权威仍归 [[tool-interface#^anc-config-tool-registry]]（只是宿主文件变了）;in-process `module:` 相对路径改为**相对所在配置文件目录**解析（项目级配置里的模块路径相对项目根——语义自然）。
 **配置文件绝不保存 key**：ProviderEntry 只允许 `api_key_env` 环境变量名，顶层或 provider 内出现 `api_key` 均 fail-fast 拒绝。文件不含秘密，因此不实施 0600 权限检查；真正的 key 只存在于 MCP server 继承的进程环境与运行期 HostConfig 内存。
 
@@ -296,7 +331,7 @@ struct: ProviderEntry
   Id: provider-entry
   Fields:
     - service_id: line   # 路由标识；[A-Za-z_][A-Za-z0-9_]*，大小写归一后全局唯一，default 为保留字
-    - protocol: line     # wire 报文格式枚举（作者定拆 2026-08-13——'openai'一词罩两套报文用户会疑惑）：anthropic=Messages API 兼容 / openai-chat=OpenAI chat/completions 兼容（现役实装） / openai-responses=OpenAI Responses API 兼容（**枚举预留,适配器未实装**——选它启动即报'未实装+当下用 openai-chat'清晰指路,不静默降级;实装触发=接 Responses 独有能力〔服务端工具等〕）。0.x 干净拆不留 'openai' 旧值——留着旧值歧义就还在。openai-chat 当下不支持 LLM 工具循环，见 [[step-dispatcher#^anc-exec-protocol-adapter]]
+    - protocol: line     # wire 报文格式枚举（作者定拆 2026-08-13——'openai'一词罩两套报文用户会疑惑）：anthropic=Messages API 兼容 / openai-chat=OpenAI chat/completions 兼容 / openai-responses=OpenAI Responses API 兼容（0020 批实装 2026-09-20——OpenAI 官方生态工具循环正路,OpenAI/DeepSeek `/v1/responses`/xAI/vLLM/Azure 原生支持;此前系枚举预留）。0.x 干净拆不留 'openai' 旧值——留着旧值歧义就还在。三档工具循环能力:anthropic/openai-responses 原生支持,openai-chat 不支持（fail-fast 指路）,见 [[step-dispatcher#^anc-exec-protocol-adapter]]
     - base_url: line     # API 端点（如 https://api.deepseek.com/anthropic）
     - model: line        # 该 provider 的默认模型
     - api_key_env: line  # 环境变量名引用——唯一合法凭证形态；[A-Za-z_][A-Za-z0-9_]*
@@ -369,7 +404,7 @@ struct: HostConfig
     - model_engine: ModelEngine        # 可选。多模型路由配置——不提供则从 api_key+base_url 构建单服务
     - resource_limits: ResourceLimits  # 可选。单步资源上限
     - spec_provider: SpecProvider      # 可选。call 子 spec 解析注入位（独立模式 call 递归消费）
-    - protocol: line                   # 可选。LLM wire 协议枚举 anthropic/openai-chat/openai-responses(预留)，缺省 anthropic——复用模式与存量注入零变化；standalone 由 provider 条目带入
+    - protocol: line                   # 可选。LLM wire 协议枚举 anthropic/openai-chat/openai-responses（三值现役,0020 批撤预留），缺省 anthropic——复用模式与存量注入零变化；standalone 由 provider 条目带入
     - tool_registry: [ToolServerEntry] # 可选。外部工具注册条目（hoptools.yaml 加载产物,文法权威 [[tool-interface#^anc-config-tool-registry]]）——CompositeToolProvider 装配消费；缺省无外部工具
     - env_snapshot: yaml               # 可选。进程环境快照（run 隔离不变量,权威 [[../ARCHITECTURE#^anc-run-isolation]]）：组合根构造 HostConfig 时把运行期会消费的 env 键一次性冻结——**快照是封闭集,键集即契约**（0008③:漏键=该环境变量 standalone 下静默失效,原'等'字含糊致实装只冻 providers 三键）。键集两类=providers 派生六键（{SERVICE}_API_KEY/_BASE_URL/_PROTOCOL 恒派;_AUTH/_THINKING/_MAX_OUTPUT_TOKENS 配了才派——2026-09-20 review 批清账:三个条件键随各自特性批入码,本清单漏更）+固定透传六键（ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN/ANTHROPIC_API_KEY/HOPJIT_ANTHROPIC_API_KEY/ANTHROPIC_MODEL/HOPJIT_MAX_OUTPUT_TOKENS——dispatcher envOf 固定键消费点全集,新增消费点必须同步透传表;CLAUDE_CODE_MAX_OUTPUT_TOKENS 已摘,0084 批三随实况勘正——该键语义属 CC 宿主,引擎捡它=跨受众误配,^anc-exec-output-budget 摘除记录）;构造单点 buildEnvSnapshot,startRun/restore 同函数;引擎内核运行期只查快照禁直读 process.env——外部/它 run 改 env 不再影响在飞 run。缺省未提供时内核回退直读（存量兼容,组合根逐个收编后收紧）
     - hop_env: yaml                    # 可选。spec 环境参数表（组合根按覆盖链合成:配置两级→params 覆盖;ask 回填运行时并入——doc-ref 展开/body 只读注入/prompt 值表三消费面,概念权威 ^anc-config-hop-env。与 env_snapshot 分立:那是进程环境快照〔含凭证,不落盘〕,这是 spec 环境参数〔非密,可落盘〕。组合根合成表时同步把值为绝对路径的声明根扩入 sandbox read allowed——写配置即授权,授权面与声明面同一动作,见 [[doc-ref#^anc-exec-doc-ref-hop-env]]）

@@ -1,0 +1,52 @@
+```python
+import ast
+import sys
+
+
+def check_functions(tree):
+    results = []
+
+    def func_length(node):
+        body = node.body
+        if not body:
+            return 1
+        dec_ends = [d.end_lineno for d in node.decorator_list]
+        start = node.lineno
+        if dec_ends:
+            start = max(start, max(dec_ends) + 1)
+        return body[-1].end_lineno - start + 1
+
+    def collect(node):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            length = func_length(node)
+            if length > 40:
+                results.append((node.lineno, length))
+            for child in ast.iter_child_nodes(node):
+                collect(child)
+        elif isinstance(node, ast.ClassDef):
+            for item in node.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    length = func_length(item)
+                    if length > 40:
+                        results.append((item.lineno, length))
+                collect(item)
+            for child in ast.iter_child_nodes(node):
+                collect(child)
+        else:
+            for child in ast.iter_child_nodes(node):
+                collect(child)
+
+    collect(tree)
+    return results
+
+
+with open(sys.argv[1], 'r', encoding='utf-8') as f:
+    source = f.read()
+tree = ast.parse(source)
+violations = check_functions(tree)
+if violations:
+    for lineno, length in violations:
+        print(f"line {lineno}: function is {length} lines long (exceeds 40)")
+    sys.exit(1)
+sys.exit(0)
+```

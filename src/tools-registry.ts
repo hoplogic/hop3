@@ -59,6 +59,7 @@ export interface ToolServerEntry { // @a: anc-config-tool-registry
   binding: ToolBinding;
   tools: ToolSpec[];               // 白名单语义：声明即启用
   call_timeout_ms?: number;        // 单调用超时硬闸（缺省 60000）——挂死的外部 call 不吊死步骤
+  per_parallel_child?: boolean;    // 每个并行子任务独占一个该 server 进程（缺省 false=全 run 共用;只许 mcp,todo/0112）
 }
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -297,11 +298,17 @@ export function parseToolServers(servers: unknown[], baseDir: string): ToolServe
     if (sv['call_timeout_ms'] !== undefined && (typeof sv['call_timeout_ms'] !== 'number' || sv['call_timeout_ms'] <= 0)) {
       throw new Error(`TOOLS_FILE_INVALID: tool_servers[${i}].call_timeout_ms 须为正数（毫秒）`);
     }
+    // per_parallel_child：布尔;只许 mcp——in-process 模块缓存全进程一份,"每子任务一份"无从兑现 // @a: anc-config-tool-registry
+    if (sv['per_parallel_child'] !== undefined) {
+      if (typeof sv['per_parallel_child'] !== 'boolean') throw new Error(`TOOLS_FILE_INVALID: tool_servers[${i}].per_parallel_child 须为布尔值（true/false）`);
+      if (b['kind'] === 'in-process') throw new Error(`TOOLS_FILE_INVALID: tool_servers[${i}].per_parallel_child 只适用于 kind: mcp（in-process 模块装载进引擎进程、全进程只有一份,无法每个并行子任务各起一份）`);
+    }
     entries.push({
       name: sv['name'] as string,
       // _base_dir=该条目声明所在配置文件目录（统一配置两级形态——项目级声明的 module 相对项目根）
       binding: normalizeBinding(b, typeof sv['_base_dir'] === 'string' ? sv['_base_dir'] as string : baseDir), tools: specs,
       ...(typeof sv['call_timeout_ms'] === 'number' ? { call_timeout_ms: sv['call_timeout_ms'] } : {}),
+      ...(sv['per_parallel_child'] === true ? { per_parallel_child: true } : {}),
     });
   }
   return entries;

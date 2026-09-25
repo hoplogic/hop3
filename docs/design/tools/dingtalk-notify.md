@@ -74,7 +74,9 @@ execute('dingtalk_notify', args):
 
 ## composeRunCard 归置注记【说明】
 
-运行状态卡片组装函数 `composeRunCard(RunCardInput) → {title, text}` 住本模块实现文件（src/tools-notify.ts,与 sendDingtalk 并列）——**代码归置,不改变职责分工**：渲染的调用责任仍在引擎挂点侧（standalone=mcp-server maybeNotify / 复用模式=cli outputWithNotify,契约各归 [[../mcp-server#^anc-mcp-notify-hook]] 与 [[../hop-cli#^anc-cli-notify-reuse]]）,sendDingtalk 仍只收文本。抽共享的理由：两挂点各自组装=同一张卡两份实现,改徽记/加字段必漂移（2026-08-31 复用模式挂点落地时抽出,RunCardInput 类型契约在 hop-cli 节）。
+运行状态卡片组装函数 `composeRunCard(RunCardInput) → {title, text}` 住本模块实现文件（src/tools-notify.ts,与 sendDingtalk 并列）——**代码归置,不改变职责分工**。
+渲染的调用责任仍在引擎挂点侧（standalone=mcp-server maybeNotify / 复用模式=cli outputWithNotify,契约各归 [[../mcp-server#^anc-mcp-notify-hook]] 与 [[../hop-cli#^anc-cli-notify-reuse]]）,sendDingtalk 仍只收文本。
+抽共享的理由：两挂点各自组装=同一张卡两份实现,改徽记/加字段必漂移（2026-08-31 复用模式挂点落地时抽出,RunCardInput 类型契约在 hop-cli 节）。
 
 ## 将来扩渠道【说明】
 

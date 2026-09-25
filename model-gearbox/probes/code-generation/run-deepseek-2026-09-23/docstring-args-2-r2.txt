@@ -1,0 +1,71 @@
+```python
+import ast
+import re
+import sys
+
+def check_function(node):
+    if node.name.startswith('_'):
+        return False
+    doc = ast.get_docstring(node)
+    if doc is None:
+        print(str(node.lineno) + ": function '" + node.name + "' has no docstring")
+        return True
+    params = []
+    for arg in node.args.posonlyargs:
+        params.append(arg.arg)
+    for arg in node.args.args:
+        params.append(arg.arg)
+    if node.args.vararg is not None:
+        params.append(node.args.vararg.arg)
+    for arg in node.args.kwonlyargs:
+        params.append(arg.arg)
+    if node.args.kwarg is not None:
+        params.append(node.args.kwarg.arg)
+    has_error = False
+    for param in params:
+        if param == 'self' or param == 'cls':
+            continue
+        pattern = r'\b' + re.escape(param) + r'\b'
+        if re.search(pattern, doc) is None:
+            print(str(node.lineno) + ": function '" + node.name + "' docstring missing parameter '" + param + "'")
+            has_error = True
+    return has_error
+
+def visit(node, in_function):
+    if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+        if not in_function:
+            return check_function(node)
+        return False
+    if isinstance(node, ast.ClassDef):
+        if in_function:
+            return False
+        has_error = False
+        for child in ast.iter_child_nodes(node):
+            if visit(child, False):
+                has_error = True
+        return has_error
+    if in_function:
+        return False
+    has_error = False
+    for child in ast.iter_child_nodes(node):
+        if visit(child, in_function):
+            has_error = True
+    return has_error
+
+path = sys.argv[1]
+f = open(path, 'r', encoding='utf-8')
+source = f.read()
+f.close()
+
+try:
+    tree = ast.parse(source)
+except SyntaxError:
+    print("SyntaxError in file")
+    sys.exit(1)
+
+has_error = visit(tree, False)
+if has_error:
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

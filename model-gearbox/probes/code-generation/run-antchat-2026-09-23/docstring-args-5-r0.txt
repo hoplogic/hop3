@@ -1,0 +1,91 @@
+```python
+import ast
+import re
+import sys
+
+
+def get_all_params(func_node):
+    params = []
+    args = func_node.args
+    for arg in args.posonlyargs:
+        params.append(arg.arg)
+    for arg in args.args:
+        params.append(arg.arg)
+    if args.vararg is not None:
+        params.append(args.vararg.arg)
+    for arg in args.kwonlyargs:
+        params.append(arg.arg)
+    if args.kwarg is not None:
+        params.append(args.kwarg.arg)
+    return params
+
+
+class Checker(ast.NodeVisitor):
+    def __init__(self, source_lines):
+        self.source_lines = source_lines
+        self.violations = []
+
+    def _is_underscored(self, name):
+        return name.startswith("_")
+
+    def _get_docstring_info(self, func_node):
+        body = func_node.body
+        if not body:
+            return None, None
+        first_stmt = body[0]
+        if not (isinstance(first_stmt, ast.Expr) and isinstance(first_stmt.value, ast.Constant) and isinstance(first_stmt.value.value, str)):
+            return None, None
+        docstring = first_stmt.value.value
+        has_docstring = True
+        docstring_line = first_stmt.lineno
+        return has_docstring, docstring, docstring_line
+
+    def _check_function(self, func_node, kind_label):
+        name = func_node.name
+        if self._is_underscored(name):
+            return
+        required_params = get_all_params(func_node)
+        required_params = [p for p in required_params if p not in ("self", "cls")]
+        has_docstring, docstring, ds_line = self._get_docstring_info(func_node)
+        if not has_docstring:
+            self.violations.append((func_node.lineno, f"{kind_label} {name} is missing a docstring"))
+            return
+        for param in required_params:
+            pattern = re.escape(param)
+            if not re.search(r'(?<![a-zA-Z0-9_])' + pattern + r'(?![a-zA-Z0-9_])', docstring):
+                self.violations.append((ds_line, f"{kind_label} {name} docstring does not mention parameter '{param}'"))
+
+    def visit_FunctionDef(self, node):
+        self._check_function(node, "Function")
+        self.generic_visit(node)
+
+    def visit_AsyncFunctionDef(self, node):
+        self._check_function(node, "Async function")
+        self.generic_visit(node)
+
+    def visit_ClassDef(self, node):
+        self.generic_visit(node)
+
+
+def main():
+    filepath = sys.argv[1]
+    with open(filepath, encoding="utf-8") as f:
+        content = f.read()
+    source_lines = content.splitlines()
+    try:
+        tree = ast.parse(content)
+    except SyntaxError as e:
+        print(f"Line {e.lineno}: Syntax error - {e.msg}", file=sys.stderr)
+        sys.exit(1)
+    checker = Checker(source_lines)
+    checker.visit(tree)
+    if checker.violations:
+        for lineno, reason in checker.violations:
+            print(f"Line {lineno}: {reason}")
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+
+main()
+```

@@ -1,0 +1,32 @@
+```python
+import sys
+import re
+
+def main():
+    path = sys.argv[1]
+    with open(path, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    lines = content.split('\n')
+    bad = False
+    for i, line in enumerate(lines, start=1):
+        # 去掉 Windows 换行符的 \r 部分（如果存在），不计入长度
+        # split('\n') 后最后一行如果没有结尾换行也不会有多余的 \r
+        # 对于 "\r\n" 的情况, split('\n') 会产生以 "\r" 结尾的行 (除了最后一行确定没有的情况)
+        # 所以需要把行尾的 \r 去掉参与字符计数
+        check_line = line
+        if check_line.endswith('\r'):
+            check_line = check_line[:-1]
+
+        length = len(check_line)
+        if length > 100:
+            print(f"Line {i}: exceeds 100 characters ({length} chars)")
+            bad = True
+
+    if bad:
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+main()
+```

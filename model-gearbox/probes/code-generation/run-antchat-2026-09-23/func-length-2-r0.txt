@@ -1,0 +1,37 @@
+```python
+import ast
+import sys
+
+data = open(sys.argv[1]).read()
+tree = ast.parse(data)
+
+bad = []
+
+def get_func_lines(node):
+    start = node.lineno
+    end = node.end_lineno
+    return end - start + 1
+
+def check(node):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        size = get_func_lines(node)
+        if size > 40:
+            bad.append(str(node.lineno) + ": function " + node.name + " is " + str(size) + " lines (max 40)")
+        for c in ast.iter_child_nodes(node):
+            check(c)
+    elif isinstance(node, ast.ClassDef):
+        for c in ast.iter_child_nodes(node):
+            check(c)
+    else:
+        for c in ast.iter_child_nodes(node):
+            check(c)
+
+for c in ast.iter_child_nodes(tree):
+    check(c)
+
+if bad:
+    for m in bad:
+        print(m, file=sys.stderr)
+    sys.exit(1)
+sys.exit(0)
+```
