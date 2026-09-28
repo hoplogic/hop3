@@ -192,6 +192,7 @@ npm run release
 
 ## 深入文档
 
+- 规范输入与前置发现工具：[MySpec](https://myspec.dev) — 交互式规范驱动开发平台，通过结构化访谈生成 4 文件规范包（`constitution.md`, `requirements.md`, `solution.md`, `tasks.md`）并通过 MCP 协议驱动智能体。
 - 入门演示随 npm 包（coffee-week 首跑 → data-quality → doc-review + 各自演示数据 + GETTING-STARTED）；项目仓库 `examples/` — 全量端到端范本。
 - HopSpec v3 语法与执行语义：[核心规范](./docs/concepts/HopSpec%20V3核心规范.md) · [语法参考](./docs/concepts/HopSpec%20V3语法参考.md) · [配套运行时能力](./docs/concepts/HopSpec%20V3配套HopJIT运行时能力.md)。
 
