@@ -19,10 +19,10 @@ hopjit --help          # 确认命令可用
 
 ## 2. 装 skill 进 Claude Code
 
-复用模式靠 skill 驱动。零参数即装到用户级（所有项目可用）：
+复用模式靠 skill 驱动。**`npm install -g` 时已自动装过**——钩子探测本机的 Claude Code / Codex / opencode（配置目录在不在），对探到的每一个装一遍用户级 skill。下面的手动命令用于补装、刷新或指定载体，零参数同样走自动探测：
 
 ```bash
-hopjit install-skill
+hopjit install-skill      # npm 装包时已自动跑过（按探到的载体各装一遍）;手动跑用于补装或刷新
 ```
 
 输出 `status: ok`（YAML，人可读；脚本化用 `--json` 得单行 JSON）即成功，`~/.claude/skills/` 下生成：
@@ -39,7 +39,7 @@ hopjit install-skill
 **重启 Claude Code**（或新开会话），`/hop` 就在 skill 列表里了（跑 spec、翻译、修订都从它进；hopspec/hopbuild 等内部件装在盘上但不占菜单）。
 
 > 只想给单个项目装：`hopjit install-skill --dir .claude/skills`（写当前项目）。
-> Codex 载体：`hopjit install-skill --carrier codex`（缺省装用户级 `~/.codex/skills/`，装一次全项目可用——与 CC 对称）；要装项目级用 `--dir <项目根>/.agents/skills`（--dir 语义=skills 根目录）。注意 Codex 同名 skill 项目级优先于用户级——旧项目级残留会盖住用户级新版，装置器会检测并提示。
+> Codex 载体：`hopjit install-skill --carrier codex`（只装 Codex、不探测其他载体;装用户级 `~/.codex/skills/`，装一次全项目可用——与 CC 对称）；要装项目级用 `--dir <项目根>/.agents/skills`（--dir 语义=skills 根目录）。注意 Codex 同名 skill 项目级优先于用户级——旧项目级残留会盖住用户级新版，装置器会检测并提示。
 > cfuse 内置载体：cfuse 内置窗口表现为原生 Claude Code 或 Codex,按该载体的原生命令跑即可（环境变量 `CLAUDE_CONFIG_DIR`/`CODEX_HOME` 自动装到 `~/.codefuse/engine/{cc,codex}/skills/`）。裸终端预装（目标 agent 未启动）用显式 carrier:
 >   - `hopjit install-skill --carrier cfuse-cc`（装到 `~/.codefuse/engine/cc/skills/`——cfuse 内置 cc 读取的目录）
 >   - `hopjit install-skill --carrier cfuse-codex`（装到 `~/.codefuse/engine/codex/skills/`——cfuse 内置 codex 读取的目录）

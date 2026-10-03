@@ -26,14 +26,15 @@
 | 定位（四要素） | 契约 | `anc-struct-hop-cli` |
 | 关键决策 | 决策 | — |
 | CLI 命令表 | 说明 | — |
-| 命令契约 | 契约 | `anc-cli-dispatch` / `anc-cli-instance-resolve` / `anc-cli-state-load` / `anc-cli-list` / `anc-cli-pack` / `anc-cli-install-skill` / `anc-cli-install-skill-permission` / `anc-cli-install-skill-single-entry` / `anc-cli-hop-dispatch` / `anc-cli-carrier-home-resolution` / `anc-cli-notify-reuse` / `anc-cli-abort` / `anc-cli-schema-sep` |
+| 命令契约 | 契约 | `anc-cli-dispatch` / `anc-cli-instance-resolve` / `anc-cli-state-load` / `anc-cli-list` / `anc-cli-pack` / `anc-cli-install-skill` / `anc-cli-install-skill-permission` / `anc-cli-install-skill-single-entry` / `anc-cli-carrier-autodetect` / `anc-cli-postinstall` / `anc-cli-hop-dispatch` / `anc-cli-carrier-home-resolution` / `anc-cli-notify-reuse` / `anc-cli-abort` / `anc-cli-schema-sep` |
 | CLI 响应类型 | 契约 | `anc-cli-response-types`（组标题）/ `anc-cli-init-response` / `anc-cli-validate-response` / `anc-cli-list-response` / `anc-cli-next-response` / `anc-cli-step-ready` / `anc-cli-execution-paused` / `anc-cli-command-response` / `anc-cli-vars-response` / `anc-cli-status-response` / `anc-cli-status-nested-pause` / `anc-cli-abort-response` / `anc-cli-replan-response` / `anc-cli-branch-request` |
 | JSON I/O 约定 | 契约 | `anc-cli-json-io` / `anc-cli-file-arg-safety` |
 | JSON 交互示例 | 说明 | — |
 
 ## 定位【契约】 ^anc-struct-hop-cli
 
-> **模块版本**：hop-cli `v0.35.1`（2026-10-01 工程链 review 修复：frontmatter 键名 user_invocable→user-invocable〔官方连字符,下划线自 8 月起空操作〕;放行判据显式枚举 cc/cfuse-cc 不借 carrierFamily〔opencode 被误写 CC 文件〕;放行七形态写全〔permissions 非对象/allow 非数组不写只 note〕;缺省注册条补自举三支与注册面失败两支;其他载体小节加 opencode 启用句;装载清单登 hop-ops.md;出口表登 ensureCcPermission;InstallSkillResponse 小节加锚;:225 旧句清）。上版 v0.35.0（同日）。本版 install-skill 三改（作者定"核心是通过安装和 /hop 完成对 coding agent 的教育,对用户尽可能傻瓜化"）：①缺省即注册 MCP server 并自举配置（原须 --mcp）;②CC 载体自动放行 `mcp__hopjit__run_approved_command`（写 `<cwd>/.claude/settings.local.json` permissions.allow,幂等）;③用户可见 skill 收敛为 `hop` 一个——hopspec/hopspec-mcp/hopbuild/hopbuild2/hopfix 仍装到盘上但 `user_invocable: false`,由 /hop 分派;InstallSkillResponse 加 permission_written/permission_note。上版 v0.34.0（2026-09-27）。0.x 未承诺稳定。
+> **模块版本**：hop-cli `v0.36.0`（2026-10-03 作者定"install-skill 应该是智能探测的,不是手工选择"+"只敲 npm install -g,其他的都应该让 /hop 去解决"：install-skill 缺省按本机载体 home 在场自动探测、一次装全部探到的载体,`--carrier` 降为显式覆盖〔^anc-cli-carrier-autodetect〕;包加 postinstall 钩子装包即装 skill,四种环境静默跳过只留一行指路〔^anc-cli-postinstall〕;InstallSkillResponse 加 carriers/results 多载体形态）；
+> - 上版 v0.35.1=2026-10-01 工程链 review 修复：frontmatter 键名 user_invocable→user-invocable〔官方连字符,下划线自 8 月起空操作〕;放行判据显式枚举 cc/cfuse-cc 不借 carrierFamily〔opencode 被误写 CC 文件〕;放行七形态写全〔permissions 非对象/allow 非数组不写只 note〕;缺省注册条补自举三支与注册面失败两支;其他载体小节加 opencode 启用句;装载清单登 hop-ops.md;出口表登 ensureCcPermission;InstallSkillResponse 小节加锚;:225 旧句清）。上版 v0.35.0（同日）。本版 install-skill 三改（作者定"核心是通过安装和 /hop 完成对 coding agent 的教育,对用户尽可能傻瓜化"）：①缺省即注册 MCP server 并自举配置（原须 --mcp）;②CC 载体自动放行 `mcp__hopjit__run_approved_command`（写 `<cwd>/.claude/settings.local.json` permissions.allow,幂等）;③用户可见 skill 收敛为 `hop` 一个——hopspec/hopspec-mcp/hopbuild/hopbuild2/hopfix 仍装到盘上但 `user_invocable: false`,由 /hop 分派;InstallSkillResponse 加 permission_written/permission_note。上版 v0.34.0（2026-09-27）。0.x 未承诺稳定。
 > - 本版=新增 schema-sep 命令（把 spec 源文件里 HopSchema 名/类型分隔符从 `:` 原地迁移到 ` % ` 的工具,先备份、转换后三道校验不过就拒绝写回,todo/0109 第 2 步,^anc-cli-schema-sep）；
 > - 上版 v0.33.0=status 对网络暂停与嵌套串行调用子流程里的停点也报 paused,StatusResponse 新增可选字段 call_path（^anc-cli-status-nested-pause,todo/0105 作者拍甲案）；
 > - 上版 v0.32.0=init 新增 --child-instance（循环里的串行 call 子实例按轮次命名,子实例 ID 与步骤号分开传,hopissues/0098）；
@@ -175,7 +176,7 @@ trait：
 | `hopjit vars [--instance id]` | ExecutionEngine.get_vars | VarsResponse |
 | `hopjit resume [--instance id]` | ExecutionEngine.recover → completeAndAdvance | NextResponse |
 | `hopjit abort [--instance id] [--reason text]` | ExecutionEngine.abort（实例主动中止,契约 [[exec-engine#^anc-exec-abort]]:非终态→aborted 持久幂等/completed·failed 拒改写/aborted 后一切推进命令墓碑拒;加载走 load 保留现场） | AbortResponse |
-| `hopjit install-skill [--dir <目标>] [--carrier cc\|codex\|cfuse-cc\|cfuse-codex\|opencode] [--demo] [--plus] [--mcp] [--force]` | 从包内 `driver/` 展开 skill 到目标（**缺省即注册 MCP server + 自举配置 + CC 放行 run_approved_command**,2026-10-01;`--mcp` 保留为显式别名）;用户可见 skill 只有 `hop`,其余五件装为内部件——目标按 carrier 解析（`--dir` 覆盖；`cc`/`codex` 读官方环境变量 `CLAUDE_CONFIG_DIR`/`CODEX_HOME` 自动适配当前环境,`cfuse-cc`/`cfuse-codex` 固定 cfuse home,详见 ^anc-cli-carrier-home-resolution）；`--demo` 附装演示集（**demo 恒项目级**落 cwd `.agents/skills`）；Codex 旧项目级残留检测→`legacy_note`；不涉引擎状态 | InstallSkillResponse |
+| `hopjit install-skill [--dir <目标>] [--carrier cc\|codex\|cfuse-cc\|cfuse-codex\|opencode] [--demo] [--plus] [--mcp] [--force]` | 从包内 `driver/` 展开 skill 到目标（**`--carrier` 缺席时自动探测本机在场的载体并逐个装**,一个都没探到才回落 cc,^anc-cli-carrier-autodetect;**缺省即注册 MCP server + 自举配置 + CC 放行 run_approved_command**,2026-10-01;`--mcp` 保留为显式别名）;用户可见 skill 只有 `hop`,其余五件装为内部件——目标按 carrier 解析（`--dir` 覆盖；`cc`/`codex` 读官方环境变量 `CLAUDE_CONFIG_DIR`/`CODEX_HOME` 自动适配当前环境,`cfuse-cc`/`cfuse-codex` 固定 cfuse home,详见 ^anc-cli-carrier-home-resolution）；`--demo` 附装演示集（**demo 恒项目级**落 cwd `.agents/skills`）；Codex 旧项目级残留检测→`legacy_note`；不涉引擎状态 | InstallSkillResponse |
 | `hopjit schema-sep <spec.md>` | parseSpec + convertSchemaSeparators + validateSpec（把 HopSchema 名/类型分隔符从 `:` 原地改成 ` % `,先备份;不创建实例、不调 Engine,契约见 ^anc-cli-schema-sep） | SchemaSepResponse |
 | `hopjit pack <spec.md> [--carrier cc\|codex\|cfuse-cc\|cfuse-codex\|opencode] [--dir <目标>] [--name <skill名>] [--assets <逗号分隔文件>] [--force]` | 把一个 hopskill spec 打包成载体对应的**独立具名 skill**（CC 系 `/skill`；Codex 系 `$skill`；`cfuse-*` 复用对应原生系的包装模板,仅目标 home 不同） | PackResponse |
 
@@ -312,6 +313,20 @@ trait：
   - 其他载体（判据=显式枚举 `carrier === 'cc' || carrier === 'cfuse-cc'`,**不借 `carrierFamily`**——那个函数把 opencode 也归 'cc' 系,只是包装模板选型语义,首版误用致 opencode 被写了 CC 文件,review 面二实抓）：Codex 与 opencode 都有按 `<server>_<tool>` 粒度的放行配置,但公开文档未给出完整工具名规范——本器不猜格式,`permission_note` 输出一行指路"请在载体里放行 hopjit 的 run_approved_command 工具"。**opencode 另加一句"并把 mcp.hopjit.enabled 改为 true"**——opencode 注册缺省 `enabled:false`（既有决策,见上 opencode 载体条款：防复用模式 LLM 误调 start_run）,server 不启动工具不注入,run_approved_command 在 opencode 上要用户显式启用后才可达;缺省要不要改 true 归作者（todo/0134）。
   - 响应：`permission_written`（写入的文件路径;跳过/非 CC 时 null）+ `permission_note`。
 - **用户可见 skill 收敛为 `hop` 一个（2026-10-01 作者定——"现在安装时会装好几个 hop 家族的 skill,也要考虑避免 coding agent 的认知混乱"）** ^anc-cli-install-skill-single-entry：六件仍全部装到盘上（清单与路径不变）,但只有 `hop/SKILL.md` 保持 `user-invocable: true`（三载体源都显式写,不靠缺省）;`hopspec`/`hopspec-mcp`/`hopbuild`/`hopbuild2`/`hopfix` 五件 frontmatter 改 `user-invocable: false`（**连字符**——Claude Code 官方 frontmatter 键名,未识别的键静默忽略;本库自 2026-08 起写的下划线 `user_invocable` 一直是空操作,2026-10-01 review 面四对官方表实锤后全库改正）。Claude Code 对该字段的语义：不出现在用户的 `/` 菜单,模型仍可按 description 调用,description 仍进上下文（官方 skills 文档"Control who invokes a skill"）。/hop 的分派节决定什么情况走哪件（[[#^anc-cli-hop-dispatch]]）。Codex/opencode 载体同改 frontmatter（载体不认该字段时无害）。缺省件铁律不变：零配置可跑;`--plus` 件仍是显式附装。
+
+- **载体自动探测（2026-10-03 作者定"install-skill 应该是智能探测的,而不是手工选择"）** ^anc-cli-carrier-autodetect：`--carrier` 缺席时不再缺省 `cc`,而是探测本机装了哪些载体,对探到的每一个各装一遍（同一套展开/注册/自举/放行流程逐载体跑,互不影响）。`--carrier` 显式给出时照旧只装那一个——它从"必选参数"降为"覆盖探测结果"。
+  - **探测判据=载体 home 目录在场**（按 ^anc-cli-carrier-home-resolution 解析后 `existsSync`）：`cc`→`$CLAUDE_CONFIG_DIR` 或 `~/.claude`;`codex`→`$CODEX_HOME` 或 `~/.codex`;`opencode`→`$OPENCODE_CONFIG_DIR` 或 `~/.config/opencode`;`cfuse-cc`/`cfuse-codex`→`~/.codefuse/engine/{cc,codex}`。home 在场=用户至少启动过一次该载体,是"装了"的最低可靠信号;不探可执行文件（PATH 里有 `claude` 不等于用户在用,且 cfuse 内置载体没有独立可执行文件）。
+  - **去重**：环境变量把 `cc` 的 home 重定向到 `~/.codefuse/engine/cc` 时（cfuse 会话里跑）,`cc` 与 `cfuse-cc` 解析到同一目录——按解析后的 home 去重,只装一次,carrier 名取先探到的（探测顺序固定 cc → codex → opencode → cfuse-cc → cfuse-codex）。
+  - **一个都没探到**→回落只装 `cc`（与旧缺省一致：用户裸机先装 hopjit 再装 Claude Code 的顺序也要能通,`~/.claude/skills` 由本器创建）,响应 `detect_note` 说明"未探到任何载体 home,按 Claude Code 装到 ~/.claude/skills;其他载体装好后重跑 install-skill 即自动补装"。
+  - **响应形态**：探测路径下 `carrier` 字段仍带（=探到的第一个,兼容只读该字段的旧消费方）,新增 `carriers % [line]`（本次实际装的载体清单）与 `results % [InstallSkillResult]`（每载体一份,结构=旧响应去掉 status/driver_version/driver_source 三个全局字段）;顶层 `installed`/`target`/`mcp_registered`/`permission_written` 等字段取第一个载体的值（兼容）。显式 `--carrier` 路径 `carriers` 恒单元素,形态同。`--dir` 与自动探测互斥——`--dir` 给了目标目录却不知道给哪个载体,此时等价 `--carrier cc`（旧行为）,不探测。
+  - 正例：机器上有 `~/.claude` 和 `~/.codex` → `hopjit install-skill` 零参数装两个载体,`carriers: ["cc","codex"]`;反例：`hopjit install-skill --carrier codex` 只装 codex,即便 `~/.claude` 在场也不碰。
+  - 测试面：探测函数 `detectCarriers()` 导出,用例用临时 HOME 布目录正反例（两在场/零在场/环境变量重定向去重/显式 --carrier 不探测）。
+
+- **postinstall：装包即装 skill（2026-10-03 作者定"只需要 npm i -g @hoplogic/hopjit,其他的都应该让 /hop 去搞定"）** ^anc-cli-postinstall：package.json `scripts.postinstall` 跑 `node dist/postinstall.js`,它调 install-skill 的自动探测路径（等价零参数 `hopjit install-skill`,不带 --force：已有副本不覆盖,升级场景由 /hop 维护线接手）。README 安装节因此只剩 `npm install -g @hoplogic/hopjit` 一条。
+  - **为什么不在 postinstall 里问**：npm ≥7 跑生命周期脚本时不接终端 stdin、缺省也不显示脚本输出（要 `--foreground-scripts`）;且主要安装者是 agent 替用户敲 npm,agent 不会应答 npm 内部提示。问不到人,所以只探测不问。
+  - **四种环境静默跳过,不让 npm install 失败**（钩子抛错=装包失败=用户连 hopjit 命令都拿不到,代价远大于少装一个 skill）：①`HOPJIT_SKIP_SKILL=1`（用户显式关闭——不想被自动写 skill 目录与 MCP 注册的退出口）;②`CI` 环境变量在场（流水线装包无载体）;③以 root 身份跑且 `SUDO_USER` 在场（`sudo npm i -g` 时 HOME 是 root 的,探测落空或写错家目录）;④包路径不在 `node_modules/` 下（源码仓自身 `npm install`——开发者加依赖或 dev-install.sh 装依赖时钩子也会跑,开发装机由 dev-install.sh 自己跑 `install-skill --force`）或 `dist/cli.js` 不在。跳过与任何异常都只向 stderr 打一行 `[hopjit] 未自动安装 skill（原因）——在 agent 里说"装一下 hop",或手动跑 hopjit install-skill`,退出码恒 0。
+  - **项目级两件不在 postinstall 里做**：CC 的 `.mcp.json` 注册与 `.claude/settings.local.json` 放行是项目作用域（写 `<cwd>`）,而 postinstall 的 cwd 是 npm 的包目录不是用户项目——写进去既无效又污染。postinstall 路径下这两步跳过并在 note 里说明"项目级注册与放行在首次 /hop 时补"。**首次补的机制**：/hop 的 driver 在分派前先核 `<cwd>/.mcp.json` 有无 hopjit 条目,没有就跑一次 `hopjit install-skill`（幂等,此时 cwd 是用户项目,两件自然落位）——写进 driver/hop-skill.md 的"0. 分派"节前置检查,三载体同改。
+  - **测试面**：postinstall 入口把"该不该跳过"抽成纯函数 `postinstallSkipReason(env, uid, pkgDir, distExists)` 导出,四种跳过各一正例、全不命中返回 null 一反例;真跑的集成面归真机 `test:live:smoke`（干净 HOME 装包后 `~/.claude/skills/hop/SKILL.md` 在场）。
 
 - **`--plus`：附装进阶研究件并自动落位工具配置（2026-08-30 作者定"install-skill --plus 这样比较简单的"——进阶件不进缺省〔缺省件铁律=零配置可跑,这两件依赖外部工具注册,不配即死;deep-research 另有费用时长面〕,但值得一开关到位）** ^anc-cli-install-skill-plus：带 `--plus` 时做三件：
   1. **装 plus 集**（carrier-aware pack,与 --demo 同机制;名字即 spec Id 不加前缀——这两件本就带 hop- 前缀命名空间）：
@@ -637,7 +652,10 @@ struct: InstallSkillResponse
   Id: install-skill-response
   Fields:
     - status % line                    # 'ok' 或 'error'
-    - carrier % line                   # 本次安装的载体（cc/codex/cfuse-cc/cfuse-codex）
+    - carrier % line                   # 本次安装的第一个载体（兼容字段;自动探测时=探到的第一个,^anc-cli-carrier-autodetect）
+    - carriers % [line]                # 本次实际安装的全部载体（显式 --carrier 时单元素）
+    - results % [InstallSkillResult]   # 每载体一份结果,字段=下列 target 起的各字段;顶层同名字段取 results[0] 的值（兼容只读顶层的旧消费方）
+    - detect_note % line               # 可选。自动探测说明（零探到回落 cc / 去重 / postinstall 跳过项目级两步）
     - driver_version % line            # 包 package.json version（装的是哪个版本）
     - driver_source % line             # 包根绝对路径（从哪个源装的）
     - target % line                    # 展开目标 skills 目录

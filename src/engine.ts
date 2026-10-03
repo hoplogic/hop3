@@ -454,6 +454,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
         logDir: options.logDir,
         level: options.logLevel,
         maxRuns: options.maxRuns,   // @a: anc-obs-log-retention
+        stateDir: options.stateDir,   // 活账反查根——清理不删在跑 run 的日志目录（hopissues/0116） // @a: anc-obs-log-retention
         title: ast.header.title,
         goal: ast.header.goal ?? '',
         inputs: inputs,

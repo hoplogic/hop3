@@ -15,7 +15,7 @@ function validateYamll(txt) {
   try { load(lines.slice(0, execIdx + 1).join('\n')); }
   catch (e) { errs.push('header 非法: ' + (e.problem || e.message)); }
   const isBlockHead = (l) => /^ *(?:"[\d.]+(?:#\d+)?"|[\d.]+(?:#\d+)?):\s*$/.test(l);
-  const isTopKey = (l) => /^(status|ended_at|replan_audit|resumed_at|warn):/.test(l);
+  const isTopKey = (l) => /^(status|ended_at|replan_audit|resumed_at|warn|log_gap|command|rumination_suspect):/.test(l);   // log_gap: 自愈断档标记（hopissues/0116）;command/rumination_suspect 同为文档级顶层块
   let cur = [];
   const flush = (blk) => {
     const body = blk.filter(l => l.trim() !== '');

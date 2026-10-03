@@ -16,7 +16,7 @@ const ROOT = process.env.HOPJIT_CHECK_ROOT ?? join(dirname(fileURLToPath(import.
 const SRC = join(ROOT, 'src');
 
 // 组合根白名单：进程边界翻译层,允许读进程状态（写 process.env 一律禁——含组合根）
-const COMPOSITION_ROOTS = new Set(['cli.ts', 'mcp-server.ts']);
+const COMPOSITION_ROOTS = new Set(['cli.ts', 'mcp-server.ts', 'postinstall.ts']);   // postinstall.ts=npm 钩子进程入口（^anc-cli-postinstall）,与 cli 同为进程边界
 // 逐条登记豁免（文件 → [{pattern, reason}]）
 const EXEMPT = [
   { file: 'dispatcher.ts', pattern: 'snap ? snap[key] : process.env[key]', reason: 'envOf 统一读取入口的回退支路——快照缺席回退直读（存量兼容,主锚 env_snapshot 条款）;唯一合法内核读点' },

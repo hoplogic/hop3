@@ -9,7 +9,7 @@ user-invocable: true
 	source: [[hop-skill]]
 	source_id: hopjit-driver-hop
 	type: adapt
-	last_sync: 2026-10-02T23:09+0800
+	last_sync: 2026-10-03T14:13+0800
 	note: /hop 的 opencode 载体适配（适配基准=Codex 版 driver/codex/hop-skill.md——作者抓"在 codex /hop 都能用,为什么在 opencode 不装?"撤销上一批"v1 不装"裁定后补装;同语义分载体不许步骤语义漂移）。载体差异三处:触发=隐式（opencode 按 description 触发,用户说 hop/继续上次的活即中）/问人=question 内置工具（opencode-driver-carrier 映射表）/外包与阅卷按 subagent 能力降级（无 subagent 全自驱+判据硬化,零仪式——opencode 有内置 general subagent,常态可外移）。布局契约 [[opencode-driver-carrier#^anc-driver-opencode-install-layout]]。演进随 CC 版同批,归 git log。
 %%
 
@@ -42,6 +42,8 @@ hop 是**独立的 plan/执行工具**：多个活并存、随开随切——像
 ### 0. 分派：用户给的是什么，走哪条路
 
 hop 是唯一入口，进来先判用户给的是什么，五条路：
+
+**进分派之前先补一件安装期做不了的事（2026-10-03 作者定"只敲 npm install,其他都让 /hop 解决"）**：skill 是 npm 装包时自动装上的。opencode 的 MCP 注册在用户级 opencode 配置（`~/.config/opencode/opencode.jsonc`）,装包时已写好,本项目不需要再补什么;但若 `hopjit` 命令能找到而 配置里没有 `mcp.hopjit`（用户装包时跳过了钩子,或配置文件是后来才建的）,跑一次 `hopjit install-skill --carrier opencode`（幂等）补上,再告诉用户一句。已经有的就什么都不做。
 
 - **一句话能答完、不需要留痕的**（算个数、翻译一段）→ 直接答，不进 hop。hop 不劫持对话。
 - **复杂的、需要可控可靠保障的活**（多步骤、要进度记录、要独立核验、中断后要能接着干）→ 下面第 1 节起的升格流程：建任务卡、引擎管进度与把关。这是 hop 的主路。

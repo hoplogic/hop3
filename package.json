@@ -1,6 +1,6 @@
 {
   "name": "@hoplogic/hopjit",
-  "version": "0.19.0",
+  "version": "0.19.1",
   "description": "HopJIT execution engine for HopSpec v3 — structured execution runtime for LLM agents (CC / Codex reuse-mode drivers)",
   "type": "module",
   "license": "MPL-2.0",
@@ -87,6 +87,7 @@
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "npm run clean && tsc && chmod +x dist/cli.js dist/mcp-server.js",
+    "postinstall": "node dist/postinstall.js",
     "test": "npm run -s build && vitest run",
     "precommit": "./scripts/precommit.sh",
     "check:fast": "tsc --noEmit && node scripts/check-anchor-format.mjs && node scripts/check-text-integrity.mjs && node scripts/check-process-state.mjs && node scripts/check-driver-carriers.mjs && node scripts/check-layer-imports.mjs && node scripts/check-module-arch-audit.mjs && node scripts/check-threshold-sync.mjs && node scripts/check-teaching-sync.mjs && node scripts/check-line-length.mjs && npm run -s check:scripts-syntax",

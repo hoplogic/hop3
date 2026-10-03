@@ -47,7 +47,7 @@
 
 ## 定位【契约】 ^anc-obs-hoplog
 
-> **模块版本**：hoplog `v0.6.1`（2026-10-01 工程链 review：^anc-obs-command-block 从列表项散文独立成契约节——原锚定形态不合法致真身悬空、三件套缺席;行为零变化）。上版 v0.6.0（2026-09-30）加 recordCommand 顶层 `command:` 块——hopjit-mcp run_approved_command 的执行账,todo/0132。上版 v0.5.0（同日）本版两件——对外分发后防塞爆硬盘（todo/0127,作者定）：①缺省级别 debug→info（prompt+response 占日志字节 65%,本机 8 月起 351 个 run 105 MB 从未清过）;②新增日志保留上限 `max_runs` 缺省 3——新建 run 目录前把日志根目录下多出的最老 run 整目录删掉,契约 ^anc-obs-log-retention。上版 v0.4.0（2026-09-02）新增 recordRuminationSuspect 文档级留档方法（^anc-exec-thinking-exhausted 二批,hopissues/0060）。0.x 未承诺稳定。日志 YAML 格式是半稳契约——人/agent 复盘读,格式破坏影响既有日志解析；此定位锚点即 hoplog 模块的归属锚点）
+> **模块版本**：hoplog `v0.7.2`（2026-10-03 作者抓"任何时刻文件都是合法 YAML 这个概念有问题吧？很早以前就改成 YAMLL 了,怎么还留着"——设计层四处 v2 嵌套树口径残留清理：:187/:245/:276 三句与 ^anc-obs-hoplog-flush 实现约束 2 整段改为 YAMLL 口径（块内合法、块间独立、全文不求成树,概念权威 [[../concepts/HopSpec V3扩展-可观测性与YAMLL日志格式#^anc-obs-format-invariants]] 不变量 2）;v0.7.1 写进 ^anc-obs-log-retention 的"重建后仍合法 YAMLL"条款定罪语从"整文非法 YAML"改为"缺 execution: 标记致块区无法定位";测试侧 yamlLoad(整文) 断言改走已有的逐块校验 yamllErrors）。上版 v0.7.1（2026-10-03 工程链 review 修复：自愈重建后先重发最小 header 与 `execution:` 行再写 log_gap——原版重建的 main.yaml 无 header 整文非法 YAML、extractHopLogStepKeys 返回空、复用模式跨进程续写每个 done 被判孤儿,违反 ^anc-obs-hoplog-flush'任何时刻合法 YAML';'读失败的快照当活账'改为'略过+warn 一次'——原文字写了一个无物可收的行为;契约加'写失败/目录缺失不杀 run'条款;出口表登 collectLiveRunDirs;resume 段补重建失败支;Goal 行改;log_gap 入顶层块家族）。上版 v0.7.0（同日 hopissues/0116 修复：①计数保留跳过活 run——pruneRunDirs 只删被某份 state.json 以终态引用或无人引用的目录,未终态快照指向的目录恒留,构造器透传 stateDir 供反查;②append 写失败不杀 run——首次 ENOENT/EACCES/EPERM 尝试重建目录续写,再失败 warn 一次后降级 no-op,run 继续;③HopLog.resume 目录不在时重建并写 `log_gap:` 断档标记。接口面：HopLogOptions 加 stateDir?、pruneRunDirs 加第三参 liveRunDirs?、新导出 collectLiveRunDirs）。上版 v0.6.1（2026-10-01 工程链 review：^anc-obs-command-block 从列表项散文独立成契约节——原锚定形态不合法致真身悬空、三件套缺席;行为零变化）。上版 v0.6.0（2026-09-30）加 recordCommand 顶层 `command:` 块——hopjit-mcp run_approved_command 的执行账,todo/0132。上版 v0.5.0（同日）本版两件——对外分发后防塞爆硬盘（todo/0127,作者定）：①缺省级别 debug→info（prompt+response 占日志字节 65%,本机 8 月起 351 个 run 105 MB 从未清过）;②新增日志保留上限 `max_runs` 缺省 3——新建 run 目录前把日志根目录下多出的最老 run 整目录删掉,契约 ^anc-obs-log-retention。上版 v0.4.0（2026-09-02）新增 recordRuminationSuspect 文档级留档方法（^anc-exec-thinking-exhausted 二批,hopissues/0060）。0.x 未承诺稳定。日志 YAML 格式是半稳契约——人/agent 复盘读,格式破坏影响既有日志解析；此定位锚点即 hoplog 模块的归属锚点）
 
 **① 自身定位**：HopLog 是 HopJIT 的执行轨迹日志组件——只追加、实时落盘的完整执行历史，**给人和 agent 排查深层次 bug 用的**。当 Spec 执行出现预期外结果（LLM 幻觉、数据异常、策略失败、retry 耗尽）时，HopLog 提供足够信息**还原完整的决策链路**：每一步什么时候开始、输入什么、产出什么、调了什么工具、谁批准了 commit、为什么失败。（解释性类比：类似飞行记录仪——事后复盘用，不参与飞行控制。）
 
@@ -65,7 +65,8 @@
 |---|---|---|---|---|
 | `HopLog` | 类 | hoplog.ts | 执行轨迹日志组件（engine 持有并调 record*） | stable |
 | `LogLevel` | 类型 | hoplog.ts | 日志级别枚举（engine/cli 配置最低记录级别） | stable |
-| `pruneRunDirs` | 函数 | hoplog.ts | 日志保留上限清理（HopLog 构造器内调;export 供测试直判与将来 CLI 手工清理口复用）。2026-09-30 todo/0127 | provisional |
+| `pruneRunDirs` | 函数 | hoplog.ts | 日志保留上限清理（HopLog 构造器内调;export 供测试直判与将来 CLI 手工清理口复用;第三参 liveRunDirs? 为活 run 日志目录集合,命中既不删也不占配额——2026-10-03 hopissues/0116）。2026-09-30 todo/0127 | provisional |
+| `collectLiveRunDirs` | 函数 | hoplog.ts | 从快照根目录收活 run 的日志目录集合（state.json 无 terminal_state 且 hoplog_run_dir 在场;HopLog 构造器内调;export 供测试直判）。2026-10-03 hopissues/0116 | provisional |
 | `DEFAULT_MAX_RUNS` | 常量 | hoplog.ts | 保留上限缺省 3（cli/mcp-server 缺省口同源,不各写字面）。2026-09-30 todo/0127 | provisional |
 | `timestamp` | 函数 | hoplog.ts | 生成带时区偏移的毫秒精度本地时间戳（YAMLL 各事件的时间字段单点来源；engine 记 join/dispatch 时刻复用，保证与日志内时间同源同格式）。2026-08-01 补登 | stable |
 | `extractHopLogStepKeys` | 函数 | hoplog.ts | 从真实 YAMLL `execution:` 下提取精确步骤块键（HopLog resume / carrier-live-e2e G11 消费） | stable |
@@ -98,6 +99,7 @@ trait（按职责分三组）：
   - **不过孤儿守卫**（命中时点在截断抛错前,步级归属不可靠——recordWarn 空 stepId 顶层块同先例）;
   - content 经 sanitizeFull 抹密钥**不截断**（全文是留档价值本体,llm.prompt 全文核验通道同理）;无视日志级别恒写（审计性——线下判"是不是反刍"的唯一证据）;
   - **已知权衡:多份留档=顶层同名键重复**（≤5 份封顶下常态可现）——库内 YAMLL 消费是行式正则解析（extractHopLogStepKeys 族）天然容忍,文档级 `warn:` 先例同病同对称;外部 strict YAML 工具整档 load 会拒,线下分析用文本工具或逐块切读（review C1-3 判权衡记账,不改键形态——破坏 warn 对称性且库内消费零收益）。
+- `log_gap:` 顶层块（无独立 record 方法——由 append 自愈与 resume 自愈两处内部写,^anc-obs-log-retention HopSop）：**文档级顶层块**,字段 `at`（timestamp）与 `reason`（二值枚举 `dir_recreated` / `dir_missing_on_resume`）;不过孤儿守卫;同一文件理论可出现两次（append 重建一次 + 另一进程 resume 重建一次）,与 warn/rumination_suspect 同名键重复的权衡同;读到它=之前的记录不可恢复,state/vars 账不受影响。2026-10-03 hopissues/0116。
 - `recordStepMeta(stepId, meta: StepMeta)`——步骤特有字段。按字段分类决定写入：审计性字段（tool/commit_audit/hitl/callee_spec_id）无视级别始终写入；流控字段（knowledge/retry/taken/condition/llm/tokens_used）info 级写入
 - `recordWarn(stepId, message)`——告警附注。warn 级以下写入，消息脱敏。
   - **stepId 非空 = step 级**（warn 作该 step 块字段）；**stepId 为空 `''` = 文档级**（如"Output 声明却从未赋值"，不归属任何 step）→ 落顶层 `warn:` 独立块，不过 guardOrphan/blockHeader（空 id 无 step 归属，若走守卫会被误当孤儿写成 `# ERROR: orphan` 而正文丢失）。
@@ -132,7 +134,7 @@ trait（按职责分三组）：
 **parallel 执行流事件**（parallel 步骤的子字段，按步骤深度缩进嵌入 execution 树，补充记录 fan-out/join 结构化信息）：
 
 > **⚠️ 缩进契约（修订，^anc-obs-nested-tree）**：`fanout`/`join` **不是顶格根级事件**——它们是所属 parallel 步骤（如 4.3）的 body 子字段，缩进 `2d+2`（与该步的 type/summary/at 并列，`d` = parallel 步骤深度）。
-> - **曾误实现为顶格 0 缩进**：在 fan-out/join 时（execution 深缩进流中途）append 一个顶格键，会提前闭合整个 `execution:` mapping → 其后步骤全部错位、YAML 不可解析，违反 §609「任何时刻都是合法 YAML」。
+> - **曾误实现为顶格 0 缩进**：在 fan-out/join 时（execution 深缩进流中途）append 一个顶格键，会提前闭合整个 `execution:` mapping → 其后步骤全部错位、块无法按缩进归位,违反 YAMLL 不变量 4「层级自表达」（块的缩进编码它在执行树的位置;本条旧文曾引 v2 的「任何时刻合法 YAML」定罪,2026-10-03 改口径）。
 > - 修正为随步骤深度缩进后，fanout/join 作为该步的 body 字段自然嵌在其子树内。
 
 > **⚠️ parallel child 生命周期归子 hoplog（方案 A）** ^anc-obs-parallel-child-satellite：父 hoplog 的 parallel 步骤（4.3）子树里 **不写 child 的 start/done**——每个 child 有独立子 hoplog（`parallel/<child_id>/log/.../main.yaml`，目录嵌套即关联），start/done/prompt/outputs 全在那里。
@@ -182,7 +184,7 @@ trait（按职责分三组）：
    > 审计性字段（tool/commit_audit/hitl/callee_spec_id）无视级别始终写入
    > 流控字段（knowledge/retry/taken/condition/llm）info 级写入
 3. [act] 步骤完成/失败时追加 outputs+status / reason+status
-   > 每次写入都是 appendFileSync 实时落盘，任何时刻文件都是合法 YAML
+   > 每次写入都是 appendFileSync 实时落盘，每个已落盘的块内部是合法 YAML、块间独立（YAMLL,全文不求成树）
 ```
 
 ### 核心要求
@@ -240,7 +242,7 @@ trait（按职责分三组）：
 
 1. **Debug 能力**：定位 LLM 交互问题，记录工作流实际运行结果，支持并行分支快速关联和 HITL 审查
 2. **分级过滤**：三级日志（debug ⊇ info ⊇ warn），审计性字段无视级别始终记录
-3. **单文件输出**：main.yaml（人和 agent 共读），任何时刻都是合法 YAML
+3. **单文件输出**：main.yaml（人和 agent 共读），YAMLL——流式追加的独立 YAML 块,机器按块切分逐块解析
 4. **步骤类型特化**：reason 记录 `llm:`，act 记录 `tool:`，confirm 记录 `hitl:`，commit 记录 `commit_audit:`——审计信息是步骤字段，无独立事件流
 
 ---
@@ -271,7 +273,7 @@ specs/
 - **Run ID**：`{YYYYMMDD}T{HHMMSS}-{4hex}`，4 位 hex 防止同秒冲突
 - **Trace ID**：`trace_id` 统一使用 `instance_id`（UUID）——顶层 run 的 `trace_id` = 自己的 `instance_id`；call/parallel worker 子实例继承父的 `instance_id` 作为 `trace_id`。这保证**同一个 trace_id 串起所有关联 run**（父+子），grep 一个 trace_id 就能找到整棵执行树的全部日志。`run_id`（时间戳格式）标识单个 run，`trace_id`（UUID）标识关联的执行树 ^anc-obs-trace-inherit
 - **Run 目录**：`.hoplog/{spec_id}-{run_id}/`
-- **主文件**：`{run_dir}/main.yaml`——唯一输出文件，人和 agent 共用，流式追加，任何时刻都是合法 YAML
+- **主文件**：`{run_dir}/main.yaml`——唯一输出文件，人和 agent 共用，流式追加的 YAMLL（元数据头块 + `execution:` 标记 + 顺序追加的事件块 + 终态块;块内合法、块间不求成树——见 [[#^anc-obs-nested-tree]] v3 转向）
 - **卫星文件**：`{run_dir}/{step_id}.yaml`（parallel/call 并发分支）
 
 ### 文件输出
@@ -376,20 +378,25 @@ HopLog.recordCommand(rec):
 ```
 contract: HopLogRetention
   Id: hoplog-retention
-  Goal: 日志根目录下最多保留 max_runs 个 run 目录,新建 run 前把多出的最老 run 整目录删掉,让日志体积有界
+  Goal: 日志根目录下最多保留 max_runs 个**已终态或无人引用**的 run 目录（在跑的不计）,新建 run 前把多出的最老 run 整目录删掉,让日志体积有界
   Constraints:
   - 只有一个旋钮 max_runs（正整数,缺省 3）——不做总大小上限、不做按天数轮转（作者定"太复杂"）
   - 清理时机=HopLog 构造时、在 mkdir 本 run 目录之前：先数、再删、再建。不起后台进程、不在 run 结束时清（run 结束可能是崩溃,没有结束钩子）
   - 只数日志根目录一层的 run 目录（名形如 <spec_id>-<YYYYMMDD>T<HHMMSS>-<hex>,末段时间戳可直接字典序排）;子实例日志嵌在父 run 目录下的 parallel|calls/<cid>/ 里,随父整目录删,不单独计数——子实例构造 HopLog 时 logDir 不是根目录,清理对它空转（判据:子实例 logDir 恒为 `<父 run 目录>/parallel|calls/<cid>/log`——上溯两级目录名是 parallel 或 calls 即跳过;实现期首版只看上一级,单测抓出后改）
   - 排序依据=目录名里的时间戳段（不依赖 mtime——mtime 会被 resume 续写刷新,最老的 run 若被 resume 过就排到最新,误删其它）;名字不合 run 目录形态的条目（用户手放的文件、旧版遗留）不计数不删
   - 删除失败（权限/占用）只 warn 不阻塞本 run——日志是核验通道不是执行前提,清不掉不该让用户的活跑不了
-  - 保留 = 最新的 max_runs 个再加上本次即将新建的这个之外——即建完后根目录恰有 max_runs 个（含本次）;max_runs=1 时只留本次
+  - **在跑的 run 的日志目录恒不删**（hopissues/0116,2026-10-02 hopkb 实撞：20 子实例并行的长跑批 2h42m 后被同机第 3 个顶层 run 的构造器按计数删了日志目录,2 秒后下一次写日志 ENOENT 整批 failed,4000 万 token 在飞进度全失）：候选目录若被 stateDir 下任一 state.json 的 `hoplog_run_dir` 指向且该快照无 `terminal_state`,跳过不删、也不计入 keep 配额;无 stateDir 可查（纯 HopLog 直构、测试）时退回原计数行为。判据与 hopkb hoplog-prune 同："未终态快照指向即留"。缺省 3 对"一人一次跑一个 spec"成立,对同 runtime 并发多批不成立——活账保护是让缺省值在并发下也安全的底线,不改缺省数字
+  - 保留 = 最新的 max_runs 个再加上本次即将新建的这个之外——即建完后根目录恰有 max_runs 个（含本次,不含被活账保护跳过的）;max_runs=1 时只留本次
+  - **日志写失败或日志目录缺失恒不导致 run 失败**（hopissues/0116 第二缺陷：原裸 appendFileSync 上抛把整批杀死）：append 写失败首次尝试重建目录续写,再失败 warn 一次后本实例后续写降级为不写,run 继续到终态;resume 到不存在的目录重建后续写。与第 5 条"删除失败只 warn"同一态度——日志是核验通道不是执行前提。**重建后的文件必须仍是合法 YAMLL**：先重发最小 header 块与 `execution:` 标记行再写断档标记（缺 `execution:` 则块区无法定位——^anc-obs-step-keys 的 extractHopLogStepKeys 返回空、复用模式续写每个 done 被判孤儿,review 实测;定罪依据是块级独立与层级自表达被破坏,不是"整文 yaml.load 抛错"——后者在 YAMLL 下本就不是要求）
+  - **活账判据的固有代价**：崩溃型 run（永不终态、无人 resume）的日志目录在本机制下永久不删也不占配额——日志对这类 run 回到"只增不减"。本库不加按龄轮转（作者 todo/0127 定"太复杂,就留 max runs"）;需要兜它的项目用自己的按龄清理（hopkb hoplog-prune 按龄 3 天+未终态指向即留）
   - max_runs 非正整数（0/负/非数）在配置加载期与 CLI 参数解析期响亮拒,不静默当缺省（与 log_level 文法核同姿势）
 ```
 
 **类型约定（HopType）**：
 
 - `HopLogOptions.maxRuns?: number`——本次 run 建目录前日志根目录允许保留的 run 目录数上限（含本次）;缺省 3;
+- `HopLogOptions.stateDir?: string`——快照根目录,供清理前反查哪些日志目录被未终态 run 引用;engine initExecution 透传自己的 stateDir;缺席则不做活账保护（2026-10-03 hopissues/0116）;
+- `pruneRunDirs(logDir, keep, liveRunDirs?: Set<string>)`——第三参=活 run 日志目录绝对路径集合,命中即跳过;缺席（undefined）=空集,退回纯计数;`collectLiveRunDirs(stateDir): Set<string>` 从 stateDir 下每份 state.json 读 `hoplog_run_dir` 与 `terminal_state` 组集合;**读/解析失败的快照略过并 stderr warn 一次（点名文件）**——它给不出任何目录路径,无物可收;引擎自己的 persistence 走 tmp→fsync→rename 原子写不会产半写快照,读失败几乎只来自外部损坏,为此让整轮停删是用近零概率的误删换确定性的永久停删,不划算（review 2026-10-03 定形;v0.7.0 首稿写"当活账收入"是一个不可实现的行为）;
 - `EngineOptions.maxRuns?: number`——透传给 HopLog（与 logLevel 同路）;
 - CLI `--max-runs <n>`（run / resume 系命令,与 `--log-level` 并列）;
 - StandaloneConfig `log_retention?: { max_runs: number }`（hopjit.yaml 两级,项目级赢;schema 权威 [[shared-providers#^anc-config-standalone-schema]]）。
@@ -400,9 +407,20 @@ contract: HopLogRetention
 HopLog.constructor(options) 建目录前:
 1. maxRuns = options.maxRuns ?? 3
 2. [条件(basename(dirname(dirname(options.logDir))) ∈ {parallel, calls})] 跳过清理（子实例 logDir=<父 run>/parallel|calls/<cid>/log,上溯两级）
-3. entries = readdir(options.logDir) 里满足 RUN_DIR_RE = /^.+-\d{8}T\d{6}-[0-9a-f]{4}$/ 且是目录的条目,按名字末段 <YYYYMMDDTHHMMSS-hex> 升序
-4. [循环] 当 entries.length > maxRuns - 1：取最老一条 rmSync(recursive) ;失败→记 warn 到 stderr 一行,继续下一条
-5. mkdir 本 run 目录（既有流程）
+3. live = options.stateDir ? collectLiveRunDirs(options.stateDir) : ∅——遍历 stateDir 一层子目录的 state.json,`terminal_state` 为空且 `hoplog_run_dir` 在场的收入集合;单份读/解析失败略过并 warn 一次（HopType 条写了为什么）。步 2 的子实例判在步 3 之前——子实例不收集也不清理,省一次 readdir+N 份 JSON.parse
+4. entries = readdir(options.logDir) 里满足 RUN_DIR_RE 且是目录且 **绝对路径不在 live 里** 的条目,按名字末段升序（活账目录既不删也不占配额）
+5. [循环] 当 entries.length > maxRuns - 1：取最老一条 rmSync(recursive) ;失败→记 warn 到 stderr 一行,继续下一条
+6. mkdir 本 run 目录（既有流程）
+
+HopLog.append(text) 每次写盘:
+1. appendFileSync 成功 → 返回
+2. 失败且错误码 ∈ {ENOENT, EACCES, EPERM}：首次（本实例 dirRecreated 未置位——与 resume 自愈共用同一个一次性额度）→ mkdirSync(runDir, recursive) 后**先重发最小 header**（spec_id/run_id/trace_id/level/started_at 从实例字段取,构造时已存;`execution:` 行跟上）,再追加 `log_gap: {at, reason: dir_recreated}` 块,再重试原 text;成功则 stderr warn 一行"日志目录曾丢失,已重建续写"
+3. 重建/重试仍失败 → **当场**置 appendDead 并 warn 一行（带重建失败的原因,不是首次写失败的原因——review 变异实锤：内层静默落到下一次写才降级,期间 appendDead 状态不实）;非上述错误码 → 直接置 appendDead 并 warn 一行（带首次错误）。两路都只 warn 一次,此后 append 全部 no-op,run 继续——日志是核验通道不是执行前提（同本契约第 5 条对删除失败的态度;原实现裸 appendFileSync 上抛把整批杀死,与自述矛盾）
+
+HopLog.resume(runDir):
+1. [条件(runDir 不存在)] mkdirSync(runDir, recursive) → 当场写最小 header（spec_id/run_id/trace_id 从目录名与 state 取不到就写 `(unknown)`,level 用传入或 info,started_at 当前时刻）+ `execution:` 行 + `log_gap: {at, reason: dir_missing_on_resume}`——续跑不因 ENOENT 失败,断档在日志里可见（state 的 hoplog_run_dir 不变）;置 dirRecreated（之后 append 再失败不二次重建,直接降级）
+   - [条件(重建失败)] stderr warn 一行 + appendDead（本实例后续写全部 no-op,run 继续）——与 append 步 3 同一态度,不静默
+2. 既有流程（读 level/重建 startedSteps/延迟 resume marker）
 ```
 
 **消费侧**：hoplog.ts 构造器;engine.ts initExecution 透传 maxRuns;cli.ts run/resume 系 `--max-runs`;mcp-server.ts start_run 取配置 `log_retention.max_runs`、文法核与两级合并。
@@ -846,8 +864,9 @@ hitl:
 1. **实时流式写入**：每个 record* 方法直接 `appendFileSync` 写入 main.yaml。不缓冲、不批量——发生即持久化，中途崩溃不丢已有记录。
    - **多行值的块标量续行缩进必须与字段行同档**——toYaml 的 indent 参数按字段行深度传（字段行缩 2d+2 格即传 d+1 档），漏传=续行比字段行浅、块标量提前终止整文非法;
    - 实撞出处:2026-08-31 作者对 hoplog 现场实抓——recordStepFailed 的 reason 未传 indent，check note 首次写出多行失败原因即炸 yaml.safe_load；同方法 summary/fail_kind 同病未炸是值恰无换行 ^anc-obs-hoplog-flush
-2. **文件结构 = 合法 YAML（嵌套树）**：run 开始写元数据头 → `execution:` 标记 → 每步字段按 step-id 深度缩进追加（见 [[#^anc-obs-nested-tree]]：key `2d`、body `2d+2`、子块值 `2d+4`）→ close 追加顶层 `status`/`ended_at`。
-   - **任何时刻文件都是合法 YAML**——叶子 step 的字段在其完成前连续写完；容器 step 的子步嵌在更深缩进、容器 done 以自身缩进续写在子树之后（流式 append 先进后出 = YAML 嵌套闭合），无 section 交错、无重复 key
+2. **文件结构 = YAMLL**（概念权威 [[../concepts/HopSpec V3扩展-可观测性与YAMLL日志格式#^anc-obs-format-invariants]] 不变量 2"块级独立"）：run 开始写元数据头块 → `execution:` 标记行 → 每个事件一个独立块,按 step-id 深度缩进追加（见 [[#^anc-obs-nested-tree]]：块头 `2d`、块体 `2d+2`、子块值 `2d+4`）→ close 追加顶层 `status`/`ended_at` 块。
+   - **块内合法、块间独立、全文不求成单一 YAML 树**——机器消费者按块切分再逐块 `yaml.load`（`extractHopLogStepKeys` 族行式解析;测试侧 `yamllErrors` 同款）,不许对整文 `yaml.load` 下断言。同一 step-id 的块头可重复出现（loop 轮次 `#N`、resume 续写、容器 done 续在子树之后）,都是合法 YAMLL;v2"任何时刻全文是一棵合法 YAML 树"的要求已于 2026-07-09 随 v3 转向废止（理由见 ^anc-obs-nested-tree：流式 append 下维持全局嵌套闭合在 resume/recover/多次续跑组合下反复失败）。**本条曾在 v3 之后仍以旧文残留在此处与 :187/:245/:276 三句,被 2026-10-03 review 当现行契约引用定罪、并据此在测试里加了整文 load 断言——作者抓后清理**;
+   - `execution:` 标记行是块区的定位锚（`extractHopLogStepKeys` 从它之后开始切块）——它缺席时所有步骤块无归属,这是"结构非法"的真正判据,不是"整文 yaml.load 抛错";
 
    **多行字符串的块标量安全条件（2026-08-25 修 #41）**：`toYaml` 对多行字符串缺省用 `|` 块标量（可读性首选），但**首个内容行自带前导空白的字符串必须回退 JSON 双引号单行**（`\n` 转义）。
    - 原因：无缩进指示符的块标量由首个非空行定缩进基线——值首行若带 4 空格缩进（如 LLM response 里嵌的 spec 片段文本），基线被抬高到"发出前缀+4"，后续缩进较浅的行提前终止块标量、被误读成错层 mapping key，整份 main.yaml 非法（dr16-6 r7 实锤两例：child_fragment 值以缩进步骤文本开头,`tier:` 行炸档）。
@@ -861,7 +880,7 @@ hitl:
    - 跨进程 reason/act 步时，进程 A `recordStepStart` 写完骨架 + `llm.prompt`（debug 级）后返回 step_ready、进程退出（step 处于 running）；进程 B `resume()` 后 `completeStep` → `recordStepDone` 补 `llm.response` + `outputs/status`。
    - **resume 点精确落在「同一个 step 的 start 与 done 之间」——resume 恢复的就是这一步的完成**。故 resume marker 语义上从属于**正在完成的那个 step**，标记「此步跨进程完成」，应作它的**收尾字段**（与 `status`/`completed_at` 并列），而非硬插进 step 内部的独立事件。
 
-   旧实现的 bug：`resume()` 无条件 append `  # resumed at ...`（2 空格裸注释），跨进程续 reason/act 步时砸进**未闭合的 `prompt: |` 块标量中间**（prompt 已写、response 未写），提前终止 8 空格块标量且缩进错层，破坏 YAML，违反上条「任何时刻文件都是合法 YAML」。实测一份 run 10 marker 8 命中。深层原因：把 marker 当成游离于 step 之外、要找缝硬插的独立事件，而非从属于当前 step 的字段。
+   旧实现的 bug：`resume()` 无条件 append `  # resumed at ...`（2 空格裸注释），跨进程续 reason/act 步时砸进**未闭合的 `prompt: |` 块标量中间**（prompt 已写、response 未写），提前终止 8 空格块标量且缩进错层，把那一个事件块砸坏,违反 YAMLL 不变量 2「块级独立——块内合法」（块内多行标量被外来行劈断即该块非法;本条旧文曾引 v2 的「任何时刻文件都是合法 YAML」定罪,2026-10-03 改口径）。实测一份 run 10 marker 8 命中。深层原因：把 marker 当成游离于 step 之外、要找缝硬插的独立事件，而非从属于当前 step 的字段。
 
    修法（延迟结构化写入，落在 step 收尾）：
    - `resume()` **不立即 append**，只把时间戳存入实例字段 `pendingResume`（`string | null`）。

@@ -1440,6 +1440,11 @@ LogLevel——三级日志（debug ⊇ info ⊇ warn），控制 .hoplog 输出�
     - mcp-server.ts StandaloneConfig.log_retention + 文法核 + mergeConfigs 项目级赢 + startRun 透传 — @a: anc-obs-log-retention
       - hoplog.test.ts "日志保留上限（max_runs,缺省 3）"（4 存 3 删最老/恰 3 不删与 maxRuns=1 只留本次/异形条目不动/mtime 反序仍按名删/子实例 logDir 不清/非正整数拒/pruneRunDirs 返回值/缺省 info） — @v: anc-obs-log-retention
       - mcp-server.test.ts "log_retention：max_runs 非正整数加载期拒;合法过;mergeConfigs 项目级赢" — @v: anc-obs-log-retention
+  - 2026-10-03 hopissues/0116 修复（hoplog v0.7.0）：计数保留把在跑 run 的日志目录删了,下次写日志 ENOENT 整批 failed（hopkb 20 子实例长跑批 2h42m、4000 万 token 在飞进度全失;同机第 3 个顶层 run 的构造器按计数误删）。三修——①`collectLiveRunDirs(stateDir)` 从快照反查未终态 run 的 hoplog_run_dir,`pruneRunDirs` 第三参跳过且不占配额,HopLogOptions.stateDir 由 engine 透传;②`append` 写失败首次重建目录续写+`log_gap: dir_recreated`,再失败 warn 一次后 no-op,run 继续（原裸 appendFileSync 上抛与"日志是核验通道不是执行前提"自述矛盾）;③`HopLog.resume` 目录不在时重建+`log_gap: dir_missing_on_resume`
+    - hoplog.ts `collectLiveRunDirs` / `pruneRunDirs` 第三参 / `append` try-rebuild-degrade / `resume` 自愈;engine.ts initExecution 透传 stateDir — @a: anc-obs-log-retention
+      - hoplog.test.ts "日志保留不删活 run + 写失败不杀 run + resume 目录缺失自愈（hopissues/0116）" 7 例（活账跳过不占配额与已终态照删/无 stateDir 退回纯计数+第三参直给/损坏 state.json 保守/rm -rf 后重建续写留 log_gap+warn/重建也败降级 no-op 只 warn 一次/resume 缺目录重建/端到端：引擎 A 在跑再起 B C D 三个顶层 run,A 目录仍在且续写无 log_gap） — @v: anc-obs-log-retention
+      - 变异重放 2026-10-03：去活账过滤→①正例+端到端红 / append 改回裸抛→②两例红 / resume 不重建→③红 / engine 不透传 stateDir→端到端红（**首版此条实为 flaky**：A/B/C/D 同秒建目录,排序落到随机 hex,A 不透传时被删概率约一半——review 面三 12 次重跑 7 红 5 绿;修复批 T6 改预置名字确定更老的活账目录后确定红）。首版卡注"端到端例经 dist 须 build"不实——测试 import src,真因是 cc655e0e 修的 stateDir 传错位置（构造参数 vs initExecution 选项,单跑绿全量红）叠加随机排序,review 面四抓,已删
+      - 2026-10-03 工程链 review（hop_tasks hopissues修复批工程链review）：四面抓 19 修 7 不修——高位一条：自愈重建后的 main.yaml 无 header 无 execution: 行,整文非法 YAML、extractHopLogStepKeys 返回空、复用模式跨进程续写每个 done 被判孤儿（面二 js-yaml 实跑实证）→ 修复批加 writeHeaderMinimal 两处自愈先重发 header;中位：T6 flaky/T5 名不副实（ENOTDIR 非目标码,内层重建失败零覆盖）/"读失败当活账"三处文字对一处行为说谎/出口表漏登 collectLiveRunDirs/契约缺写失败条款;变异 15 处红 8 绿 7（M2/M3/M4/M7/M10/M13 + M8 flaky）修复批全部补测试重放。修复批记录见下行
 
 ### anc-obs-llm-response ✅
 
@@ -2450,6 +2455,26 @@ CC 载体 install-skill 自动把 `mcp__hopjit__run_approved_command` 写进 `<c
   - cli.ts 陈旧副本扫描的 isBundled 六件清单（安装集唯一枚举点,标注说明单入口的代码面在 skill 源） — @a: anc-cli-install-skill-single-entry
     - cli.test.ts "install-skill 缺省傻瓜化（0132 后续）" 正例（六件装齐;hop 含 user_invocable: true;其余五件含 false） — @v: anc-cli-install-skill-single-entry
 
+### anc-cli-carrier-autodetect ✅（2026-10-03 作者定——"hopjit install-skill 这个应该是智能探测的,而不是手工选择"）
+
+`--carrier` 缺席时按载体 home 目录在场探测（cc/codex/opencode/cfuse-cc/cfuse-codex 固定顺序,按解析后 home 去重）,对探到的每一个各装一遍;零探到回落 cc 并 detect_note 说明;`--dir` 给了目录等价 cc 不探测;显式 `--carrier` 只装那一个。响应新增 `carriers`/`results`/`detect_note`,顶层字段取第一个载体的值（兼容只读顶层的旧消费方）。
+
+- [[hop-cli#^anc-cli-carrier-autodetect]] 契约（探测判据/去重/回落/响应形态）
+  - cli.ts `detectCarriers()` + install-skill 载体选择三支 + `installOne` 按载体循环 + 多载体响应拼装 — @a: anc-cli-carrier-autodetect
+    - cli.test.ts "install-skill 载体自动探测" 组（detectCarriers 正反例与顺序;CLAUDE_CONFIG_DIR 重定向去重;两载体零参数双装与顶层取首;零在场回落 cc 与显式 --carrier 不碰他方;--dir 不探测） — @v: anc-cli-carrier-autodetect
+  - USAGE.md §2 / README 安装节 / AGENT-GUIDE §二 — 用户面口径
+
+### anc-cli-postinstall ✅（2026-10-03 作者定——"只需要 npm i -g @hoplogic/hopjit,其他的都应该让 /hop 去搞定"）
+
+package.json `postinstall: node dist/postinstall.js` 装包即装 skill（等价零参数 install-skill,不带 --force）;四种环境跳过（HOPJIT_SKIP_SKILL=1 / CI / sudo 下 root / 源码仓自身装依赖或 dist 缺席）与任何异常都只向 stderr 打一行指路,退出码恒 0;`HOPJIT_POSTINSTALL=1` 让 install-skill 跳过项目级两件（CC .mcp.json 注册、settings.local.json 放行）,由 /hop 首次在项目里跑时补。
+
+- [[hop-cli#^anc-cli-postinstall]] 契约（不问只探/四跳过/项目级两件延后/首次 /hop 补）
+  - src/postinstall.ts 钩子入口 + cli.ts `postinstallSkipReason()` 纯函数 + install-skill `projectScope` 两处跳过 — @a: anc-cli-postinstall
+    - cli.test.ts "install-skill 载体自动探测" 组（HOPJIT_POSTINSTALL=1 不写项目级两件且 note 说明;postinstallSkipReason 四跳过各命中、装包形态 null、真 root 不经 sudo 照装;dist/postinstall.js 真跑源码仓路径跳过退出码 0 不写 skill;package.json 钩子登记） — @v: anc-cli-postinstall
+  - driver/hop-skill.md + codex/opencode 副本「0. 分派」节前置检查（项目里没 .mcp.json/hopjit 条目就跑一次 install-skill 补） — 协议面
+  - scripts/check-layer-imports.mjs LAYER 表登记 postinstall（层 2,hop-cli 模块） — 守卫登记
+  - 真机面：干净 HOME 下 `npm install -g <tgz> --foreground-scripts` 实跑一次（2026-10-03 本批：cc+codex 双装、HOPJIT_SKIP_SKILL/CI 两跳过均按契约）— 归 test:live:smoke 候选,本批手工验
+
 ### anc-cli-hop-dispatch ✅（2026-10-01——用户可见入口收敛后 /hop 要替用户选路;运维规则按需加载是作者定"针对运维场景的特殊规则,普通人用不上,要考虑如何触发"的落点）
 
 /hop 五路分派（直接答/升格主路/现成 spec 按 hopspec 协议/构建翻译修订按 hopbuild·hopfix,hopbuild2 仅点名/明说 MCP 按 hopspec-mcp）;运维规则 `hop/references/hop-ops.md` 只在活涉及 ssh·远端·多机或项目 hopjit.yaml 有 `environments:` 段时读（environments 本批只是 agent 读的约定,引擎不解析）。
@@ -3309,6 +3334,8 @@ flush(): void {（2026-08-25 #41 追注：条款 2"任何时刻合法 YAML"补�
   - [[spec-observability#^anc-obs-hoplog-flush]]
     - hoplog.ts `flush(): void {` — @a: anc-obs-hoplog-flush
       - hoplog.test.ts — @v: anc-obs-hoplog-flush
+  - 2026-10-03 口径清理（hoplog v0.7.2,作者抓"任何时刻文件都是合法 YAML 这个概念有问题吧？很早以前就改成 YAMLL 了"）：实现约束 2 原标题"文件结构 = 合法 YAML（嵌套树）"与正文"任何时刻文件都是合法 YAML"是 v2 嵌套树残留——2026-07-09 v3 转向 YAMLL 时同文档 ^anc-obs-nested-tree 已写"根本转向……v2 执念于任何时刻全文是一棵合法 YAML 树……反复失败",但本条与 :187/:245/:276 三句旧文未删,被 2026-10-03 hopissues 修复批 review 当现行契约引用定罪自愈重建文件,并据此在测试里加了 yamlLoad(整文) 断言（当天恰绿是因简单流碰巧成树,不是机制保证）。改：四处改 YAMLL 口径（块内合法、块间独立、全文不求成树,概念权威 ^anc-obs-format-invariants 不变量 2）;本卡上方 #41 追注里"条款 2'任何时刻合法 YAML'"字样随之失准——块标量安全条件本身仍成立,它守的是"块内合法"（多行标量被劈=该块非法）;:137/:883 两处历史 bug 注记的定罪语改引 YAMLL 不变量 4/2
+    - tests/hoplog.test.ts：三处 yamlLoad(整文) 断言改走既有 yamllErrors 逐块校验（yamllErrors 的顶层块白名单补齐 warn/log_gap/command/rumination_suspect,与守卫脚本 validate-run-yamll 的 isTopKey 同源）;新例「YAMLL 不是单一 YAML 树」钉死契约方向——合法 YAMLL（同 step-id 块头重复）整文 load 必抛而逐块过,谁再加整文 load 断言这条提醒他 — @v: anc-obs-hoplog-flush
 
 ---
 
@@ -4793,6 +4820,15 @@ skill repo 全量 12 件滚动验证收官后，把攒下的五条构建器缺�
 - [[docs/design/hopbuild2#^anc-build-main-flow]] ← D76③ 条目（范围标记分段口径——两个使用点,一套规则）
   - skills/hopbuild2/split-structure.md 步 1.3 语法关与步 3.2 切片 body — 引擎强制链载体（本批次未改 spec,只补设计与测试）
     - tests/act-body-interpreter.test.ts「hopbuild2 split-structure 3.2 切片分段口径」4 例：1.3 正例（"+"、逗号、顿号三种写法都 syntax_ok 且无报文）/1.3 反例（缺 L 前缀的段报"格式坏的行号段"、越界段报"越界行号段"并点名 L9-L99）/3.2 正例（三种写法切片结果与 "+" 形态一致）/3.2 反例（段外行不进切片）。变异核证:M6f 撤 1.3 的逗号顿号归一、M6g 删 1.3 单行号补全,各自使 1.3 正例转红,恢复转绿;M6h 清空 1.3 格式坏段清单、M6i 清空越界段清单,各自使 1.3 反例转红,恢复转绿 — @v: anc-build-main-flow
+
+### anc-build-main-flow 追注（2026-10-03 hopissues/0113——D104 派生语义必须有数据落点）
+
+hopbuild2 翻译拆步时,原文"条件 A 取 X、否则用 Y"的兜底落值只活在步骤说明文字里、产出只有条件值,下游静默丢用户显式入参（外部项目 R7 实撞）。修在 split-structure 1.4 语义关 2b 加第③向（派生/兜底动词所指的值须在 `+ →` 承载终值或 `- ←` 接入,悬空即打回点名）+ split-patterns 骨架成文自查段加生成侧对偶句（review 面一抓：只加判官侧,判官打回生成者不知规矩,多烧重试轮）+ deep-validate 判据面一补"派生语义悬空"锚例。不加 validate 规则（散文词匹配误报不可控,validate 是对外稳定面;语义关本就是 LLM 判语义的位置）。
+
+- [[hopbuild2#^anc-build-main-flow]] ← D104 条目（v0.22.9 立;v0.22.10 review 修复补 HopSop 判官五步块、修法范围扩生成侧、词表改指路 split-structure 单源、删过程账条;速览表补两行）
+  - skills/hopbuild2/split-structure.md 1.4 2b③（词表单源）+ :138 "只核六条"（旧账"五条"实列六条顺手改）;skills/hopbuild2/split-patterns.md reason 自查段③向对偶句;scripts/deep-validate/deep-validate-knowledge.md 判据面一锚例（review 后改四段结构+修后 `+ →` 样本行+标摘自附件） — 知识文档判定序条款（spec 文件层无 @a,0067 试点口径）
+    - 库内零自动化回归（review 面三实证：删两处条款全库机检照绿）——验证面=hopissues 卡 probe（报告方复翻句式,归报告方）;真机验证面挂 todo/0138（hopbuild-selftest 加含"否则取 X"句式 fixture 入 live:deep）
+    - 交付前 dv split-structure：1 低 0 中 0 高（4.2 fix_note 半角冒号旧账顺手改破折号）;review 后 dv 再跑见修复批记录
 
 ### anc-exec-revision-short-weak ✅（2026-09-18 弱模型档修订短 prompt——hoplog 验尸+A/B 各 n=6 立据,S 档真机四轮迭代收全绿）
 

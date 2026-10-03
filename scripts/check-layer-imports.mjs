@@ -28,6 +28,7 @@ const LAYER = {
 
   // 驱动适配层（2）
   'cli': 2, 'cli-types': 2, 'dispatcher': 2, 'protocol-openai': 2, 'tools': 2, 'tools-registry': 2, 'tools-composite': 2, 'tools-mcp-binding': 2, 'tools-inprocess-binding': 2, 'tools-notify': 2, 'persistence': 2,   // protocol-openai 属 step-dispatcher；tools-registry/composite 属 tools 模块
+  'postinstall': 2,   // npm postinstall 钩子入口（hop-cli 模块,只 import cli 的纯函数——^anc-cli-postinstall）
   'mcp-server': 2,   // standalone MCP 协议壳（薄壳包 dispatcher，见 design/mcp-server.md）
 };
 

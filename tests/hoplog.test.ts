@@ -1,9 +1,9 @@
 // @module: hoplog ^anc-obs-hoplog
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync, utimesSync, chmodSync, appendFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { HopLog, extractHopLogStepKeys, sanitize, toYaml, pruneRunDirs, DEFAULT_MAX_RUNS } from '../src/hoplog.js';
+import { HopLog, extractHopLogStepKeys, sanitize, toYaml, pruneRunDirs, collectLiveRunDirs, DEFAULT_MAX_RUNS } from '../src/hoplog.js';
 import { load as yamlLoad } from 'js-yaml';
 import { ExecutionEngine } from '../src/engine.js';
 import type { HostConfig } from '../src/provider-types.js';
@@ -95,7 +95,7 @@ function yamllErrors(txt: string): string[] {
   try { yamlLoad(lines.slice(0, execIdx + 1).join('\n')); }
   catch (e) { errs.push('header 非法: ' + ((e as Error).message)); }
   const isHead = (l: string) => /^ *(?:"[\d.]+(?:#\d+)?"|[\d.]+(?:#\d+)?):\s*$/.test(l);
-  const isTop = (l: string) => /^(status|ended_at|replan_audit|resumed_at):/.test(l);
+  const isTop = (l: string) => /^(status|ended_at|replan_audit|resumed_at|warn|log_gap|command|rumination_suspect):/.test(l);   // 文档级顶层块全集,与 scripts/validate-run-yamll.mjs isTopKey 同源
   let cur: string[] = [];
   const flush = (blk: string[]) => {
     const body = blk.filter(l => l.trim() !== '');
@@ -757,6 +757,26 @@ g
       // YAMLL：start/done 各自成块、块头同 step-id 重复是合法的（不再要求 key 唯一）。
       // 整体 YAMLL 合法（header + 逐块）。
       expectYamllValid(mainYaml);
+    });
+
+    // 2026-10-03 作者抓设计里残留 v2 口径"任何时刻文件都是合法 YAML"——YAMLL 的契约恰恰是全文**不**求成树。
+    // 本例钉死这一点：一份合法的 YAMLL（同 step-id 块头重复、容器 done 续在子树之后、resume 续写）整文 yaml.load 会抛,
+    // 但逐块校验必须过——谁再往测试里加 yamlLoad(整文) 断言,这条会提醒他那不是契约。
+    it('YAMLL 不是单一 YAML 树：合法 YAMLL 整文 load 抛（重复键）而逐块校验过——整文 load 不是契约（^anc-obs-hoplog-flush 实现约束 2 v0.7.2 口径）', () => {
+      const log = new HopLog({ specId: 't', logDir: tmpDir, title: 'T', goal: 'G' });
+      log.recordStepStart('1', 'subtask', 'c');
+      log.recordStepStart('1.1', 'act', 'a');
+      log.recordStepDone('1.1', { r: 1 });
+      log.recordStepStart('1.1', 'act', 'a');   // 同 step 重跑：块头 "1.1" 在同一缩进层第二次出现
+      log.recordStepDone('1.1', { r: 2 });
+      log.recordStepDone('1', { r: 'c' });
+      const text = readFileSync(join(log.getRunDir(), 'main.yaml'), 'utf-8');
+      expect(text.split('\n').filter(l => /^ {4}"1\.1(#\d+)?":$/.test(l)).length).toBeGreaterThanOrEqual(2);
+      expectYamllValid(text);                                  // 契约：逐块合法
+      expect(extractHopLogStepKeys(text)).toEqual(expect.arrayContaining(['1', '1.1']));   // 契约：块键可提取
+      // 非契约（且在本形态下必然不成立）：整文作为单一 YAML 文档 load。重复键在 js-yaml 缺省下抛 duplicated mapping key——
+      // 这正是 v2"任何时刻全文合法"做不到、改 YAMLL 的原因。
+      expect(() => yamlLoad(text)).toThrow();
     });
 
     // 失败重跑轮同样带 #iter（2026-08-10 cc:repair e2e 实撞:failed→再 start 时 doneSteps 命中
@@ -1617,6 +1637,239 @@ describe('日志保留上限（max_runs,缺省 3）', () => {
   });
 });
 
+// hopissues/0116：计数保留删了在跑 run 的日志目录,下一次写日志 ENOENT 整批 failed（hopkb 20 子实例长跑批 2h42m 后被同机第 3 个顶层 run 的构造器误删）
+// @v: anc-obs-log-retention
+describe('日志保留不删活 run + 写失败不杀 run + resume 目录缺失自愈（hopissues/0116）', () => {
+  const mkRun = (root: string, spec: string, stamp: string) => { const d = join(root, `${spec}-${stamp}`); mkdirSync(d, { recursive: true }); writeFileSync(join(d, 'main.yaml'), 'x'); return d; };
+  const mkState = (stateDir: string, id: string, hoplogRunDir: string, terminal?: string) => {
+    mkdirSync(join(stateDir, id), { recursive: true });
+    writeFileSync(join(stateDir, id, 'state.json'), JSON.stringify({ format_version: 1, hoplog_run_dir: hoplogRunDir, ...(terminal ? { terminal_state: terminal } : {}) }));
+  };
+  const opts = (logDir: string, extra: Record<string, unknown> = {}) => ({ specId: 'r', logDir, title: 'T', goal: 'G', ...extra });
+  let errSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => { errSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true); });
+  afterEach(() => { errSpy.mockRestore(); });
+
+  it('① 正例：最老的 run 被未终态快照引用 → 跳过不删也不占配额,删的是次老的;已终态引用的照删', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-live-'));
+    const stateDir = mkdtempSync(join(tmpdir(), 'hl-live-state-'));
+    const oldest = mkRun(root, 'r', '20260901T100000-aaaa');   // 在跑（长跑批）
+    const second = mkRun(root, 'r', '20260902T100000-bbbb');   // 已终态
+    mkRun(root, 'r', '20260903T100000-cccc');
+    mkRun(root, 'r', '20260904T100000-dddd');
+    mkState(stateDir, 'live-1', oldest);
+    mkState(stateDir, 'done-1', second, 'completed');
+    const live = collectLiveRunDirs(stateDir);
+    expect([...live].map(x => realpathSync(x))).toEqual([realpathSync(oldest)]);   // 集合存 realpath（macOS /var↔/private/var）,按规范形比
+    new HopLog(opts(root, { stateDir }));
+    const left = readdirSync(root).sort();
+    expect(left).toContain('r-20260901T100000-aaaa');           // 活账恒留
+    expect(left).not.toContain('r-20260902T100000-bbbb');       // 非活账里最老的一条被删（3 个非活账 + 本次 = 4 > 3,删 1）
+    expect(left).toContain('r-20260903T100000-cccc');
+    expect(left.filter(n => n !== 'r-20260901T100000-aaaa')).toHaveLength(DEFAULT_MAX_RUNS);   // 活账不占配额
+  });
+
+  it('① 反例：不传 stateDir 时退回纯计数（活账保护不可得）;pruneRunDirs 第三参直接给集合也生效', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-nolive-'));
+    const oldest = mkRun(root, 'r', '20260901T100000-aaaa');
+    mkRun(root, 'r', '20260902T100000-bbbb'); mkRun(root, 'r', '20260903T100000-cccc');
+    expect(pruneRunDirs(root, 1, new Set([oldest]))).toEqual(['r-20260902T100000-bbbb']);
+    expect(existsSync(oldest)).toBe(true);
+    const root2 = mkdtempSync(join(tmpdir(), 'hl-nolive2-'));
+    mkRun(root2, 'r', '20260901T100000-aaaa'); mkRun(root2, 'r', '20260902T100000-bbbb'); mkRun(root2, 'r', '20260903T100000-cccc');
+    expect(pruneRunDirs(root2, 1)).toEqual(['r-20260901T100000-aaaa', 'r-20260902T100000-bbbb']);
+  });
+
+  it('① 保守：state.json 读不懂（半写/损坏）的快照不让清理炸,能读的活账照样保护', () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'hl-badstate-'));
+    mkdirSync(join(stateDir, 'broken')); writeFileSync(join(stateDir, 'broken', 'state.json'), '{"format_version": 1, "hoplog_run_dir": ');
+    mkState(stateDir, 'ok', '/tmp/x/r-20260901T100000-aaaa');
+    expect(collectLiveRunDirs(stateDir)).toEqual(new Set(['/tmp/x/r-20260901T100000-aaaa']));
+    expect(errSpy.mock.calls.some(c => String(c[0]).includes('快照读取失败') && String(c[0]).includes('broken')), '略过要可见：warn 点名损坏文件').toBe(true);
+  });
+
+  it('① 旁路：stateDir 下无 state.json 的子目录 / stateDir 不存在 → 都不进集合、不炸（M2/M2b 原无保护）', () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'hl-nostate-'));
+    mkdirSync(join(stateDir, 'half-made'));   // 实例目录建了 state.json 还没落
+    mkState(stateDir, 'ok', '/tmp/y/r-20260901T100000-bbbb');
+    expect(collectLiveRunDirs(stateDir)).toEqual(new Set(['/tmp/y/r-20260901T100000-bbbb']));
+    expect(collectLiveRunDirs(join(stateDir, 'nope'))).toEqual(new Set());
+  });
+
+  it('① 路径归一：logDir 传相对路径、state.json 里存绝对路径 → 活账仍判中（M3 原无保护;实撞：macOS 临时目录 /var 与 /private/var 两写法,只 resolve 对不上,改 realpath）', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-rel-'));
+    const prevCwd = process.cwd();
+    try {
+      process.chdir(root);
+      mkdirSync('logs');
+      const oldestAbs = mkRun(join(root, 'logs'), 'r', '20260901T100000-aaaa');
+      mkRun(join(root, 'logs'), 'r', '20260902T100000-bbbb'); mkRun(join(root, 'logs'), 'r', '20260903T100000-cccc');
+      expect(pruneRunDirs('logs', 1, new Set([oldestAbs]))).toEqual(['r-20260902T100000-bbbb']);
+      expect(existsSync(oldestAbs)).toBe(true);
+    } finally { process.chdir(prevCwd); }
+  });
+
+  it('① 边界：活账数 ≥ maxRuns 时非活账仍按配额删——活账不占配额不等于配额消失', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-edge2-'));
+    const stateDir = mkdtempSync(join(tmpdir(), 'hl-edge2-state-'));
+    const l1 = mkRun(root, 'r', '20260901T100000-aaaa'); const l2 = mkRun(root, 'r', '20260902T100000-bbbb'); const l3 = mkRun(root, 'r', '20260903T100000-cccc');
+    mkRun(root, 'r', '20260904T100000-dddd'); mkRun(root, 'r', '20260905T100000-eeee'); mkRun(root, 'r', '20260906T100000-ffff');
+    for (const [i, d] of [l1, l2, l3].entries()) mkState(stateDir, `live-${i}`, d);
+    new HopLog(opts(root, { stateDir }));
+    const left = readdirSync(root).sort();
+    for (const d of [l1, l2, l3]) expect(existsSync(d)).toBe(true);
+    expect(left.filter(n => !/aaaa|bbbb|cccc/.test(n))).toHaveLength(DEFAULT_MAX_RUNS);   // 3 活账之外恰 3 个（dddd 被删,eeee ffff + 本次）
+    expect(left).not.toContain('r-20260904T100000-dddd');
+  });
+
+  it('② 正例：日志目录被外部 rm -rf 后继续写 → 重建目录续写、留 log_gap 块、stderr warn 一行,不抛', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-rm-'));
+    const log = new HopLog(opts(root));
+    rmSync(log.getRunDir(), { recursive: true, force: true });
+    expect(() => log.recordStepStart('1', 'act', '干活')).not.toThrow();
+    expect(existsSync(log.getFilePath())).toBe(true);
+    const txt = readFileSync(log.getFilePath(), 'utf-8');
+    expect(txt).toMatch(/^log_gap:\n  at: .+\n  reason: dir_recreated$/m);
+    expect(txt).toContain('"1":');
+    expect(errSpy.mock.calls.some(c => String(c[0]).includes('已重建续写'))).toBe(true);
+    // 重建后的文件仍是合法 YAMLL：header 块在前、execution: 标记在 log_gap 之后、逐块合法、步骤键可提取（review 面二抓：首版重建后缺 execution: 标记,块区无法定位,extractHopLogStepKeys 返回空、复用模式续写判孤儿）
+    expect(txt).toMatch(/^spec_id: r\n/);
+    expect(txt.indexOf('execution:')).toBeGreaterThan(txt.indexOf('log_gap:'));
+    expectYamllValid(txt);   // YAMLL：逐块合法,不对整文 yaml.load 下断言（2026-10-03 作者抓旧口径）
+    expect(extractHopLogStepKeys(txt)).toContain('1');
+    log.recordStepDone('1', { status: 'completed', outputs: {} });
+    expect(readFileSync(log.getFilePath(), 'utf-8')).not.toContain('# ERROR: orphan');
+  });
+
+  it('② 只重建一次：目录第二次被删 → 不再重建,降级 no-op 且只再 warn 一次（M10 原无保护）', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-twice-'));
+    const log = new HopLog(opts(root));
+    rmSync(log.getRunDir(), { recursive: true, force: true });
+    log.recordStepStart('1', 'act', 'a');
+    expect(existsSync(log.getFilePath())).toBe(true);
+    rmSync(log.getRunDir(), { recursive: true, force: true });
+    log.recordStepStart('2', 'act', 'b');
+    expect(existsSync(log.getRunDir()), '第二次不重建').toBe(false);
+    expect(errSpy.mock.calls.filter(c => String(c[0]).includes('降级为不写'))).toHaveLength(1);
+    log.recordStepStart('3', 'act', 'c');
+    expect(errSpy.mock.calls.filter(c => String(c[0]).includes('降级为不写'))).toHaveLength(1);
+  });
+
+  it('② EACCES 走重建分支：目录被 chmod 000 → 首次写 EACCES 进重建（mkdir 空转、重试仍败）→ 内层"重建失败"warn 后降级,run 不死（M4 原无保护;root 下 chmod 不生效则跳过）', () => {
+    if (process.getuid && process.getuid() === 0) return;
+    const root = mkdtempSync(join(tmpdir(), 'hl-eacces-'));
+    const log = new HopLog(opts(root));
+    const runDir = log.getRunDir();
+    chmodSync(runDir, 0o000);
+    let probeFailed = false;
+    try { appendFileSync(join(runDir, 'main.yaml'), ''); } catch { probeFailed = true; }
+    if (!probeFailed) { chmodSync(runDir, 0o755); return; }   // 环境不拒写（如某些 CI 以特权跑）,本例无判别力
+    try {
+      expect(() => log.recordStepStart('1', 'act', 'a')).not.toThrow();
+      // EACCES 必须走重建分支：mkdir 对已存在目录空转、重试仍 EACCES → 落内层"重建失败"warn;若 EACCES 不在重建码集合里会走外层"写入失败"warn——两路 stderr 文字不同,盒外可辨（首版断言两样都认,自己放过了 M4——独立阅卷抓）
+      expect(errSpy.mock.calls.some(c => String(c[0]).includes('重建失败'))).toBe(true);
+      expect(errSpy.mock.calls.some(c => String(c[0]).includes('日志写入失败'))).toBe(false);
+    } finally { chmodSync(runDir, 0o755); }
+  });
+
+  it('② 反例：非目标错误码（runDir 位置被同名文件占住 → ENOTDIR）→ 不进重建分支,直接 warn 一次后降级 no-op,后续写不再报错、不再 warn', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-dead-'));
+    const log = new HopLog(opts(root));
+    rmSync(log.getRunDir(), { recursive: true, force: true });
+    writeFileSync(log.getRunDir(), 'not a dir');   // 同名文件占位,mkdir 必败
+    expect(() => log.recordStepStart('1', 'act', 'a')).not.toThrow();
+    expect(() => log.recordStepStart('2', 'act', 'b')).not.toThrow();
+    const warns = errSpy.mock.calls.filter(c => String(c[0]).includes('降级为不写'));
+    expect(warns).toHaveLength(1);
+  });
+
+  it('② 反例：ENOENT 后重建也失败（父目录只读,mkdir EACCES）→ 内层 catch 落到降级,warn 一次（M13 原零覆盖——首版 T5 用同名文件占位走的是 ENOTDIR 非目标码,没进重建分支;同名文件占父目录也是 ENOTDIR,同病）', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-rebuildfail-'));
+    const log = new HopLog(opts(root));
+    if (process.getuid && process.getuid() === 0) return;
+    const runDir = log.getRunDir();
+    rmSync(runDir, { recursive: true, force: true });
+    chmodSync(root, 0o555);   // 父目录只读：首次 appendFileSync 报 ENOENT（runDir 没了）→ 进重建分支 → mkdirSync 在只读父目录下 EACCES → 内层 catch → 降级
+    try {
+      expect(() => log.recordStepStart('1', 'act', 'a')).not.toThrow();
+      expect(existsSync(runDir), '重建应失败').toBe(false);
+      // 第一次写就要落到"重建失败"那条 warn（带重建失败原因）,不是推迟到下一次写才按"写入失败"降级
+      expect(errSpy.mock.calls.filter(c => String(c[0]).includes('重建失败')), '重建失败当场 warn').toHaveLength(1);
+      expect(errSpy.mock.calls.some(c => String(c[0]).includes('已重建续写'))).toBe(false);
+      log.recordStepStart('2', 'act', 'b');
+      expect(errSpy.mock.calls.filter(c => String(c[0]).includes('降级为不写')), '只 warn 一次,之后 no-op').toHaveLength(1);
+    } finally { chmodSync(root, 0o755); }
+  });
+
+  it('端到端（卡 probe ①）：引擎 A 起跑未终态,同 stateDir 再起 B、C、D 三个顶层 run（缺省 max_runs=3）→ A 的日志目录仍在,A 继续写不报错', () => {
+    const base = mkdtempSync(join(tmpdir(), 'hl-e2e-'));
+    const logDir = join(base, '.hoplog'); const stateDir = join(base, '.hopstate');
+    // stateDir 是 initExecution 的选项（engine 据它建 FilePersistence 并透传 HopLog）,不是构造参数——首版测试传错位置,单跑恰好绿（空目录时机）全量才红
+    // 活账必须确定地排最老——首版用引擎 A 自己生成的目录名,四个 run 同秒建、排序落到随机 hex,A 不透传时被删概率约一半（review 面三 12 次重跑 7 红 5 绿）。
+    // 改为预置一个名字时间戳远早的活账目录 + 对应未终态 state.json：三个新 run 的构造器必然把它视为最老候选,保护不生效它必被删
+    mkdirSync(logDir, { recursive: true });
+    const oldestLive = join(logDir, 'log-test-20200101T000000-0000');
+    mkdirSync(oldestLive); writeFileSync(join(oldestLive, 'main.yaml'), 'spec_id: x\nexecution:\n');
+    mkdirSync(join(stateDir, 'live-preset'), { recursive: true });
+    writeFileSync(join(stateDir, 'live-preset', 'state.json'), JSON.stringify({ format_version: 1, hoplog_run_dir: oldestLive }));
+    const a = new ExecutionEngine();
+    expect(a.initExecution(TWO_STEP_SPEC, MINIMAL_HOST_CONFIG, { logDir, stateDir, params: { data: 'd' } }).status).toBe('ok');
+    const s1 = a.nextStep(); expect(s1.status).toBe('step_ready');
+    const aDir = a.getHopLogRunDir()!;
+    for (let i = 0; i < 3; i++) {
+      const e = new ExecutionEngine();
+      expect(e.initExecution(TWO_STEP_SPEC, MINIMAL_HOST_CONFIG, { logDir, stateDir, params: { data: 'd' } }).status).toBe('ok');
+    }
+    expect(existsSync(oldestLive), '预置的最老活账目录不该被后起 run 的计数清理删掉').toBe(true);
+    expect(existsSync(aDir), 'A 在跑,日志目录也不该被删').toBe(true);
+    expect(() => a.completeStep((s1 as { step_id: string }).step_id, { mid: 'm' })).not.toThrow();
+    expect(readFileSync(join(aDir, 'main.yaml'), 'utf-8')).not.toContain('log_gap');
+  });
+
+  it('③ 正例：HopLog.resume 指向已不存在的目录 → 重建并写 log_gap: dir_missing_on_resume,后续记录照写', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-resume-'));
+    const gone = join(root, 'r-20260901T100000-aaaa');
+    expect(existsSync(gone)).toBe(false);
+    const log = HopLog.resume(gone);
+    expect(existsSync(join(gone, 'main.yaml'))).toBe(true);
+    expect(() => log.recordStepStart('2', 'reason', '续')).not.toThrow();
+    const txt = readFileSync(join(gone, 'main.yaml'), 'utf-8');
+    expect(txt).toMatch(/^log_gap:\n  at: .+\n  reason: dir_missing_on_resume$/m);
+    expect(txt).toContain('"2":');
+    // 重建后仍合法 YAMLL：header 块（spec_id/run_id 从目录名拆）、execution: 标记在 log_gap 后、逐块合法、跨进程续写 done 不被判孤儿
+    expect(txt).toMatch(/^spec_id: r\nrun_id: 20260901T100000-aaaa\n/);
+    expectYamllValid(txt);   // YAMLL：逐块合法,不对整文 yaml.load 下断言（2026-10-03 作者抓旧口径）
+    expect(extractHopLogStepKeys(txt)).toContain('2');
+    const log2 = HopLog.resume(gone);
+    log2.recordStepDone('2', { status: 'completed', outputs: {} });
+    expect(readFileSync(join(gone, 'main.yaml'), 'utf-8')).not.toContain('# ERROR: orphan');
+  });
+
+  it('③ 反例：resume 到在场的目录 → 不写 log_gap、不重建、不 warn', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-resume-ok-'));
+    const log = new HopLog(opts(root));
+    log.recordStepStart('1', 'act', 'a');
+    const before = readFileSync(log.getFilePath(), 'utf-8');
+    const r = HopLog.resume(log.getRunDir());
+    r.recordStepStart('2', 'act', 'b');
+    const after = readFileSync(log.getFilePath(), 'utf-8');
+    expect(after.startsWith(before)).toBe(true);
+    expect(after).not.toContain('log_gap');
+    expect(errSpy.mock.calls.some(c => String(c[0]).includes('已重建'))).toBe(false);
+  });
+
+  it('③ resume 自愈后额度已用：目录再次被删 → 不二次重建,降级（M7 原无保护）', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-resume-twice-'));
+    const gone = join(root, 'r-20260901T100000-aaaa');
+    const log = HopLog.resume(gone);
+    expect(existsSync(gone)).toBe(true);
+    rmSync(gone, { recursive: true, force: true });
+    expect(() => log.recordStepStart('3', 'act', 'c')).not.toThrow();
+    expect(existsSync(gone), 'resume 已用掉一次性重建额度').toBe(false);
+    expect(errSpy.mock.calls.filter(c => String(c[0]).includes('降级为不写'))).toHaveLength(1);
+  });
+});
+
 // hopjit-mcp run_approved_command 执行账（^anc-obs-command-block,todo/0132）
 describe('recordCommand 顶层 command: 块', () => {   // @v: anc-obs-command-block
   let tmpDir: string;
@@ -1625,10 +1878,12 @@ describe('recordCommand 顶层 command: 块', () => {   // @v: anc-obs-command-b
 
   const rec = { argv: ['python3', '-c', 'print(1)'], cwd: '/ws', returncode: 0, duration_ms: 12, stdout_bytes: 2, stderr_bytes: 0, truncated: { stdout: false, stderr: false } };
 
-  it('字段齐且整档 YAML 可 load;level=warn 也恒写（审计性）', () => {
+  it('字段齐且 command 块可单独 load;level=warn 也恒写（审计性）', () => {
     const log = new HopLog({ specId: 's', logDir: tmpDir, title: 'T', level: 'warn' });
     log.recordCommand({ ...rec, caller_step: '3.2' });
-    const doc = yamlLoad(readFileSync(log.getFilePath(), 'utf-8')) as Record<string, unknown>;
+    const text = readFileSync(log.getFilePath(), 'utf-8');
+    expectYamllValid(text);   // 全档逐块合法（YAMLL）;command 块切出单独 load 取字段——不对整文 yaml.load（2026-10-03 改口径）
+    const doc = yamlLoad(text.slice(text.indexOf('command:'))) as Record<string, unknown>;
     const cmd = doc.command as Record<string, unknown>;
     expect(cmd.argv).toEqual(['python3', '-c', 'print(1)']);
     expect(cmd.cwd).toBe('/ws');

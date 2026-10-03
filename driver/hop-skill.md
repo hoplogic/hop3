@@ -9,7 +9,7 @@ user-invocable: true
 	source: [[hopspec-skill]]
 	source_id: hopspec-driver-skill
 	type: extend
-	last_sync: 2026-10-02T23:09+0800
+	last_sync: 2026-10-03T14:13+0800
 	note: /hop 的 CC 载体 driver。定位与协议归 description+正文（单一事实源,本行不复述——三处抄同一段=三处漂移面,'随手/日常'分叉实撞）。引擎面配套锚点:主动 replan ^anc-exec-replan-proactive / abort ^anc-exec-abort / 镜像写回 ^anc-exec-specfile-writeback / 阅卷分权 ^anc-exec-reuse-verdict-outsource。逐稿演进史归 git log。
 %%
 
@@ -38,6 +38,8 @@ user-invocable: true
 ### 0. 分派：用户给的是什么，走哪条路
 
 /hop 是唯一入口，进来先判用户给的是什么，五条路：
+
+**进分派之前先补一件安装期做不了的事（2026-10-03 作者定"只敲 npm install,其他都让 /hop 解决"）**：skill 是 npm 装包时自动装上的,那时 cwd 是 npm 的包目录不是你现在这个项目,所以项目级的两件——`.mcp.json` 里的 hopjit 注册、`.claude/settings.local.json` 里对 `mcp__hopjit__run_approved_command` 的放行——还没落到本项目。每次 /hop 进来看一眼：当前项目根没有 `.mcp.json`,或它里面没有 `mcpServers.hopjit`,就先跑一次 `hopjit install-skill`（幂等：已装的 skill 不动,只补这两件项目级配置;要用 `--carrier` 指定载体时也只是补配置）,再告诉用户一句"已在本项目注册 hopjit,新开会话后已批准命令不再逐条弹窗"。已经有的就什么都不做,不每次都跑。
 
 - **一句话能答完、不需要留痕的**（算个数、翻译一段）→ 直接答，不进 hop。hop 不劫持对话。
 - **复杂的、需要可控可靠保障的活**（多步骤、要进度记录、要独立核验、中断后要能接着干）→ 下面第 1 节起的升格流程：建任务卡、引擎管进度与把关。这是 hop 的主路。

@@ -51,7 +51,7 @@ codex 对 MCP 工具的暴露方式由此二选一：
 
 **真实代价只有一条**：MCP 工具 schema 常驻模型上下文。本机当前 = hopjit 4 工具 + deepwiki 3 工具，约几百 token，可忽略；只有装几十个 MCP server、数百工具的会话，`true`（配上能工作的 `tool_search`）才开始有价值。一句话：**这是给"工具很多的会话"准备的省上下文开关，DeepSeek 官方脚本默认开了它，但它在自定义 catalog 模型上是坏的（上游 bug）；关掉 = 回到最朴素可靠的"工具直接列出"形态。**
 
-### Workaround（本机已打）
+### Workaround
 
 `~/.codex/deepseek-models.json` 全部模型条目 `supports_search_tool` 改为 `false` → MCP 工具以 Direct 注册、直接进工具面：
 

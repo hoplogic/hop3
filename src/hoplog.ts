@@ -2,8 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 // @module: hoplog ^anc-obs-hoplog
-import { mkdirSync, appendFileSync, readFileSync, existsSync, readdirSync, rmSync, statSync } from 'node:fs';
-import { join, basename, dirname } from 'node:path';
+import { mkdirSync, appendFileSync, readFileSync, existsSync, readdirSync, rmSync, statSync, realpathSync } from 'node:fs';
+import { join, basename, dirname, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
 // 三级日志：debug ⊇ info ⊇ warn。审计性字段无视级别始终记录。
@@ -114,6 +114,9 @@ export interface HopLogOptions {
   // 日志根目录允许保留的 run 目录数上限（含本次）,缺省 3——新建本 run 目录前删多出的最老 run。
   // 见 [[spec-observability#^anc-obs-log-retention]] // @a: anc-obs-log-retention
   maxRuns?: number;
+  // 快照根目录——清理前反查哪些日志目录被未终态 run 引用,活账目录恒不删;缺席不做活账保护。
+  // hopissues/0116。见 [[spec-observability#^anc-obs-log-retention]] // @a: anc-obs-log-retention
+  stateDir?: string;
   title: string;
   goal: string;
   inputs?: Record<string, unknown>;
@@ -128,15 +131,17 @@ const RUN_DIR_RE = /-(\d{8}T\d{6}-[0-9a-f]{4})$/;   // @a: anc-obs-log-retention
 /** 日志保留上限清理：日志根目录下 run 目录超过 keep 个即从最老删起（整目录;构造器传 maxRuns-1,建完本次恰 maxRuns 个）。子实例日志嵌在父 run 目录的
  * parallel|calls/<cid>/ 下,不是根目录,对它空转。删除失败只 warn 不抛——日志是核验通道不是执行前提。
  * 返回删掉的目录名清单（测试判据）。见 [[spec-observability#^anc-obs-log-retention]] // @a: anc-obs-log-retention */
-export function pruneRunDirs(logDir: string, keep: number): string[] {
+export function pruneRunDirs(logDir: string, keep: number, liveRunDirs?: Set<string>): string[] {
   if (!Number.isInteger(keep) || keep < 0) throw new Error(`保留数须为非负整数（实际: ${String(keep)}）`);
   // 子实例 logDir 恒为 <父 run>/parallel|calls/<cid>/log——上溯两级判（^anc-obs-parallel-child-satellite 卫星布局）
   const kindDir = basename(dirname(dirname(logDir)));
   if (kindDir === 'parallel' || kindDir === 'calls') return [];
   if (!existsSync(logDir)) return [];
+  const live = new Set([...(liveRunDirs ?? [])].map(canonicalPath));   // 调用方给的集合也归一——测试/第三方直传裸路径
   const runs = readdirSync(logDir)
     .filter(n => RUN_DIR_RE.test(n))
     .filter(n => { try { return statSync(join(logDir, n)).isDirectory(); } catch { return false; } })
+    .filter(n => !live.has(canonicalPath(join(logDir, n))))   // 在跑 run 的日志目录既不删也不占配额（hopissues/0116）;两侧都走 canonicalPath
     .sort((a, b) => (RUN_DIR_RE.exec(a)![1] < RUN_DIR_RE.exec(b)![1] ? -1 : 1));
   const removed: string[] = [];
   while (runs.length > keep) {
@@ -145,6 +150,36 @@ export function pruneRunDirs(logDir: string, keep: number): string[] {
     catch (e) { process.stderr.write(`[hoplog] 清理旧 run 目录失败（不阻塞本次运行）: ${victim}: ${e instanceof Error ? e.message : String(e)}\n`); }
   }
   return removed;
+}
+
+/** 活账比对用的规范路径：resolve 之后再 realpath（macOS 下 /var 与 /private/var 是同一目录的两个写法——
+ *  state.json 存的是引擎 resolve 出的绝对路径,readdir 拼出的可能经过 symlink 前缀,只 resolve 对不上;review 补路径归一测试时实撞）。
+ *  目标不存在时 realpath 会抛,退回 resolve 结果。 */
+function canonicalPath(p: string): string {
+  const r = resolve(p);
+  try { return realpathSync(r); } catch { return r; }
+}
+
+/** 从快照根目录收活 run 的日志目录集合：每份 <stateDir>/<id>/state.json 里 terminal_state 为空且 hoplog_run_dir 在场的收入;
+ * 单份读/解析失败略过并 stderr warn 一次（它给不出目录路径,无物可收;引擎 persistence 原子写不产半写快照,读失败几乎只来自外部损坏）。hopissues/0116。
+ * 见 [[spec-observability#^anc-obs-log-retention]] // @a: anc-obs-log-retention */
+export function collectLiveRunDirs(stateDir: string): Set<string> {
+  const live = new Set<string>();
+  if (!existsSync(stateDir)) return live;
+  let ids: string[] = [];
+  try { ids = readdirSync(stateDir); } catch { return live; }
+  for (const id of ids) {
+    const p = join(stateDir, id, 'state.json');
+    if (!existsSync(p)) continue;
+    try {
+      const st = JSON.parse(readFileSync(p, 'utf-8')) as { terminal_state?: unknown; hoplog_run_dir?: unknown };
+      if (!st.terminal_state && typeof st.hoplog_run_dir === 'string') live.add(canonicalPath(st.hoplog_run_dir));
+    } catch (e) {
+      // 读不懂的快照给不出目录路径,无物可收——略过并 warn 一次让它可见（引擎 persistence 原子写不产半写快照,读失败几乎只来自外部损坏）
+      process.stderr.write(`[hoplog] 快照读取失败,活账保护略过它: ${p}: ${e instanceof Error ? e.message : String(e)}\n`);
+    }
+  }
+  return live;
 }
 
 // 审计性字段 key 集合——写入时无视日志级别
@@ -195,17 +230,30 @@ export class HopLog { // @a: anc-obs-hoplog, anc-obs-execution-log-absorption
   // emitResumed，重复写语义冗余）。首次恢复的 marker 足以标记"该 step 曾被恢复"，后续恢复不再重复写。
   // resume 重建时从文件扫已有 resumed_at 行填入（跨进程去重）。顶层事件（close/replan）用空串 '' 记。
   private resumedWritten = new Set<string>();
+  // 最小 header 五字段存实例——自愈重建后要重发它们,否则重建的 main.yaml 无 header 无 execution: 行,
+  // 整文非法 YAML、extractHopLogStepKeys 返回空、复用模式续写每个 done 被判孤儿（review 2026-10-03 实测）。
+  // 见 [[spec-observability#^anc-obs-log-retention]] Constraints 写失败条 // @a: anc-obs-log-retention
+  private headerSpecId = '(unknown)';
+  private headerRunId = '(unknown)';
+  private headerTraceId = '(unknown)';
+  private headerStartedAt = '';
 
   constructor(options: HopLogOptions) {
     this.level = options.level ?? 'info';   // 缺省 info（2026-09-30 todo/0127 作者定——对外分发防塞爆硬盘,prompt+response 占字节 65%;2026-08-23 曾定 debug,前提'个人开发体积可承受'已变。排障显式 debug） // @a: anc-obs-log-levels
     // 建目录前先清理:保留最新 maxRuns-1 个再加本次,建完恰 maxRuns 个 // @a: anc-obs-log-retention
     const maxRuns = options.maxRuns ?? DEFAULT_MAX_RUNS;
     if (!Number.isInteger(maxRuns) || maxRuns < 1) throw new Error(`max_runs 须为正整数（实际: ${String(options.maxRuns)}）`);
-    pruneRunDirs(options.logDir, maxRuns - 1);
+    const kindDir = basename(dirname(dirname(options.logDir)));
+    const isChild = kindDir === 'parallel' || kindDir === 'calls';   // 子实例不收集也不清理（HopSop 步 2 在步 3 前）
+    pruneRunDirs(options.logDir, maxRuns - 1, !isChild && options.stateDir ? collectLiveRunDirs(options.stateDir) : undefined);
     const runId = generateRunId();
     this.runDir = join(options.logDir, `${options.specId}-${runId}`); // @a: anc-obs-file-layout
     mkdirSync(this.runDir, { recursive: true });
     this.filePath = join(this.runDir, 'main.yaml');
+    this.headerSpecId = options.specId;
+    this.headerRunId = runId;
+    this.headerTraceId = options.traceId ?? runId;
+    this.headerStartedAt = timestamp();
 
     // Header — written immediately。spec_id（用户在 spec 写的 Id:）/trace_id（调用方传入）走 toYaml 转义
     // ——外部来源值含空格/冒号/特殊字符会破 YAML header；run_id（内部生成固定格式）/level（枚举）无需。
@@ -216,7 +264,7 @@ export class HopLog { // @a: anc-obs-hoplog, anc-obs-execution-log-absorption
     // 生产路径 engine 恒传（顶层=instanceId/worker=父id），兜底仅直接构造 HopLog 的测试/工具场景。
     this.append(`trace_id: ${toYaml(options.traceId ?? runId)}\n`); // @a: anc-obs-trace-inherit
     this.append(`level: ${this.level}\n`);
-    this.append(`started_at: ${toYaml(timestamp())}\n`);
+    this.append(`started_at: ${toYaml(this.headerStartedAt)}\n`);
     // title/goal 在 spec: 下的 2 空格层级；多行值走 block scalar，内容须比键更深缩进（indent=1 → 内容 4 空格 > 键 2 空格）。
     // 不传 indent 时多行 goal 的 block scalar 内容仅 2 空格 = 键缩进 → YAML 非法（block 判空 + 内容行无冒号）。
     this.append(`spec:\n  title: ${toYaml(options.title, 1)}\n  goal: ${toYaml(options.goal, 1)}\n`);
@@ -231,6 +279,32 @@ export class HopLog { // @a: anc-obs-hoplog, anc-obs-execution-log-absorption
     const log = Object.create(HopLog.prototype) as HopLog;
     log.runDir = runDir;
     log.filePath = join(runDir, 'main.yaml');
+    log.appendDead = false;
+    log.dirRecreated = false;
+    // header 五字段：既有文件头能读到就用,读不到（目录已丢）从目录名拆 spec_id/run_id,trace_id 写 (unknown)
+    const m = /^(.*)-(\d{8}T\d{6}-[0-9a-f]{4})$/.exec(basename(runDir));
+    log.headerSpecId = m ? m[1] : '(unknown)';
+    log.headerRunId = m ? m[2] : '(unknown)';
+    log.headerTraceId = '(unknown)';
+    log.headerStartedAt = '';
+    if (existsSync(log.filePath)) {
+      const head = readFileSync(log.filePath, 'utf-8').slice(0, 800);
+      const t = head.match(/^trace_id:\s*(.+)$/m); if (t) log.headerTraceId = t[1].trim().replace(/^"|"$/g, '');
+      const st = head.match(/^started_at:\s*(.+)$/m); if (st) log.headerStartedAt = st[1].trim().replace(/^"|"$/g, '');
+    }
+    // 目录不在（crash 后被清理）：重建+重发最小 header+断档标记,续跑不因 ENOENT 失败（hopissues/0116）// @a: anc-obs-log-retention
+    if (!existsSync(runDir)) {
+      log.level = level ?? 'info';
+      try {
+        mkdirSync(runDir, { recursive: true });
+        log.writeHeaderMinimal('dir_missing_on_resume');
+        process.stderr.write(`[hoplog] resume 时日志目录不在,已重建（之前的记录不可恢复）: ${runDir}\n`);
+      } catch (e) {
+        log.appendDead = true;
+        process.stderr.write(`[hoplog] resume 时日志目录不在且重建失败,本 run 后续日志降级为不写（run 继续）: ${runDir}: ${e instanceof Error ? e.message : String(e)}\n`);
+      }
+      log.dirRecreated = true;
+    }
     // 从已有 main.yaml 头部读取 level（跨进程恢复时保持原 run 的日志级别）
     if (!level && existsSync(log.filePath)) {
       const head = readFileSync(log.filePath, 'utf-8').slice(0, 500);
@@ -648,8 +722,48 @@ export class HopLog { // @a: anc-obs-hoplog, anc-obs-execution-log-absorption
     // All writes are immediate via appendFileSync — flush is a no-op
   }
 
+  /** 自愈重建后重发最小 header + `execution:` 行——让重建的文件对 YAML 整文 load 与 extractHopLogStepKeys 都合法。
+   *  直接 appendFileSync（不经 append——append 正在失败路径里）。见 [[spec-observability#^anc-obs-log-retention]] // @a: anc-obs-log-retention */
+  private writeHeaderMinimal(reason: 'dir_recreated' | 'dir_missing_on_resume'): void {
+    appendFileSync(this.filePath,
+      `spec_id: ${toYaml(this.headerSpecId)}\n` +
+      `run_id: ${this.headerRunId}\n` +
+      `trace_id: ${toYaml(this.headerTraceId)}\n` +
+      `level: ${this.level}\n` +
+      `started_at: ${toYaml(this.headerStartedAt || timestamp())}\n` +
+      `log_gap:\n  at: ${toYaml(timestamp())}\n  reason: ${reason}\n` +
+      `execution:\n`);
+  }
+
+  // 日志目录被外部删（计数清理误伤/磁盘清理）时首次重建续写并留断档标记;再失败 warn 一次后 no-op——
+  // 日志是核验通道不是执行前提,写不进去不该让 run 死（hopissues/0116：原裸 appendFileSync 上抛,整批 failed）。
+  // 见 [[spec-observability#^anc-obs-log-retention]] HopSop append // @a: anc-obs-log-retention
+  private appendDead = false;
+  private dirRecreated = false;
   private append(text: string): void {
-    appendFileSync(this.filePath, text);
+    if (this.appendDead) return;
+    try { appendFileSync(this.filePath, text); return; }
+    catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (!this.dirRecreated && (code === 'ENOENT' || code === 'EACCES' || code === 'EPERM')) {
+        this.dirRecreated = true;
+        try {
+          mkdirSync(this.runDir, { recursive: true });
+          this.writeHeaderMinimal('dir_recreated');
+          appendFileSync(this.filePath, text);
+          process.stderr.write(`[hoplog] 日志目录曾丢失,已重建续写（之前的记录不可恢复）: ${this.runDir}\n`);
+          return;
+        } catch (e2) {
+          // 重建也失败：当场降级并 warn（不落到下面——下面的 warn 带的是首次错误,这里要带的是重建失败的原因;
+          // review 变异实锤：若此处静默 return,降级会推迟到下一次写才发生,期间 appendDead=false 状态不实）
+          this.appendDead = true;
+          process.stderr.write(`[hoplog] 日志目录丢失且重建失败,本 run 后续日志降级为不写（run 继续）: ${this.runDir}: ${e2 instanceof Error ? e2.message : String(e2)}\n`);
+          return;
+        }
+      }
+      this.appendDead = true;
+      process.stderr.write(`[hoplog] 日志写入失败,本 run 后续日志降级为不写（run 继续）: ${this.filePath}: ${e instanceof Error ? e.message : String(e)}\n`);
+    }
   }
 
   private shouldRecord(level: LogLevel): boolean {

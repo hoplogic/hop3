@@ -93,7 +93,9 @@ ended_at: "…"
 
 三级向下包含：`debug`（完整 prompt 原文）⊇ `info`（值与轨迹，缺省）⊇ `warn`（骨架）。跑法：`--log-level debug`（CLI）或 hopjit.yaml `log_level: debug`（MCP）——缺省 info 看不到 `llm.prompt`，要排"模型看到了什么"先升级再复现。
 
-**日志保留上限**：`.hoplog` 下缺省只留最近 3 个 run（`log_retention.max_runs` / `--max-runs` 可调），新起 run 前自动删最老的——排障要保留现场就先把它调大，或把要留的 run 目录挪走。
+**日志保留上限**：`.hoplog` 下缺省只留最近 3 个 run（`log_retention.max_runs` / `--max-runs` 可调），新起 run 前自动删最老的**已结束**的 run——正在跑的 run（`.hopstate` 下快照还没终态的）不会被删，并发跑多个长批不用为此调大上限。排障要保留已结束的现场就调大，或把要留的 run 目录挪走。
+
+**看到顶层 `log_gap:` 块**：这个 run 的日志目录曾在中途丢过（`reason: dir_recreated`=写日志时发现目录没了，当场重建续写；`dir_missing_on_resume`=续跑时目录不在，重建后续写）。块之前的记录不可恢复，块之后的照常；执行账（state/vars）不受影响——日志是核验通道不是执行前提，目录丢了 run 不会因此失败。
 
 **审计无级别豁免**：不可逆操作（commit）、人工决策（hitl）、跨 spec 调用、重规划（`replan_audit`）**无视级别始终记录**——安全审计不能被调低日志级别绕过。这意味着：即便 warn 级的日志，审计链也是完整的，grep 即提取。
 

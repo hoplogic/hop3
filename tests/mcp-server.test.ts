@@ -3,10 +3,11 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 // @module: mcp-server ^anc-struct-mcp-server
 import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, existsSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { collectLiveRunDirs } from '../src/hoplog.js';
 import {
   loadStandaloneConfig,
   mergeConfigs,
@@ -1871,6 +1872,10 @@ describe('log_level 配置节（standalone 缺省 info）', () => {
       const runDir = entry.dispatcher.getEngine().getHopLogRunDir();
       expect(runDir).toBeTruthy();
       expect(readFileSync(join(runDir!, 'main.yaml'), 'utf-8')).toMatch(/^level: info$/m);
+      // hopissues/0116 卡 probe ① 的真实路径：MCP 起的 run 其 state.json 落盘后,活账反查必须能找到它的日志目录——
+      // start_run 把 stateDir 送进 initExecution 并由 engine 透传 HopLog 这一跳此前零测试（review 面三缺口 9）
+      const live = collectLiveRunDirs(join(dir, '.hopstate'));
+      expect([...live].map(x => realpathSync(x))).toContain(realpathSync(runDir!));
     } finally { delete process.env['HOPJIT_CONFIG']; }
   });
 

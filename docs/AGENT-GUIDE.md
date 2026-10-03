@@ -17,20 +17,21 @@ HOP 是给 LLM agent 用的任务规约语言加执行引擎。用户或你把�
 
 缺省模式叫复用模式——**你就是推理引擎**，HopJIT 只管流控，不需要任何 API key。另有独立模式（引擎自己调模型 API 跑完整份规约），用户明说"走 MCP"时才用。
 
-## 二、安装（两条命令，全部幂等）
+## 二、安装（一条命令，幂等）
 
 用户说"装一下 hop"时，你照下面做，不用问额外问题：
 
 ```bash
 npm install -g @hoplogic/hopjit
-hopjit install-skill            # Claude Code 缺省;Codex 加 --carrier codex;opencode 加 --carrier opencode
 ```
 
-`hopjit --version` 能出版本号即第一步成功。`install-skill` 一条命令做了三件事，装完请把这三件事用一两句话告诉用户：
+装包时的 postinstall 钩子会自动探测本机装了哪些载体（Claude Code / Codex / opencode，判据是各自的配置目录在不在），对探到的每一个跑一遍 `hopjit install-skill`。npm 缺省不显示钩子输出；想看它做了什么，装完跑 `hopjit install-skill` 一次（幂等，已装的不动，输出里 `carriers` 字段是探到的载体清单）。钩子在四种情况下不动手只打一行提示：`HOPJIT_SKIP_SKILL=1`、`CI` 环境、`sudo` 全局装、源码仓自身装依赖——这时你手动跑 `hopjit install-skill` 即可；要指定载体加 `--carrier codex|opencode`。
+
+`install-skill` 做了三件事，装完请把这三件事用一两句话告诉用户：
 
 1. 把驱动 skill 装进载体的 skill 目录（Claude Code 是用户级 `~/.claude/skills/`，装一次所有项目可用）。**用户菜单里只会出现 `/hop` 一个入口**，其余几件（执行协议、翻译器、修订器、MCP 薄壳）装在盘上由 /hop 按需分派，用户不直接敲。
 2. 把 hopjit 的 MCP server 注册进载体，并生成 `~/.hopjit/config.yaml` 配置骨架。复用模式不需要动它；用户要走独立模式时再填模型凭证。
-3. Claude Code 下，在当前项目的 `.claude/settings.local.json` 放行一个 MCP 工具 `mcp__hopjit__run_approved_command`。这是"已批准命令不再逐条弹窗"机制的开关，第四节讲它怎么用。
+3. Claude Code 下，在当前项目的 `.claude/settings.local.json` 放行一个 MCP 工具 `mcp__hopjit__run_approved_command`。这是"已批准命令不再逐条弹窗"机制的开关，第四节讲它怎么用。**这一件和 `.mcp.json` 注册都是项目级的，npm 装包时的钩子做不了（那时 cwd 是包目录）——/hop 第一次在一个项目里跑时会自己补上，你不用管。**
 
 装完让用户**重启载体或新开一个会话**，`/hop` 才会出现在 skill 列表里。命令输出里的 `mcp_note` / `permission_note` 两个字段如果有内容，原样转告用户——那是注册或放行没做成时的手工补救指引。
 
@@ -60,7 +61,7 @@ Codex 里对应的入口是 `$hop`，opencode 里是隐式触发（直接说"用
 
 2. **停点归真人。** `[confirm]` 和 `[ask]` 步是用户亲手标出来的"这里我要出现"的位置。到了这里停下问用户，不替答，不猜。
 
-3. **已批准命令按卡执行，没批的不绕。** 任务卡里可以有一节 `## 已批准命令`，一行一个命令前缀——这是用户写下的授权："在这个任务里，这类命令经过规约核验后可以执行"。干到要跑这些命令的步骤时，调 MCP 工具 `run_approved_command`（命令写成 argv 列表，不拼 shell 字符串），引擎按前缀核对、执行、记账，整类命令零弹窗。命令不在卡上时工具会拒绝并告诉你怎么办：**停下问用户要不要加进卡**（加了重起任务），或者就让这一条走载体自己的审批。**不要自己把命令加进卡，不要换成载体 Bash 绕过去**——授权范围要不要扩是用户的决定，不是你的。
+3. **已批准命令按HopSpec执行，没批的禁止绕过。** 任务HopSpec里可以有一节 `## 已批准命令`，一行一个命令前缀——这是用户写下的授权："在这个任务里，这类命令经过规约核验后可以执行"。干到要跑这些命令的步骤时，调 MCP 工具 `run_approved_command`（命令写成 argv 列表，不拼 shell 字符串），引擎按前缀核对、执行、记账，整类命令零弹窗。命令不在HopSpec上时工具会拒绝并告诉你怎么办：**停下问用户要不要加进HopSpec**（加了重起任务），或者就让这一条走载体自己的审批。**不要自己把命令加进HopSpec，禁止换成载体 Bash 绕过去**——授权范围要不要扩是用户的决定，不是你的。
 
 ## 五、包里有什么、去哪找（只装了 npm 包、拿不到仓库时）
 
@@ -83,7 +84,7 @@ Codex 里对应的入口是 `$hop`，opencode 里是隐式触发（直接说"用
 | `skills/hopbuild/` `skills/hopfix/` | 翻译器与修订器的 skill 正文（含 primer 知识附件） | /hop 分派时自动在场 |
 | `model-gearbox/profiles/` | 各模型能力档案（机读） | 独立模式选模型时 |
 
-包内文档是打包期清洗过的发布件——仓库里用于工程追溯的锚点、双链、内部卡号都已去掉，个别地方会看到"见本文相关节""源码仓设计文档"这样的替代词，那是原来指向内部材料的位置。不在包里的是开发 hop 引擎本身的材料：设计契约（`docs/design/`）、开发者系列教程（D 篇，除 D10）、追溯表、Doctree。源码仓在 GitHub（`hoplogic/hop3`），国内访问不便时不必强求。
+包内文档是打包期清洗过的发布件——仓库里用于工程追溯的锚点、双链、内部卡号都已去掉，个别地方会看到"见本文相关节""源码仓设计文档"这样的替代词，那是原来指向内部材料的位置。
 
 ## 六、出了问题怎么报
 

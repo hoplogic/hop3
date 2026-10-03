@@ -235,7 +235,7 @@ CC（推理 + 工具执行，全程在场）
 
 **显式共享登记（有意共享，不算违反，动它须过本表）**：`MAX_CONCURRENT_RUNS` 并发闸（server 级费用防线）；provider 限速/费用（进程共享 API key——全局费用闸挂观察账）；`runs` 注册表（server 的本职状态）；`.hopstate` 盘面（run 各有子目录，天然隔离）。
 
-**守卫**：`check-process-state.mjs`（内核禁 `process.env/cwd/chdir`+模块顶层可变状态，组合根白名单豁免，见 [[docs/design/chain-enforcement]]）+ 崩溃回归（故障 run 并发健康 run：健康 run 走完、server 存活、故障 run 记 failed）+ 串台回归（两 run 各自 HostConfig，解析根/凭证互不可见）。
+**守卫**：`check-process-state.mjs`（内核禁 `process.env/cwd/chdir`+模块顶层可变状态，组合根白名单豁免——组合根三个：`cli.ts`/`mcp-server.ts`/`postinstall.ts`（npm 钩子进程入口），见 [[docs/design/chain-enforcement]]）+ 崩溃回归（故障 run 并发健康 run：健康 run 走完、server 存活、故障 run 记 failed）+ 串台回归（两 run 各自 HostConfig，解析根/凭证互不可见）。
 
 > 各模块落点细节：server 侧=[[docs/design/mcp-server#^anc-mcp-run-lifecycle]]；env 快照字段=[[docs/design/shared-providers#^anc-config-standalone-schema]]；缓存归属=[[docs/design/spec-ast]]。本节是唯一权威，各处引用不复制。
 

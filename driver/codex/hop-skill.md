@@ -9,7 +9,7 @@ user-invocable: true
 	source: [[hop-skill]]
 	source_id: hopjit-driver-hop
 	type: adapt
-	last_sync: 2026-10-02T23:09+0800
+	last_sync: 2026-10-03T14:13+0800
 	note: /hop 的 Codex 载体适配（源=CC 版 driver/hop-skill.md,同语义分载体不许步骤语义漂移）。定位与协议归 description+正文（单一事实源,本行不复述）。载体差异仅三处:触发 $hop/问人走对话直接问答（规约 C9）/外包与阅卷按 spawn 能力降级（无 spawn 全自驱+判据硬化,零仪式）。布局契约 [[codex-driver-carrier#^anc-driver-codex-install-layout]]。演进随 CC 版同批,归 git log。
 %%
 
@@ -42,6 +42,8 @@ $hop 是**独立的 plan/执行工具**：多个活并存、随开随切——�
 ### 0. 分派：用户给的是什么，走哪条路
 
 $hop 是唯一入口，进来先判用户给的是什么，五条路：
+
+**进分派之前先补一件安装期做不了的事（2026-10-03 作者定"只敲 npm install,其他都让 /hop 解决"）**：skill 是 npm 装包时自动装上的。Codex 的 MCP 注册在用户级 `~/.codex/config.toml`,装包时已写好,本项目不需要再补什么;但若 `hopjit` 命令能找到而 `config.toml` 里没有 `[mcp_servers.hopjit]`（用户装包时跳过了钩子,或 config.toml 是后来才建的）,跑一次 `hopjit install-skill --carrier codex`（幂等）补上,再告诉用户一句。已经有的就什么都不做。
 
 - **一句话能答完、不需要留痕的**（算个数、翻译一段）→ 直接答，不进 hop。hop 不劫持对话。
 - **复杂的、需要可控可靠保障的活**（多步骤、要进度记录、要独立核验、中断后要能接着干）→ 下面第 1 节起的升格流程：建任务卡、引擎管进度与把关。这是 hop 的主路。

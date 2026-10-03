@@ -569,7 +569,7 @@ program.command('init <spec>')
         specPath: resolve(specPath),
         cliAbsPath: resolve(fileURLToPath(import.meta.url)),
         ...(params ? { params } : {}),
-        ...(opts.logDir ? { logDir: opts.logDir } : {}),
+        ...(opts.logDir ? { logDir: resolve(opts.logDir) } : {}),   // 与 run 路径同：绝对化入账,活账反查按绝对路径比对（review 面二缺陷 5）
         ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
         ...(opts.maxRuns !== undefined ? { maxRuns: parseMaxRuns(opts.maxRuns) } : {}),   // @a: anc-obs-log-retention
         ...((callMode || isParallelChild) ? { parentInstanceId: childParent, callStepId: childStep } : {}),
@@ -996,6 +996,34 @@ function resolveCarrierHome(c: Carrier): string {
     case 'opencode':    return process.env.OPENCODE_CONFIG_DIR || join(process.env.XDG_CONFIG_HOME || join(h, '.config'), 'opencode');
   }
 }
+// 载体自动探测：home 目录在场=用户至少启动过一次该载体。按解析后的 home 去重（cfuse 会话里
+// CLAUDE_CONFIG_DIR 把 cc 重定向到 ~/.codefuse/engine/cc,与 cfuse-cc 同目录只装一次,名取先探到的）。
+// 零探到返回空数组,由调用方回落 cc。见 hop-cli ^anc-cli-carrier-autodetect。// @a: anc-cli-carrier-autodetect
+export function detectCarriers(): Carrier[] {
+  const seen = new Set<string>();
+  const found: Carrier[] = [];
+  for (const c of ['cc', 'codex', 'opencode', 'cfuse-cc', 'cfuse-codex'] as Carrier[]) {
+    const home = resolve(resolveCarrierHome(c));
+    if (!existsSync(home) || seen.has(home)) continue;
+    seen.add(home);
+    found.push(c);
+  }
+  return found;
+}
+
+// postinstall 该不该跳过（纯函数,钩子入口 dist/postinstall.js 调它）。四种环境只打一行指路、退出码 0——
+// 钩子抛错=npm install 失败=用户连 hopjit 命令都拿不到,代价远大于少装一个 skill。
+// 见 hop-cli ^anc-cli-postinstall。// @a: anc-cli-postinstall
+export function postinstallSkipReason(env: NodeJS.ProcessEnv, uid: number | undefined, pkgDir: string, distExists: boolean): string | null {
+  if (env.HOPJIT_SKIP_SKILL === '1') return 'HOPJIT_SKIP_SKILL=1';
+  if (env.CI) return 'CI 环境无载体';
+  if (uid === 0 && env.SUDO_USER) return 'sudo 下 HOME 是 root 的,探测会落空或写错家目录';
+  // 源码仓自身 npm install（开发者加依赖/dev-install.sh）：包路径不在 node_modules 下。开发装机由 dev-install.sh 自己跑 install-skill --force
+  if (!/[\\/]node_modules[\\/]/.test(pkgDir)) return '源码仓自身装依赖,不是装包';
+  if (!distExists) return 'dist/cli.js 不在';
+  return null;
+}
+
 function assertCarrier(c: string, cmd: string): asserts c is Carrier {
   if (!CARRIER_VALUES.includes(c as Carrier))
     throw new Error(`${cmd}_ERROR: 未知 carrier '${c}'（支持: ${CARRIER_VALUES.join(' | ')}）`);
@@ -1243,7 +1271,7 @@ export function detectCcHopjitRegistration(carrier: 'cc' | 'cfuse-cc' = 'cc'): s
 program.command('install-skill')
   .description('Install hopspec driver skills for Claude Code / Codex (native or cfuse) from the package driver/ sources')
   .option('--dir <target>', 'Skills root directory (default: resolved per carrier — cc/codex read CLAUDE_CONFIG_DIR/CODEX_HOME, cfuse-cc/cfuse-codex use ~/.codefuse/engine/{cc,codex}/skills, opencode uses ~/.config/opencode/skills)')
-  .option('--carrier <carrier>', 'Driver carrier: cc | codex | cfuse-cc | cfuse-codex | opencode', 'cc')
+  .option('--carrier <carrier>', 'Driver carrier: cc | codex | cfuse-cc | cfuse-codex | opencode (default: auto-detect every carrier whose home directory exists; falls back to cc)')
   .option('--demo', 'Also install the coffee-week demo skill for the selected carrier')
   .option('--plus', 'Also install the hop-fact-check and hop-deep-research research skills, and merge their tool_servers config into ~/.hopjit/config.yaml')
   .option('--mcp', 'Compatibility alias — MCP server registration and standalone config bootstrap now happen by default (2026-10-01); passing this flag changes nothing')   // 缺省即注册（作者定"缺省安装 mcp"）,flag 留作兼容别名 // @a: anc-cli-install-skill
@@ -1257,8 +1285,29 @@ program.command('install-skill')
         errorExit(`INSTALL_SKILL_ERROR: 包内未找到 driver/（${driverDir}）——确认包完整安装`);
         return;
       }
-      assertCarrier(opts.carrier, 'INSTALL_SKILL');
-      const carrier = opts.carrier as Carrier;
+      // 载体选择三支（^anc-cli-carrier-autodetect）：显式 --carrier 只装那一个;--dir 给了目录却不知给谁,等价 cc（旧行为）;
+      // 都没给→探测本机在场的载体逐个装,零探到回落 cc。// @a: anc-cli-carrier-autodetect
+      let carriers: Carrier[];
+      let detectNote: string | undefined;
+      if (opts.carrier !== undefined) {
+        assertCarrier(opts.carrier, 'INSTALL_SKILL');
+        carriers = [opts.carrier as Carrier];
+      } else if (opts.dir !== undefined) {
+        carriers = ['cc'];
+      } else {
+        carriers = detectCarriers();
+        if (carriers.length === 0) {
+          carriers = ['cc'];
+          detectNote = '未探到任何载体 home（~/.claude / ~/.codex / ~/.config/opencode / ~/.codefuse）,按 Claude Code 装到 ~/.claude/skills;其他载体装好后重跑 hopjit install-skill 即自动补装';
+        } else {
+          detectNote = `自动探测到载体：${carriers.join(', ')}（要只装一个用 --carrier）`;
+        }
+      }
+      // postinstall 路径（cwd 是 npm 包目录不是用户项目）：CC 的 .mcp.json 注册与 settings.local.json 放行是项目作用域,跳过;首次 /hop 时补。// @a: anc-cli-postinstall
+      const projectScope = process.env.HOPJIT_POSTINSTALL !== '1';
+      const driverVersion = readPackageVersion();
+
+      const installOne = (carrier: Carrier): Record<string, unknown> => {
       // 目标按 carrier home 解析（^anc-cli-carrier-home-resolution）：cc/codex 读官方环境变量
       // CLAUDE_CONFIG_DIR/CODEX_HOME（自动适配当前环境,如 cfuse 内置载体重定向）;cfuse-cc/cfuse-codex
       // 固定 ~/.codefuse/engine/{cc,codex}/skills（裸终端显式指定 cfuse 目标）。--dir 覆盖。
@@ -1269,7 +1318,6 @@ program.command('install-skill')
       const force = opts.force === true;
       // 版本可见性：响应带 driver_version/driver_source；SKILL.md frontmatter 后注入版本戳注释——
       // 已装副本自身可查（head -5），不依赖安装时的响应。见 [[hop-cli#^anc-cli-install-skill]] 版本可见性条。
-      const driverVersion = readPackageVersion();
       const versionStamp = `<!-- driver: @hoplogic/hopjit v${driverVersion} (${pkgRoot}) installed ${new Date().toISOString()} -->`;
 
       const stampSkill = (source: string, src: string): string => {
@@ -1667,7 +1715,9 @@ program.command('install-skill')
           // 判定（best-effort,CC 内部格式演进不拦装）。// @a: anc-cli-install-skill
           const existingScope = detectCcHopjitRegistration(carrier as 'cc' | 'cfuse-cc');
           const configPath = resolve(process.cwd(), '.mcp.json');
-          if (existingScope) {
+          if (!projectScope) {
+            mcpNote = 'postinstall 阶段不写项目级 .mcp.json（cwd 不是用户项目）——首次 /hop 时在项目里自动补注册';
+          } else if (existingScope) {
             mcpNote = `已有 hopjit 注册（${existingScope}）,未写 .mcp.json——同名多 scope 会冲突且窄 scope 优先;请自查该注册指向`;
           } else {
             let config: { mcpServers?: Record<string, unknown> } = {};
@@ -1728,7 +1778,9 @@ program.command('install-skill')
       // CC 放行 run_approved_command;其他载体指路不猜格式。判据显式枚举——carrierFamily 把 opencode 也归 'cc'（包装模板选型语义）,借它会把 CC 文件写进 opencode 项目（review 实抓） // @a: anc-cli-install-skill-permission
       let permissionWritten: string | null = null;
       let permissionNote: string | undefined;
-      if (carrier === 'cc' || carrier === 'cfuse-cc') {
+      if ((carrier === 'cc' || carrier === 'cfuse-cc') && !projectScope) {
+        permissionNote = 'postinstall 阶段不写项目级 settings.local.json 放行——首次 /hop 时在项目里自动补';
+      } else if (carrier === 'cc' || carrier === 'cfuse-cc') {
         const r = ensureCcPermission(process.cwd());
         permissionWritten = r.written;
         permissionNote = r.note;
@@ -1736,11 +1788,8 @@ program.command('install-skill')
         permissionNote = `请在 ${carrier} 载体里放行 hopjit 的 ${RUN_APPROVED_COMMAND_TOOL} 工具（按 <server>_<tool> 粒度的放行配置）${carrier === 'opencode' ? ',并把 opencode 配置里 mcp.hopjit.enabled 改为 true（安装缺省 false,server 不启动则工具不存在;缺省值待定 todo/0134）' : ''}——任务卡里批准的命令才能不再逐条弹窗`;
       }
 
-      output({
-        status: 'ok',
-        carrier: carrier,
-        driver_version: driverVersion,
-        driver_source: pkgRoot,
+      return {
+        carrier,
         target,
         installed,
         ...(removed.length ? { removed } : {}),   // 受管目录清理清单（--force 档）// @a: anc-cli-install-skill
@@ -1755,6 +1804,19 @@ program.command('install-skill')
         ...(permissionNote ? { permission_note: permissionNote } : {}),
         ...(staleNotes.length ? { stale_notes: staleNotes } : {}),   // @a: anc-cli-stale-skill-scan
         ...(skipped ? { note: '无文件写入（目标已存在，用 --force 覆盖）' } : {}),
+      };
+      };   // installOne
+
+      // 多载体响应：顶层字段取第一个载体的值（兼容只读顶层的旧消费方）,全部结果在 results（^anc-cli-carrier-autodetect）。// @a: anc-cli-carrier-autodetect
+      const results = carriers.map(installOne);
+      output({
+        status: 'ok',
+        ...results[0],
+        carriers,
+        results,
+        driver_version: driverVersion,
+        driver_source: pkgRoot,
+        ...(detectNote ? { detect_note: detectNote } : {}),
       });
     } catch (err: unknown) {
       errorExit(err instanceof Error ? err.message : String(err));

@@ -30,6 +30,7 @@ import {
   errorExit,
   program,
   setOutputJson, readProjectCommands,
+  detectCarriers, postinstallSkipReason,
 } from '../src/cli.js';
 import type { HostConfig } from '../src/provider-types.js';
 
@@ -1757,6 +1758,127 @@ describe('CLI function unit tests (coverage)', () => {
         const notes: string[] = out.stale_notes ?? [];
         expect(notes.some(n => n.includes('hopfix') && n.includes('该位置已不受本次安装管辖'))).toBe(true);
       }));
+    });
+
+    // @v: anc-cli-carrier-autodetect — install-skill 缺省按载体 home 在场自动探测,--carrier 降为覆盖（2026-10-03 作者定"智能探测不是手工选择"）
+    describe('install-skill 载体自动探测', () => {
+      function withHome(fn: (home: string) => Promise<void> | void): Promise<void> {
+        const fakeHome = mkdtempSync(join(tmpdir(), 'hopdetect-home-'));
+        const cwd = mkdtempSync(join(tmpdir(), 'hopdetect-cwd-'));
+        const oldCwd = process.cwd();
+        const saved: Record<string, string | undefined> = {};
+        for (const k of ['HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'OPENCODE_CONFIG_DIR', 'XDG_CONFIG_HOME', 'HOPJIT_POSTINSTALL']) { saved[k] = process.env[k]; delete process.env[k]; }
+        process.env.HOME = fakeHome;
+        process.chdir(cwd);
+        return Promise.resolve(fn(fakeHome)).finally(() => {
+          process.chdir(oldCwd);
+          for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+        });
+      }
+      const runInstall = async (args: string[]) => {
+        const cap = capture();
+        try { await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', ...args]); } finally { cap.restore(); }
+        return JSON.parse(cap.get().trim().split('\n').pop()!);
+      };
+
+      it('detectCarriers：按 home 在场探测,顺序固定,零在场空数组（正反例）', () => withHome((home) => {
+        expect(detectCarriers()).toEqual([]);
+        mkdirSync(join(home, '.codex'), { recursive: true });
+        expect(detectCarriers()).toEqual(['codex']);
+        mkdirSync(join(home, '.claude'), { recursive: true });
+        mkdirSync(join(home, '.config', 'opencode'), { recursive: true });
+        expect(detectCarriers()).toEqual(['cc', 'codex', 'opencode']);
+      }));
+
+      it('detectCarriers：CLAUDE_CONFIG_DIR 把 cc 重定向到 cfuse 目录时与 cfuse-cc 去重,只报先探到的 cc', () => withHome((home) => {
+        const cfuseCc = join(home, '.codefuse', 'engine', 'cc');
+        mkdirSync(cfuseCc, { recursive: true });
+        process.env.CLAUDE_CONFIG_DIR = cfuseCc;
+        expect(detectCarriers()).toEqual(['cc']);
+        delete process.env.CLAUDE_CONFIG_DIR;
+        expect(detectCarriers()).toEqual(['cfuse-cc']);   // 裸终端无重定向：~/.claude 不在,cfuse-cc 自己在
+      }));
+
+      it('零参数两载体在场 → 两个都装,carriers/results 两元素,顶层字段=第一个载体的值', () => withHome(async (home) => {
+        mkdirSync(join(home, '.claude'), { recursive: true });
+        mkdirSync(join(home, '.codex'), { recursive: true });
+        const out = await runInstall(['--force']);
+        expect(out.status).toBe('ok');
+        expect(out.carriers).toEqual(['cc', 'codex']);
+        expect(out.results).toHaveLength(2);
+        expect(out.carrier).toBe('cc');
+        expect(out.target).toBe(join(home, '.claude', 'skills'));
+        expect(out.results[1].carrier).toBe('codex');
+        expect(out.results[1].target).toBe(join(home, '.codex', 'skills'));
+        expect(existsSync(join(home, '.claude', 'skills', 'hop', 'SKILL.md'))).toBe(true);
+        expect(existsSync(join(home, '.codex', 'skills', 'hop', 'SKILL.md'))).toBe(true);
+        expect(out.detect_note).toContain('cc, codex');
+      }));
+
+      it('零在场 → 回落只装 cc 并 detect_note 说明（旧缺省不退化）;显式 --carrier codex 时 ~/.claude 在场也不碰（反例）', () => withHome(async (home) => {
+        const out = await runInstall(['--force']);
+        expect(out.carriers).toEqual(['cc']);
+        expect(out.detect_note).toContain('未探到任何载体');
+        expect(existsSync(join(home, '.claude', 'skills', 'hop', 'SKILL.md'))).toBe(true);
+        rmSync(join(home, '.claude'), { recursive: true, force: true });
+        mkdirSync(join(home, '.claude'), { recursive: true });
+        const out2 = await runInstall(['--carrier', 'codex', '--force']);
+        expect(out2.carriers).toEqual(['codex']);
+        expect(out2.detect_note).toBeUndefined();
+        expect(existsSync(join(home, '.claude', 'skills'))).toBe(false);
+      }));
+
+      it('--dir 给了目录不探测,等价 cc（旧行为）', () => withHome(async (home) => {
+        mkdirSync(join(home, '.codex'), { recursive: true });
+        const dir = mkdtempSync(join(tmpdir(), 'hopdetect-dir-'));
+        const out = await runInstall(['--dir', dir, '--force']);
+        expect(out.carriers).toEqual(['cc']);
+        expect(out.target).toBe(dir);
+        expect(existsSync(join(home, '.codex', 'skills'))).toBe(false);
+      }));
+
+      // @v: anc-cli-postinstall — 钩子路径不写项目级两件（cwd 不是用户项目）,note 指路首次 /hop 补
+      it('HOPJIT_POSTINSTALL=1：skill 与用户级注册照装,项目级 .mcp.json 与 settings.local.json 不写、note 说明', () => withHome(async (home) => {
+        mkdirSync(join(home, '.claude'), { recursive: true });
+        process.env.HOPJIT_POSTINSTALL = '1';
+        const out = await runInstall([]);
+        expect(out.carriers).toEqual(['cc']);
+        expect(existsSync(join(home, '.claude', 'skills', 'hop', 'SKILL.md'))).toBe(true);
+        expect(out.mcp_registered).toBeNull();
+        expect(out.mcp_note).toContain('postinstall');
+        expect(out.permission_written).toBeNull();
+        expect(out.permission_note).toContain('postinstall');
+        expect(existsSync(join(process.cwd(), '.mcp.json'))).toBe(false);
+        expect(existsSync(join(process.cwd(), '.claude'))).toBe(false);
+      }));
+
+      it('postinstallSkipReason：四种跳过各命中;装包形态（node_modules 下且 dist 在）返回 null', () => {
+        const pkg = '/x/lib/node_modules/@hoplogic/hopjit';
+        expect(postinstallSkipReason({ HOPJIT_SKIP_SKILL: '1' }, 501, pkg, true)).toContain('HOPJIT_SKIP_SKILL');
+        expect(postinstallSkipReason({ CI: 'true' }, 501, pkg, true)).toContain('CI');
+        expect(postinstallSkipReason({ SUDO_USER: 'lenx' }, 0, pkg, true)).toContain('sudo');
+        expect(postinstallSkipReason({}, 0, pkg, true)).toBeNull();   // 真 root 不经 sudo（容器）照装
+        expect(postinstallSkipReason({}, 501, '/Users/me/src/hoplogic3', true)).toContain('源码仓');
+        expect(postinstallSkipReason({}, 501, pkg, false)).toContain('dist');
+        expect(postinstallSkipReason({}, 501, pkg, true)).toBeNull();
+      });
+
+      it('dist/postinstall.js 真跑：源码仓路径下跳过,打一行指路,退出码 0,不写任何 skill 目录', () => {
+        const fakeHome = mkdtempSync(join(tmpdir(), 'hoppi-home-'));
+        mkdirSync(join(fakeHome, '.claude'), { recursive: true });
+        const r = spawnSync(process.execPath, [resolve(__dirname, '..', 'dist', 'postinstall.js')], {
+          encoding: 'utf-8', env: { ...process.env, HOME: fakeHome, CLAUDE_CONFIG_DIR: join(fakeHome, '.claude') },
+        });
+        expect(r.status).toBe(0);
+        expect(r.stderr).toMatch(/\[hopjit\] 未自动安装 skill（源码仓/);
+        expect(r.stderr).toContain('hopjit install-skill');
+        expect(existsSync(join(fakeHome, '.claude', 'skills'))).toBe(false);
+      });
+
+      it('package.json：postinstall 钩子登记为 node dist/postinstall.js', () => {
+        const pkg = JSON.parse(readFileSync(resolve(__dirname, '..', 'package.json'), 'utf-8'));
+        expect(pkg.scripts.postinstall).toBe('node dist/postinstall.js');
+      });
     });
 
     // 元守卫：install-skill 缺省即注册+放行后,任何用例都不得往仓库根写 .mcp.json / .claude/settings.local.json
