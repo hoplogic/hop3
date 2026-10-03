@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-09-01T15:42+0800
+	last_sync: 2026-09-27T20:38+0800
 	note: deep-validate 跑前深检设计——validate 的深化档（2026-09-01 作者两拍立项：缘起 anchor-audit spec standalone 化十跑九坑）。载体=hopskill spec（scripts/deep-validate/），判据台账=知识文档活资产。
 %%
 
@@ -61,10 +61,10 @@ Id: deep-validate
 Goal: 对一份 HopSpec 做跑前运行期假设检查——把每个步骤说明教的动作与
   目标执行模式的真实能力面对照,产出建议性风险报告
 Inputs:
-- spec_path: line     # 被审 spec 文件路径（workspace 相对）
-- exec_mode: enum(standalone, driver)  # 目标执行模式
+- spec_path % line     # 被审 spec 文件路径（workspace 相对）
+- exec_mode % enum(standalone, driver)  # 目标执行模式
 Outputs:
-- risk_report: markdown  # 风险清单（每条:坑位/病理/修法建议/严重度;五面逐面表态）
+- risk_report % markdown  # 风险清单（每条:坑位/病理/修法建议/严重度;五面逐面表态）
 Constraints:
 - fast 硬约束一:LLM 调用次数恒定,不随被审 spec 规模增长——单 reason 步
   一次过全部判据面,不分批不分模块（分批是审计的形态,不是快检的）

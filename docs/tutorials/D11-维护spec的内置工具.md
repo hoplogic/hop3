@@ -3,7 +3,7 @@
 	source: [[../design/tools]]
 	source_id: hopjit-tools
 	type: compact
-	last_sync: 2026-09-01T20:26+0800
+	last_sync: 2026-09-27T20:38+0800
 	note: D 系列 11（2026-08-30 作者令"把这套工具总体收拢一下,归集到同一个design和D系列tutorial文档里"）——spec 内容工具族教学：读/写/验三件+parse_json 解码,一处讲全。契约权威 tools.md ^anc-exec-spec-tools-family 总览 + 三件各自契约节;insert 语义同日作者纠偏（对齐 D44 编辑代数,废 insert_after）
 %%
 
@@ -62,7 +62,7 @@ node = read_spec_tree(spec_text: full_text, mode: "node", node_path: "5.2")
 r = parse_json(insert_node(
   spec_text: full_text,
   node_path: "2",
-  fragment: "1. [check] 核验产出\n  - ← draft\n  + → ok: bool  # 判定\n  + → note: text  # 说明\n"
+  fragment: "1. [check] 核验产出\n  - ← draft\n  + → ok % bool  # 判定\n  + → note % text  # 说明\n"
 ))
 new_text = r.spec_text
 ```

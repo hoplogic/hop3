@@ -1,0 +1,66 @@
+```python
+import ast
+import re
+import json
+import sys
+
+def check_function_length(filename):
+    try:
+        file = open(filename, 'r', encoding='utf-8')
+        source = file.read()
+        file.close()
+    except Exception as e:
+        print(f"无法读取文件: {filename}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as e:
+        print(f"语法错误: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    violations = []
+    
+    def traverse(node, line_offset=0):
+        if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+            start_line = node.lineno + line_offset
+            end_line = node.end_lineno
+            if end_line is None:
+                # 某些情况下 end_lineno 可能不存在，用实际行数估算
+                body_lines = len(node.body)
+                # 但为准确起见，我们不依赖 end_lineno 时，直接使用定义行加体行数
+                func_lines = 1 + body_lines  # def 行 + body 行
+            else:
+                func_lines = end_line - start_line + 1
+            
+            if func_lines > 40:
+                violations.append(f"第 {start_line} 行: 函数 '{node.name}' 长度为 {func_lines} 行，超过 40 行限制")
+
+            # 处理嵌套函数
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, ast.FunctionDef) or isinstance(child, ast.AsyncFunctionDef):
+                    child_start_line = child.lineno + line_offset
+                    traverse(child, line_offset)
+
+        elif isinstance(node, ast.ClassDef):
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, ast.FunctionDef) or isinstance(child, ast.AsyncFunctionDef):
+                    child_start_line = child.lineno + line_offset
+                    traverse(child, line_offset)
+
+        for child in ast.iter_child_nodes(node):
+            traverse(child, line_offset)
+
+    traverse(tree)
+
+    if violations:
+        for violation in violations:
+            print(violation, file=sys.stderr)
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+# 主逻辑：从命令行参数获取文件路径
+filename = sys.argv[1]
+check_function_length(filename)
+```

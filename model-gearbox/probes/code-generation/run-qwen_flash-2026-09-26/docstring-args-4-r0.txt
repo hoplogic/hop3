@@ -1,0 +1,148 @@
+```python
+import ast
+import re
+import json
+import sys
+
+def get_parameters(func_node):
+    params = []
+    for arg in func_node.args.posonlyargs + func_node.args.args:
+        if arg.arg not in ('self', 'cls'):
+            params.append(arg.arg)
+    if func_node.args.vararg and func_node.args.vararg.arg not in ('self', 'cls'):
+        params.append(func_node.args.vararg.arg)
+    for arg in func_node.args.kwonlyargs:
+        if arg.arg not in ('self', 'cls'):
+            params.append(arg.arg)
+    if func_node.args.kwarg and func_node.args.kwarg.arg not in ('self', 'cls'):
+        params.append(func_node.args.kwarg.arg)
+    return params
+
+def extract_docstring(node):
+    if node.body and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Str):
+        return node.body[0].value.s
+    return None
+
+def is_valid_docstring(docstring, params):
+    if not docstring:
+        return False
+    # Normalize: remove leading/trailing whitespace and convert to lowercase for search
+    text = docstring.strip()
+    for param in params:
+        # Search for param as a complete word (with word boundaries)
+        # Use raw string to avoid escaping issues
+        pattern = r'\b' + re.escape(param) + r'\b'
+        if not re.search(pattern, text):
+            return False
+    return True
+
+def check_file(filepath):
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            source = f.read()
+    except Exception as e:
+        sys.stderr.write(f"Error reading file {filepath}: {e}\n")
+        sys.exit(1)
+
+    if not source.strip():
+        sys.exit(0)
+
+    try:
+        tree = ast.parse(source, filename=filepath)
+    except SyntaxError as e:
+        sys.stderr.write(f"Syntax error in {filepath}: {e}\n")
+        sys.exit(1)
+
+    violations = []
+
+    def walk(node):
+        if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+            # Skip functions starting with underscore
+            if node.name.startswith('_'):
+                return
+            # Skip magic methods like __init__, __repr__
+            if node.name.startswith('__') and node.name.endswith('__'):
+                return
+            # Check if it's a nested function (inside another function body)
+            parent = node.parent
+            while parent is not None:
+                if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    return  # Nested function, skip
+                parent = parent.parent
+            # Extract parameters
+            params = get_parameters(node)
+            docstring = extract_docstring(node)
+            if not docstring:
+                violations.append((node.lineno, "Missing docstring"))
+            elif not is_valid_docstring(docstring, params):
+                # Find missing params
+                text = docstring.strip()
+                missing = []
+                for param in params:
+                    pattern = r'\b' + re.escape(param) + r'\b'
+                    if not re.search(pattern, text):
+                        missing.append(param)
+                if missing:
+                    violations.append((node.lineno, f"Docstring does not mention parameter(s): {', '.join(missing)}"))
+
+        elif isinstance(node, ast.ClassDef):
+            # Process methods in class
+            for child in node.body:
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    # Skip private or magic methods
+                    if child.name.startswith('_'):
+                        continue
+                    if child.name.startswith('__') and child.name.endswith('__'):
+                        continue
+                    # Check if nested (inside function body)
+                    parent = child.parent
+                    while parent is not None:
+                        if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            break
+                        parent = parent.parent
+                    else:
+                        # Not nested — valid method
+                        params = get_parameters(child)
+                        docstring = extract_docstring(child)
+                        if not docstring:
+                            violations.append((child.lineno, "Missing docstring"))
+                        elif not is_valid_docstring(docstring, params):
+                            text = docstring.strip()
+                            missing = []
+                            for param in params:
+                                pattern = r'\b' + re.escape(param) + r'\b'
+                                if not re.search(pattern, text):
+                                    missing.append(param)
+                            if missing:
+                                violations.append((child.lineno, f"Docstring does not mention parameter(s): {', '.join(missing)}"))
+
+        for child in ast.iter_child_nodes(node):
+            walk(child)
+
+    # Attach parent references manually since ast.walk doesn't provide them
+    for node in ast.walk(tree):
+        if hasattr(node, 'parent'):
+            continue
+        stack = [(node, None)]
+        while stack:
+            current, parent = stack.pop()
+            current.parent = parent
+            for child in ast.iter_child_nodes(current):
+                stack.append((child, current))
+
+    walk(tree)
+
+    if violations:
+        for line_num, reason in violations:
+            sys.stderr.write(f"Line {line_num}: {reason}\n")
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+# Main execution
+if len(sys.argv) < 2:
+    sys.stderr.write("Usage: script.py <file_path>\n")
+    sys.exit(1)
+
+check_file(sys.argv[1])
+```

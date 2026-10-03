@@ -1,0 +1,58 @@
+```python
+import ast
+import sys
+
+LIMIT = 40
+
+
+def find_long_functions(tree):
+    # 遍历整棵语法树,普通函数 / async 函数 / 类方法 / 嵌套函数都会被 walk 找到,
+    # 各自单独计算长度;外层函数的 end_lineno 天然包含内层函数所占的行。
+    bad = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # node.lineno 是 def 所在行(装饰器不计入),
+            # node.end_lineno 是函数体最后一行,长度含首尾两行。
+            length = node.end_lineno - node.lineno + 1
+            if length > LIMIT:
+                bad.append((node.lineno, node.name, length))
+    bad.sort()
+    return bad
+
+
+if len(sys.argv) < 2:
+    print("usage: python check_func_length.py <file.py>", file=sys.stderr)
+    sys.exit(1)
+
+path = sys.argv[1]
+
+try:
+    with open(path, "r", encoding="utf-8") as handle:
+        source = handle.read()
+except (OSError, ValueError) as err:
+    print("cannot read " + path + ": " + str(err), file=sys.stderr)
+    sys.exit(1)
+
+# 去掉可能存在的 UTF-8 BOM,避免影响语法分析
+if source.startswith("\ufeff"):
+    source = source[1:]
+
+try:
+    tree = ast.parse(source)
+except SyntaxError as err:
+    print("cannot parse " + path + ": " + str(err), file=sys.stderr)
+    sys.exit(1)
+
+violations = find_long_functions(tree)
+if violations:
+    for lineno, fname, length in violations:
+        print(
+            "line " + str(lineno)
+            + ": function '" + fname + "'"
+            + " has " + str(length) + " lines"
+            + " (limit " + str(LIMIT) + ")"
+        )
+    sys.exit(1)
+
+sys.exit(0)
+```

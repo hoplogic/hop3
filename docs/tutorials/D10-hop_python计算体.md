@@ -3,7 +3,7 @@
 	source: [[../concepts/HopSpec V3语法参考]]
 	source_id: hopspec-v3-syntax-ref
 	type: compact
-	last_sync: 2026-09-05T18:17+0800
+	last_sync: 2026-10-01T16:01+0800
 	note: 开发者系列 D10——hop_python 计算体(定位:agent 代写的简单逻辑代码呈现,人读得懂核得对;2026-08-30 作者定自用户主线 04 位移入——受限子集/白名单/禁令细节对"用 spec 的人"过深,对"写引擎周边的人"恰好)（文法权威在语法参考 §5，本文回答"什么该写成 body、怎么写、错了会怎样"）
 %%
 
@@ -18,7 +18,7 @@
 
 这就是 hop_python 存在的全部理由：**求和、切分、拼接、按阈值分流这类事没有任何"判断"含量，让 LLM 做纯属引入不确定性**（它可能算错、可能"顺手优化"、可能每次格式不同）。写成 body 之后，这些步骤由引擎确定性执行——同样输入永远同样输出，且零 token 成本。
 
-**先说清你的角色：这些 body 基本不用你亲手写。** 无论是 `/hopbuild` 翻译（[[07-升级你的自然语言skill]]）还是让 agent 帮你起草 spec，body 都是 agent 生成的——它就是把"简单逻辑"从散文变成代码呈现：原来写"把营业额加起来"，现在是 `total = sum(daily_sales)`，一个意思，但后者引擎能锁死执行。**你需要的是读得懂、核得对**（这段代码是不是我要的逻辑），偶尔手调一两行。本篇按这个深度讲。
+**先说清你的角色：这些 body 基本不用你亲手写。** 无论是 /hop 分派的 hopbuild 翻译（[[07-升级你的自然语言skill]]）还是让 agent 帮你起草 spec，body 都是 agent 生成的——它就是把"简单逻辑"从散文变成代码呈现：原来写"把营业额加起来"，现在是 `total = sum(daily_sales)`，一个意思，但后者引擎能锁死执行。**你需要的是读得懂、核得对**（这段代码是不是我要的逻辑），偶尔手调一两行。本篇按这个深度讲。
 
 一份好 spec 的形状因此很清晰：**该动脑的写 `[reason]`（交给 LLM），不该动脑的写 `[act]` + body（交给引擎），有不可逆副作用的写 `[commit]` + body（前面加把关闸门）。**
 
@@ -27,13 +27,13 @@
 Claude Code 命令：
 
 ```
-/hopspec run examples/syntax/act-body.md --params '{"expenses": [120, 88, 1500, 260], "auto_limit": 2000}'
+/hop 跑 examples/syntax/act-body.md --params '{"expenses": [120, 88, 1500, 260], "auto_limit": 2000}'
 ```
 
 Codex 命令：
 
 ```
-$hopspec run examples/syntax/act-body.md --params '{"expenses": [120, 88, 1500, 260], "auto_limit": 2000}'
+$hop 跑 examples/syntax/act-body.md --params '{"expenses": [120, 88, 1500, 260], "auto_limit": 2000}'
 ```
 
 这是一个报销单核算：合计、找最大单笔、按公司规则判审批级别。两个 act 步骤全带 body，整个执行**一次 LLM 都没调**——你会看到它几乎瞬间完成，而且**金额账绝不会算错**（这正是不让 LLM 心算金额的理由）。这类 spec 在独立模式下同样一分钱推理费都不花。
@@ -43,8 +43,8 @@ $hopspec run examples/syntax/act-body.md --params '{"expenses": [120, 88, 1500, 
 ```markdown
 1. [act] 合计与找最大单笔
   - ← expenses
-  + → total: int
-  + → biggest: int
+  + → total % int
+  + → biggest % int
   > ```hop_python
   > total = sum(expenses)
   > biggest = max(expenses)
@@ -74,12 +74,12 @@ $hopspec run examples/syntax/act-body.md --params '{"expenses": [120, 88, 1500, 
 
 ### `yaml` 类型的变量：拿到手就是结构
 
-声明为 `yaml` 的变量（`+ → contract: yaml`）在 hop_python 里**是真结构（对象/列表），不是一段文本**。名字里的 "yaml" 说的是它的书写与展示语法——LLM 产出时写 YAML 文本、看它时也看到 YAML 文本，但引擎在边界上自动转换（产出时 parse 成结构入库，给 LLM 看时序列化回文本），所以你在 body 里**直接取字段，不需要任何 parse**：
+声明为 `yaml` 的变量（`+ → contract % yaml`）在 hop_python 里**是真结构（对象/列表），不是一段文本**。名字里的 "yaml" 说的是它的书写与展示语法——LLM 产出时写 YAML 文本、看它时也看到 YAML 文本，但引擎在边界上自动转换（产出时 parse 成结构入库，给 LLM 看时序列化回文本），所以你在 body 里**直接取字段，不需要任何 parse**：
 
 ```markdown
 2. [act] 从契约提取输入名单
   - ← contract
-  + → names: [line]
+  + → names % [line]
   > ```hop_python
   > names = [i.name for i in contract.inputs]   # 字段链、推导直接用
   > has_goal = len(contract.goal) > 0            # len 对对象=键数,对列表=元素数
@@ -145,10 +145,10 @@ commands:
 ```markdown
 2. [reason] 评估修复策略           # 该动脑的
   - ← issues
-  + → fix_strategy: yaml          # 明确产出：策略对象
+  + → fix_strategy % yaml          # 明确产出：策略对象
 3. [act] 执行修复                  # 不该动脑的
   - ← raw_data, fix_strategy
-  + → clean_data: [yaml]
+  + → clean_data % [yaml]
   > ```hop_python
   > if fix_strategy.clip_enabled:      # 消费判断结果——这是确定性条件
   >     cleaned = clip_outliers(data: raw_data, threshold: fix_strategy.z_threshold)
@@ -159,7 +159,7 @@ commands:
 ```
 
 
-**还有一类是写的时候就被拦**（validate 静态闸，跑都不用跑）：读文件的工具（`read`/`exists`/`listdir`）的 path 参数写成字面绝对路径（如 `read(path: "/Users/you/f.md")`）——validate 当场 error。沙箱禁绝对路径：一律写 workspace 相对路径；实例涂鸦区的文件用 `work_zone_path("文件名")` 取路径。写侧六件工具的字面路径同有静态闸（写盘归 commit 或 work_zone）。
+**还有一类是写的时候就被拦**（validate 静态闸，跑都不用跑）：读文件的工具（`read`/`exists`/`listdir`）的 path 参数写成字面绝对路径（如 `read(path: "/Users/you/f.md")`）——validate 当场 error。理由是可移植：写死的绝对路径绑定了某台机器的目录布局，换机器或换 workspace 就指向不存在的位置（运行时文件工具认落在 workspace 内的绝对路径，但规约里一律写 workspace 相对路径）；实例涂鸦区的文件用 `work_zone_path("文件名")` 取路径。写侧六件工具的字面路径同有静态闸（写盘归 commit 或 work_zone）。
 
 ## 第 4 步：commit 与 check——同一套文法
 
@@ -170,8 +170,8 @@ commands:
 ```markdown
 5. [check] 合法关：validate 零 error
   - ← validate_result
-  + → legal_ok: bool   # 判定槽
-  + → why: text        # 失败说明
+  + → legal_ok % bool   # 判定槽
+  + → why % text        # 失败说明
   > ```hop_python
   > legal_ok = '"errors":[]' in validate_result
   > why = "" if legal_ok else validate_result

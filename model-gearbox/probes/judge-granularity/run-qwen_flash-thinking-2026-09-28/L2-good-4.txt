@@ -1,0 +1,8 @@
+Q1: yes (依据：清单中存在line_ref为L1的点P1)
+Q2: yes (依据：点P2和P3的line_ref均为L2)
+Q3: yes (依据：清单中存在line_ref为L3的点P4)
+Q4: yes (依据：清单中存在line_ref为L4的点P5)
+Q5: yes (依据：所有inference点的premises均有具体前提内容)
+Q6: yes (依据：所有点的quote在原文对应行中完全匹配)
+extract_ok: true
+extract_gap: |

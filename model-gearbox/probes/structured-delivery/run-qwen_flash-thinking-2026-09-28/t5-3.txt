@@ -1,0 +1,11 @@
+ledger:
+  - path: "docs/api.md"
+    定性: "参考性"
+    处置: "按需读取"
+  - path: "scripts/check.py"
+    定性: "流程性"
+    处置: "并入构建视野"
+  - path: "assets/logo.png"
+    定性: "未引用"
+    处置: "呈裁"
+total: 3

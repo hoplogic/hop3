@@ -58,7 +58,7 @@ doc-ref 解析归 **engine**（`assembleBasicContext`），不在 dispatcher—�
 **解析流程**（engine `resolveStepDocRefs(step, context)` 调纯函数 `resolveDocRefs(refs, workspaceDir, sandbox, workZone, hopEnv?, specDir?, inlineMode?)`，模块 src/doc-ref.ts）：
 
 1. **收集 refs**：spec 级（`spec.header.doc_refs`，对所有步骤可见）+ 步骤级（`step.doc_refs`）合并去重。
-2. **路径解析 + sandbox 校验**：Obsidian 习惯省 `.md` 后缀 → 每个候选位先试原名，再试 `+.md` 兜底；禁字面绝对路径/`..`，读一律走 `validateReadAccess` 权限链（denied 基线对任何候选位同拦）。**解析基准两级（2026-08-20 作者定——目录概念三层归位：spec 目录=自包含单元/workspace=作业对象根/work_zone=引擎内务）**：
+2. **路径解析 + sandbox 校验**：Obsidian 习惯省 `.md` 后缀 → 每个候选位先试原名，再试 `+.md` 兜底；字面绝对路径按文件工具同一判据（落在 workspace 内即认、外拒——2026-09-30 hopissues/0112 起,原为一律禁;[[tools/file-tools#^anc-exec-tool-path-resolve]]）、`..` 一律禁，读一律走 `validateReadAccess` 权限链（denied 基线对任何候选位同拦）。**解析基准两级（2026-08-20 作者定——目录概念三层归位：spec 目录=自包含单元/workspace=作业对象根/work_zone=引擎内务）**：
    - **第一级 spec 目录**（`dirname(specPath)`）：spec 自带材料（同住知识文档）随 spec 走——hopbuild primer、audit knowledge、pack 产物的 spec.md+知识文档全是"知识文档与 spec 同目录"形态，spec 是自包含分发单元，其自带引用不依赖 caller 从哪启动。两处同名时 spec 目录赢（自包含语义）。specPath 缺席（内存态引擎/片段校验）跳过本级；
      - **但子实例必须继承父的 specPath**；call 子实例 spec 另有其人时传 callee 自己的路径〔SpecProvider 源〕，parallel subtask 子实例=同一份 spec 传父的；
        - 实撞出处（2026-09-01 第九跑）：dispatcher 三处子实例 init〔parallel subtask/parallel call/串行 call〕全漏传，子实例 specDir 缺席致 doc-ref 校验只剩 workspace 根基准，anchor-audit 的 11 个语义批 init 全灭〔知识文档住 scripts/audit/ 与 spec 同目录，父实例好的、子实例全找不到〕；

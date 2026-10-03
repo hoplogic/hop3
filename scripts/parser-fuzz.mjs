@@ -136,9 +136,11 @@ function safeParse(text, origin) {
   }
 }
 
-// ── 归一：剥 source_location 后的稳定序列化 ──
+// ── 归一：剥位置元数据后的稳定序列化 ──
+// colon_separators（^anc-rule-schema-sep-dual）记的是冒号分隔符所在行号,与 source_location 同属位置元数据：
+// 不剥的话,删掉任何一行都会让其后的行号整体前移、AST 必然"变了",真被吞掉的行也测不出惰性——守卫失明。
 function normalizeAst(ast) {
-  return JSON.stringify(ast, (k, v) => (k === 'source_location' ? undefined : v));
+  return JSON.stringify(ast, (k, v) => (k === 'source_location' || k === 'colon_separators' ? undefined : v));
 }
 function normalizeErrors(errors) {
   return JSON.stringify(errors.map(e => `${e.kind}:${e.rule ?? ''}:${e.message}`).sort());

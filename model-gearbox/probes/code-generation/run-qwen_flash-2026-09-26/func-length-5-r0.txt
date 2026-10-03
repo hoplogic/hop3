@@ -1,0 +1,73 @@
+```python
+import ast
+import re
+import json
+import sys
+
+def check_function_length(filename):
+    try:
+        with open(filename, 'r', encoding='utf-8') as file:
+            source = file.read()
+    except (OSError, UnicodeDecodeError) as e:
+        sys.stderr.write(f"无法读取文件: {filename}\n")
+        sys.exit(1)
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as e:
+        sys.stderr.write(f"语法错误: {e}\n")
+        sys.exit(1)
+
+    violations = []
+    
+    def traverse(node, line_offset=0):
+        # 递归遍历 AST 节点，检查每个函数
+        if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+            # 计算函数体的行数：从 def 行到 body 最后一行（含）
+            start_line = node.lineno + line_offset
+            end_line = node.end_lineno + line_offset if hasattr(node, 'end_lineno') else start_line
+            func_lines = end_line - start_line + 1
+            
+            # 装饰器不计入，但定义行算入，所以直接用上面计算即可
+            if func_lines > 40:
+                violations.append(f"第 {start_line} 行: 函数 '{node.name}' 长度为 {func_lines} 行，超过 40 行限制")
+
+            # 递归处理函数体内的嵌套函数
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, ast.FunctionDef) or isinstance(child, ast.AsyncFunctionDef):
+                    # 嵌套函数的位置偏移是当前函数的起始行
+                    child_start_line = child.lineno + line_offset
+                    # 需要调整子节点的行号偏移，以确保其所在位置正确
+                    traverse(child, line_offset)
+
+        # 递归处理类
+        elif isinstance(node, ast.ClassDef):
+            # 保持行号偏移
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, ast.FunctionDef) or isinstance(child, ast.AsyncFunctionDef):
+                    child_start_line = child.lineno + line_offset
+                    traverse(child, line_offset)
+
+        # 处理其他节点（如模块顶层语句等）
+        for child in ast.iter_child_nodes(node):
+            traverse(child, line_offset)
+
+    # 启动遍历
+    traverse(tree)
+
+    # 输出违规信息并退出
+    if violations:
+        for violation in violations:
+            sys.stderr.write(violation + "\n")
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+# 主逻辑：从命令行参数获取文件路径
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.stderr.write("缺少文件路径参数。\n")
+        sys.exit(1)
+    filename = sys.argv[1]
+    check_function_length(filename)
+```

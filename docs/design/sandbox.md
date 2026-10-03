@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-06-12T22:28+0800
+	last_sync: 2026-09-27T20:38+0800
 	note: SandboxConfig 四维度安全模型——act 步骤的资源边界定义与拦截规则。内容分级（决策/契约/说明）+ 6 个配置锚点 + 1 个执行模型锚点
 %%
 
@@ -48,10 +48,10 @@
 struct: SandboxConfig
   Id: sandbox-config
   Fields:
-    - filesystem: FilesystemSandbox  # 详见下文 ① filesystem
-    - network: NetworkSandbox        # 详见下文 ② network
-    - runtime: RuntimeSandbox        # 详见下文 ③ runtime
-    - database: DatabaseSandbox      # 可选。详见下文 ④ database
+    - filesystem % FilesystemSandbox  # 详见下文 ① filesystem
+    - network % NetworkSandbox        # 详见下文 ② network
+    - runtime % RuntimeSandbox        # 详见下文 ③ runtime
+    - database % DatabaseSandbox      # 可选。详见下文 ④ database
 ```
 
 （TS 形态是代码层投影，在 src/provider-types.ts——设计以本 HopType 为准。）
@@ -87,8 +87,8 @@ struct: SandboxConfig
 struct: FilesystemSandbox
   Id: filesystem-sandbox
   Fields:
-    - workspace_dir: line  # 工作区根目录——内部可自由写、删、试验
-    - read_access: yaml    # 三清单：allowed（可自由读的路径/glob）/ denied（绝对禁读——密钥、凭证文件）/ confirm_required（需 confirm 步骤后才能读——敏感配置）
+    - workspace_dir % line  # 工作区根目录——内部可自由写、删、试验
+    - read_access % yaml    # 三清单：allowed（可自由读的路径/glob）/ denied（绝对禁读——密钥、凭证文件）/ confirm_required（需 confirm 步骤后才能读——敏感配置）
 ```
 
 ### 拦截规则【契约】
@@ -106,9 +106,9 @@ struct: FilesystemSandbox
 5. 其余 → reject
 
 **安全防护**：
-- 绝对路径 → reject（强制相对 workspace 解析）
+- 绝对路径 → 落在 workspace 内按相对路径同样处理,workspace 外 reject（2026-09-30 hopissues/0112 改,原为"一律 reject"——判据只问落点不问写法;细则 [[tools/file-tools#^anc-exec-tool-path-resolve]]）
 - 路径穿越 `..` → reject
-- symlink 逃逸（解析后指向 workspace 外且不在 allowed 中）→ reject
+- symlink 逃逸（解析后指向 workspace 外且不在 allowed 中）→ reject——"在内"判定带路径分隔符边界（兄弟目录 /x/proj2 不算 /x/proj 之内）,目标文件不存在时解析到最近已存在的祖先目录（经软链父目录新建文件同样拦）
 
 ### 典型配置【说明】
 
@@ -135,7 +135,7 @@ filesystem:
 struct: NetworkSandbox
   Id: network-sandbox
   Fields:
-    - trusted_hosts: [line]  # 可信域名白名单
+    - trusted_hosts % [line]  # 可信域名白名单
 ```
 
 ### 拦截规则【契约】
@@ -168,7 +168,7 @@ network:
 struct: RuntimeSandbox
   Id: runtime-sandbox
   Fields:
-    - available: [line]  # 命令白名单——引擎强制(2026-08-29 语义升格,原"声明性文档"退役)。两个消费口共用:body 的 subprocess.run + 工具面的 run_script(2026-09-22)
+    - available % [line]  # 命令白名单——引擎强制(2026-08-29 语义升格,原"声明性文档"退役)。两个消费口共用:body 的 subprocess.run + 工具面的 run_script(2026-09-22)
 ```
 
 ### 拦截规则【契约】
@@ -206,8 +206,8 @@ runtime:
 struct: DatabaseSandbox
   Id: database-sandbox
   Fields:
-    - temp_databases: [line]      # 临时库——act 步骤可读写
-    - readonly_databases: [line]  # 可选。只读库——act 步骤只能查询
+    - temp_databases % [line]      # 临时库——act 步骤可读写
+    - readonly_databases % [line]  # 可选。只读库——act 步骤只能查询
 ```
 
 ### 拦截规则【契约】

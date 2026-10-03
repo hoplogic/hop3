@@ -1,6 +1,7 @@
 ---
 name: hopspec
-description: Drive HopSpec structured execution specs with the hopjit engine (reuse mode — Codex itself is the reasoning LLM via CLI, zero API key). Default entry for running specs; use $hopspec-mcp only when the user explicitly asks for MCP/standalone execution.
+description: Run an existing HopSpec file (reuse mode — Codex itself is the reasoning LLM via CLI, zero API key): confirm parameters, answer intervention points, present the final state by contract. Dispatched by $hop; users do not invoke it directly. Ad-hoc tasks without a spec go through $hop.
+user-invocable: false
 ---
 
 %% @trace
@@ -8,7 +9,7 @@ description: Drive HopSpec structured execution specs with the hopjit engine (re
 	source: [[codex-driver-carrier]]
 	source_id: hopjit-codex-driver-carrier
 	type: extract
-	last_sync: 2026-08-31T09:51+0800
+	last_sync: 2026-10-01T15:45+0800
 	note: Codex 复用模式 main orchestrator。普通执行段由 agents/segment-driver.md 承担（parallel-worker/batch-fanout 已随旧通道退役，P0.5）。
 %%
 

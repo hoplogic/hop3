@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-08-23T11:29+0800
+	last_sync: 2026-09-29T23:37+0800
 	note: tools 模块设计——装配层本体（成员构成/生命周期/出口边界;2026-08-31 拆迁后形态:各工具组契约归 tools/ 子目录一模块一文件,本文只长索引行）。2026-07-02 从 shared-types.md 抽出独立成文;2026-08-31 作者定归口拆迁。
 %%
 
@@ -27,7 +27,17 @@ shared-providers 的 `ToolProvider` 契约（见 [[shared-providers#^anc-provide
 
 ## tools 模块定位【契约】 ^anc-struct-tools
 
-> **模块版本**：tools `v0.20.1`（2026-09-23）。本版 `run_script` 的工具说明补写工作目录约定——脚本以它自己所在的目录为工作目录运行,同目录的样例文件给 `args` 传裸文件名（T9 复跑实撞:模型照其余文件工具的习惯传工作区相对路径,脚本找不到文件,qwen3.8-27b 因此烧穿一轮 20 轮工具上限;契约 [[tools/run-script#^anc-exec-builtin-run-script]]）。
+> **模块版本**：tools `v0.23.1`（2026-09-30）。本版把目录边界判定两件 resolveRealDeep / isWithinDir 从模块私有改为出口（todo/0132——mcp-server run_approved_command 的 cwd 越界判复用,语义零变化）。上版 v0.23.0（同日）work_zone 豁免读写分权（todo/0126,作者定"可以读,但不应该能写"）：写只认当前实例自己的 work_zone,读对本 run 整个实例树的 work_zone 开放（祖先/兄弟/后代按目录布局判）;收回 v0.22.0 "本实例+祖先读写全放行"——后代不再能写祖先。ToolProvider 加可选方法 setWorkZoneScope（写根与读树）;registerWorkZoneRoot 语义收窄为读集合兜底。契约 [[tools/file-tools#^anc-exec-work-zone-registry]]。
+>
+> - 上版（v0.22.0） work_zone 沙箱豁免改为只认本次运行自己实例树的涂鸦区集合（todo/0124,作者定"这个任务就应该直接把 work_zone 目录记下来"——原三支判定里字面正则两支让 workspace 外任何含 `.hopstate/<x>/work_zone` 字面的路径都能读写、模块级注册表让同进程别的 run 互相可读写;集合改归 DefaultToolProvider 实例持有,engine.getWorkZone() 做登记路由,ToolProvider 加可选方法 registerWorkZoneRoot,PersistenceProvider 加可选方法 getWorkZoneRoots 报本实例与祖先实例的根;契约 [[tools/file-tools#^anc-exec-work-zone-registry]]）。**出口表变更**：删模块级函数 `registerWorkZoneRoot`（0066 批 provisional 登入,本版随字面判定一并退役——登记改经 ToolProvider 接口可选方法进提供者实例,不再有模块级出口;0.x 阶段删出口走 MINOR,决策依据=作者定"直接把 work_zone 目录记下来"）。
+>
+> - 上版（v0.21.0）文件工具认落在 workspace 内的绝对路径（hopissues/0112——hopbuild2 翻译产物的 commit 步用用户给的绝对路径派生落盘路径,原"一律禁绝对路径"把交付物拦在门外;概念层只要求落在 workspace 内,不要求相对写法）;同批修两处既有逃逸:目录前缀判定补路径分隔符边界（兄弟目录 /x/proj2 不再算在 /x/proj 内）、新建文件经软链父目录与悬空软链不再逃出 workspace（契约 [[tools/file-tools#^anc-exec-tool-path-resolve]]）。
+>
+> - 上版（v0.20.3） `edit_file` 给模型看的返回说明（ToolDef.returns）从"字节偏移 at byte"改正为与实际回执一致的"字符偏移 at char"（这句会渲染进工具清单,旧说法误导模型）;file-tools 设计补齐零匹配报错结构与最接近行算法的逐步流程（工程链 review 修复,契约 [[tools/file-tools#^anc-exec-builtin-edit-file-tool]]）。
+>
+> - 上版（v0.20.2） `edit_file` 零匹配报错附文件里最接近的行原文（最多 3 条,行号+JSON 引号包住的原文）——hb2 qwen-flash 修错步连续十几轮凭记忆写 old_text 零匹配,旧报错只回显 old_text 本身看不出错在哪（契约 [[tools/file-tools#^anc-exec-builtin-edit-file-tool]]）。
+>
+> - 上版（v0.20.1）`run_script` 的工具说明补写工作目录约定——脚本以它自己所在的目录为工作目录运行,同目录的样例文件给 `args` 传裸文件名（T9 复跑实撞:模型照其余文件工具的习惯传工作区相对路径,脚本找不到文件,qwen3.8-27b 因此烧穿一轮 20 轮工具上限;契约 [[tools/run-script#^anc-exec-builtin-run-script]]）。
 >
 > - 上版（v0.20.0）`run_script` 的 `.py` 脚本一律先过 Python 语法沙箱再执行（审查与执行归 py-sandbox 模块,契约 [[py-sandbox]]）;回执 JSON 加 `defense` 字段标本次防护等级;审查被拒=工具失败带逐行拒绝报文。run_script 原工程偏差①"白名单管不住脚本内容能再 spawn 什么"由此关上（[[tools/run-script]]）。
 >
@@ -104,11 +114,11 @@ CompositeToolProvider 构造器的内置段从"硬编码单成员 builtin-file"�
 | 符号                                                                                                          | 种类  | 出口文件               | 用途（谁依赖）                                                                                                                | 稳定性         |
 | ----------------------------------------------------------------------------------------------------------- | --- | ------------------ | ---------------------------------------------------------------------------------------------------------------------- | ----------- |
 | `DefaultToolProvider`                                                                                       | 类   | tools.ts           | ToolProvider 默认实现（engine/cli 建实例）                                                                                      | stable      |
-| `registerWorkZoneRoot`                                                                                      | 函数  | tools.ts           | work_zone 真实根注册（persistence 发出路径时登记,isWorkZonePath 第三支判据源——hopissues/0066;2026-09-04 review 抓漏登出口表补）                    | provisional |
 | `makeEngineToolProviderFactory` | 函数 | tools-composite.ts | 引擎直执面工厂构造体单一权威（cli.ts/mcp-server.ts 组合根注册与 engine.test.ts 同 import——0076 批立,2026-09-06 review 抓漏登补） | stable |
 | `loadProjectToolRegistry` | 函数 | tools-registry.ts | 项目级 tool_servers 注册表现读（组合根工厂 loadRegistry 半边与 tool-call 命令共用——2026-09-06 review 真收敛挪入本模块） | stable |
 | `readSandboxedFile`                                                                                         | 函数  | tools.ts           | 沙箱内文件读取（doc-ref 复用）                                                                                                    | stable      |
 | `resolveWorkspacePath`                                                                                      | 函数  | tools.ts           | workspace 相对路径解析（doc-ref 复用）                                                                                           | stable      |
+| `resolveRealDeep` / `isWithinDir`                                                                           | 函数  | tools.ts           | 目录边界判定两件（真实路径换算+含分隔符边界的"在目录内"）——mcp-server `run_approved_command` 的 cwd 越 workspace 判复用,不另抄一份（[[mcp-server#^anc-mcp-run-command]],2026-09-30） | stable      |
 | `validateReadAccess`                                                                                        | 函数  | tools.ts           | 三级读权限校验（doc-ref hop_env 展开的绝对路径直判复用——展开值绕过 resolveWorkspacePath 相对链,权限判据必须同一套,见 [[doc-ref#^anc-exec-doc-ref-hop-env]]） | stable      |
 | `executeValidateSpec`                                                                                       | 函数  | tools.ts           | validate_spec 执行体（Provider 外纯函数——测试直调;见 ^anc-exec-builtin-validate-tool）                                               | provisional |
 | `executeInsertNode` / `executeReplaceNode` / `executeReplaceChildren` / `executeRenumberSteps`              | 函数  | tools.ts           | 树编辑四工具执行体（Provider 外纯函数——测试直调;共享壳 parse→spec-tree-edit 核心→renumber→sync→serialize;见 ^anc-exec-builtin-edit-tree-tool）  | provisional |

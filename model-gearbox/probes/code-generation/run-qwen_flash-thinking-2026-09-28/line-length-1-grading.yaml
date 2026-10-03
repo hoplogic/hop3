@@ -1,0 +1,9 @@
+- round: 0
+  outcome: ran
+  public_pass: true
+  hidden_pass: false
+  hidden_failed:
+    - ok_cjk100.txt(应0实1)
+    - ok_crlf100.txt(应0实1)
+    - ok_exact100.txt(应0实1)
+  crashed_files: 0

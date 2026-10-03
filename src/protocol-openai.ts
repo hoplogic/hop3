@@ -9,11 +9,66 @@
 
 import OpenAI from 'openai';
 import type Anthropic from '@anthropic-ai/sdk';
+import { Agent } from 'undici';
+
+/** 非流式请求的等待上限（毫秒）——按输出上限换算:max(10min, ceil(maxTokens/128000×60min)),与 SDK
+ * 预检估算同式。全库唯一一处公式:client 级上限（按 service 解析的输出上限）与单次请求上限
+ * （request.max_tokens）都从这里算,客户端等待超时的判定与报错文案也用它。
+ * 见 [[step-dispatcher#^anc-exec-nonstreaming-timeout]] */
+export function nonstreamingWaitMs(maxTokens: number): number { // @a: anc-exec-nonstreaming-timeout
+  // 取不到数（缺席/非数）按 0 算,落 10 分钟下限——不让 NaN 进 SDK timeout 与超时判定
+  const tokens = Number.isFinite(maxTokens) ? maxTokens : 0;
+  return Math.max(10 * 60_000, Math.ceil((tokens / 128_000) * 60 * 60_000));
+}
+
+/** 长等待连接设置——node 内建 fetch（undici）对"等响应头"和"两次收到数据的间隔"各有缺省 300 秒
+ * 时限,非流式请求要等整段生成完才回响应头,超过 300 秒的一律被掐断,给 SDK 的长 timeout 轮不到生效
+ * （todo/0117）。这里建一个 undici Agent,两个时限都取引擎的 client 级等待上限,经 SDK 构造选项
+ * fetchOptions 传入。extra 只给测试注入假连接（connect）用;同名时限键被 waitMs 盖掉。
+ * 见 [[step-dispatcher#^anc-exec-nonstreaming-timeout]] "连接设置"段 */
+export function longWaitFetchOptions(waitMs: number, extra: Agent.Options = {}): { dispatcher: Agent } { // @a: anc-exec-nonstreaming-timeout
+  return { dispatcher: new Agent({ ...extra, headersTimeout: waitMs, bodyTimeout: waitMs }) };
+}
+
+// undici 等待超时错误码——等响应头超时 / 等数据超时。数据中途停满 bodyTimeout 时 SDK 抛的是裸
+// TypeError('terminated'),cause 才是 BodyTimeoutError;按 D61 文案兜底会被当网络断流。所以先顺着
+// cause 链认错误码归 timeout（最多看 5 层防环）,再走文案兜底。
+// 见 [[step-dispatcher#^anc-exec-api-retry]] D61 条 v0.36.0 补充 // @a: anc-exec-api-retry
+const UNDICI_WAIT_TIMEOUT_CODES = new Set(['UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']);
+// 端点不可达判据——错误本体或 cause 链带 ECONNREFUSED（端口无进程监听）/ ENOTFOUND（主机名解析
+// 不到）:两者都是确定性死端点（配置指向错了/服务没起）,不是"等一等就好"的瞬时网络故障。
+// 与 isUndiciWaitTimeout 同法看 5 层 cause。见 [[step-dispatcher#^anc-exec-network-pause]] 末条
+//（hopissues/0106）。// @a: anc-exec-network-pause
+const UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EPERM']);
+/** 判一个 LLM 调用错误是否"端点不可达"（连接被拒/主机名解析不到/系统策略拒绝连接）——两 classifyError 先于 network
+ * 兜底调用;dispatcher 据此首次即抛 ENDPOINT_UNREACHABLE 不进网络暂停门。导出供测试直钉判据。 */
+export function isEndpointUnreachable(err: unknown): boolean { // @a: anc-exec-network-pause
+  let cur: unknown = err;
+  for (let depth = 0; depth < 6 && cur != null && typeof cur === 'object'; depth++) {
+    const code = (cur as { code?: unknown }).code;
+    if (typeof code === 'string' && UNREACHABLE_CODES.has(code)) return true;
+    // undici 聚合错（AggregateError.errors[]——双栈地址各拒一次）
+    const errs = (cur as { errors?: unknown }).errors;
+    if (Array.isArray(errs) && errs.some(e => typeof (e as { code?: unknown })?.code === 'string' && UNREACHABLE_CODES.has((e as { code: string }).code))) return true;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+function isUndiciWaitTimeout(err: unknown): boolean {
+  let cur: unknown = err;
+  for (let depth = 0; depth < 6 && cur != null && typeof cur === 'object'; depth++) {
+    const code = (cur as { code?: unknown }).code;
+    if (typeof code === 'string' && UNDICI_WAIT_TIMEOUT_CODES.has(code)) return true;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return false;
+}
 
 /** LLM 调用错误类别——dispatcher 重试策略按类别分派，不 instanceof SDK 错误类（双协议归一）。
  * 见 [[step-dispatcher#^anc-exec-protocol-adapter]] */
 export type LlmErrorKind = // @a: anc-exec-protocol-adapter
-  | 'rate_limited' | 'server_error' | 'timeout' | 'network'
+  | 'rate_limited' | 'server_error' | 'timeout' | 'network' | 'unreachable'
   | 'auth' | 'context_overflow' | 'temperature_rejected' | 'other';
 
 /** ProtocolClient：LLM 调用协议句柄——create 收发内部 IR（Anthropic 消息形状），classifyError 归一错误类别。
@@ -25,6 +80,10 @@ export interface ProtocolClient { // @a: anc-exec-protocol-adapter
   supportsToolLoop: boolean;
   create(request: Anthropic.MessageCreateParamsNonStreaming): Promise<Anthropic.Message>;
   classifyError(err: unknown): LlmErrorKind;
+  // 端点身份（service_id+base_url）——端点不可达 fail-fast 报文用（hopissues/0106,
+  // ^anc-exec-network-pause 末条:"配了哪个后端、指向哪、为什么连不上"三样让用户一眼定位）。
+  // dispatcher 构造后盖章;缺省 provider 的 service_id 记 'default'。// @a: anc-exec-network-pause
+  endpoint?: { service_id: string; base_url?: string };
   // anthropic 直通包装保留底层 messages 引用（测试经 defaultClient.messages.create 抓 mock——
   // 全量既有测试零改动即"IR 不变"的守卫物证）；openai 侧无此字段。
   messages?: Anthropic['messages'];
@@ -64,14 +123,16 @@ export function wrapAnthropicClient(client: Anthropic, AnthropicCtor: typeof Ant
     // 显式给与 SDK 同式的值即跳过预检;小预算恒 10min 行为不变。见 design
     // ^anc-exec-nonstreaming-timeout。// @a: anc-exec-nonstreaming-timeout
     create: (request) => client.messages.create(request, {
-      timeout: Math.max(10 * 60_000, Math.ceil((request.max_tokens / 128_000) * 60 * 60_000)),
+      timeout: nonstreamingWaitMs(request.max_tokens),
     }) as Promise<Anthropic.Message>,
     classifyError(err: unknown): LlmErrorKind {
       if (err instanceof AnthropicCtor.RateLimitError) return 'rate_limited';
       if (err instanceof AnthropicCtor.InternalServerError) return 'server_error';
       if (err instanceof AnthropicCtor.APIConnectionTimeoutError) return 'timeout';
+      if (isEndpointUnreachable(err)) return 'unreachable';   // 先于 network 兜底——确定性死端点不入暂停门（0106）// @a: anc-exec-network-pause
       if (err instanceof AnthropicCtor.APIConnectionError) return 'network';
       if (err instanceof AnthropicCtor.AuthenticationError) return 'auth';
+      if (isUndiciWaitTimeout(err)) return 'timeout';   // 先于文案兜底（bodyTimeout 形态是裸 terminated）// @a: anc-exec-api-retry
       if (err instanceof AnthropicCtor.APIError && (err as { status?: number }).status === 400
           && /temperature/i.test(String((err as Error).message))) return 'temperature_rejected';
       if (err instanceof AnthropicCtor.BadRequestError
@@ -82,12 +143,31 @@ export function wrapAnthropicClient(client: Anthropic, AnthropicCtor: typeof Ant
   };
 }
 
+/** openai 两个构造函数的入参。waitMs=client 级等待上限（毫秒,dispatcher 传 nonstreamingTimeoutMs(serviceId)）,
+ * 缺省按最小 10 分钟;fetchExtra 只给测试注入假连接。 */
+export interface OpenAiClientOpts { apiKey: string; baseURL?: string; waitMs?: number; fetchExtra?: Agent.Options }
+
+// openai SDK 构造选项:显式 key + 等待上限 + 长等待连接设置 + 关掉 SDK 内部重试（重试全部归引擎
+// callLlmWithRetry——SDK 缺省重试 2 次会叠在引擎次数上,等满上限的请求也会被 SDK 自己再等两轮）。
+// 见 [[step-dispatcher#^anc-exec-nonstreaming-timeout]] 与 ^anc-exec-api-retry "SDK 内部重试关掉"条
+// @a: anc-exec-nonstreaming-timeout
+function openAiCtorOpts(opts: OpenAiClientOpts): ConstructorParameters<typeof OpenAI>[0] {
+  const waitMs = opts.waitMs ?? 10 * 60_000;
+  return {
+    apiKey: opts.apiKey,
+    ...(opts.baseURL ? { baseURL: opts.baseURL } : {}),
+    timeout: waitMs,
+    maxRetries: 0,
+    fetchOptions: longWaitFetchOptions(waitMs, opts.fetchExtra) as NonNullable<ConstructorParameters<typeof OpenAI>[0]>['fetchOptions'],
+  };
+}
+
 /** OpenAI 协议适配器：IR 请求 → chat/completions；响应 → IR。工具字段在场即抛
  * PROTOCOL_TOOL_LOOP_UNSUPPORTED（当下边界——上游 executeActWithTools 入口已先拦，此处防御性兜底）。 */
-export function makeOpenAiClient(opts: { apiKey: string; baseURL?: string }): ProtocolClient { // @a: anc-exec-protocol-adapter
+export function makeOpenAiClient(opts: OpenAiClientOpts): ProtocolClient { // @a: anc-exec-protocol-adapter
   // 显式传 key 构造——切断 openai SDK 自读 OPENAI_API_KEY 的隐式通道
   //（standalone 不变量 2"显式压过隐式"，anthropic authToken:null 同型预防）
-  const client = new OpenAI({ apiKey: opts.apiKey, ...(opts.baseURL ? { baseURL: opts.baseURL } : {}) });
+  const client = new OpenAI(openAiCtorOpts(opts));
 
   return {
     protocol: 'openai-chat',
@@ -114,7 +194,7 @@ export function makeOpenAiClient(opts: { apiKey: string; baseURL?: string }): Pr
         messages,
         max_tokens: request.max_tokens,
         ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
-      });
+      }, { timeout: nonstreamingWaitMs(request.max_tokens) });   // 单次请求等待上限 // @a: anc-exec-nonstreaming-timeout
       // chat/completions → IR
       const text = resp.choices[0]?.message?.content ?? '';
       return {
@@ -145,9 +225,10 @@ export function makeOpenAiClient(opts: { apiKey: string; baseURL?: string }): Pr
  * IR tool_use/tool_result 块与 Responses function_call/function_call_output typed items
  * 一一对应（0020 批 2026-09-20,OpenAI 官方生态工具循环正路）。经 SDK client.responses.create
  * 调用,只写双向转换不写传输层。见 design ^anc-exec-protocol-adapter openai-responses 转换规则。 */
-export function makeOpenAiResponsesClient(opts: { apiKey: string; baseURL?: string }): ProtocolClient { // @a: anc-exec-protocol-adapter
-  // 显式传 key 构造——切断 openai SDK 自读 OPENAI_API_KEY 的隐式通道（同 chat 适配器）
-  const client = new OpenAI({ apiKey: opts.apiKey, ...(opts.baseURL ? { baseURL: opts.baseURL } : {}) });
+export function makeOpenAiResponsesClient(opts: OpenAiClientOpts): ProtocolClient { // @a: anc-exec-protocol-adapter
+  // 显式传 key 构造——切断 openai SDK 自读 OPENAI_API_KEY 的隐式通道（同 chat 适配器）;
+  // 等待上限、连接设置、关 SDK 重试同 chat 适配器（openAiCtorOpts）
+  const client = new OpenAI(openAiCtorOpts(opts));
   // reasoning 参数被拒记名——OpenAI 官方对非推理模型发 reasoning/include 参数 400 拒;记名后该
   // client 免传（与 dispatcher temperature 剥除重试同模式;reasoning 是本协议私有参数,生命周期
   // 归适配器闭包,不进 dispatcher 重试表）。
@@ -248,15 +329,16 @@ export function makeOpenAiResponsesClient(opts: { apiKey: string; baseURL?: stri
         store: false,
       });
       let resp: OpenAI.Responses.Response;
+      const reqOpts = { timeout: nonstreamingWaitMs(request.max_tokens) };
       try {
-        resp = await client.responses.create(buildParams());
+        resp = await client.responses.create(buildParams(), reqOpts);   // 单次请求等待上限 // @a: anc-exec-nonstreaming-timeout
       } catch (err) {
         // reasoning/include 被拒剥除重试（非推理模型 400 拒这两参——剥除记名当场重发一次,
         // 与 dispatcher temperature 剥除同模式;其余错误原样穿透归 classifyError 重试链）
         const msg = String((err as Error)?.message ?? '');
         if (!reasoningRejected && err instanceof OpenAI.BadRequestError && /reasoning|include/i.test(msg)) {
           reasoningRejected = true;
-          resp = await client.responses.create(buildParams());
+          resp = await client.responses.create(buildParams(), reqOpts);
         } else {
           throw err;
         }
@@ -325,8 +407,10 @@ function classifyOpenAiError(err: unknown): LlmErrorKind { // @a: anc-exec-proto
   if (err instanceof OpenAI.RateLimitError) return 'rate_limited';
   if (err instanceof OpenAI.InternalServerError) return 'server_error';
   if (err instanceof OpenAI.APIConnectionTimeoutError) return 'timeout';
+  if (isEndpointUnreachable(err)) return 'unreachable';   // 先于 network 兜底（0106）// @a: anc-exec-network-pause
   if (err instanceof OpenAI.APIConnectionError) return 'network';
   if (err instanceof OpenAI.AuthenticationError) return 'auth';
+  if (isUndiciWaitTimeout(err)) return 'timeout';   // 先于文案兜底（bodyTimeout 形态是裸 terminated）// @a: anc-exec-api-retry
   if (err instanceof OpenAI.BadRequestError) {
     const msg = String((err as Error).message);
     if (/temperature/i.test(msg)) return 'temperature_rejected';

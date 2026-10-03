@@ -22,6 +22,10 @@ export interface SpecHeader { // @a: anc-ast-spec-header
   inputs?: VarDecl[];
   outputs?: OutputDecl[];
   tools?: ToolNeed[];   // Tools 段工具需求声明（^anc-rule-tools-section,概念 ^anc-tool-two-faces——init 对环境注册面对账）// @a: anc-rule-tools-section
+  // 《已批准命令》段（^anc-rule-approved-commands,概念 ^anc-rule-approved-commands-section）：外层每项一条 argv 前缀,
+  // 内层是该前缀的词元列表（argv[0] 首位）。缺段=undefined 不是空数组,消费侧 `?? []`。授权单位是任务
+  // 不是命令名——body subprocess.run 并入命令名级白名单,hopjit-mcp run_approved_command 按前缀逐项相等匹配。// @a: anc-rule-approved-commands
+  approved_commands?: string[][];
   config?: SpecConfig;
   doc_refs?: DocRef[]; // doc-ref [[doc#章节]] 从 Constraints 提取（spec 级）， // @a: anc-rule-doc-ref-extract
   // 内容章节（^anc-rule-narrative-sections 2026-08-27 作者定"写在spec文件的内容章节就是缺省要供给的内容"）：
@@ -31,6 +35,20 @@ export interface SpecHeader { // @a: anc-ast-spec-header
   // 文法的非空非注释行——parser 只收集零报错,validator W1 出 warn（写错的行不再无声蒸发）。
   // @a: anc-rule-decl-zone-warn
   decl_zone_orphans?: Array<{ line: number; text: string; section: string }>;
+  // HopSchema 名/类型分隔符仍用冒号的行（^anc-rule-schema-sep-dual,todo/0109 第 1 步）：
+  // `%` 是正式写法,`:` 仍收但每处记一条——validator 据此出一条 W2 汇总告警,
+  // hopjit schema-sep 迁移工具据此定位要改的行。一条都没有时不设置本字段。
+  // @a: anc-rule-schema-sep-dual
+  colon_separators?: SchemaColonSeparatorRecord[];
+}
+
+/** HopSchema 声明行里仍用冒号作名/类型分隔符的一处记录。见 [[spec-parser#^anc-rule-schema-sep-dual]]。
+ * // @a: anc-rule-schema-sep-dual */
+export interface SchemaColonSeparatorRecord {
+  line: number;       // 1 起算的真实行号（片段模式=片段文本内的行号）——迁移工具据此定位,必须精确
+  section: 'Inputs' | 'Outputs' | 'Types' | 'Tools' | 'Steps';
+  name: string;       // 冒号前的名字（变量名/字段名/参数名/工具输出名）原文
+  type: string;       // 冒号后的类型原文（未经 normalizeTypeToken 归一——迁移工具按原文在行内定位）
 }
 
 /** ToolNeed：spec Tools 段单条工具需求声明——本 spec 假定的工具签名（需求面;实现权威在环境注册面）。

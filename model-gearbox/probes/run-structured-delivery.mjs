@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // G5 结构化交付探针跑批——schema 复杂度阶梯(内容全给定,只考"按声明形态交付"的皮)。
-// 用法: node model-gearbox/probes/run-structured-delivery.mjs --service <service_id> [--n 6] [--tiers t1..t6] [--out <dir>]
+// 用法: node model-gearbox/probes/run-structured-delivery.mjs --service <service_id> [--n 6] [--tiers t1..t6] [--thinking on|off] [--max-tokens 16384] [--out <dir>]
 // 设计要点: 每题数据值在 prompt 里全给齐(内容零难度)——失败必然是形态失败,G5 与 G2 干净解耦。
 //   六档阶梯按 schema 复杂度递增;T5 专埋 Ling 实撞死相考点(yaml 字段交成块标量字符串——
 //   "内容对皮不对":值本身是合法 yaml 文本但包进了字符串,结构层判非对象即抓)。
@@ -17,9 +17,11 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
 const argOf = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
 const SERVICE = argOf('--service');
+const THINKING = argOf('--thinking', 'default');   // on=显式开思考(对照臂,thinking budget=max_tokens/2 与引擎装配同式;产物目录缺省加 -thinking 后缀);off=显式关思考(给缺省开思考的端点量关档,目录加 -nothinking 后缀);default=端点缺省
+const MAX_TOKENS = parseInt(argOf('--max-tokens', '16384'), 10);
 const N = parseInt(argOf('--n', '6'), 10);
 const TIERS = argOf('--tiers', 't1,t2,t3,t4,t5,t6').split(',');
-const OUT = argOf('--out', join(HERE, 'structured-delivery', `run-${SERVICE}-${new Date().toISOString().slice(0, 10)}`));
+const OUT = argOf('--out', join(HERE, 'structured-delivery', `run-${SERVICE}${THINKING === 'on' ? '-thinking' : THINKING === 'off' ? '-nothinking' : ''}-${new Date().toISOString().slice(0, 10)}`));
 if (!SERVICE) { console.error('用法: --service <service_id> [--n 6] [--tiers t1..t6]'); process.exit(1); }
 
 const cfg = yamlLoad(readFileSync(join(homedir(), '.hopjit', 'config.yaml'), 'utf-8'));
@@ -130,9 +132,10 @@ async function call(prompt) {
   else headers['x-api-key'] = KEY;
   const r = await fetch(`${provider.base_url}/v1/messages`, {
     method: 'POST', headers,
-    body: JSON.stringify({ model: provider.model, max_tokens: 16384, messages: [{ role: 'user', content: prompt }] }),
+    body: JSON.stringify({ model: provider.model, max_tokens: MAX_TOKENS, ...(THINKING === 'on' ? { thinking: { type: 'enabled', budget_tokens: Math.floor(MAX_TOKENS / 2) } } : THINKING === 'off' ? { thinking: { type: 'disabled' } } : {}), messages: [{ role: 'user', content: prompt }] }),
   });
   const body = await r.json();
+  if (!r.ok) throw new Error(`端点报错 HTTP ${r.status}——这是环境故障(欠费/限流/服务端错),不是能力读数,探针中止不计分: ${JSON.stringify(body).slice(0, 300)}`);
   const text = (body.content ?? []).filter(b => b.type === 'text').map(b => b.text).join('');
   return { text: text || `(空正文 stop_reason=${body.stop_reason})`, model: body.model ?? '(响应体缺 model 字段)' };
 }
@@ -227,7 +230,7 @@ for (const tier of TIERS) {
 }
 const summary = {
   service: SERVICE, model_from_response: [...modelSeen], n_per_cell: N,
-  date: new Date().toISOString().slice(0, 10),
+  date: new Date().toISOString().slice(0, 10), thinking: THINKING, max_tokens: MAX_TOKENS,
   维度: 'G5 结构化交付——schema 复杂度阶梯(内容全给定零难度,失败必为形态失败;皮错=yaml/结构字段交成字符串,单列计数)',
   tiers: result,
 };

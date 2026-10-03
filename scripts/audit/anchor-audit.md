@@ -15,24 +15,24 @@ Constraints:
 - **中文输出**：所有报告和摘要用中文。
 
 Inputs:
-- project_root: line  # 待审计工程根目录（含设计目录 docs/design/ 或 design/、src/、tests/、TRACEABILITY.md），默认当前工作目录（cwd）
-- scripts_dir: line  # 存放 scan.py/cross_compare.py 的目录，**绝对路径**。权威源在本库 scripts/audit/（随 spec 入库、可分发自足）。由 caller/driver 按 skill 安装位置或库内路径提供
-- concept_dir: line  # 概念层 Markdown 目录（S→D 语义审计权威源，传给 scan.py --concept-dir），相对 project_root；多目录空格分隔；空=无概念层则 S→D 维度 skip
-- audit_mode: line  # fresh（默认，清理 .anchor-audit/ 中间产物全新审计——semantic_audit_summary.yaml 台账恒不删,module_ledger 增量合并要读旧账）/ resume（另保留 batch_*_results.yaml 断点续传）
-- modules: line  # 按模块跑：空（默认）=全量；非空=空格分隔的模块名列表（如 "step-dispatcher mcp-server"）——块一扫描仍全库（脚本廉价且结构比对需全景），块二语义审计只审这些模块，汇总标注审计范围
+- project_root % line  # 待审计工程根目录（含设计目录 docs/design/ 或 design/、src/、tests/、TRACEABILITY.md），默认当前工作目录（cwd）
+- scripts_dir % line  # 存放 scan.py/cross_compare.py 的目录，**绝对路径**。权威源在本库 scripts/audit/（随 spec 入库、可分发自足）。由 caller/driver 按 skill 安装位置或库内路径提供
+- concept_dir % line  # 概念层 Markdown 目录（S→D 语义审计权威源，传给 scan.py --concept-dir），相对 project_root；多目录空格分隔；空=无概念层则 S→D 维度 skip
+- audit_mode % line  # fresh（默认，清理 .anchor-audit/ 中间产物全新审计——semantic_audit_summary.yaml 台账恒不删,module_ledger 增量合并要读旧账）/ resume（另保留 batch_*_results.yaml 断点续传）
+- modules % line  # 按模块跑：空（默认）=全量；非空=空格分隔的模块名列表（如 "step-dispatcher mcp-server"）——块一扫描仍全库（脚本廉价且结构比对需全景），块二语义审计只审这些模块，汇总标注审计范围
 
 Outputs:
-- report_path: line  # 结构审计报告绝对路径（Write 写 {project_root}/.anchor-audit/report.md 后返回的实际路径）
-- semantic_summary: text  # 语义审计汇总（S→D/D→C/C→T 三维通过率 + 模块规模表 + ❌/⚠️ 清单）
+- report_path % line  # 结构审计报告绝对路径（Write 写 {project_root}/.anchor-audit/report.md 后返回的实际路径）
+- semantic_summary % text  # 语义审计汇总（S→D/D→C/C→T 三维通过率 + 模块规模表 + ❌/⚠️ 清单）
 
 ## Steps
 
 1. [act] 准备审计环境
   - ← project_root, scripts_dir, concept_dir, audit_mode
-  + → design_dir: line  # 设计文档目录，相对 project_root（探测命中的实际名；候选序 docs/design → design，与 scan.py 缺省一致）
-  + → src_dir: line     # 代码目录，相对 project_root（默认 src）
-  + → test_dir: line    # 测试目录，相对 project_root（默认 tests）
-  + → paths_report: text  # 探测结果摘要（各路径是否存在 + audit_mode 清理动作）
+  + → design_dir % line  # 设计文档目录，相对 project_root（探测命中的实际名；候选序 docs/design → design，与 scan.py 缺省一致）
+  + → src_dir % line     # 代码目录，相对 project_root（默认 src）
+  + → test_dir % line    # 测试目录，相对 project_root（默认 tests）
+  + → paths_report % text  # 探测结果摘要（各路径是否存在 + audit_mode 清理动作）
   > 无推理纯准备（2026-09-01 脚本化 prep_env.py——原形态教 LLM 用文件工具删 .anchor-audit/ 旧产物,standalone 写域闸拒〔WORK_ZONE_ONLY,该目录不在 work_zone〕第八跑实撞;探测/清理/PyYAML 自证全归脚本:fresh 清全部中间产物、resume 保留 batch_*_results 断点;semantic_audit_summary.yaml 恒不删——module_ledger 增量合并要读旧账〔6.2 条款〕,原 fresh"清空整个目录"连台账一起删是设计缺口,脚本化顺手修正）。
   > ```hop_python
   > cd_arg = ["--concept-dir", concept_dir] if concept_dir else []
@@ -47,16 +47,16 @@ Outputs:
 
 2. [ask present_inputs=paths_report] 确认审计范围
   - ← paths_report
-  + → scope_confirmed: line  # 用户确认信号（approve=按 paths_report 探测到的 design/src/test/concept 路径执行后续扫描）
+  + → scope_confirmed % line  # 用户确认信号（approve=按 paths_report 探测到的 design/src/test/concept 路径执行后续扫描）
   > 展示 paths_report（driver 据 present_inputs 硬约束必须完整 dump 探测结果给 user）：探测到的设计/代码/测试/概念目录 + audit_mode 清理动作。请 caller 确认这组路径正确、可据此扫描；用户已显式指定范围时此步可直接 approve。scope_confirmed 仅是放行信号，实际路径由 step 1 产出的 design_dir/src_dir/test_dir 承载，后续步骤直接用那几个变量，不从 scope_confirmed 取路径。
 
 3. [subtask retry=2] 脚本扫描六层锚点
   - ← project_root, scripts_dir, concept_dir, design_dir, src_dir, test_dir, scope_confirmed
-  + → scan_ok: bool  # 六份 YAML 齐备（子任务聚合输出，gate 结构/语义审计）
+  + → scan_ok % bool  # 六份 YAML 齐备（子任务聚合输出，gate 结构/语义审计）
 
   3.1. [act] 运行 scan.py
     - ← project_root, scripts_dir, concept_dir, design_dir, src_dir, test_dir
-    + → scan_done: line  # 扫描完成标记 + scan.py 退出码摘要
+    + → scan_done % line  # 扫描完成标记 + scan.py 退出码摘要
     > 无推理纯脚本调用（2026-09-01 body 化——原无 body 形态在 standalone 撞死:LLM 工具面无命令执行,tool_failure 自报耗尽;说明本就写"无推理纯脚本调用",恰是 subprocess.run body 正形。运行前提:sandbox.runtime.available 白名单须含 uv——经 `uv run --with pyyaml python3` 起(引擎 spawnSync 不吃 shell alias,裸 python3 落到系统装缺 pyyaml,2026-09-01 probe 实锤 rc=2;uv 一次性供依赖零系统污染)。白名单空时本步响亮拒,属环境配置缺失非本 spec 缺陷）。脚本输出 6 份 YAML 到 `{project_root}/.anchor-audit/`，各份内容与下游消费者由引擎注入（doc-ref）[[anchor-audit-knowledge#扫描产物说明]]。退出码 0=无违规，1=有命名违规/无效引用，2=运行错误。
     > ```hop_python
     > argv = ["uv", "run", "--with", "pyyaml", "python3", scripts_dir + "/scan.py", project_root, "--design-dir", design_dir, "--src-dir", src_dir, "--test-dir", test_dir]
@@ -67,9 +67,9 @@ Outputs:
 
   3.2. [check final] 验证六份 YAML 存在且非空
     - ← project_root, scan_done
-    + → scan_ok: bool  # 判定槽：6 份 YAML 齐备
-    + → scan_issue: text  # 说明槽：缺失/空文件清单（通过时不查看）
-    > **机械检查、非 LLM 判断**（2026-09-01 body 化——原说明教"driver 用 test -s 判"系复用模式写法,standalone 判官 LLM 无文件工具判不了,如实拒判耗尽;确定性检查的正形=check body 引擎直执零 LLM;文件工具走 workspace 相对路径——沙箱禁绝对路径,0042 doc-review 第十一次同款实撞）：六份文件均存在且非空（concept_anchors 即便无概念层也由脚本写空壳带 note，仍应存在）。任一缺失或空 → scan_ok=false，scan_issue 列问题文件，触发 subtask retry 重跑 scan.py。
+    + → scan_ok % bool  # 判定槽：6 份 YAML 齐备
+    + → scan_issue % text  # 说明槽：缺失/空文件清单（通过时不查看）
+    > **机械检查、非 LLM 判断**（2026-09-01 body 化——原说明教"driver 用 test -s 判"系复用模式写法,standalone 判官 LLM 无文件工具判不了,如实拒判耗尽;确定性检查的正形=check body 引擎直执零 LLM;文件工具走 workspace 相对路径——沙箱拒 workspace 外的绝对路径,规约里写相对路径才可移植,0042 doc-review 第十一次同款实撞）：六份文件均存在且非空（concept_anchors 即便无概念层也由脚本写空壳带 note，仍应存在）。任一缺失或空 → scan_ok=false，scan_issue 列问题文件，触发 subtask retry 重跑 scan.py。
     > 注：用 `[check final]` 而非 act，是因它是 subtask 的契约验收门——失败才能触发 subtask retry 重跑扫描。
     > ```hop_python
     > names = ["concept_anchors.yaml", "design_anchors.yaml", "code_anchors.yaml", "test_anchors.yaml", "traceability_cards.yaml", "module_anchors.yaml"]
@@ -84,11 +84,11 @@ Outputs:
 
 4. [subtask] 结构比对与报告
   - ← project_root, scripts_dir
-  + → report_path: line  # report.md 写盘路径
+  + → report_path % line  # report.md 写盘路径
 
   4.1. [act] 运行集合运算脚本
     - ← project_root, scripts_dir
-    + → compare_done: line  # cross_compare 完成标记
+    + → compare_done % line  # cross_compare 完成标记
     > 无推理纯脚本调用（2026-09-01 body 化,与 3.1 同批同因）：脚本读 6 份 YAML 做 15 项集合运算（概念→设计、设计→代码、代码→测试/设计/追溯、模块三维校验等，逐项定义由引擎注入下一步的 [[anchor-audit-knowledge#结构比对判据]]），透传模块规模，输出 `{project_root}/.anchor-audit/cross_compare_results.yaml`。
     > ```hop_python
     > r = subprocess.run(["uv", "run", "--with", "pyyaml", "python3", scripts_dir + "/cross_compare.py", project_root], cwd: project_root, timeout: 300)
@@ -98,14 +98,14 @@ Outputs:
   4.2. [reason] 解读比对结果并撰写报告正文
     - ← project_root, compare_done
     - 工具: read  # 读 .anchor-audit/cross_compare_results.yaml（compare_done 只是完成标记,结果文件须自读）
-    + → report_md: text  # 结构审计报告完整 markdown 正文
+    + → report_md % text  # 结构审计报告完整 markdown 正文
     > 读 `{project_root}/.anchor-audit/cross_compare_results.yaml`（脚本已完成全部集合运算，你只解读、判严重度、撰写，不重做集合差）。按引擎注入的以下判据解读每一项并判定严重度（P0 链路断裂 / P1 覆盖缺口 / P2 命名风格），按注入的报告模板组织成完整 markdown 正文（含 module_scale 模块规模表）。引擎已自动注入（doc-ref）：
     > - 15 项比对的语义与缺失含义：[[anchor-audit-knowledge#结构比对判据]]
     > - 报告章节结构与统计表格式：[[anchor-audit-knowledge#报告格式模板]]
 
   4.3. [act] 写盘结构审计报告
     - ← report_md, project_root, scripts_dir
-    + → report_path: line  # 写盘路径
+    + → report_path % line  # 写盘路径
     > 无推理纯写盘（2026-09-01 经 write_artifact.py——act 文件工具写域=work_zone only,.anchor-audit/ 持久产物被闸拒〔第十一跑实撞〕;审计产物与 scan.py 六份 YAML 同性质=审计工具的工作产物,同 scan.py 由白名单脚本自主写盘,不经引擎文件工具写域闸）：
     > ```hop_python
     > r = subprocess.run(["uv", "run", "--with", "pyyaml", "python3", scripts_dir + "/write_artifact.py", project_root, "report"], input: report_md, cwd: project_root, timeout: 60)
@@ -114,11 +114,11 @@ Outputs:
 
 5. [subtask] 语义一致性审计（全量或按模块）
   - ← project_root, modules
-  + → batch_digests: [line]  # 各批摘要行（模块名+盘上路径+计数——全文只落盘不过变量通道，控量）
+  + → batch_digests % [line]  # 各批摘要行（模块名+盘上路径+计数——全文只落盘不过变量通道，控量）
 
   5.1. [act] 按模块聚合分批
     - ← project_root, scripts_dir, modules, audit_mode
-    + → batches: [text]  # 每元素=一个模块的待审计批（模块名 + 规模 + 该模块全部锚点 id/code/design 位，自包含）
+    + → batches % [text]  # 每元素=一个模块的待审计批（模块名 + 规模 + 该模块全部锚点 id/code/design 位，自包含）
     > 无推理纯计算（2026-09-01 脚本化——原形态让 LLM 读两份 YAML 后亲手产出全部锚点清单,395 锚点的转写必烧穿 max_tokens〔第七跑实撞 output_tokens=65536 工具循环轮掐断〕;本步恰是 Constraints"确定性用脚本、判断用 LLM"的脚本侧,归位 make_batches.py:锚点归模块/设计位反查/模块过滤防拼错/隔离声明,全在脚本内做——LLM 零转写,body 跑完 read 读回结构化产物）。**断点续传按模块名标识**：批文件名 = `batch_{module}_results.yaml`——5.2.1.2 写盘用模块名,resume 靠名匹配跳过已完成模块（位置序号会错位,弃用）。
     > ```hop_python
     > mods_arg = ["--modules", modules] if modules else []
@@ -129,23 +129,23 @@ Outputs:
     > ```
 
   5.2. [loop for-each batch in batches, collect batch_digest into batch_digests] 逐批并行语义审计
-    + → batch_digests: [line]  # 各批摘要行（顺序对应 batches）
+    + → batch_digests % [line]  # 各批摘要行（顺序对应 batches）
 
     5.2.1. [subtask retry=2 parallel] 审计单批锚点
       - ← batch, project_root, scripts_dir
-      + → batch_digest: line  # 本批摘要行：`{module} {写盘路径} anchors={n}`——结果全文在盘上，变量通道只走这一行（产出控量：全文过 collect 会在汇总步撑爆上下文与输出；err/warn 计数归 6.1 tally）
+      + → batch_digest % line  # 本批摘要行：`{module} {写盘路径} anchors={n}`——结果全文在盘上，变量通道只走这一行（产出控量：全文过 collect 会在汇总步撑爆上下文与输出；err/warn 计数归 6.1 tally）
 
       5.2.1.1. [reason] 逐锚点判定 S→D / D→C / C→T
         - ← batch, project_root
         - 工具: read  # 按协议读设计/代码/测试源文件行号段（batch 只含锚点清单,语义审计必须读源文件）
-        + → batch_result_item: text  # 本批结果 yaml 文本（批头 module+scale，每锚点含 s2d/d2c/c2t verdict+note）
+        + → batch_result_item % text  # 本批结果 yaml 文本（批头 module+scale，每锚点含 s2d/d2c/c2t verdict+note）
         > 你是语义一致性审计员，工作关系到系统正确性——任何遗漏的不对齐都会累积并最终导致执行灾难，必须以最严格标准审查每一个锚点。batch 是**一个模块**（批头带模块名与规模），对批内的**每个**锚点按引擎注入的协议读源文件做判定，并结合模块规模判断覆盖是否失衡，产出本批结果 yaml 文本（批头记 module+scale，不写盘，写盘交下一步）。引擎已自动注入（doc-ref）：
         > - 单批执行步骤 + 按模块分批协议（读哪些文件、±行号范围、规模如何参与判断、输出 yaml 格式；**超 ~30 锚点的批必须按"大批分段落盘"分段执行,严禁一口气攒全量输出**）：[[anchor-audit-knowledge#单批语义审计执行协议]]
         > - 三维度判据与严格判断标准（error≠warn、字段数必须一致、⚠️ 必附说明）：[[anchor-audit-knowledge#语义审计维度判据]]
 
       5.2.1.2. [act] 写盘本批结果（断点保护+写前校验）并产摘要行
         - ← batch_result_item, batch, scripts_dir, project_root
-        + → batch_digest: line  # 本批摘要行：`{module} {实际写盘路径} anchors={n}`
+        + → batch_digest % line  # 本批摘要行：`{module} {实际写盘路径} anchors={n}`
         > 写盘经 write_batch.py（2026-09-01 作者令"赶快做掉"——写前 parse 把关:批结果 YAML 坏形态原本静默落盘,几步外 6.1 读盘才炸,病灶离症状隔容器;脚本写前校验让打回发生在产批当轮——parse 炸即 rc=2 带行号与修法指路,本步失败触发 subtask retry,LLM 拿着报错重产。围栏壳/通体缩进两形态属可修复噪声脚本自剥并记录;真坏才拒）。写盘路径=`{project_root}/.anchor-audit/batch_{module}_results.yaml`——write_batch.py 是白名单脚本自主写盘（同 write_artifact 先例,不经引擎文件工具写域闸）,落点必须与 5.1 make_batches --resume 的断点判据（查 .anchor-audit/ 已有批结果）对齐,写进各子实例 work_zone 会让 resume 永远查不到已完成批而重复出批;digest 记实际写盘路径（下游 6.1 按它逐文件读）。
         > ```hop_python
         > mod_line = [l for l in split(batch, "\n") if startswith(l, "module:")][0]
@@ -158,12 +158,12 @@ Outputs:
 
 6. [subtask] 汇总并落盘语义审计产物
   - ← report_path, batch_digests, project_root
-  + → semantic_summary: text  # 汇总：S→D/D→C/C→T 通过率 + ❌ 项清单 + ⚠️ 明细 + 模块规模表
+  + → semantic_summary % text  # 汇总：S→D/D→C/C→T 通过率 + ❌ 项清单 + ⚠️ 明细 + 模块规模表
 
   6.1. [act] 汇总统计（确定性——脚本计数,产出控量）
     - ← batch_digests, project_root, scripts_dir
-    + → semantic_summary: text  # 三维通过率表+模块规模表+❌清单+⚠️明细(体量与缺陷数同阶)
-    + → tally_path: line  # tally JSON 落盘路径(work_zone;6.2 write_artifact 消费)
+    + → semantic_summary % text  # 三维通过率表+模块规模表+❌清单+⚠️明细(体量与缺陷数同阶)
+    + → tally_path % line  # tally JSON 落盘路径(work_zone;6.2 write_artifact 消费)
     > 统计计数是确定性工作（2026-09-01 脚本化 tally_batches.py——原形态让 LLM 读全部批次文件三维计数+抄录明细,10 份批次的 ⚠️ 明细抄录烧穿 max_tokens〔第十跑实撞 output_tokens=65536,retry 耗尽〕;Constraints"确定性用脚本、判断用 LLM"的脚本侧归位。脚本收 digest 里的实际路径清单——批结果由 5.2.1.2 写盘到 `.anchor-audit/`,路径以 digest 为准;围栏壳/通体缩进两形态容忍〔第十跑两份批文件实撞〕）。脚本输出 JSON(三维计数/通过率/err 全文/warn 明细),本步把 JSON 转 markdown 汇总表——转写量与缺陷数同阶。
     > ```hop_python
     > paths = [split(d, " ")[1] for d in batch_digests]
@@ -179,7 +179,7 @@ Outputs:
 
   6.2. [act] 写盘语义审计产物（release 闸核验对象）
     - ← tally_path, project_root, scripts_dir, modules
-    + → summary_written: line  # 写盘路径
+    + → summary_written % line  # 写盘路径
     > 无推理纯写盘（2026-09-01 经 write_artifact.py,同 4.3 写域正形;audited_at/audited_commit 由脚本取真值;module_ledger 增量合并在脚本内——写盘前读旧 summary,范围外模块条目原样保留〔台账是"每模块最后审于哪个 commit"的累积账,scripts/audit-scope.mjs 据此推增量;semantic_audit_summary.yaml 是"语义审计最近何时真跑过"的唯一凭证,scope=full 才作全量凭证〕;拆段批名 module__partN 归并回模块名记账）：
     > ```hop_python
     > mods = split(modules, " ") if modules else []
@@ -189,19 +189,19 @@ Outputs:
 
 7. [ask present_inputs=semantic_summary] 展示审计结果并询问修复
   - ← semantic_summary
-  + → fix_choice: line  # auto_fix（自动修复 P0+P1 结构项）/ report_only（仅查看报告）/ exit
+  + → fix_choice % line  # auto_fix（自动修复 P0+P1 结构项）/ report_only（仅查看报告）/ exit
   > 展示 semantic_summary 完整内容（driver 据 present_inputs 硬约束必须完整 dump 给 user）：结构审计统计 + 缺失/违规数，语义审计 S→D/D→C/C→T 通过率 + ❌ 清单 + ⚠️ 明细。询问 caller：是否自动修复可修复项？选项 auto_fix（加缺失 `@a:`/`@v:` 锚点、修正死引用文件名等结构项；语义 ❌ 需人工、⚠️ 逐一确认）/ report_only / exit。
 
 8. [branch] 按用户选择执行
   - ← fix_choice
-  + → fix_outcome: text  # 修复结果摘要或报告路径提示
+  + → fix_outcome % text  # 修复结果摘要或报告路径提示
 
   8.1. [case] 自动修复 (fix_choice == "auto_fix")
-    + → fix_outcome: text
+    + → fix_outcome % text
 
     8.1.1. [commit] 修复前 git 快照
       - ← project_root
-      + → snapshot_done: line  # 快照 commit 标记
+      + → snapshot_done % line  # 快照 commit 标记
       > 不可逆操作（建立可回滚锚点）：在 {project_root} 若为 git 仓库，建立修复前快照。安全流程见 [[anchor-audit-knowledge#自动修复安全流程]]。
       > 运行前提：sandbox.runtime.available 白名单须含 git——白名单空时本步响亮拒，属环境配置缺失。
       > ```hop_python
@@ -213,24 +213,24 @@ Outputs:
 
       8.1.2. [act free] 提取可修复项并产出全部补丁
         - ← project_root, snapshot_done
-        + → patches: yaml  # 全部补丁清单，每项 {file, line, edit_kind, old_str, new_str}，按文件末尾→开头排序
+        + → patches % yaml  # 全部补丁清单，每项 {file, line, edit_kind, old_str, new_str}，按文件末尾→开头排序
         > 读 `{project_root}/.anchor-audit/cross_compare_results.yaml`，筛出可自动修复的结构项（设计→代码缺失需补 `@a:`、无效引用需修正文件名）；语义 ❌ 项不入清单（需人工）。**对每个可修项当场产出完整补丁**：按该项的 location（文件:行号）用 `read(path, start_line, end_line)` 取目标行及上下文若干行，就地确定 old_str（含足够上下文保证在文件内唯一匹配）与 new_str（edit_kind=add_anchor 时 new_str=原行+锚标注；fix_ref_path 时替换坏文件名为正确名）。全部补丁按**"文件内位置从末尾向前"排序**（避免前序插入行导致后续目标位置偏移，见引擎注入的 [[anchor-audit-knowledge#自动修复安全流程]]）。补丁在本步一次产齐——供给面备足，应用步零翻找（改造前的逐项模式里，应用环节的规划步只拿到 id+行号、要自己翻文件找 old_str，翻找不收敛撞过工具迭代上限；批量模式把"找 old_str"收敛到本步的定向行号段读取）。
 
       8.1.3. [act free] 批量应用补丁
         - ← patches
-        + → fix_log: yaml  # 逐项应用记录：{file, line, edit_kind, 结果: applied|skipped, skip原因?}
+        + → fix_log % yaml  # 逐项应用记录：{file, line, edit_kind, 结果: applied|skipped, skip原因?}
         > 无推理纯执行（补丁已由上一步产齐，本步禁读 patches 外的任何来源、禁探索翻找）：逐补丁用 edit_file 按 old_str→new_str 应用；单项零匹配或多匹配时记 `skipped` 带 edit_file 报错原文，**继续下一项不中断**（单项失败不再蒸发全部——改造前逐项模式一步失败整 run 判 failed，第 1 轮的成功修复也没能走到应用）。全部处理完把逐项记录写入 fix_log。
 
       8.1.4. [act] 汇总修复结果
         - ← project_root, fix_log
-        + → fix_outcome: text  # 变更摘要
+        + → fix_outcome % text  # 变更摘要
         > 无推理纯计算：执行 `git -C {project_root} diff --stat` 取变更概览，结合 fix_log 组装变更摘要写入 fix_outcome（applied 项数、skipped 项数带原因、涉及文件；并注明语义 ❌ 项未自动改、需人工修复——skipped 项同样留给人工，其 old_str 与报错原文在 fix_log 里可直接复用）。
 
   8.2. [case] 仅查看报告 (fix_choice == "report_only")
-    + → fix_outcome: text
+    + → fix_outcome % text
     8.2.1. [act] 输出报告路径
       - ← report_path
-      + → fix_outcome: text
+      + → fix_outcome % text
       > 无推理：组装提示文本，告知结构审计报告位于 report_path、语义审计批次结果位于 {project_root}/.anchor-audit/batch_*_results.yaml，未做修改。
 
 9. [exit] 交付审计结果

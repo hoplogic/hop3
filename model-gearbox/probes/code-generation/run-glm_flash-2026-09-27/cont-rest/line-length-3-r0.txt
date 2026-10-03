@@ -1,0 +1,36 @@
+```python
+import sys
+
+if len(sys.argv) < 2:
+    print("error: missing file path", file=sys.stderr)
+    sys.exit(1)
+
+path = sys.argv[1]
+limit = 100
+
+try:
+    sourcefile = open(path, "rt", encoding="utf-8")
+    try:
+        content = sourcefile.read()
+    finally:
+        sourcefile.close()
+except Exception as err:
+    print("error: cannot read file: " + repr(err), file=sys.stderr)
+    sys.exit(1)
+
+rawlines = content.split("\n")
+if content.endswith("\n"):
+    rawlines.pop()
+
+hasviolation = 0
+for lineno, linetext in enumerate(rawlines, 1):
+    linelen = len(linetext)
+    if linelen > limit:
+        hasviolation = 1
+        print("line " + str(lineno) + ": length " + str(linelen) + " exceeds " + str(limit) + " characters")
+
+if hasviolation:
+    sys.exit(1)
+
+sys.exit(0)
+```

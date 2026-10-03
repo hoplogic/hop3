@@ -1,0 +1,25 @@
+- id: P1
+  type: fact
+  line_ref: L1
+  claim: 全球每天消费约 30 亿杯咖啡。
+  premises: ""
+- id: P2
+  type: fact
+  line_ref: L2
+  claim: 咖啡因在人体内的半衰期约为 5 小时。
+  premises: ""
+- id: P3
+  type: inference
+  line_ref: L2
+  claim: 下午晚些时候摄入咖啡因会影响夜间的睡眠质量。
+  premises: 咖啡因的半衰期约为 5 小时，即摄入后约 5 小时体内仍残留约一半的咖啡因；下午晚些时候摄入咖啡因后，到夜间就寝时通常尚未完全代谢排出。
+- id: P4
+  type: fact
+  line_ref: L3
+  claim: 美国食品药品监督管理局（FDA）建议健康成年人每日咖啡因摄入量不超过 400 毫克。
+  premises: ""
+- id: P5
+  type: inference
+  line_ref: L4
+  claim: 每天饮用四杯以内的标准咖啡对多数人是安全的。
+  premises: 美国 FDA 建议健康成年人每日咖啡因摄入不超过 400 毫克；每杯标准咖啡约含 100 毫克咖啡因，四杯合计约 400 毫克（此换算为文中未明示的隐含假设）。

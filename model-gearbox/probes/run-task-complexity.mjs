@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // G2 任务复杂度探针跑批（extract-scaling 语料的一键仪器——测"一次做正确的能力"）。
-// 用法: node model-gearbox/probes/run-task-complexity.mjs --service <service_id> [--n 6] [--tiers xs,s,m,l] [--out <dir>]
+// 用法: node model-gearbox/probes/run-task-complexity.mjs --service <service_id> [--n 6] [--tiers xs,s,m,l] [--thinking on|off] [--max-tokens N] [--out <dir>]
 // 测法: 每档语料直连单发(无重试无引擎兜底——裸能力=首轮通过率),产出对答案键机械判分。
 //   判分三关(对 doc-<档>.key.yaml): ①schema(产出可解析为点数组且字段齐) ②覆盖(required 逐条:
 //   claim 含 match 全部词〔|=任一〕且 type 相符) ③前提(premises_must_cite 条目的 premises 非空且非纯编号)。
@@ -17,9 +17,10 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
 const argOf = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
 const SERVICE = argOf('--service');
+const THINKING = argOf('--thinking', 'default');   // on=显式开思考(对照臂,thinking budget=max_tokens/2 与引擎装配同式;产物目录缺省加 -thinking 后缀);off=显式关思考(给缺省开思考的端点量关档,目录加 -nothinking 后缀);default=端点缺省
 const N = parseInt(argOf('--n', '6'), 10);
 const TIERS = argOf('--tiers', 'xs,s,m,l').split(',');
-const OUT = argOf('--out', join(HERE, 'extract-scaling', `run-${SERVICE}-${new Date().toISOString().slice(0, 10)}`));
+const OUT = argOf('--out', join(HERE, 'extract-scaling', `run-${SERVICE}${THINKING === 'on' ? '-thinking' : THINKING === 'off' ? '-nothinking' : ''}-${new Date().toISOString().slice(0, 10)}`));
 if (!SERVICE) { console.error('用法: --service <service_id> [--n 6] [--tiers xs,s,m,l] [--out <dir>]'); process.exit(1); }
 
 const cfg = yamlLoad(readFileSync(join(homedir(), '.hopjit', 'config.yaml'), 'utf-8'));
@@ -69,9 +70,10 @@ async function call(prompt) {
   else headers['x-api-key'] = KEY;
   const r = await fetch(`${provider.base_url}/v1/messages`, {
     method: 'POST', headers,
-    body: JSON.stringify({ model: provider.model, max_tokens: MAX_TOKENS, messages: [{ role: 'user', content: prompt }] }),
+    body: JSON.stringify({ model: provider.model, max_tokens: MAX_TOKENS, ...(THINKING === 'on' ? { thinking: { type: 'enabled', budget_tokens: Math.floor(MAX_TOKENS / 2) } } : THINKING === 'off' ? { thinking: { type: 'disabled' } } : {}), messages: [{ role: 'user', content: prompt }] }),
   });
   const body = await r.json();
+  if (!r.ok) throw new Error(`端点报错 HTTP ${r.status}——这是环境故障(欠费/限流/服务端错),不是能力读数,探针中止不计分: ${JSON.stringify(body).slice(0, 300)}`);
   const text = (body.content ?? []).filter(b => b.type === 'text').map(b => b.text).join('');
   return { text, model: body.model ?? '(响应体缺 model 字段)', stop: body.stop_reason };
 }
@@ -158,7 +160,7 @@ const order = ['xs', 's', 'm', 'l', 'xl', 'xxl'].filter(t => TIERS.includes(t));
 const collapse = order.find(t => tiers[t] && tiers[t].pass_rate < 0.5) ?? '(测程内未坍塌)';
 const summary = {
   service: SERVICE, model_from_response: [...modelSeen], n_per_cell: N,
-  date: new Date().toISOString().slice(0, 10),
+  date: new Date().toISOString().slice(0, 10), thinking: THINKING, max_tokens: MAX_TOKENS,
   维度: 'G2 任务复杂度(一次做正确的能力)——单发裸能力,无重试无引擎兜底',
   tiers: Object.fromEntries(Object.entries(tiers).map(([k, v]) => [k, { pass: v.pass, runs: v.runs.map(r => ({ i: r.i, pass: r.pass, covered: `${r.covered}/${r.required}`, prose_prefix: r.prose_prefix, miss: r.miss })) }])),
   坍塌点: collapse,

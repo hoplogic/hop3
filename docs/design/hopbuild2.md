@@ -3,20 +3,27 @@
 	source: [[../concepts/HopSpec V3核心规范]], [[hopbuild]]
 	source_id: hopspec-v3-core, hopjit-hopbuild
 	type: extend
-	last_sync: 2026-09-08T22:09+0800
+	last_sync: 2026-09-29T18:43+0800
 	note: hopbuild2 构建器设计——作者立卷 2026-08-21:类 LLVM pass 的递归等价分拆形态,取代 hopbuild v1 的"分解→升格→核查"单轮四拍。新设计从零起卷,v1 (hopbuild.md) 保留在场对照,择机迁移。
 %%
 
 # hopbuild2 构建器设计（递归等价分拆）
 
-> **模块版本**：hopbuild2 `v0.22.1`（2026-09-25）。本版=D101 人裁接受现状时剩余缺陷写进修检遗留节。上版 v0.22.0。0.x 未承诺稳定。**逐版演进史归 git log**（升版在下表加一行速览，演进论证归 commit message）；条款细节以正文各锚点条款为权威，下表只记"哪版加了什么、实撞出处在哪"。
+> **模块版本**：hopbuild2 `v0.22.8`（2026-09-30）。本版=工程链 review 修复：D76③ 范围标记分段口径改写为点名两个使用点（split-structure 步 1.3 与步 3.2）并补 1.3 半边测试;D33 条目正文补写 v0.22.6 的三条教学;分发布局表补齐八个文件。上版 v0.22.7（D103 入口三处修正）。0.x 未承诺稳定。**逐版演进史归 git log**（升版在下表加一行速览，演进论证归 commit message）；条款细节以正文各锚点条款为权威，下表只记"哪版加了什么、实撞出处在哪"。
 
-> **现行状态注记**：已实现（skills/hopbuild2 五件套，coffee/ppt/dr 多发真机验证中；分发接线 ^anc-build-layout2 ）。
+> **现行状态注记**：已实现（skills/hopbuild2 母本五件套+二轮展开入口+两份模型变体，coffee/ppt/dr 多发真机验证中；分发接线 ^anc-build-layout2 ）。
 
 **版本速览表**（新→旧）：
 
 | 版本 | 内容一句话 | 要点与实撞出处 |
 |---|---|---|
+| v0.22.8 | 工程链 review 修复:分段口径两处点名、D33 正文补写、分发布局补齐 | ^anc-build-main-flow D76③ + ^anc-build-split-patterns D33 + ^anc-build-layout2——review（214b92a0..19f757ed）查出:D76③ 是两处同口径约束却只写散文、只测 3.2 半边（把 1.3 的归一撤掉测试照样全绿）;v0.22.6 版本行自称续补 D33 条目而条目正文一字未改;分发布局写"五文件"而目录实有八个。本版三处设计正文补齐,1.3 半边补测试 |
+| v0.22.7 | D103 入口三处修正 | ^anc-build-main-flow——hopissues 0107/0109/0110（外部 skill 项目迁移准备实撞）：①步骤 1 先用机械 body 预判 input_skill_path（非空、workspace 相对形态、文件在场），三判都过直接采用，不过才进 ask；②2.4 拼接构建基准时按完整路径机械排除输入文件自身（台账把本体登记成流程性附属时，本体曾被并入两遍），参考性清单同样排除；③语言层 Inputs 没有缺省值载体、顶层 run 全部 Inputs 必填（exec-engine ^anc-exec-init-required-inputs），入口命令模板改为恒传 `"target_profile": ""`，入口文档对用户仍是可选语义。三份主流程 spec 同改，selftest 补传 target_profile 并迁预答键，守卫 ③f-8 锁住自身排除行 |
+| v0.22.6 | 范式库补三条骨架成文教学 | ^anc-build-split-patterns（D33 交互闸门条目的续补）——flash 宏观测评 hb2×qwen-flash 实撞（incident-response 语料,run d4e5fbc5）：骨架成文步 5.1.2.2.1 连续被 validate 拒,拒因三类：①"没指定模式才问人"的 ask 不写 `+ →`（P13）、改用 confirm 却配枚举输出（P12）；②五个步骤都写 `- ← node_source`——把构建器自己手上的材料当成产物变量（V1）,分级表也写成 `- ← severity_table`；③产出变量叫 `postmortem`,与 mode 的枚举成员同名（V2）。三条都是教学从没讲过的形态规则,不是模型手滑。split-patterns 交互闸门节补"ask 与 confirm 的输出形态"条（附条件闸门 case+ask 的完整例子,ask 产出沿用输入同名同类型）,骨架成文纪律节补另两条。例子经 validate_spec 正反例实测（正例通过；删掉 `+ →` 报 P13） |
+| v0.22.5 | 对齐门机械核对坏形态不自崩 | 对齐门类型面机械关（D16 条款）——flash 宏观测评 hb2×glm-flash 实撞：头部用中文键且缺 constraints,4.3 body 对缺席的 constraints 做列表推导先崩,回填说明从未算出,三轮反馈只有引擎报错。两份主流程 spec 的 4.3 与拼文件头步给 constraints 补"缺席按空列表",4.3 另补七键之外顶层键的回填 |
+| v0.22.4 | 对齐门非法类型回填补枚举写法 | 对齐门类型面机械关（D16 条款）——flash 宏观测评 hb2×qwen-flash 实撞：头部 mode 输入三轮都写 `type: enum`,取值只放在说明里；4.3 回填文案只说"改用 yaml/[yaml]/text",从没告诉模型枚举要写成 `enum(a,b,c)`,retry=3 烧尽。两份主流程 spec 的回填文案补一句枚举写法 |
+| v0.22.3 | 执行面三约束 ② 条改正 | 执行面三约束——todo/0119 第 3 条（deep-validate 报告）：② 条与两份分拆器 Input 注释仍写"judgement_log 可用 workspace 相对路径",而写台账的全是 act body,2026-08-28 写域收窄后 act 步骤只能写 work_zone,按注释口径传 workspace 路径必被拒。改为"必须是 work_zone 路径",与主流程实际传法一致；同批次按该卡逐条修 spec 文本：split-structure 补 1.1 缺的 node_source 输入、4.1 输出两个工作台文件路径供 4.2 消费、4.2 教按反馈定位读不整读、log_notes 条目模板冒号改破折号、步骤 5 删掉重复声明的 fragment_path 输出（B5）；split-node 材料 30 行阈值改为按节点合计算；spec 与 qwen 档两份的附属台账处置、头部契约说明两处自由文字补冒号引号规矩，2.2 补附属文件多时的读取预算、5.1.3.1.3 读回修检工单台账只取最近 10 轮；expand 三处台账改教块状 YAML；deep-validate 复跑新报的四处文字级缺口同批次补上——spec 两份的修错步 5.1.3.1.2 原教"读 source.md 路径"却拿不到这个路径（act free 调不了 work_zone_path），改由 5.1.3.1.1 的 body 产出 source_path 经输入传入，5.1.6 说明里提 effective_task 的句子改为指向 5.1.1 任务书组装步（消 V11），两处 YAML 自由文字的加引号规矩从只防冒号扩到三种情形（冒号加空格、以方括号或花括号开头、空格加井号）；expand 的 6.1 拼装步同病（教写 work_zone 文件却调不了 work_zone_path），改由 1.1 的 body 算好 assembled_dest/replaced_dest 两个路径经输入传入，4.2 头部契约补块状 YAML 与加引号规矩 |
+| v0.22.2 | D102 修错步不给删除与改名工具 | ^anc-build-main-flow——todo/0103 实撞：27b 自建七跑修检环第 8 轮，修错步调 remove 把草稿文件整个删掉，之后两轮 read 连续失败，修检环空转到额度耗尽，靠上一轮审阅文件里的草稿快照人工恢复才救回。作者拍"根本不应该给这两个工具"：5.1.3.1.2 步骤头加 move 与 remove 两条禁工具行（被禁工具从本步工具清单里整体剔除，执行者看不到），修错步工具面从此只剩定位读+原地定向编辑+交卷自检；两份 spec 同改，守卫 ③f-7 锁住五件不给的工具，引擎零改动 |
 | v0.22.1 | D101 接受现状的剩余缺陷写进修检遗留节 | ^anc-build-main-flow——todo/0104 实撞：人裁 accept 后审阅文件修检遗留节显示字面 undefined（合理关判 false 引擎不写说明槽，accept 分支又没赋值）。accept 分支自己给 sensible_note 赋值（开头说明+烧尽判断件全文+现场文件路径），D68 "记档"去向落定为修检遗留节，问人文案与注释里"记进研判点台账"的失实承诺改正；两份 spec 同改，守卫 ③f-6 锁住 |
 | v0.22.0 | D100 结构判定封闭化 | ^anc-build-judge-closure——27b 自建空心验尸对症：三结构判 false 形态封闭（首行"不命中: <判据名>"取列举清单，自造判据非法，列举全不成立即命中）+ 1.2/3.2/5.2 机械枚举闸双判 + 叶子材料清点节禁统称句吞材料；全档位通用。缓办=判定与产计划成本解耦，真机复测仍见 false 偏置再拆步 |
 | v0.21.0 | D99 交互式命令与结构意图两条教学 | ^anc-build-interactive-and-intent——todo/0072 第一档作者拍板落地：交互式命令按机械确认/中途真决策/原子不可拆三分处置（真决策=拆步走 ask 停点，零新机制）；结构性设计意图被简化须对齐门呈报（一条通则不逐案列，与 D88/D82/D84 同一条"设计意图不许静默降级"上位原则） |
@@ -180,7 +187,7 @@
 - 递归环：split-node 命中结构判定 → call split-structure → 其内对每个 NL 子节点 call split-node——调用栈就是分拆树,hoplog 的 call 嵌套即分拆过程。
 - **执行面三约束（2026-08-21 首轮真机+二轮知识供给通查实抓,spec 成文必须守）**：
   - ①**reason/check 无工具面,不得指令其写盘**——研判点条目经 `log_notes: [line]` 产出变量流转,由后续 act body `append` 统一落台账（首稿 1.1/1.4 指令"记入 judgement_log"=要求执行面没有的能力,LLM 只能静默跳过或谎称已记）;
-  - ②**judgement_log 是 workspace 相对路径**——引擎工具面拒绝绝对路径（首轮真机实撞:`append` 绝对路径 TOOL_EXEC_ERROR 全树连败）;
+  - ②**研判点台账各实例写自己的,父读各子合并**（2026-09-30 todo/0126 改——原形态"主流程生成台账路径经 call 逐层传下、各层子实例 append 同一文件"要求后代写祖先 work_zone,作者裁定 work_zone 写权严格归本实例、读对实例树开放;首轮真机实撞的 `append` 绝对路径 TOOL_EXEC_ERROR 与后来的写域收窄史见 git log）：每个分拆实例的台账=自己 `work_zone_path("judgement-log.md")`,写台账的 act body 只写它;子实例经输出 `log_path` 把自己台账路径回传（与 fragment_path 同款通道）,父在剥壳终核步读各子台账、追加进自己的——逐层向上合并,根实例台账即全树;主流程读根 call 收回的 `log_path`。`judgement_log` 不再是 Input,不再经 call 传参;
   - ③**known_vars must 并入父层变量**——`parent_vars: [line]` 是两 spec 的显式 Input（call 站点随 sub_context 一起组装传递）,机械核的 known_vars=header inputs+parent_vars（漏并入=递归子层消费父骨架变量必 V1 假红烧 retry）。
 
 **知识注入载体 = split-patterns.md**（范式库 ^anc-build-split-patterns 的投影,与 spec 同目录随 doc-ref 按步切片注入——节标题是切片锚）。
@@ -198,12 +205,12 @@ v1 spec.md 的壳形态（对齐门 4.x/构建循环 5.x/终审意见闸/commit 
 
 1. **根 call 换 split-node**：5.1.1 `call split-node(node_task: 根任务句, node_source: 原文全文, parent_context: "", parent_vars: [], header_final, judgement_log)` → 收 `fragment`+`tier`（v1 是 call expand-node 无档位）;
 2. **tier 档位随产物走**：构建循环聚合输出+终审呈审面+交付物三处都带 tier——mixed 不是打回理由（终态两档都合法,^anc-build-pass-model）,终审呈"档位+台账"供作者知情裁定;交付时 tier 写入产物文件头注释行（档位与工具面依赖的适用说明——括注文案权威=终态两档 D94 勘误版）;
-3. **judgement_log=涂鸦区绝对路径**（`work_zone_path("judgement-log.md")`——work_zone 是绝对路径禁令唯一豁免,跨 call 实例共享通道与 v1 同形;分拆器侧的"workspace 相对"约束是对**非涂鸦区**路径说的）;
+3. **台账不再经参数传下,经 `log_path` 收上来**（2026-09-30 todo/0126——根 call 收 `log_path: log_path`,与 fragment_path 同款;各实例台账在各自 work_zone,父读子合并,见执行面三约束②）;
 4. **合理关判据=首要原则四条**（与 split-structure 1.4 同一把尺,全局面复核——分拆器逐节点核过,主流程整文再核一遍防拼装级语义漂移;细则不重复:D 系列机械防线已在分拆器内,主流程不重设）。
 
 产物落位 `skills/hopbuild2/spec.md`（Id: hopbuild2）——与 split-node/split-structure/split-patterns 同目录成四件套,check-spec-syntax 首行判据自动收编入 release 闸。
 
-**对齐门含类型面机械关（D16,2026-08-21 主流程首轮真机实抓——4.1 生成的 header 写 `message`/`list[Email]` 自造类型,毒素落进构建循环后分拆器忠实沿用,V4 八轮退死:分拆 LLM 无权改 header,只有源头能拦）**：4.3 独立 check（body 机械判 inputs/outputs 类型 ∈ 法内面:基础类型+`[`前缀+`enum(`前缀）,坏类型清单回填重跑轮定向修正——头部类型是全树源头,源头关一道抵下游八轮。生成步注入片段语法速查（类型面速查在其中）。（步号按 D46 顺延后形态;实抓记述中的"4.1 生成"是当时步号）
+**对齐门含类型面机械关（D16,2026-08-21 主流程首轮真机实抓——4.1 生成的 header 写 `message`/`list[Email]` 自造类型,毒素落进构建循环后分拆器忠实沿用,V4 八轮退死:分拆 LLM 无权改 header,只有源头能拦）**：4.3 独立 check（body 机械判 inputs/outputs 类型 ∈ 法内面:基础类型+`[`前缀+`enum(`前缀）,坏类型清单回填重跑轮定向修正——头部类型是全树源头,源头关一道抵下游八轮。**回填文案必须覆盖枚举的正确写法**：取值要写进括号 `enum(a,b,c)`,只写 `enum`、把取值放进说明字段的写法不合法。文案只指"改用 yaml/text"会把模型带离正路（2026-09-28 实撞：qwen-flash 三轮都交 `type: enum`,反馈三轮都只说改用 yaml/text,对齐门 retry=3 烧尽）。**机械核对任何形态的 header 都必须走到回填，不许自己先崩**：可选的列表字段（inputs/outputs/constraints）缺席时一律按空列表处理；平面七键之外的顶层键（如把 goal 写成中文"目标"、另立"阶段""模式"之类自拟键）列进回填说明，指明只认七个键名。检查代码自己崩了，模型拿到的反馈只有一句引擎报错，没有任何可改的指引（2026-09-28 实撞：glm-5.3-flash 交的头部用中文键且缺 constraints,4.3 在算回填说明前就对缺席的 constraints 做列表推导崩掉,三轮反馈都是"列表推导的遍历对象须为列表,实际: undefined",对齐门 retry=3 烧尽）。同一条"缺席按空列表"也适用于 5.1.2.2.1.2 拼文件头的 constraints。生成步注入片段语法速查（类型面速查在其中）。（步号按 D46 顺延后形态;实抓记述中的"4.1 生成"是当时步号）
 
 **D80 构建递归并行化——递归 call 挂 parallel,同层兄弟子树并发分拆（2026-08-24 作者定"不着急"挂账 #44;2026-09-03 作者拍"做"提级——0037 轮验尸实证:105 个子实例 808 次 LLM 调用两两零重叠全程串行,两棵构建树 14.2h 若并行化按关键路径估算压到约 3.3h,是全部可省项里量级最大的一刀〔并发 20 已配,max_concurrent_workers,全程闲置〕）**：一处标注+两条配套——
 
@@ -214,7 +221,7 @@ v1 spec.md 的壳形态（对齐门 4.x/构建循环 5.x/终审意见闸/commit 
   - 契约来历:本条目首版写"收割语义引擎原生"时引擎实为抄近道直连最近容器,隔壳形态三坑〔产物蒸发/兜底死代码/编号撞名〕被独立阅卷探针拦下,经作者三轮纠偏定性"parallel 只改时机不改产出链拓扑"后引擎修复,决策档案 todo/decision/20260904-parallel收割须兑现声明产出链.md;
 - S16 静态检测护链(壳边界声明齐全写时核过)。3.1/3.2 备料步在 call 之前串行逐项跑,产参链合法（S12:标注步骤输出容器内不可消费——child_frag_path 只经壳边界与 loop collect 导出,合规）。
 
-**②共享台账并发写认账**：judgement_log 全树共写,并行子实例同时 append 同一文件——append 是原子追加不撕行,但**行序随完成序交错**（不再是深度优先的叙事序）。台账行本就带 node_task 前缀自标识,交错可读性可接受;终审呈现按行前缀归组即可。此为知情接受的形态代价,不加锁不加序——加协调机制的复杂度大于交错的阅读代价。
+**②台账并发写已消**（2026-09-30 todo/0126 随台账通道改造）：各实例写自己的台账、父按 child_log_paths 顺序读子合并,行序=父的 sub_nodes 序（深度优先叙事序回来了）,原"并发 append 同一文件行序交错"的知情接受形态不再存在。
 
 **③深度闸与行号基准并发安全自证**：depth/max_depth 随 call 参数各自传递零共享;node_source 行号是冻结原文的全局基准,子树间零写共享——D75/D76 两机制天然并发安全,不需改动。
 
@@ -278,7 +285,15 @@ v1 spec.md 的壳形态（对齐门 4.x/构建循环 5.x/终审意见闸/commit 
 
 **②范围标记文法改行号段**：占位行标准形（D63 定的 `⟦范围: <原文范围标记>⟧`）里的标记从散文（"阶段三·对焦决策 全章 + 约束 9"）改为行号段 `⟦范围: L120-L185⟧`,逻辑块不连续允许多段 `⟦范围: L120-L185 + L310-L312⟧`。写占位行的 LLM 本就对着原文做拆分判断,顺手报行号段比复述节标题更省更准。原"标题文法+LLM 兜底分支"方案整个不要——任何文本都有行号,"机械切不中"这个失败形态被消灭而非被兜住;唯一残余错误面=LLM 报错行号段,恰被④机械对账当场抓住。
 
-**③切片机械化（治本刀口）**：split-structure 3.1 的 sub_source 从 LLM 抄写改为机械 body 按行号段从 node_source 直接提取（解析 `⟦范围: ...⟧` 的行号段,按行切割拼接）——零抄写错误、零输出 token。切片保真后,它就是子层可信的动作清单权威源（D77 对账下移的地基）。
+**③切片机械化（治本刀口）**：split-structure 3.1 的 sub_source 从 LLM 抄写改为机械 body 按行号段从 node_source 直接提取（解析 `⟦范围: ...⟧` 的行号段,按行切割拼接）——零抄写错误、零输出 token。
+
+- **范围标记分段口径——两个使用点,一套规则**（v0.22.8 升为两处点名的约束）：
+  - 规则：先把半角逗号 `,`、全角逗号 `，`、顿号 `、` 一律归一成 `+`,再按 `+` 切段、去掉空段;单行号 `L69` 视同 `L69-L69`;
+  - 使用点一：skills/hopbuild2/split-structure.md 步 1.3（语法关）——核每个占位行的范围标记是否合法,按本规则分段后逐段核;
+  - 使用点二：同文件步 3.2（机械备料）——按本规则分段后逐段从 node_source 切行拼接;
+  - 为什么必须同一套：1.3 放行的写法 3.2 必须切得动。两处口径不一致时,骨架过了关却在切片处确定性崩溃（2026-09-29 qwen-flash 真机实撞:占位行写 `⟦范围: L29-L55, L58-L65⟧`、`⟦范围: L69, L72-L89⟧`,1.3 已归一放行,3.2 只按 `+` 切,`int("55, ")` 求值失败,split-node 重试三轮同因烧尽）;
+  - 测试：tests/act-body-interpreter.test.ts 直接取盘上两段 body 执行——3.2 半边测逗号/顿号/单行号与 `+` 形态切出同样结果、段外行不进切片;1.3 半边测逗号/顿号/单行号写法放行、非法行号段照拒;
+- 切片保真后,它就是子层可信的动作清单权威源（D77 对账下移的地基）。
 
 **④覆盖对账的机械半边（白送的大收益;站点=计划层）**：split-node 三个判定步（顺序/分支/循环）各升 [subtask retry=2]——内部 reason 产计划 + 机械 check 对账（计划各条行号段并集对照 node_source 行号全集做减法,漏行〔某行无归属〕、越界〔引用 node_source 里不存在的行号〕即判不过,坏行清单回填,subtask 重试带反馈重产计划——有权修计划的层自己修,不下发缺口）。
 
@@ -384,9 +399,10 @@ v1 spec.md 的壳形态（对齐门 4.x/构建循环 5.x/终审意见闸/commit 
 
 **②skill_path 进闸——步骤 1 改 [subtask retry=2]（ask+机械 check）,坏形态路径带反馈重问（治风险 3）**。
 
-- 病理：skill_path 是用户经 ask 给的裸文件路径,spec 全程零校验;沙箱路径规则"一律 workspace 相对（禁绝对路径、禁 ..,work_zone 绝对路径唯一豁免）"下,用户给 /Users/… 或含 .. 的路径（文件路径类输入的常见形态）时,步骤 2 的 read（读侧）或步骤 7 的 commit（写侧,split(skill_path) 派生的交付路径同形态）必被拒——变量拼出的路径 B9/B10 静态拦不到,恰是 deep-validate 管的运行期半边;
+- 病理：skill_path 是用户经 ask 给的裸文件路径,spec 全程零校验;当时的沙箱路径规则"一律 workspace 相对（禁绝对路径、禁 ..,work_zone 绝对路径唯一豁免）"下,用户给 /Users/… 或含 .. 的路径（文件路径类输入的常见形态）时,步骤 2 的 read（读侧）或步骤 7 的 commit（写侧,split(skill_path) 派生的交付路径同形态）必被拒——变量拼出的路径 B9/B10 静态拦不到,恰是 deep-validate 管的运行期半边;
+  - **2026-09-30 起引擎认落在 workspace 内的绝对路径**（hopissues/0112,[[tools/file-tools#^anc-exec-tool-path-resolve]]）,上面"必被拒"收窄为"workspace 外必被拒"。步骤 1 形态闸照旧拒一切 / 开头的路径——**有意保留,不随引擎放宽**:spec body 取不到 workspace 根,判不了一个绝对路径在内还是在外;而 workspace 外的绝对路径送进 exists 会让步骤失败,不是干净判 false。保守闸拒掉的只是"workspace 内但写成绝对形态"这一种合法输入,代价是用户改写一次;放宽的前提是先有能取 workspace 根的内置函数,届时再议;
 - 修法用引擎原生回问形态,不造新机制：步骤 1 改 [subtask retry=2],1.1 [ask] 收路径（说明写明"请给 workspace 相对路径——绝对路径与含 .. 的路径沙箱会拒"）,1.2 [check] 机械体检 body 三判——startswith(skill_path,"/") 即拒（绝对路径）、含 ".." 即拒（越界形态）、exists 判文件在场（拼错路径当场抓,不带毒进构建）;
-- **三判有短路序**：形态坏（绝对/含 ..）时不碰 exists——绝对路径送进读侧工具会被沙箱拒成工具失败（步骤炸而非干净判 false）,先判形态、两形态都干净才探在场;判 false 带说明重跑 subtask,ask 重问,retry=2 耗尽如实上浮。**selftest 预答键**：'1'→'1.1'。
+- **三判有短路序**：形态坏（绝对/含 ..）时不碰 exists——绝对路径送进读侧工具会被沙箱拒成工具失败（步骤炸而非干净判 false）,先判形态、两形态都干净才探在场;判 false 带说明重跑 subtask,ask 重问,retry=2 耗尽如实上浮。**selftest 预答键**：'1'→'1.1'。（2026-09-29 D103 起:步骤 1 先机械预判已给路径,合格直接采用不进 ask;ask 步号改为 1.2.2.1、体检改为 1.3,预答键随迁 '1.1'→'1.2.2.1'——以 D103 为准。）
 
 **③格局注记**：deep-validate 同报告判定其余全部干净——24 个 body 零 subprocess 依赖、写域全合规、确定性步骤形态无一错派;validate 的 20 条 warning（18×B2+1×V11+1×P8）逐条表态不构成风险。本条修完后 deep-validate 复验须三条全消。**
 
@@ -409,6 +425,132 @@ v1 spec.md 的壳形态（对齐门 4.x/构建循环 5.x/终审意见闸/commit 
 - ③ask 即暂停——人不来答任务停在现场,隔天可续,快照落盘可恢复;
 - QC 烧尽兜底的 rebuild 支路同批补一行:人裁 rebuild 后置 build_directive="build"（上浮重试须走整树构建,防被残留的 fix 指令带偏）。selftest 预答键随步骤号迁移,新增耗尽 ask 预答 accept（快乐路径不触发;触发时不选 continue 防自测无限续圈——与 D69 同款考虑）。
 
+**D103 入口三处修正——已给有效路径直接采用、输入文件自身不重复并入构建基准、入口命令恒传 target_profile 空串（2026-09-29,hopissues 0107/0109/0110）**：
+
+- **实撞来由**：一个外部 skill 项目做迁移准备，按入口文档跑 hopbuild2，同一天报来三张卡：
+  1. 0107：起跑时 input_skill_path 已经给了、文件也在，引擎仍停在步骤 1.1 的 ask 上再问一遍路径——入口文档写的是"已给且存在时直接采用,不必强问"；
+  2. 0109：入口文档把 target_profile 标为可选，用户没指定目标档时"不传"；照做起跑，引擎在第一步之前报 INIT_FAILED，点名缺 target_profile；
+  3. 0110：待翻译的 skill 正文里引用了自己的文件名（skill-source.md 正文说"本文件…"），2.2 盘点附属文件时把输入文件本身也登记成"流程性"附属，2.4 拼接构建基准时本体被并入两遍——source.md 里整份本体出现两次，行号基准膨胀一倍，下游切片与覆盖对账都在重复内容上工作。台账的处置原话是"本体内容已由 raw_body 收录，沿用一次，不重复拼接"——执行 LLM 自己知道不该拼第二遍，但 2.4 是机械 body，只看定性不看处置文字。
+- **病根逐条**：
+  1. 0107：1.1 [ask] 是引擎硬停点——ask 步骤恒暂停问人，说明里写的"无歧义直接采用不必强问"是给答题者的作业指引，引擎不读它（step-dispatcher ^anc-exec-hitl-presentation：instruction 字段只给驱动侧，不改变暂停语义）。standalone 模式下没有替答的驱动层，这句话等于没写；复用模式能不能省掉这一问全看驱动者自觉。"直接采用"的条件（非空、形态合法、文件在场）全是机械可判的，应当由 spec 自己判掉，不留给散文；
+  2. 0109：HopSpec 的 Inputs 文法没有缺省值载体（VarDecl 只有 name/type/description 三字段），引擎对顶层 run 的全部 Inputs 按必填处理，缺席即 INIT_FAILED（exec-engine ^anc-exec-init-required-inputs）。所以 spec 层做不到"省略参数合法"——报告卡期望的第一种修法"在主流程规约中提供空值缺省"在现语言里没有载体。入口文档说"不传"是和语言规则冲突的教法，错在入口文档；
+  3. 0110：2.4 的 body 只按定性筛附属，没有"附属不能是本体自己"这条机械判。输入文件是本体，由 2.1 read 收进 raw_body，它在语义上根本不是附属；台账误登记时 body 应当兜住，而不是依赖执行 LLM 不犯这个错。
+- **修法**：
+  1. **0107 → 步骤 1 先机械预判，再分流**：步骤 1 容器仍是 [subtask retry=2]，内部改为五步——1.1 [act] 机械预判 given_ok（input_skill_path 非空、不以 / 开头、不含 ..、exists 判在场，四判全过才 true；形态坏时不碰 exists，与路径体检同一短路序）→ 1.2 [branch]：case(given_ok) 臂 act 直接采用 skill_path = input_skill_path，case(else) 臂才是原来的 ask 收路径 → 1.3 [check] 路径形态体检（原 1.2，body 不变）→ 1.4 [act] 输入分型（原 1.3）→ 1.5 [branch] 构建路由（原 1.4，子步号随之后移）。ask 问人步号从 1.1 变成 1.2.2.1；
+  2. **0110 → 2.4 按完整路径机械排除输入文件自身**：body 先把台账每件的 path 按既有规则补 skill 目录前缀（与 flow_files 同一条补前缀规则），补完等于 skill_path 的条目剔除，得到 aux_entries；流程性/混合清单与参考性清单都从 aux_entries 取。台账本身不改——4.4 对齐门照样呈出这条登记和它的处置原话，人能看见执行 LLM 把本体登记进来过。2.2 说明补一句"输入文件本身是本体不是附属，不入账"，从源头少犯；body 的排除是兜底，不依赖这句教学生效；
+  3. **0109 → 入口命令恒传空串**：SKILL.md 命令模板改为 `--params '{"input_skill_path": "<收集值>", "max_depth": 3, "target_profile": ""}'`，参数说明从"没提就不传"改为"没提就传空串"；对用户的语义不变——用户仍然不用回答这个问题，空串就是通用形态（步骤 1.3 词表把空串列为合法档，步骤 3 归一空值为空串）。本设计壳调用协议节同改。
+- **候选为什么不用**：
+  1. 0107 候选"删掉 ask，路径不对直接失败"：用户给错路径是常见形态（绝对路径、拼写错），原设计 D72② 专门用 ask 重问让用户当场改，删掉等于退回 D72 之前；
+  2. 0107 候选"引擎给 ask 加'有默认值就跳过'语义"：是改语言层暂停语义，ask 的定义是"恒问人"，为一个 spec 的便利改语言定义不值；spec 内 act+branch 已经能表达，零引擎改动；
+  3. 0109 候选"引擎顶层 Inputs 闸对某些参数放宽"：闸的立规理由是漏传参数导致 None 静默灌进下游（exec-engine 该锚点的实撞），放宽要先给 Inputs 文法加缺省值载体，属语言层决策，不在本批范围；入口协议补一个空串就能解决报告方的实际问题；
+  4. 0110 候选"解析台账处置文字里的'不重复拼接'"：处置是自由文字，措辞千变万化，按关键词判不可靠；按路径判是确定的。
+- **重试轮分析（0107 修法的边界）**：步骤 1 的 retry 重跑时 1.1 重新预判。given_ok 为 true 时，1.3 体检判 false 只可能是档位名不在词表（路径三判与 given_ok 同一套判据），而档位来自起跑参数、ask 本来就改不了它——修前同样是重问两轮后耗尽上浮，修后是不重问直接耗尽上浮，失败说明照样点名"目标执行档不支持"。given_ok 为 false 时进 ask，用户给的新路径若仍不合格，1.3 判 false 带说明重跑，重跑轮 input_skill_path 没变，照旧进 ask，retry 反馈把上轮拒因带给用户。
+- **三份 spec 同改**：skills/hopbuild2/spec.md、spec.qwen-flash.md、spec.qwen3.8-27b.md 的步骤 1 与步骤 2（含 Inputs 行注释里"分型机械判见 1.3"改成 1.4）逐字相同，三份同改。
+- **随改的使用点**：
+  1. scripts/hopbuild-selftest.mjs：startRun 参数补 `target_profile: ''`（修前缺它，按顶层必填闸会 INIT_FAILED——selftest 自身就是 0109 的第二个撞点）；预答键 '1.1' 迁到 '1.2.2.1'（样本路径 skills/sample/SKILL.md 存在，新流程走直接采用臂不会停在 ask 上；键保留作兜底，防样本缺席时停点落在表外）；
+  2. D72② 的"selftest 预答键 '1'→'1.1'"是当时的迁移记录，本条再迁一次，D72 原文加一句指向本条；
+  3. D91 分流条款"输入分型新增 [act] 步，站在路径体检之后"位置关系不变，步号由 1.3 变 1.4，条款里没写步号，不用改；
+  4. D98 入参形态条款"缺省空"补一句"入口协议恒传空串"。
+- **守卫**：check-spec-syntax hopbuild2 专项新增 ③f-8，三份 spec 都查：2.4 body 里 `aux_entries = [` 行必须含 `!= skill_path` 与补前缀表达式，`raw_flow = [`、`flow_kinds = [`、`raw_ref = [` 三行必须从 `aux_entries` 取，而且这四个赋值在 2.4 里各只许出现一行（多出一行就可能是后面追加的覆盖赋值，把修好的值又改回去）——删掉排除、把清单改回从 aux_ledger 取、或追加覆盖赋值，本体重复并入复发，守卫报红。步骤 1 的直接采用分支由测试锁（引擎真跑 spec 前几步，给存在的路径不停 ask、给绝对路径停在 ask 上）。
+- **不扩面**：hopbuild2-expand.md 的入口（mixed_spec_path）由主 spec call 传入，不经用户起跑，不涉 0107/0109；split-node/split-structure 不读附属台账，不涉 0110。
+- **无新类型**：本条新增一个 bool 变量 given_ok（1.1 产出，只在步骤 1 内消费）与一个 body 局部列表 aux_entries，不改任何步骤对外的输入输出声明。
+
+**能力契约（HopTrait）**——步骤 1 与 2.4 修后的对外契约：
+
+```
+trait: EntryPathAndBaseline
+  Id: entry-path-and-baseline
+  Goal: 已给有效路径不再问人;构建基准里本体恰好出现一次
+  Inputs:
+  - input_skill_path % line  # 起跑参数给的路径（可空串）
+  - target_profile % line  # 起跑参数给的目标执行档（入口协议恒传,缺省空串）
+  - aux_ledger % yaml  # 2.2 产的附属台账（每件 path/定性/处置;path 是包内相对形态）
+  Outputs:
+  - skill_path % line  # 确认后的路径（workspace 相对,已过体检）
+  - skill_content % text  # 构建基准编号版（本体一次 + 流程性/混合附属各一次）
+  - ref_assets % [line]  # 参考性附属路径清单（不含输入文件自身）
+  Constraints:
+  - input_skill_path 非空且不以 / 开头且不含 .. 且文件在场 → 直接采用,不暂停问人
+  - 上述任一不满足 → 暂停问人（ask）,体检不过带拒因重问,retry=2 耗尽上浮
+  - 台账条目补 skill 目录前缀后等于 skill_path → 不进流程性/混合拼接,不进参考性清单;台账条目本身保留原样呈审
+  - 入口协议起跑恒带 target_profile 键（空串=通用形态）——语言层 Inputs 无缺省值,省略即 INIT_FAILED
+```
+
+**关键逻辑（HopSop）**——步骤 1 与 2.4 自身排除：
+
+```
+步骤 1:
+1. 1.1 机械预判:given 为空 / 以 / 开头 / 含 .. → given_ok=false（不调 exists）;否则 given_ok=exists(given)
+2. 1.2 分流:given_ok → skill_path=input_skill_path;否则 ask 收路径（重试轮带上轮拒因）
+3. 1.3 体检:绝对路径 / 含 .. / 文件不在 / 档位不在词表 任一 → 判 false 带拒因,整个步骤 1 重跑
+4. 1.4 分型、1.5 路由（原 1.3/1.4,逻辑不变）
+2.4 自身排除:
+1. dir_prefix = skill_path 去掉文件名后的目录加 "/"（无目录则空串）
+2. 每条台账:full = path 已带 dir_prefix 则原样,否则 dir_prefix + path
+3. full == skill_path 的条目剔除 → aux_entries
+4. 流程性/混合清单、参考性清单都从 aux_entries 取;本体 raw_body 恒在最前,只此一份
+```
+
+**D102 定向修错步的工具面不给 remove 与 move——草稿文件只许原地改，不许删、不许改名（2026-09-26,todo/0103）**：
+
+- **实撞来由**：2026-09-21 用 qwen3.8-27b 自建 hopbuild2 的七跑（^anc-build-judge-closure 七跑批账），意见轮修检第 8 轮，定向修错步 5.1.3.1.2 调 remove 把 work_zone 下的草稿文件 spec-draft.md 整个删掉（意图不明，疑似"先删旧的再写新的"，写的那一半没做成）。第 9、10 轮修错步 read 草稿连续失败，修检环带着"文件丢失"空转到额度耗尽；耗尽现场的评估意见如实写"工具故障导致文件丢失，建议重建草稿"，可人裁 continue 的语义是"接着盘上现场干"，盘上已经没有现场，continue 只会继续空转。当次是主对话发现上一轮终审审阅文件 review.md 里恰好有草稿全文快照，手工抽出来恢复 spec-draft.md 后才续跑成功——这是运气，不是防线；
+- **病根**：修错步的工具面比它的活宽。它的活是"按工单在草稿文件上原地定向改几处"，正路只需要定位读（read / search_file / read_spec_tree）、原地编辑（edit_file）、交卷自检（read + validate_spec）。但 remove 和 move 属于基础文件工具族（src/tools.ts 里 category=basic，零声明恒可用），修错步没写禁工具行就一定会拿到它们。此前已经禁了 write、append、create（治"整篇重写草稿"的输出浪费与它的旁门），删除与改名这两件一直留在工具清单里——而这两件恰好都能让草稿从 draft_path 上消失：remove 直接删掉；move 把它改名挪走（下一轮修错步按 draft_path 读，同样读不到）；
+- **作者拍板原话**（2026-09-26，回答"修错步该怎么防删草稿"）："禁 remove 和 move， 但这个在步骤许可工具上，应该直接禁掉吧，根本不应该给这两个工具"；
+- **修法**：两份 spec 的 5.1.3.1.2 步骤头，在原有三条禁工具行之后各加两行 `- 禁工具: move  # …` 与 `- 禁工具: remove  # …`。步骤头的禁工具行（概念层 ^anc-step-tool-deny）语义正是"本步不给这件工具"——被禁工具在发请求之前就从本步工具清单里整体剔除，"执行者根本看不到它,结构性根除——不是运行期拦截"；两种执行模式同一语义：standalone 在 src/dispatcher.ts executeActWithTools 组装请求 tools 字段时过滤（禁用过滤排在分档过滤之前），复用模式在 src/prompt.ts buildToolManifest 组装工具清单时过滤（无工具定义档的基础族恒列行同样过滤）。所以作者说的"在步骤许可工具上直接不给"就是这两行，**引擎零改动**。说明里原句"write 与 append 本步已禁用"改成讲全五件不给的工具与理由，与步骤头一致；
+- **卡上三个候选为什么都不用**：
+  1. 候选①"修错步动手前快照草稿，删坏了下一轮从快照恢复"——这是出事之后的恢复手段；工具不给，这件事就根本发生不了，不需要恢复链路，也不需要每轮多一次整文件复制；
+  2. 候选②"remove 工具对本事务的关键交付物路径加拦"——需要引擎新增"按路径拦截删除"的机制，而且只拦 remove 不拦 move；作者拍的是在步骤层面直接不给，禁工具行已经有这个语义；
+  3. 候选③"read 失败时打回文案指路从快照恢复"——教学补丁，不机械，模型不照做就照样空转；
+- **三份 spec 同改**：skills/hopbuild2/spec.md 与 skills/hopbuild2/spec.qwen3.8-27b.md（变体生成器未实装，手工同步），两份改动逐字相同；2026-09-29 入库的 skills/hopbuild2/spec.qwen-flash.md 从母本降档生成时已带入本条改动,现为三份；
+- **守卫**：check-spec-syntax hopbuild2 专项段 ③f-7，三份 spec 都查（2026-09-29 起 skills/hopbuild2/spec.qwen-flash.md 变体也在守卫名单内——该变体从母本手工降档生成,本条改动随母本带入）——5.1.3.1.2 步骤标题行到下一个步骤标题行之间，禁工具行必须覆盖 write / append / create / move / remove 五件，且工具授权行里不许出现这五件（parser 对同名既授又禁本来就报错，守卫把"授权行里写了这五件之一"也按漂移报红，报错信息更直接）；找不到这个步骤也判红；
+- **不扩面**：
+  1. split-structure.md 的 4.2 定向修错（拼装工作台文件的修错）不动：它的活本来就是"改完写回原文件"，工作台文件由下一步机械拼装读回，与本条的修检环草稿不是同一件东西，也不在作者拍板范围；真机撞见同类删文件再按同一形态补；
+  2. spec.md 步骤 7 [commit] 写盘交付的 body 用 move 给目标位同名旧文件做 .bak 备份，是 commit 步的机械 body，与修错步工具面无关，不受影响；
+- **随批发现的存量缺口（只记录、不在本条修）**：探针打印修错步实际工具清单为 read / listdir / exists / edit_file / search_file / makedirs / validate_spec（修前还有 move / remove），**没有** read_spec_tree / replace_node / insert_node——这三件是特殊件，必须在步骤头 `- 工具:` 行授权才下发，而步骤头只授权了 validate_spec；本步说明却教"结构性改动用 read_spec_tree 定位、replace_node/insert_node 定向替换或插入"。这与 validate_spec 授权行注释记下的实撞同型（"教了没授权=工具对执行体静默不可见"）。补授权会加大本步工具面（D98 按目标档案 adapt.max_inline_tools 管工具件数，27b 档对工具件数敏感），属于有取舍的改动，不在作者本次拍板范围，已随 todo/0103 处置记录呈报作者另拍；
+- **无新类型**：本条只在两份 spec 的一个步骤头加两行禁工具声明、改一句说明，不引入新类型、不改输入输出声明。
+
+**能力契约（HopTrait）**——修错步的工具面（给什么、不给什么、为什么）：
+
+```
+trait: FixStepToolSurface
+  Id: fix-step-tool-surface
+  Goal: 定向修错步只拿到"定位读 + 原地定向编辑 + 交卷自检"这三类工具,草稿文件本身不会被删掉、改名挪走或整篇重建
+  Inputs:
+  - draft_path % line  # 草稿文件路径（修检环盘上现场——跨轮唯一的工作稿）
+  - health_report % text  # 机械体检工单
+  - pending_feedback % text  # 作者终审定向意见（可空）
+  - issue_ledger_path % line  # 修检工单台账文件路径
+  Outputs:
+  - fix_note % line  # 一句话修错记录
+  Constraints:
+  - 给（基础族零声明下发）: read / search_file / listdir / exists / edit_file / makedirs——定位读与原地定向编辑;edit_file 零匹配、多匹配都报错,改不坏整份文件
+  - 给（显式授权）: validate_spec——交卷前自检
+  - 现状缺口（存量,本条不扩面）: 本步说明教了 read_spec_tree / replace_node / insert_node,但它们是特殊件、步骤头没授权,实际清单里没有——结构性缺陷目前只能靠 read + edit_file 文本替换完成
+  - 不给: write——整文件覆盖,草稿几万字整篇回写浪费输出且撞单次回复长度上限
+  - 不给: append——分块重建全文的旁门
+  - 不给: create——"新路径写全文再挪过去覆盖"整篇重建旁门的一半
+  - 不给: move——改名能让草稿从 draft_path 上消失,也是上一条旁门的另一半
+  - 不给: remove——直接删掉草稿（todo/0103 实撞）
+  - "不给"= 步骤头 `- 禁工具:` 行,被禁工具从本步工具清单里整体剔除,执行者看不到;不是运行期拦截
+```
+
+**关键逻辑（HopSop）**——修错步改草稿的唯一路径（工具面收窄之后，这是它能走的全部路）：
+
+```
+修错步改草稿:
+1. 落账:重试反馈非空 → edit_file 把工单原话插进 issue_ledger_path 台账头行之后;首轮跳过
+2. 逐条定位:
+   2.1 工单带行号 → read(path, start_line, end_line) 取那一段
+   2.2 工单没带行号 → search_file 定位行号,再按行号段 read
+   2.3 结构性缺陷 → 同 2.1/2.2 按行号段读那一节（说明里教的 read_spec_tree 目前未授权,见契约"现状缺口"行）
+3. 逐条原地改:
+   3.1 文本缺陷 → edit_file（old_text 带足上下文保证唯一;删除=new_text 空串;插入=锚文本+新内容）
+   3.2 结构性缺陷 → 写出改后节文本 → edit_file 整节替换落盘（replace_node / insert_node 同上未授权）
+4. 交卷自检:read(draft_path) 读回全文 → validate_spec → 有 error 回到 3 定向再修,直到零 error
+5. 写 fix_note 交卷
+不存在的路径:删掉草稿、把草稿改名挪走、整篇重写草稿、另起新文件再覆盖回去——对应工具不在本步清单里
+```
+
 **D101 人裁接受现状时剩余缺陷写进修检遗留节——补上 D68/D69 没落地的"记档"去向（2026-09-25,todo/0104）**：
 
 - **实撞来由**：27b 自建 hopbuild2 七跑首轮终审呈审时（2026-09-21,^anc-build-judge-closure 七跑批账），修检额度耗尽、人裁 accept 带着 8 条剩余缺陷升格交终审，终审审阅文件 review.md 的"修检遗留"节显示字面 `undefined`——既不是缺陷清单也不是空。终审人拿不到"这份产物带着哪些已知缺陷"的账，当次靠主对话手里的烧尽现场文件补上，呈审面自身是缺的；
@@ -420,8 +562,8 @@ v1 spec.md 的壳形态（对齐门 4.x/构建循环 5.x/终审意见闸/commit 
   5. 连带的文案失实：D68 写"剩余缺陷记档随终审呈裁"，spec 里的问人文案承诺"缺陷清单会记进研判点台账，终审时一并裁"、注释写"剩余缺陷已记台账/台账有记录"——实际上没有任何步骤做这件事；
 - **修法**：accept 分支自己给 sensible_note 赋值，内容=一句开头说明（人裁接受现状、修检额度耗尽、带剩余缺陷升格终审）+ 烧尽现场判断件 exhaust_brief 全文（它的第二段就是最后一轮合理关的完整问题清单原话）+ 现场文件路径 exhaust_path（草稿全文与完整现场在那个文件里）；
 - **落点选修检遗留节，不选研判点台账**：研判点台账（log_text / judgement-log.md）记的是分拆过程里的暂定处置，语义不同；修检遗留节的契约本来就是"放行残留与最后一轮过账"，accept 路径的剩余缺陷正是"最后一轮过账"。因此 D68 的"记档"去向落定为审阅文件修检遗留节，spec 里问人文案与注释中"记进研判点台账"的承诺同步改成指向审阅文件修检遗留节；5.1.4 修检遗留节标题补上人裁接受现状的情形；
-- **两份 spec 同改**：skills/hopbuild2/spec.md 与 skills/hopbuild2/spec.qwen3.8-27b.md（变体生成器未实装，手工同步）；
-- **守卫**：check-spec-syntax hopbuild2 专项段 ③f-6 两份 spec 都查——accept 分支声明产出 sensible_note、输入含 exhaust_brief 与 exhaust_path、body 给 sensible_note 的赋值同时含这两个变量；
+- **三份 spec 同改**：skills/hopbuild2/spec.md 与 skills/hopbuild2/spec.qwen3.8-27b.md（变体生成器未实装，手工同步）；2026-09-29 入库的 skills/hopbuild2/spec.qwen-flash.md 从母本降档生成时已带入本条改动,现为三份；
+- **守卫**：check-spec-syntax hopbuild2 专项段 ③f-6 三份 spec 都查（2026-09-29 起 skills/hopbuild2/spec.qwen-flash.md 变体也在守卫名单内——该变体从母本手工降档生成,本条改动随母本带入）——accept 分支声明产出 sensible_note、输入含 exhaust_brief 与 exhaust_path、body 给 sensible_note 的赋值同时含这两个变量；
 - **顺带效果**：意见轮第二圈若走 accept，修前会渲染上一圈残留的旧 sensible_note，修后被本圈的判断件覆盖；
 - **不扩面**：引擎层"字符串 + 不存在的值"静默渲染成 "undefined" 而不报计算异常，属 act-body `+` 条款层面的问题，本条不动，另行呈报作者；
 - **无新类型**：本条只改 accept 分支的输入输出声明与 body，不引入新类型，sensible_note 沿用既有 text 型。
@@ -433,13 +575,13 @@ trait: AcceptExhaustedDraft
   Id: accept-exhausted-draft
   Goal: 修检额度耗尽且人裁 accept 时,把当前草稿升格为终稿,并把剩余缺陷清单交到终审审阅文件的修检遗留节
   Inputs:
-  - draft_path: line  # 当前草稿文件路径（修检环盘上现场）
-  - exhaust_brief: text  # 烧尽现场判断件全文（同一兜底块 5.1.3.1.6.1 的产出:改善对比行+最后一轮完整问题清单+历轮简史+评估意见）
-  - exhaust_path: line  # 烧尽现场文件绝对路径（同一兜底块 5.1.3.1.6.2 的产出）
+  - draft_path % line  # 当前草稿文件路径（修检环盘上现场）
+  - exhaust_brief % text  # 烧尽现场判断件全文（同一兜底块 5.1.3.1.6.1 的产出:改善对比行+最后一轮完整问题清单+历轮简史+评估意见）
+  - exhaust_path % line  # 烧尽现场文件绝对路径（同一兜底块 5.1.3.1.6.2 的产出）
   Outputs:
-  - spec_text: text  # 终稿全文（带已知剩余缺陷,清单随审阅文件修检遗留节呈终审）
-  - sensible_note: text  # 修检遗留呈审内容:开头说明+exhaust_brief 全文+exhaust_path
-  - qc_outcome: line  # 圈信号 "accept"——出圈交终审
+  - spec_text % text  # 终稿全文（带已知剩余缺陷,清单随审阅文件修检遗留节呈终审）
+  - sensible_note % text  # 修检遗留呈审内容:开头说明+exhaust_brief 全文+exhaust_path
+  - qc_outcome % line  # 圈信号 "accept"——出圈交终审
   Constraints:
   - sensible_note 必须在本分支内赋值,且同时含 exhaust_brief 全文与 exhaust_path——不许依赖合理关说明槽（本路径上合理关每轮都判 false,引擎不写它）
   - body 引擎直执,零 LLM 转写
@@ -639,6 +781,7 @@ trait: AcceptExhaustedDraft
    - **aux_ledger 字段逐条**:列表,每件三键——path（包内相对路径,照原文引用形态,读取时机械补 skill 目录前缀）/定性（四值枚举:流程性|参考性|混合|未引用）/处置（一句话理由）;
    - **判据一条 v2 执行面新增**（v1 权威未载,非移植）:可执行脚本（scripts/ 下 .py/.sh/.js）恒参考性——产物按路径调用不翻代码进 spec,脚本用法说明里的门禁句仍按内容定性拎出;
    - **单文件 skill 退化形态**:零包内引用时 aux_ledger 恒空列表零仪式,拼接退化为纯本体,行号与旧单文件形态逐字节同——形态兼容零成本;
+   - **输入文件自身不是附属**（D103,hopissues 0110）:本体已由 2.1 收进 raw_body;台账条目补 skill 目录前缀后等于 skill_path 的,2.4 机械剔除,不进拼接也不进参考性清单,台账原样保留呈审;
 2. **行号对应事实三处一次改齐**（最大隐性联动——source.md 形态一变,所有"行号↔原文"的消费点必须同批换口径）：2.4 落盘逻辑/5.1.3.1.2 对账教学（"行号指向 source.md"扩为"行号指向多文件拼接后的构建基准"）/步骤 7 交付说明。三处任何一处漏改,行号对账就在旧口径上静默错位;
 3. **对齐门呈审面（4.4）收附属台账**：呈交面加附属文件清单（台账三键原样呈——并入位置可从 source.md 分隔行直读,台账不重复记录行号防第二真值面漂移）,人对齐时能看见"哪些文件进了视野、哪些留档按需读";
 4. **交付步扩自包含核**：指针闭合（产物步骤正文的包内路径引用逐个对照交付清单,悬空即不过）+随包清单（参考性附属逐件登记进 assets-manifest.txt 随 spec 同目录落盘——pack 分发按它逐件带走的物理载体）;未引用附属不进翻译不进包,台账呈终审人裁;**交付写盘遇同名旧文件先备份再覆盖**（v1 交付面硬约束随执行面同移植:时间戳 .bak 留原目录+交付说明点名备份文件名——直接覆盖=替用户销毁其资产）;
@@ -717,9 +860,9 @@ trait: AcceptExhaustedDraft
 
 ```
 Tools:
-- chat(channel, message) -> post_id: line  # 发送状态更新到事故频道
-  - channel: line  # 目标频道标识
-  - message: text  # 状态更新正文
+- chat(channel, message) -> post_id % line  # 发送状态更新到事故频道
+  - channel % line  # 目标频道标识
+  - message % text  # 状态更新正文
 ```
 
 后果：用户环境没注册 chat 工具时,引擎起跑对账当场拒载（INIT_FAILED）——而这位用户可能只想用这份 skill 写复盘文档,复盘功能根本不碰聊天服务。
@@ -729,7 +872,7 @@ Tools:
 ```
 5. [act free] 撰写状态通报并分发
   - ← incident_info
-  + → incident_document: markdown  # 状态通报文档
+  + → incident_document % markdown  # 状态通报文档
   > 按四要素（发生了什么/影响谁/我们在做什么/下次更新时间）撰写状态通报。
   > 分发方式看环境：运行环境连接了聊天服务时,把通报发到事故频道并建战情室;
   > 未连接时,通报文档照常生成,由用户自行复制分发——文档本体是交付物,分发是旁路。
@@ -921,7 +1064,7 @@ D91 是**定向优化的载体**（expand 通道——mixed 产物二轮进构�
 - 背景=变速箱"按目标模型定制产物"的兑现批:model-gearbox 档案 adapt.build_target_profile 键与 0095 2c/2d 两笔挂账合卷;
 - 动机账:hb2 产物是给执行模型跑的,母本按强模型习惯出产物——开放式判官步/大步骤/subtask free 逃生舱,弱模型跑它必带伤〔27b 丙案两轮实测:能完赛但产物空心+修检烧尽;fact-check 微判定变体则全程自治过关〕。正解不是"弱模型别跑 hb2 产物",是构建期就按目标模型的坍塌点切步——构建质量归强模型,运行成本归弱模型,与"弱执行+强把关"路由同思路的两面。
 
-1. **入参形态**：spec.md Inputs 增 `target_profile: line`（缺省空=现行产物形态零变化——本批对存量语料零扰动;非空=已支持档名,首档 `qwen3.8-27b`）;
+1. **入参形态**：spec.md Inputs 增 `target_profile: line`（缺省空=现行产物形态零变化——本批对存量语料零扰动;非空=已支持档名,首档 `qwen3.8-27b`）;"缺省空"的兑现方式是入口协议恒传空串——语言层 Inputs 无缺省值载体,顶层省略即 INIT_FAILED（D103,hopissues 0109）;
    - 进闸=步骤 1 词表机械核,未知档名响亮拒不静默回落（**词表内联在 spec 进闸 body 里**——运行时工作区读不到本库 model-gearbox/ 目录,档案是构建器教学的编写期依据不是运行期读盘对象;新档案接入=按档案维度值往教学里补该档规则节+词表加名,两处同批改）;
    - 规则值从档案维度**编写期导出**固化进教学条款,档案更新后教学同批跟改（同源纪律:教学条款行内注明导出自哪个档案键）;
 2. **规则集=四条,每条从档案维度机械导出（首档 qwen3.8-27b 的具体值随档案更新,设计只钉"哪个维度管哪条规则"）**：
@@ -1033,7 +1176,7 @@ dv 首审五条风险处置（deep-validate 审改后 split-node）：
 
 七跑走通全程:构建循环首次穿越(计算异常零),修检环两轮 8→8 平坠后 accept 升格终审,终审定向意见三轮收敛(六条→两条→零),commit 交付落盘。修检环随批实撞两件立卡:remove 工具误删草稿(第八轮,主对话从 review.md 快照恢复续跑)/review_note 修检遗留段 undefined 渲染。总学费约七跑各 40-100 万 tokens。
 
-## 分拆范式库（builder 的可用形态清单）【契约】 ^anc-build-split-patterns## 分拆范式库（builder 的可用形态清单）【契约】 ^anc-build-split-patterns
+## 分拆范式库（builder 的可用形态清单）【契约】 ^anc-build-split-patterns
 
 分拆产物优先套用下列**范式**（named patterns）——builder 知道有哪些形态可用,产物才不会自由发挥;每个范式=一个可讲清的分拆理由（可读可解释的正向供给）。**本库是分拆步的知识供给面**（算法伪码只留判定序骨架,选型细则全在此——实现时经 doc-ref 按步注入,1.1.1 等分拆步不内联重述）。首批如下,随实跑沉淀扩充：
 
@@ -1047,13 +1190,13 @@ dv 首审五条风险处置（deep-validate 审改后 split-node）：
 
 ```
 N. [subtask retry=K] <这段活的目标>
-  + → <交付变量>: <type>  # 交付物
+  + → <交付变量> % <type>  # 交付物
   N.1. [act/reason] <干活>          ← 探索段（可多步:取数/加工/分析）
-    + → <交付变量>: <type>  # 产出
+    + → <交付变量> % <type>  # 产出
   N.2. [check final] <验收判据>     ← 验收门（机器可验;判据来自原文的"必须/确保/达标"句）
     - ← <交付变量>
-    + → ok: bool  # 判定槽
-    + → note: text  # 说明槽（不过时的缺口——引擎注入重跑轮定向修正）
+    + → ok % bool  # 判定槽
+    + → note % text  # 说明槽（不过时的缺口——引擎注入重跑轮定向修正）
 ```
 
 - **识别信号**（NL node 里）："核对并确保…"、"验证…后再…"、"质量达标才…"、"不对就重做"——凡是"产出+达标要求"成对出现的段落;
@@ -1132,6 +1275,11 @@ N. [subtask retry=K] <这段活的目标>
 
 - 实撞:35K 字源的"AskUserQuestion 确认风险点+评审模式"/"人工确认模式对焦"全部落成 reason,产物 ask/confirm 计数 0;归因=知识供给缺口非执行方问题:1.4 忠实关 D2 时已有"闸门逐个有落点"判据,但知识库从未定义什么是闸门——判据要求核对一个没教过的概念,核不出来是供给欠账;
 - 条目内容:定义（执行到此必须停等真人表态;给值落 ask/放行落 confirm;落成 reason=把"问人"偷换成"机器替人答",语义蒸发最重的一种）+四实例（直白闸门/借工具名指代的间接闸门〔实撞形态——工具名是原文实现细节,产物落 ask 不引用工具名〕/模式条款里藏的闸门/反例"确定定位类型"是执行者自断非闸门——防"确认"字面扩大化）。
+- **续补三条骨架成文形态规则（v0.22.6,2026-09-29 flash 宏观测评 hb2×qwen-flash 实撞,incident-response 语料 run d4e5fbc5——骨架成文步连续被 validate 拒,三类拒因都是教学从没讲过的形态规则）**:
+  1. **ask 与 confirm 的输出形态**（落 split-patterns"交互闸门与其它定型细则"节）:ask 收人给的值,必须至少声明一个 `+ →` 输出（缺即 P13）,值是几个模式里挑一个就写枚举类型,人写一段话就写 text;confirm 是放行闸门,输出恰好是一个 bool,要人挑选或填写数据的一律用 ask（confirm 配枚举输出即 P12）;附"原文没指定模式才问人"的条件闸门例子——外套 case 判那个输入是否为空,空的支路里 ask,ask 的产出沿用那个输入的同名同类型,后续步骤不管走哪条路都接这一个变量;
+  2. **构建材料不是产物变量**（落 split-patterns"骨架成文纪律"节）:node_source、split_plan、parent_context、node_task 是构建器这一步的输入,产物 spec 执行时没有这些变量——骨架步骤写 `- ← node_source` 必被 V1 拒;原文里的材料（分级表、模板、判据清单）同样不是变量,不写 `- ← severity_table`,而是把表的内容整段写进消费它那一步的 `>` 执行说明;产物步骤的 `- ←` 只能写 header 的输入名、parent_vars 清单里的名字、或本骨架前面步骤 `+ →` 产出的名字;
+  3. **变量名不得与枚举成员同名**（落同节）:输入声明为 `enum(new,update,postmortem)` 时,`new`/`update`/`postmortem` 不能再当变量名（V2 拒——条件表达式里无法分辨是变量还是枚举值）;
+  - 例子经 validate_spec 正反例实测:正例通过,删掉 ask 的 `+ →` 报 P13。
 
 **D22-D32 对比对齐轮十一缺陷（2026-08-21/22 coffee-week 七轮对齐+demo-rename 留出回归+ppt 复压,产物与手写金标准逐面对齐;明细归 git log〔c124211/ff54a4d/f4f7bdf 等〕,此处只记档最重三条）**：
 
@@ -1182,7 +1330,7 @@ N. [subtask retry=K] <这段活的目标>
 
 - **hop_python 文法速查**：写 body 步骤（split-node 带 body 落定）的必备注入——裸名函数无方法调用（`strip(s)` 非 `s.strip()`,追加用 `xs = xs + [item]`）/禁循环语句但列表推导可用/确定性分支 if-elif-else 直接写/字面量键加引号/白名单内置+已声明工具/work_zone_path() 涂鸦区。源=v1 primer「act / commit 的 hop_python body」节收编;
 - **HopSpec 片段语法速查**：骨架成文步骤（split-structure 1.1）的必备注入——步骤行格式/±→ 声明与 # 说明/case 条件括号形态/loop for-each 与 collect 子句/check 双槽/高频 validate 规则。源=v1 primer「HopSpec 全局知识」骨架段+「高频验证规则」收编;
-- **parent_context 双侧格式**：产出侧（split-structure 备子调用入参步）与消费侧（子调用选真名）同一格式约定——骨架全文+按行"名字: 类型  # 说明"清单,写进「骨架成文纪律」节（原只有消费侧半边）。
+- **parent_context 双侧格式**：产出侧（split-structure 备子调用入参步）与消费侧（子调用选真名）同一格式约定——骨架全文+按行"名字 % 类型  # 说明"清单,写进「骨架成文纪律」节（原只有消费侧半边）。
 
 ## 分拆不变量（每一遍都必须保持）【契约】 ^anc-build-invariants
 
@@ -1193,7 +1341,7 @@ N. [subtask retry=K] <这段活的目标>
 
 ## 分发布局（完整 skill 形态）【契约】 ^anc-build-layout2
 
-`skills/hopbuild2/` = 完整可分发 skill（2026-08-25 作者定"把 hopbuild2 构建成一个完整的 skill"——此前四件套只有 spec 本体,无壳无法被 skill 触发词调起）。五文件：
+`skills/hopbuild2/` = 完整可分发 skill（2026-08-25 作者定"把 hopbuild2 构建成一个完整的 skill"——此前四件套只有 spec 本体,无壳无法被 skill 触发词调起）。八个文件（母本五件+二轮展开入口一件+模型变体两件）：
 
 | 文件 | 角色 |
 |---|---|
@@ -1202,8 +1350,11 @@ N. [subtask retry=K] <这段活的目标>
 | split-node.md | 判定器（callee——spec 经 call 按同目录寻址,分发时必须同目录随行） |
 | split-structure.md | 结构执行机（callee 同上） |
 | split-patterns.md | 知识库（doc-ref 注入源——spec/split-node/split-structure 三者引用,同目录随行） |
+| hopbuild2-expand.md | 二轮展开入口（拿首轮 mixed 档产物包,只展开降档账上的未尽原子,既有骨架不动;设计权威 ^anc-build-expand;同样 call 同目录的 split-node） |
+| spec.qwen3.8-27b.md | spec.md 的 qwen3.8-27b 模型变体（从母本手工降档生成,变体生成器未实装;母本改动须手工同步,守卫 check-spec-syntax hopbuild2 专项段一并查） |
+| spec.qwen-flash.md | spec.md 的 qwen-flash 模型变体（2026-09-29 入库,生成与同步方式同上） |
 
-**壳的调用协议**：`/hopspec run <本目录>/spec.md --params '{"input_skill_path": "<收集值>", "max_depth": 3}'`——MCP 注册时走 standalone 薄协议（start_run 带 workspace_dir=待翻译 skill 所在作业目录）,未注册走复用模式。**workspace_dir 必须指向作业目录**（产物 spec.md/source.md 写作业目录,不写 hopbuild2 安装目录）。
+**壳的调用协议**：`/hopspec run <本目录>/spec.md --params '{"input_skill_path": "<收集值>", "max_depth": 3, "target_profile": ""}'`（三个键恒传——顶层 Inputs 全部必填,target_profile 用户没指定就传空串,D103）——MCP 注册时走 standalone 薄协议（start_run 带 workspace_dir=待翻译 skill 所在作业目录）,未注册走复用模式。**workspace_dir 必须指向作业目录**（产物 spec.md/source.md 写作业目录,不写 hopbuild2 安装目录）。
 
 **与 v1 的分发关系**：v1（skills/hopbuild）与 v2（skills/hopbuild2）并存分发,SKILL.md 触发词分开（v1=/hopbuild,v2=/hopbuild2）;install-skill 两者都装。v2 转正替换 v1 的时机另议（须 v2 连续多发全链验证通过后作者拍板）。
 

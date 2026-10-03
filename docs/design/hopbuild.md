@@ -199,7 +199,7 @@ hopspec构建的七条原则：
   - **构建节点生成段**：call expand-node(root) 递归展开（展开器=独立可 call spec,单轮作业四拍+复合子步骤子 call 递归+edit_spec_tree 拼装——见下方「生成环机器」）。
     - **中间产物一律落引擎 work_zone 涂鸦区**（`work_zone_path()` 取真身,2026-08-20 实撞改定）：body 步经 `work_zone_path("<名>")` 取绝对路径;LLM 步经 `work_zone_root` 变量〔步骤 3 body 产出〕拿位置——两执行面同一真身;
       - 实撞出处:原 spec 写 `work_zone/…` 相对路径,解析到 workspace 根下裸目录:既污染用户工作区〔根残留 ignore 过一次〕又没进引擎隔离区;LLM 工具循环时代靠 LLM 遇 ENOENT 自调 makedirs 糊住,步骤 2 body 化后引擎直执零适应性,缺口裸露三例秒败;
-    - **研判点台账是跨实例共享通道**（expand-node 递归子实例 append、主流程 5.7 read——各实例引擎 work_zone 互不相同）：主实例 `work_zone_path("judgement-log.md")` 绝对路径经 call 参数（expand-node 新增 Input `judgement_log`）逐层透传,全树共写一份（写侧工具对 work_zone 绝对路径放行,见 [[tools#^anc-exec-work-zone]]）;
+    - **研判点台账是跨实例共享通道**（expand-node 递归子实例 append、主流程 5.7 read——各实例引擎 work_zone 互不相同）：主实例 `work_zone_path("judgement-log.md")` 绝对路径经 call 参数（expand-node 新增 Input `judgement_log`）逐层透传,全树共写一份（（历史形态,hopbuild v1 已由 hopbuild2 取代;2026-09-30 todo/0126 起引擎 work_zone 写权只归本实例,子实例不能再 append 父台账,hopbuild2 改为各实例写自己的、父读各子合并——见 [[tools/file-tools#^anc-exec-work-zone-registry]]））;
     - 事务面『探索段产物入沙盒』;草稿文件退役:递归形态片段经 call 输出直接回传拼装,不再逐轮落盘草稿；
   - **整体关**（review 链前半，机器关）：
 	  - validate 结构合法

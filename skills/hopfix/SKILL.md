@@ -1,18 +1,19 @@
 ---
 name: hopfix
 description: >
+  由 /hop 分派调用（用户要改一份已有 HopSpec 的几处时）；整篇重写走 hopbuild。
   对既有 HopSpec 做定向修正——把修正意见（或 deep-validate 检查报告）变成
   节点级定向编辑：只改点名的地方，改完机械核对+呈人确认才写回（自动留快照可回滚）；
   结构性变更如实拒并指路重新翻译，不硬修。
   Trigger: "hopfix", "/hopfix", "修一下这个 spec", "这个 spec 有几处要改",
   "按报告修正 spec", "定向修正".
-user_invocable: true
+user-invocable: false
 ---
 
 %% @trace
 	id: hopfix-skill
 	type: intent
-	last_sync: 2026-09-15T17:03+0800
+	last_sync: 2026-10-01T15:45+0800
 	note: hopfix 薄包装壳（design docs/design/hopfix.md ^anc-meta-hopfix-contract）——本 skill 是 hopspec skill:流程权威在 scripts/hopfix/hopfix.md,经 /hopspec 驱动引擎强制执行。壳自身零流程知识,只做参数收集与移交。缘起作者抓"你这个用法是想把人都劝退么"——裸驱动命令不是给人用的形态,壳补齐 2026-09-02。
 %%
 
@@ -28,7 +29,7 @@ user_invocable: true
 
 | 参数 | 类型 | 说明 |
 | --- | --- | --- |
-| spec_path | line | 待修 spec 的路径——须 workspace 相对路径（绝对路径与含 .. 的路径会被拒并重问） |
+| spec_path | line | 待修 spec 的路径——须 workspace 相对路径（本入口不收绝对路径与含 .. 的路径,会被入口路径闸拒并重问） |
 | fix_order | text | 修正意见——人话写就行（"步骤 3 的说明里××是错别字；步骤 5 的阈值应该是 30000"），或直接贴一份检查报告全文 |
 
 用户话语里已带这两样（点了哪份 spec、说了要改什么）就直接采用不再问;缺哪样只问哪样。

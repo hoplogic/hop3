@@ -1,0 +1,30 @@
+```python
+import sys
+import re
+
+if len(sys.argv) < 2:
+    print("Usage: python script.py <filename>", file=sys.stderr)
+    sys.exit(1)
+
+filename = sys.argv[1]
+
+try:
+    with open(filename, 'rt', encoding='utf-8') as file:
+        lines = file.readlines()
+except OSError as e:
+    print(f"Error reading file: {e}", file=sys.stderr)
+    sys.exit(1)
+
+violations = []
+for i, line in enumerate(lines, start=1):
+    stripped_line = line.rstrip('\r\n')
+    if len(stripped_line) > 100:
+        violations.append(f"Line {i}: {len(stripped_line)} characters (exceeds 100)")
+
+if violations:
+    for violation in violations:
+        print(violation, file=sys.stderr)
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

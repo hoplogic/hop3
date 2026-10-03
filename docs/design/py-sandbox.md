@@ -3,7 +3,7 @@
 	source: [[../concepts/HopSpec V3扩展-Python语法沙箱]]
 	source_id: hopspec-v3-python-syntax-sandbox
 	type: extend
-	last_sync: 2026-09-23T12:12+0800
+	last_sync: 2026-09-27T20:38+0800
 	note: py-sandbox 模块设计——Python 语法沙箱的引擎落地:检查器(随包发布的 Python 脚本,三条规则)+ 执行契约(审的字节即跑的字节/python3 -I/系统沙箱在场即套)+ 接进 run_script。2026-09-23 立(作者定"先出 docs/design/ 的对应设计,再动 src/")。概念锚点同名沿用(先例 anc-config-sandbox-filesystem),本文件是各锚点的实现契约。
 %%
 
@@ -117,9 +117,9 @@
 Id: pysb_check.py <脚本路径> -> stdout JSON
 Goal: 按三条规则静态审一份 Python 脚本,输出逐条拒绝记录;不执行被审脚本的任何部分
 Inputs:
-- 脚本路径: line   # 命令行第一个参数;检查器以二进制模式读该文件的原始字节
+- 脚本路径 % line   # 命令行第一个参数;检查器以二进制模式读该文件的原始字节
 Outputs:
-- 审查结论: yaml   # stdout 恰好一行 JSON,形态见下 HopType
+- 审查结论 % yaml   # stdout 恰好一行 JSON,形态见下 HopType
 Constraints:
 - 规则一:原始字节直接交 ast.parse(字节)——不先解码成文本(编码声明由 ast.parse 自己照 CPython 语义处理);
   解析失败=一条拒绝记录(name='<语法>'),不是检查器自身失败
@@ -189,14 +189,14 @@ Python 语法沙箱审查未通过,脚本没有执行。逐条改完再跑:
 Id: runSandboxedPython(scriptPath, args, opts) -> PySandboxRunResult
 Goal: 审的字节就是跑的字节——审过才执行,执行的是审过的那份私有副本
 Inputs:
-- scriptPath: line      # 脚本绝对路径(调用方已过读权限链、已确认文件在场)
-- args: [line]          # 传给脚本的参数
+- scriptPath % line      # 脚本绝对路径(调用方已过读权限链、已确认文件在场)
+- args % [line]          # 传给脚本的参数
 - opts.interpreter: line   # 解释器命令名(run_script 按扩展名表给 'python3')
 - opts.whitelist: [line]   # 命令白名单(sandbox.runtime.available,原样转交原语)
 - opts.timeoutSec: number  # 产物执行超时(run_script 给 60)
 - opts.maxBuffer: int      # 产物单流输出上限(run_script 给 64KB)
 Outputs:
-- result: yaml   # 见下 HopType
+- result % yaml   # 见下 HopType
 Constraints:
 - 原始字节只读一次;私有副本写在 os.tmpdir() 下新建的 hopjit-pysb-<随机> 目录,保留原文件名
   (该目录不匹配 work_zone 判定,执行模型的写工具写不进去);检查器审副本、产物执行副本,不再按原路径读盘

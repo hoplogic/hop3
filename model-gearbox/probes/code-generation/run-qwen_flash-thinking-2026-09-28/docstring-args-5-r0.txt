@@ -1,0 +1,71 @@
+```python
+import ast
+import re
+import sys
+
+if len(sys.argv) < 2:
+    sys.stderr.write("Error: missing file path\n")
+    sys.exit(1)
+
+file_path = sys.argv[1]
+try:
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+except Exception:
+    sys.stderr.write("Error: could not open file %s\n" % file_path)
+    sys.exit(1)
+
+if content == "":
+    sys.exit(0)
+
+try:
+    tree = ast.parse(content)
+except SyntaxError:
+    sys.stderr.write("Error: syntax error in %s\n" % file_path)
+    sys.exit(1)
+
+nodes = [tree]
+stack = []
+violations = []
+
+while nodes:
+    node = nodes.pop()
+    if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+        if stack:
+            pass
+        else:
+            if node.name.startswith('_'):
+                pass
+            else:
+                doc = ast.get_docstring(node)
+                if doc is None:
+                    violations.append((node.lineno, "missing docstring"))
+                else:
+                    params = []
+                    for arg in node.args.posonlyargs:
+                        params.append(arg.arg)
+                    for arg in node.args.args:
+                        params.append(arg.arg)
+                    if node.args.vararg:
+                        params.append(node.args.vararg.arg)
+                    for arg in node.args.kwonlyargs:
+                        params.append(arg.arg)
+                    if node.args.kwarg:
+                        params.append(node.args.kwarg.arg)
+                    filtered = [p for p in params if p not in ['self', 'cls']]
+                    for param in filtered:
+                        pattern = r'\b' + re.escape(param) + r'\b'
+                        if not re.search(pattern, doc):
+                            violations.append((node.lineno, f"missing parameter '{param}' in docstring"))
+                stack.append("function")
+    for child in ast.iter_child_nodes(node):
+        nodes.append(child)
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        stack.pop()
+
+if violations:
+    for lineno, reason in violations:
+        sys.stderr.write("%s: %d: %s\n" % (file_path, lineno, reason))
+    sys.exit(1)
+sys.exit(0)
+```

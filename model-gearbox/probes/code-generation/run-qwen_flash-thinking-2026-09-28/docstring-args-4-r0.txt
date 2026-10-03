@@ -1,0 +1,59 @@
+```python
+import ast
+import re
+import sys
+
+def main():
+    filename = sys.argv[1]
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except Exception as e:
+        sys.stderr.write(f"Error reading file: {e}\n")
+        sys.exit(1)
+    
+    try:
+        tree = ast.parse(content, filename=filename, mode='exec')
+    except SyntaxError as e:
+        sys.stderr.write(f"Syntax error: {e}\n")
+        sys.exit(1)
+    
+    violations = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name.startswith('_'):
+                continue
+            docstring = ast.get_docstring(node)
+            if docstring is None:
+                violations.append((node.lineno, "missing docstring"))
+                continue
+            
+            params = []
+            for arg in node.args.posonlyargs:
+                if arg.arg not in ['self', 'cls']:
+                    params.append(arg.arg)
+            for arg in node.args.args:
+                if arg.arg not in ['self', 'cls']:
+                    params.append(arg.arg)
+            if node.args.vararg and node.args.vararg.arg not in ['self', 'cls']:
+                params.append(node.args.vararg.arg)
+            for arg in node.args.kwonlyargs:
+                if arg.arg not in ['self', 'cls']:
+                    params.append(arg.arg)
+            if node.args.kwarg and node.args.kwarg.arg not in ['self', 'cls']:
+                params.append(node.args.kwarg.arg)
+            
+            for param in params:
+                pattern = r'\b' + re.escape(param) + r'\b'
+                if not re.search(pattern, docstring):
+                    violations.append((node.lineno, f"missing parameter '{param}' in docstring"))
+    
+    if violations:
+        for line_num, reason in violations:
+            sys.stderr.write(f"{line_num}: {reason}\n")
+        sys.exit(1)
+    sys.exit(0)
+
+if __name__ == '__main__':
+    main()
+```

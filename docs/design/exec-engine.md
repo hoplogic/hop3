@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-09-09T09:11+0800
+	last_sync: 2026-09-29T16:01+0800
 	note: ExecutionEngine 设计规范——执行状态机。内容分级（决策/契约/说明）+ 关键设计决策 + 契约锚点 + impl 逻辑
 %%
 
@@ -48,17 +48,19 @@
 | call 协议载荷 / 命令数据值走参数文件 / 循环里串行 call 子实例按轮次命名 / 子实例 re-init 净室 | 契约 | `anc-exec-call-protocol-payload` / `anc-exec-cmd-args-file` / `anc-exec-call-child-iter-id` / `anc-exec-call-reinit-clean` |
 | Tools 段 init 对账 | 契约 | `anc-exec-tools-reconcile` |
 | 实例主动中止 | 决策+契约 | `anc-exec-abort` |
-| 崩溃恢复 / 状态持久化 | 契约 | `anc-exec-crash-recovery` / `anc-exec-state-persistence` / `anc-exec-driver-channel`（双执行硬闸） |
+| 崩溃恢复 / 状态持久化 | 契约 | `anc-exec-crash-recovery` / `anc-exec-state-persistence` / `anc-exec-driver-channel`（双执行硬闸） / `anc-exec-state-seq-guard`（跨进程过时覆盖拦截） |
 | 暂停态持久化与恢复 | 契约 | `anc-exec-pause-persist` |
 
 ## 定位【契约】 ^anc-struct-exec-engine
 
-> **模块版本**：exec-engine `v0.49.1-draft`（2026-09-25）。本版=失败档次判定只看失败原因开头（todo/0116）。上版 v0.49.0-draft status 停驻判定追加网络暂停与嵌套串行调用下钻两源（todo/0105）。0.x 未承诺稳定。**逐版演进史归 git log**（升版在下表加一行速览，演进论证归 commit message）；条款细节以正文各锚点条款为权威，下表只记"哪版加了什么、实撞出处在哪"。
+> **模块版本**：exec-engine `v0.50.1-draft`（2026-10-01）。本版=requires_commands 预检闸吃《已批准命令》并集（review 抓两闸不齐）;实例目录布局登 commands.log。上版 v0.50.0-draft（2026-09-26）state.json 写入序号核对,同一实例目录被另一个进程写得更新时拒绝覆盖（todo/0114）。上版 v0.49.1-draft 失败档次判定只看失败原因开头（todo/0116）。0.x 未承诺稳定。**逐版演进史归 git log**（升版在下表加一行速览，演进论证归 commit message）；条款细节以正文各锚点条款为权威，下表只记"哪版加了什么、实撞出处在哪"。
 
 **版本速览表**（新→旧）：
 
 | 版本 | 内容一句话 | 要点与实撞出处 |
 |---|---|---|
+| v0.50.1-draft | requires_commands 预检闸吃《已批准命令》并集 | ^anc-exec-requires-commands-gate 对账集合改为宿主白名单 ∪ 卡上命令名（unionApprovedCommandNames 三消费口）;实撞=0132 review 面二探针 Q：卡批 echo+声明 echo+宿主空 → INIT_FAILED 教人改 hopjit.yaml |
+| v0.50.0-draft | state.json 写入序号核对（跨进程过时覆盖拦截） | 新增 ^anc-exec-state-seq-guard:state.json 带单调递增的 state_seq 与 last_writer（pid 与写入时刻）;engine.persist 调 saveSnapshot 之前回读盘上序号,盘上比本进程内存里的大就抛 STATE_STALE、不写任何文件;persistToolJournal 对 STATE_STALE 照样上抛;MCP resume_run/stop_run 在通道核对之前预检,过时返回结构化错误且不改状态,非 running 的注册项移出注册表以便下次从盘上重新加载;旧文件没有该字段按 0 算。实撞=todo/0114（2026-09-22 宏观任务验收与成绩 T3 复跑,run 6ce0b58f 被两个 MCP 进程同时推进,完成后仍被另一个进程的 6 次续跑把 state.json 覆写回"没跑完"）,作者 2026-09-26 拍 A 案"版本号核对" |
 | v0.49.1-draft | 失败档次判定只看失败原因开头 | ^anc-exec-deterministic-no-retry 3.1b 段新增"档次判定只看失败原因的开头"条款:判事务级/步级瞬态时只看失败原因的开头（先剥封闭清单里的两种引擎包装前缀）,不再对整段做子串匹配;超窗错误在 dispatcher 产生点记 fail_kind=deterministic;步级瞬态口袋补登工具复读前缀。实撞=todo/0116（判定打回意见引用了超窗前缀字样,容器第一次打回就被当事务级确定性失败直接失败,2 次重试一次没用） |
 | v0.49.0-draft | status 停驻判定追加两源 | 引擎 detectPausedState 在 0081 三源之后追加源④网络暂停（某步 pending 且其最后一条事件是 network_pause）与源⑤嵌套串行调用下钻（running 的非 parallel call 步→读 calls/<serialCallChildInstance>/ 子快照递归判定,取最深层停点,附 call_path）;契约权威在 [[hop-cli#^anc-cli-status-nested-pause]],本模块只是实现载体。实撞=todo/0105（T5 hb2×Ling 子流程网络暂停,命令行 status 30 多分钟报 running）,作者 2026-09-25 拍甲案"顶层+嵌套都看见" |
 | v0.48.0-draft | 重试反馈按轮生效 | 0073 受众收窄条款之后新增"重试反馈按轮生效"条款：RetryRecord 记账时记事件流位置戳（event_seq）,getActiveRetryFeedback 只取本轮起点之后的记录、受众判据只数本轮起点之后的事件（本轮起点=容器祖先 loop 最晚一条轮进事件,新增执行事件 loop_iter;循环入口不划界线,外层容器重试重建时内层旧意见照旧可见）;烧尽上浮原因带上最后一次失败原文（外层判档次不看原文）;账本身零删除。^anc-exec-foreach-serial"新迭代全新事务"清单加一项。实撞=todo/0107（hopbuild2 意见轮 loop 第 4~8 轮,意见分诊步吃到第 1~3 轮的旧机械失败反馈与上轮旧意见基准,空确认轮照抄旧意见输出 revise,三次空确认三次被顶回,只能弃跑） |
@@ -160,12 +162,11 @@ Fields（按职责分组）：
 
 **工作区组**——每个执行单元的**独占工作区**（work_zone；driver/worker 临时文件的唯一合法存放点）： ^anc-exec-work-zone
 - `work_zone: string`——该执行单元独占工作区目录的绝对路径。`initExecution` 时由 `PersistenceProvider.init()` 创建（含 `vars/` 子目录），所有 NextResponse 携带此路径。**命名忠实**：叫"工作区"（不是"草稿 scratch"）——它是执行单元**独占、强制、自包含**的工作领地，临时文件**只**写这里，禁写 /tmp 或自选绝对路径。
-- **目录路径编码 child 身份**：顶层实例用 `<instanceDir>/work_zone/`；parallel/call 子实例的实例目录本身按 child 分道（`<父instanceDir>/parallel/<child_step_id>/` 或 `calls/<child_step_id>/`），work_zone 恒为实例目录下的固定名 `work_zone/`——不同 child 的完整路径天然不同，从路径层消除撞车
+- **目录路径编码 child 身份**：顶层实例用 `<instanceDir>/work_zone/`；parallel/call 子实例的实例目录本身按 child 分道（`<父instanceDir>/parallel/<child_step_id>/` 或 `calls/<child_step_id>/`），work_zone 恒为实例目录下的固定名 `work_zone/`——不同 child 的完整路径天然不同，从路径层消除撞车。**独占=写权独占**（2026-09-30 todo/0126 作者定："自己只应该在自己的 work_zone 里尝试,不应该去干扰别人,祖先也不应该,否则就乱了. 可以读,但不应该能写"）：文件工具写侧只认当前实例自己的 work_zone;读侧对本 run 整个实例树的 work_zone 开放（祖先/兄弟/后代——"避免文件的重复 copy"）,别的 run 不可见。判据权威 [[tools/file-tools#^anc-exec-work-zone-registry]]。0124 首版曾让后代可写祖先（为保 hopbuild2 台账"子 append 父"形态）,本条收回,台账改为各实例写自己的、父读各子合并
   - 勘误出处（2026-08-30 语义审计）：原文"work_zone_<child_step_id>"后缀命名与 persistence 实际布局〔getWorkZone=<instanceDir>/work_zone 固定名〕不符——真实的身份区分在实例目录层级，不在 work_zone 目录名
-- **work_zone 根注册进写域判定面（0066）**：`getWorkZone()` 把 work_zone 根经 `registerWorkZoneRoot` 注册进 tools 写域判定的第三支（注册根前缀——state-dir 名不含 `.hopstate` 字面时前两支全不中）。**原始形态与 realpath 形态都注册**（src/persistence.ts:172-173）
-  - 为什么两种形态都要：两个消费点各吃一种形态——`resolvePath` 拿 `work_zone_path()` 原始产物判、`validateFileAccess` 拿 resolveReal 后的判，只注册一种另一点失配（0066 probe 重放实抓：只注册 realpath 时 /tmp 原始形态在 resolvePath 处照拒）
-  - 目录未建时 realpath 炸则只注册原始形态。
-- **MemoryPersistence 惰性建 work_zone（有意偏差,2026-08-10 作者定）**：MemoryPersistence 的 `init` 不建 work_zone,**首次 `getWorkZone()` 调用时**才在 tmpdir 下 `mkdtempSync` 自建（含 vars/ 子目录同建,src/persistence.ts:235-245）——依据是"body 内 `work_zone_path()` 需要真实目录"
+- **work_zone 根登记进本 run 文件工具提供者（0066 立,todo/0124 改按 run）**：`engine.getWorkZone()` 每次调用把 persistence 报出的 work_zone 根集合（`getWorkZoneRoots()`——本实例加全部祖先实例的 work_zone,祖先按实例目录布局上溯）推给引擎持有的提供者引用（dispatcher 注入的 toolDefsSource 与复用模式 lazy 自建的 engineToolProvider）,提供者经 `ToolProvider.registerWorkZoneRoot` 收下;work_zone 豁免只对集合内路径生效。判据、类型与登记时机不变量的权威在 [[tools/file-tools#^anc-exec-work-zone-registry]]
+  - 演进：2026-09-03 0066 时是 persistence 直接 import tools 的模块级注册表,原始与 realpath 两形态都注册（两个消费点各吃一种形态——resolvePath 拿 work_zone_path() 原始产物判、validateFileAccess 拿真实路径判,只注册一种另一点失配,0066 probe 重放实抓）;2026-09-30 todo/0124 阅卷实证模块级注册表让同进程别的 run 互相可读写、字面正则让 workspace 外任何含惯例名的路径都放行,改为集合归提供者实例持有、engine 做登记路由,persistence 不再知道 tools。两形态都登记的要求不变
+- **MemoryPersistence 惰性建 work_zone（有意偏差,2026-08-10 作者定）**：MemoryPersistence 的 `init` 不建 work_zone,**首次 `getWorkZone()` 调用时**才在 tmpdir 下 `mkdtempSync` 自建（含 vars/ 子目录同建,persistence.ts MemoryPersistence.getWorkZone）——依据是"body 内 `work_zone_path()` 需要真实目录"
   - 独立模式不向外部 driver 暴露 work_zone（dispatcher 进程内直跑,无 @file 跨进程交换需求）,NextResponse 仍透传空串,由 dispatcher 兜（空串形态的下游边界见 [[doc-ref#^anc-exec-doc-ref-resolve]] deflate 步防御性留置注记）。
 - **确切 output_path**：step_ready 除给 `work_zone` 目录外，直接给本步 output 文件的**确切路径** `output_path`（含 child 区分）。worker 照此路径写、`--output "@<output_path>"` 提交，零拼名自由度且兼容含空格路径——消除"parallel 内层 step_id 恒为模板 id、worker 拼名易撞"的出错点。
 - **提交越界校验**：`submit_and_fetch_next --output @<path>` 时引擎校验 `<path>` 落在本执行单元 work_zone 内，越界（如 /tmp）→ 拒绝提交并报错。引擎唯一能真拦的点（复用模式 act 由 CC 执行、写入不过引擎，只能提交时校验）。见 [[hop-cli#^anc-cli-parallel-file-isolation]]。
@@ -300,19 +301,19 @@ Id: next_step
 Goal: 遍历步骤树，找到下一个待执行的步骤，组装上下文返回
 
 Inputs:
-- instance_id: line      # 执行实例 ID
+- instance_id % line      # 执行实例 ID
 - spec                   # Field
 - step_states            # Field
 - variables              # Field
 
 Outputs:
-- response: yaml         # NextResponse（5 种形状之一）
+- response % yaml         # NextResponse（5 种形状之一）
 
 ## Steps
 1. [act] 检查执行状态：是否所有顶层步骤已完成/失败/跳过
   - ← step_states, spec
-  + → execution_finished: bool
-  + → has_failed_steps: bool
+  + → execution_finished % bool
+  + → has_failed_steps % bool
   > 遍历 spec.steps（顶层），若全部状态为 done/failed/skipped 则 finished = true
 
 2. [branch] 按执行状态分派
@@ -333,7 +334,7 @@ Outputs:
   2.3. [case] execution_finished = false
     2.3.1. [act] DFS 遍历步骤树，找到第一个可执行节点
       - ← spec, step_states
-      + → target_step: yaml  # { step_id, step_type, node } 或 null
+      + → target_step % yaml  # { step_id, step_type, node } 或 null
       > 深度优先前序遍历（DFS pre-order）： ^anc-exec-dfs-traversal
       > - pending 的可执行步骤（7 种 ExecutableStepType——reason/act/check/confirm/ask/commit/call）→ 命中，标记为 running
       > - pending 的容器步骤 → 标记为 running，进入其 children 继续遍历
@@ -454,7 +455,7 @@ Outputs:
   | 4 | JSON 壳装 YAML 串组合 | coerce 解 JSON→露出 YAML 串无人再看 | 不动点循环自然吃净 | coffee3 四轮烧尽 |
   | 5 | 列表元素位单键壳 | [line] 收到 [{"字段名": ["真值"]}] | 逐元素剥壳,数组拼平/标量就地替换;任一元素键名≠字段名整列表不碰 | hopissues/0053,hopkb r15 批 8/32 灭 |
   | 6 | HopSchema 赋值形态回声 | 值字面成 "line = 'P4'"（照抄输入渲染语法）;带名带类型的整条回声 "clause_id % line = 1";同行块式记号 "text =| 正文" | 三档整串匹配后剥出真值,引号成对去引号,递归进结构:①`内建类型词 = 值` ②`名 % 内建类型词 = 值`（`%` 形态无二义,名位一并剥掉）③`=|` 同行块式（渲染器教"值恒在下方缩进块",同行写即回声）。**剥完按壳自带的类型词还原**（`bool = false` → 布尔 false、`int = 9` → 数字 9）——壳里的类型词就是权威,不依赖槽位声明,故 `[yaml]` 这类无字段级声明的槽位同样治得住 | real-task-scaling 2026-09-19,单 run 355 处全污染;todo/0108 T8 合同评审结论翻转（毒值 "bool = false" 剥成字符串 "false",下游 Python 按"非空字符串恒真"把 9 个 false 数成 9 个 true） |
-  | 7 | 引号前缀行 | 值行以引号片段开头接裸文炸 YAML 解析 | repairQuotedPrefixScalars 修复后重解析 | 见 ^anc-exec-output-quoted-prefix-repair |
+  | 7 | 引号前缀行 / 值里裸冒号 | 值行以引号片段开头接裸文炸 YAML 解析;不加引号的值里含英文冒号加空格炸 YAML 解析;不加引号的值以反引号、@ 或 % 开头炸 YAML 解析 | repairYamlScalars 串联两道修复（引号前缀全行扫描 → 裸冒号与保留字符开头按报错行逐行修,加引号时连同缩进更深的续行一起并入）后重解析 | 见 ^anc-exec-output-quoted-prefix-repair / ^anc-exec-output-inline-colon-repair（后者 2026-09-29 hb2 qwen-flash 头部契约门 4/7 实撞;反引号开头同日 ppt qwen-flash 实撞——pages 解析落空归一空列表,交付零页演示文稿） |
   | 8 | 散文前置+字段名键尾随 | 值开头是整段分析散文,真值列表在后面以 `字段名:` 键行引出（"我需要逐行分析…L25:…\n\npts_b:\n- id: P1…"） | 整体 YAML 解析失败、且壳 7 引号修复也不中之后（两档次序固定:修复先试,壳 8 是字符串档最后一档）,找最后一个行首 `字段名:` 键行,从那里截断重解析;解出物再走单键剥层与终审门 | fc 27b M 档二轮 2026-09-20,三路子实例 SCHEMA 三连败×多块,88 万 tokens 烧尽——散文里内容全对,列表完好挂在键下,七种旧剥法全够不着 |
 
   **安全边界（哪些照拒不救——宽容形态不宽容内容）**：
@@ -487,6 +488,7 @@ Outputs:
     - 实撞与拍板:折叠 v2 2026-08-25 取代"拒斥+反馈自愈"（dr16 实撞:`fix_note: line` 重试全交多行 markdown,烧掉容器三条命里的两条）;恒拦迁约束标注=todo/0043,2026-09-02 作者拍 B 案"倾向于 step 约束里说明,否则这个概念是分裂的"（全空响应事故已由 [[step-dispatcher#^anc-exec-output-empty-loud]] 响应级闸罩住）
   - **`text/markdown/prompt/HopSpec`** 接受任意字符串;**`yaml` 须为结构或可 parse 成结构的字符串**（2026-08-20 作者改判,概念权威 [[../concepts/HopSpec V3核心规范#^anc-type-yaml-structured]]）:剥壳后 parse 出结构即过,纯散文/标量=拒,反馈指路"返回结构本身" ^anc-type-yaml-structured
     - checkValue 与 coerceOutputValues 共用 parseYamlStructure;init 入口 params 同规归一
+    - 拒的反馈分两种（2026-09-29,契约权威 [[step-dispatcher#^anc-exec-output-inline-colon-repair]] 反馈半边）:YAML 解析器报错的,报"第 N 行（原文）解析失败"加常见原因（值里含英文冒号加空格、值以反引号或 @ 或 % 开头、值以引号开头却没把整值包住）,只让模型修那一行;解析出来是一段文字的,才报"实际是散文文本"——旧口径两种一律报散文,模型对着误诊改形态,同一行的冒号三轮不改
     - 文本化三面（三十六审立据）:str(x)=YAML 块式;写侧工具 content 收结构=YAML 块式落盘;f-string 插值=紧凑单行 JSON
 - **message 必含**：字段名+声明类型+实际值（截断）+不匹配原因;涉及自定义 TypeDecl 时追加该类型字段级定义行
   - 实撞出处（0017）:反馈不自包含 3 轮同因全灭;涉及类型=失配字段的 TypeDecl 闭包,每类型一行去重
@@ -672,19 +674,19 @@ Id: complete_step
 Goal: 记录步骤执行结果，更新变量，检查容器完成状态
 
 Inputs:
-- step_id: line          # 完成的步骤 ID
-- output: yaml           # 步骤输出（key-value）
+- step_id % line          # 完成的步骤 ID
+- output % yaml           # 步骤输出（key-value）
 - spec                   # Field
 - step_states            # Field
 - variables              # Field
 
 Outputs:
-- result: yaml           # CommandResponse
+- result % yaml           # CommandResponse
 
 ## Steps
 1. [act] 验证步骤状态
   - ← step_id, step_states
-  + → valid: bool
+  + → valid % bool
   > 步骤必须处于 running 状态，否则返回 INVALID_STATE
   > 若步骤已 done，先比对内容再定待遇（^anc-exec-stale-resubmit 分流）：不带 outputs 或内容与已存值归一后相同 → { status: 'ok', code: 'ALREADY_DONE' }（真幂等）；带不同内容 → { status: 'error', code: 'INVALID_STATE' }（STALE_RESUBMIT 拒收）
 
@@ -698,15 +700,15 @@ Outputs:
   2.2. [case] valid = true
     2.2.1. [act] output_schema 类型校验
       - ← step_id, output, spec
-      + → schema_valid: bool
-      + → schema_errors: [line]
+      + → schema_valid % bool
+      + → schema_errors % [line]
       > 取步骤的 + → 声明（OutputDecl[]），逐字段校验 output 是否匹配
       > v1 校验策略：基础类型（text/bool/line/[line]）做值类型检查；自定义 TypeDecl 仅验证字段名存在性（Record.keys 子集检查），不做递归类型匹配
       > 校验失败 → 返回 { status: 'error', code: 'SCHEMA_MISMATCH', message: schema_errors }
 
     2.2.2. [act] 合并输出到 variables（先写 vars.json）
       - ← step_id, output, variables
-      + → updated_vars: yaml
+      + → updated_vars % yaml
       > merge 策略：output 的 key-value 合并到当前 scope 的 variables 中，同名覆盖
       > 原子写入 vars.json
 
@@ -739,20 +741,20 @@ Id: select_branch
 Goal: 激活选中的 case，跳过未选中 case。由 Engine 内部条件评估调用，也可通过 CLI 手动覆盖（调试/HITL 介入用）
 
 Inputs:
-- step_id: line          # branch 步骤 ID
-- selected_case_id: line    # 选中的 case 步骤 ID
-- reason: text           # 选择理由（可选，用于日志）
+- step_id % line          # branch 步骤 ID
+- selected_case_id % line    # 选中的 case 步骤 ID
+- reason % text           # 选择理由（可选，用于日志）
 - spec                   # Field
 - step_states            # Field
 
 Outputs:
-- result: yaml           # CommandResponse
+- result % yaml           # CommandResponse
 
 ## Steps
 1. [act] 验证参数
   - ← step_id, selected_case_id, spec, step_states
-  + → valid: bool
-  + → error_code: line
+  + → valid % bool
+  + → error_code % line
   > 验证 step_id 指向一个 branch 步骤且状态为 running
   > 验证 selected_case_id 是该 branch 的直接 case child
   > 若 selected_case_id 不在 branch 的 children 中 → error_code = INVALID_STEP_ID
@@ -789,26 +791,26 @@ Id: fail_step
 Goal: 处理步骤失败，沿升级链决定下一步行为——就近事务边界重试阶梯，未捕获则实例终止（函数级 fail） ^anc-exec-retry-adaptive
 
 Inputs:
-- step_id: line          # 失败的步骤 ID
-- failure_reason: text   # 失败原因（人类可读）
-- fail_kind: line        # 结构化失败分类：'lack_of_info' | 'error'（默认 'error'）。driver 据此机检分流（lack_of_info → 知识补充/上传父层；error → retry/adaptive）
+- step_id % line          # 失败的步骤 ID
+- failure_reason % text   # 失败原因（人类可读）
+- fail_kind % line        # 结构化失败分类：'lack_of_info' | 'error'（默认 'error'）。driver 据此机检分流（lack_of_info → 知识补充/上传父层；error → retry/adaptive）
 - spec                   # Field
 - step_states            # Field
 - retry_counters         # Field
 - hoplog                 # Field（失败原因记录到 HopLog）
 
 Outputs:
-- action: line  # 失败处理决策：retry | adaptive_replan | propagate | abort
-- next_context: yaml  # 下一步所需上下文（仅 retry/adaptive 时有值）
+- action % line  # 失败处理决策：retry | adaptive_replan | propagate | abort
+- next_context % yaml  # 下一步所需上下文（仅 retry/adaptive 时有值）
 
 ## Steps
 1. [act] 标记步骤为 failed，失败记录（FailRecord）落档。**fail 不碰值空间**（2026-08-09 作者定，函数级 fail 定稿）：不置 None、不清理、不回滚——失败步骤与同轮前序步骤已写下的变量原样保留（重试轮修复素材）；残留处置归 spec 作者（`= Null` 初值、重跑覆盖、rollback 扩展）。原"输出置 None + 更新模式豁免（DEBT-13/^anc-exec-failstep-skip-update）"整体废除——豁免是给置 None 规则打的补丁，规则删豁免亡。**None 闸已删**：None 是普通值（= Null 重置 / 声明未产出），引擎不设"消费 None 自动 fail"闸。**计算异常也是 fail**：body 算错→本步 fail、条件算错→branch fail（同日"折 None+log"中间态废）。 ^anc-exec-none-propagation
   - ← step_id, failure_reason, fail_kind
-  + → fail_record: yaml  # FailRecord{failed_step, reason, fail_kind, attempt}——概念层四字段承载体（轮次=attempt，同一事务边界内第几次失败）；逐轮累积进 retry_history，跨 call 加壳内核原封
+  + → fail_record % yaml  # FailRecord{failed_step, reason, fail_kind, attempt}——概念层四字段承载体（轮次=attempt，同一事务边界内第几次失败）；逐轮累积进 retry_history，跨 call 加壳内核原封
 
 2. [act] 查找最近的重试容器祖先（subtask 或 case）及其 retry 配置
   - ← step_id
-  + → parent_subtask: yaml  # { id, retry_max, retry_remaining, adaptive } 或 null
+  + → parent_subtask % yaml  # { id, retry_max, retry_remaining, adaptive } 或 null
   > 由概念层「case 就是 branch 下的 subtask」推演：retry 祖先查找同时匹配 subtask 和 case 容器。
   > case 命中时按其 retry（缺省 3）/adaptive 重置 children 重跑，语义与 subtask 完全相同。
   > **commit 退火跳级（2026-08-20 作者定,概念权威 [[../concepts/HopSpec V3核心规范#^anc-step-commit]] 退火条;2026-09-02 判据重构——作者裁定"架构设计上的迷糊"后按重跑范围判据归一）** ^anc-exec-commit-anneal
@@ -862,12 +864,12 @@ Outputs:
       > Goal: 给定一次步骤失败的失败原因与失败记录类别,判出事务级确定性、步级瞬态、普通三档之一
       >
       > ## Inputs
-      > - reason: text      # handleFailStepRetry 收到的失败原因（烧尽上浮时是不带原文的那句）
-      > - fail_kind: line   # 该步失败记录里的类别（stepFailReasons 里的 fail_kind,可能缺席）
+      > - reason % text      # handleFailStepRetry 收到的失败原因（烧尽上浮时是不带原文的那句）
+      > - fail_kind % line   # 该步失败记录里的类别（stepFailReasons 里的 fail_kind,可能缺席）
       >
       > ## Outputs
-      > - fail_class: line  # transactional（事务级,直达兜底）| transient（步级瞬态,首撞免扣）| normal（普通,照扣预算走阶梯）
-      > - transient_prefix: line  # fail_class=transient 时命中的前缀名（免扣记账键的一半）,其余档为空
+      > - fail_class % line  # transactional（事务级,直达兜底）| transient（步级瞬态,首撞免扣）| normal（普通,照扣预算走阶梯）
+      > - transient_prefix % line  # fail_class=transient 时命中的前缀名（免扣记账键的一半）,其余档为空
       > ```
       >
       > **类型约定（HopType,字段逐条）**：
@@ -930,12 +932,12 @@ Outputs:
 > Goal: 为某个将要执行的步骤取重试反馈时,只取它所在各容器本轮起点之后写入的失败记录,且只对本轮的重跑参与者注入
 >
 > ## Inputs
-> - step_id: line            # 将要执行的步骤
-> - retry_history: yaml      # 容器 id → 失败记录列表（带 event_seq 位置戳）
-> - exec_events: yaml        # 执行事件流（含 loop_iter 轮次事件——入口与轮进各一条）
+> - step_id % line            # 将要执行的步骤
+> - retry_history % yaml      # 容器 id → 失败记录列表（带 event_seq 位置戳）
+> - exec_events % yaml        # 执行事件流（含 loop_iter 轮次事件——入口与轮进各一条）
 >
 > ## Outputs
-> - feedback: yaml           # {attempt, reason, prior?}——没有本轮反馈时为空（不注入）
+> - feedback % yaml           # {attempt, reason, prior?}——没有本轮反馈时为空（不注入）
 > ```
 >
 > **类型约定（HopType,字段逐条）**：
@@ -1157,7 +1159,7 @@ DFS 下行携带 `inParallelContext` 标志——遇 running/pending parallel �
 - child 子实例 failed → 该聚合输出名写 None（沿用底层 fail 语义）。
 - 全部处理后 `propagateCompletion` 标 parallel done，聚合输出提升到父 scope，继续 `advanceToCaller` 推进到下一个 caller 介入点。
 - **for-each 分支**（[[parallel-execution#^anc-exec-parallel-foreach-join]]）：for-each parallel 的 children 是运行时合成 ID（`{P}.1`…`{P}.N`），spec 里只有一个模板
-  - join **必须遍历 childResults 全部合成 ID**（不是 `getChildren` 的单个模板），按 parallel 列表输出 `+→ X: [T]` 收集各 child 的同名 `X: T` 成列表（按序号），全部合成 ID 标终态。漏遍历会导致只 join 第一个 child + 列表类型破坏。
+  - join **必须遍历 childResults 全部合成 ID**（不是 `getChildren` 的单个模板），按 parallel 列表输出 `+→ X % [T]` 收集各 child 的同名 `X % T` 成列表（按序号），全部合成 ID 标终态。漏遍历会导致只 join 第一个 child + 列表类型破坏。
 
 **join 前置不变量（健壮性硬校验，非 driver 自觉）** ^anc-exec-parallel-join-preconditions
 
@@ -1211,6 +1213,7 @@ v2 复用模式真并行中，每个 parallel child 容器在独立子实例目�
       state.json, vars.json, spec.json
     2.2/                                   # child_step_id=2.2 的子实例
       state.json, vars.json, spec.json
+  commands.log                             # hopjit-mcp run_approved_command 的兜底账（该 run 无 hoplog 或 hoplog 目录已被轮转删掉时,一行一 JSON;[[mcp-server#^anc-mcp-run-command]] 第 7 步）
   calls/                                   # call 子实例（已有）
     <子实例ID>/ ...                        # 不在 loop 里=call 步骤号;在 loop 里=<步骤号>.<各层轮次>（^anc-exec-call-child-iter-id）
 ```
@@ -1320,15 +1323,15 @@ param_mapping 的取值方一律是**引擎**，不是驱动方——驱动方�
 Id: resolve_call_params
 Goal: 按 param_mapping 从父变量空间取值,构造子实例 init 的 params
 Inputs:
-- call_step_id: line     # 父 spec 内的 call 步骤 id
+- call_step_id % line     # 父 spec 内的 call 步骤 id
 Outputs:
-- params: yaml           # 子 Input 名 → 父变量值
+- params % yaml           # 子 Input 名 → 父变量值
 Constraints:
 - 父值缺失（声明未产出）的项不注入,同时 warn 落账（2026-09-01 补——原纯静默,doc-review 第十六次实撞:点路径 from 查不到被无声跳过,5/5 子实例拿 undefined 全灭后账面无一丝痕迹;点路径写法本身已由 V12 静态拒,warn 兜静态拦不住的悬空 from）
 - 子 init 校验必填缺失即拒（**2026-09-01 账实差修复实装**——本句自 2026-08-27 立约以来一直是纸面承诺,initExecution 实际对缺失 Inputs 预放 undefined 照跑,INIT_FAILED 仅 Tools 对账一个触发源;实撞:子实例 reviewer_prompt=None 不自报缺信息,自造角色跑完全程审查,产出像样但角色与派单不符。实装口径:**闸只落 call 子实例创建链**〔initExecution 携 parentInstanceId+callStepId 且**无 subtreeRoot** 的形态——subtreeRoot 在场=parallel worker 子实例,不受此闸:worker 执行同 spec 子树,Inputs 靠 params_for_child 部分回填是常态,itemVar 缺失已有 MISSING_INPUT 专闸;实装首版漏此边界,4 个 worker 测试红当场收窄〕;判据=callee Inputs 声明的每个名在实参里缺席或值为 undefined → INIT_FAILED 点名缺哪些。"必填"定义:VarDecl 无 default 字段,全部 Inputs 视为必填——原句"缺省语义接管"在无缺省载体的现文法下是空指涉,随本次改定删除）
-- **顶层 run 必填 Inputs 同闸（2026-09-01 deep-validate 批立规,call 子实例闸的孪生半边——原句"顶层 run 缺参照旧宽容〔参数仪式归 driver 层,收紧属另一决策〕"的那个另一决策本日作者拍定收紧:anchor-audit standalone 化九坑之坑 3 实撞,漏传 scripts_dir 起 run,None 静默灌下游到 subprocess.run 拼出坏 argv 才炸,病灶离症状隔几步）**：顶层 initExecution（无 parentInstanceId 的形态——含 CLI init、MCP start_run、dispatcher runSpec 三入口,引擎单点实装三入口同享）对 spec 声明的每个 Inputs 名,实参缺席或值为 undefined → INIT_FAILED,报文逐个点名缺哪些参数并指路（"start_run/init 的 params 须提供: <名>: <类型>  # <说明>"——名/类型/说明照抄 VarDecl,让补参零翻查）。与 call 子实例闸同一"必填"定义（VarDecl 无 default 载体,全部 Inputs 视为必填）、同一判据（缺席或 undefined）、同一错误码（INIT_FAILED）——两闸是同一条完整性原则的两半边,报文措辞按受众分:子实例闸指向父层映射,顶层闸指向起 run 的调用方。parallel worker 子实例（subtreeRoot 在场）照旧不受闸（params_for_child 部分回填是常态）。Inputs 文法现无初值载体（VarDecl 只有 name/type/description 三字段——`= 初值` 是步骤输出位的文法,不是 Inputs 的）,将来若 Inputs 收初值,带初值项自然不缺席、判据无需改。 ^anc-exec-init-required-inputs
+- **顶层 run 必填 Inputs 同闸（2026-09-01 deep-validate 批立规,call 子实例闸的孪生半边——原句"顶层 run 缺参照旧宽容〔参数仪式归 driver 层,收紧属另一决策〕"的那个另一决策本日作者拍定收紧:anchor-audit standalone 化九坑之坑 3 实撞,漏传 scripts_dir 起 run,None 静默灌下游到 subprocess.run 拼出坏 argv 才炸,病灶离症状隔几步）**：顶层 initExecution（无 parentInstanceId 的形态——含 CLI init、MCP start_run、dispatcher runSpec 三入口,引擎单点实装三入口同享）对 spec 声明的每个 Inputs 名,实参缺席或值为 undefined → INIT_FAILED,报文逐个点名缺哪些参数并指路（"start_run/init 的 params 须提供: <名> % <类型>  # <说明>"——名与类型之间用 HopSchema 正字 `%`,todo/0109 第 4 步——名/类型/说明照抄 VarDecl,让补参零翻查）。与 call 子实例闸同一"必填"定义（VarDecl 无 default 载体,全部 Inputs 视为必填）、同一判据（缺席或 undefined）、同一错误码（INIT_FAILED）——两闸是同一条完整性原则的两半边,报文措辞按受众分:子实例闸指向父层映射,顶层闸指向起 run 的调用方。parallel worker 子实例（subtreeRoot 在场）照旧不受闸（params_for_child 部分回填是常态）。Inputs 文法现无初值载体（VarDecl 只有 name/type/description 三字段——`= 初值` 是步骤输出位的文法,不是 Inputs 的）,将来若 Inputs 收初值,带初值项自然不缺席、判据无需改。 ^anc-exec-init-required-inputs
 - **engine_min_version 版本闸（版本兼容性原则,todo/0093——作者定 2026-09-15"开始执行版本兼容性原则"）**：Config 段约定键 `engine_min_version: <semver>` 声明本 spec 需要的引擎最低版本（写入面=pack 自动注入打包时引擎版本,作者可手写放宽——知道自己没用新语法时）。init 期比对：键在场且**引擎自身版本 < engine_min_version → INIT_FAILED 响亮拒**,报文带两出路（升级命令 `npm i -g @hoplogic/hopjit@latest` / 确认兼容后删除该键）;**键缺席=零比对零提示**（存量 spec 零破坏,渐进采纳）。比对语义=semver 三段数值逐段比（非字符串比——"0.10.0" > "0.9.0"）,非法格式值按缺席处理并 warn 留痕（配置钝感写错不炸,但不静默）。反方向（spec 旧引擎新）不设闸——由破坏性收严三义务守（决策交代/validate 报文带修法/迁移知识进 hopfix 供给面,权威归 [[release-engineering]] 版本兼容原则节）。引擎自身版本读取失败（dist 上溯包根不可得）→ **跳过比对（fail-open,与键缺席同路径）**——版本读取问题是宿主装置故障,不该拒用户的 spec（第十一轮 review 抓获:原实装兜底 0.0.0 落进数值比恒小于一切声明值,读失败时带键 spec 全被误拒,与"永不因版本读取问题拒 spec"的本意正相反）。与顶层必填 Inputs 闸同为 init 期硬闸,判序在其前（版本不足时 Inputs 报文可能基于新语法,先判版本）;call 子实例必填闸（^anc-exec-init-required-inputs call 半边）是 2026-09-01 既有结构,恒在版本闸之前——其报文受众是写 call 映射的 spec 作者而非 run 用户,版本闸主要服务顶层 pack 产物场景,两序并存如实记（第十一轮 review 裁定:不调序,调序须重验老闸得不偿失）。 ^anc-exec-engine-min-version-gate
-- **requires_commands 命令预检闸（hopissues/0090 P3 槽位半边,作者拍 2026-09-15"加槽+顺带做 INIT 预检"）**：Config 段约定键 `requires_commands: [<命令名>...]` 声明本 spec 的 subprocess.run body 依赖哪些本地命令（写入面=hopbuild 翻译期从产物 body 抽取写入,作者也可手写;落位与 engine_min_version 同为 Config 约定键——同族"spec 自声明运行前提",零 parser 改动 serializer 免费回写）。init 期对账：键在场且为字符串列表 → 逐个与宿主命令白名单（hostConfig.sandbox.runtime.available）比对,**有缺失 → INIT_FAILED 响亮拒**,报文点名缺哪些命令并带修法指路（"把 <命令> 加进项目根 hopjit.yaml 的 commands: 列表后重跑"——与运行期拒报文同措辞,hopissues/0090 指路条款）;**键缺席=零比对**（存量 spec 零破坏,渐进采纳——未声明的 spec 仍靠运行期拒兜底）;非法格式（非列表/含非字符串项）warn 按缺席处理（配置钝感写错不炸,但不静默）。判序=engine_min_version 闸后、顶层必填 Inputs 闸前（版本都不足时命令报文没意义;命令都不齐时补参没意义——三闸从"环境层"到"参数层"递进）。**与 act-body 运行期拒的分工**：本闸只对账"声明了的"（声明是下界不是上界——body 实际调用未声明的命令仍由运行期白名单核权威兜底,见 [[act-body#^anc-exec-subprocess-run]]）;INIT 读的 hostConfig 与运行期是同一份装配（复用模式 CLI buildHostConfig 在 init 前读 hopjit.yaml,MCP 每 run 重读）,不存在"validate 期 sandbox ≠ 运行期"的时差错位——这正是本闸落 INIT 而非 validate 的理由（act-body 工程偏差③拒的是 validate 期静态预检,本闸不翻那个案,是把运行期拒的时间点前提到进 body 之前）。 ^anc-exec-requires-commands-gate
+- **requires_commands 命令预检闸（hopissues/0090 P3 槽位半边,作者拍 2026-09-15"加槽+顺带做 INIT 预检"）**：Config 段约定键 `requires_commands: [<命令名>...]` 声明本 spec 的 subprocess.run body 依赖哪些本地命令（写入面=hopbuild 翻译期从产物 body 抽取写入,作者也可手写;落位与 engine_min_version 同为 Config 约定键——同族"spec 自声明运行前提",零 parser 改动 serializer 免费回写）。init 期对账：键在场且为字符串列表 → 逐个与**宿主命令白名单 ∪ 本 spec《已批准命令》段各行首项**（unionApprovedCommandNames,与 body 运行期注入点同一并集——2026-10-01 review 补：原只对宿主白名单,卡上批过的命令仍被 INIT 闸拦并教人改 hopjit.yaml,[[act-body#^anc-exec-command-primitive]] 并集条）比对,**有缺失 → INIT_FAILED 响亮拒**,报文点名缺哪些命令并带修法指路（"把 <命令> 加进项目根 hopjit.yaml 的 commands: 列表后重跑"——与运行期拒报文同措辞,hopissues/0090 指路条款）;**键缺席=零比对**（存量 spec 零破坏,渐进采纳——未声明的 spec 仍靠运行期拒兜底）;非法格式（非列表/含非字符串项）warn 按缺席处理（配置钝感写错不炸,但不静默）。判序=engine_min_version 闸后、顶层必填 Inputs 闸前（版本都不足时命令报文没意义;命令都不齐时补参没意义——三闸从"环境层"到"参数层"递进）。**与 act-body 运行期拒的分工**：本闸只对账"声明了的"（声明是下界不是上界——body 实际调用未声明的命令仍由运行期白名单核权威兜底,见 [[act-body#^anc-exec-subprocess-run]]）;INIT 读的 hostConfig 与运行期是同一份装配（复用模式 CLI buildHostConfig 在 init 前读 hopjit.yaml,MCP 每 run 重读）,不存在"validate 期 sandbox ≠ 运行期"的时差错位——这正是本闸落 INIT 而非 validate 的理由（act-body 工程偏差③拒的是 validate 期静态预检,本闸不翻那个案,是把运行期拒的时间点前提到进 body 之前）。 ^anc-exec-requires-commands-gate
 - 非 call 步骤返回空映射（不抛错,调用方自判）
 ```
 
@@ -1355,9 +1358,9 @@ resolveCallParams(call_step_id):
 # Spec: call 深度检查
 Goal: 建子实例前拦截超深调用链,防递归失控
 Inputs:
-- depth: number          # 本次调用的深度（两模式计法见下）
+- depth % number          # 本次调用的深度（两模式计法见下）
 Outputs:
-- verdict: bool          # 超限=拒
+- verdict % bool          # 超限=拒
 Constraints:
 - 上限 = resource_limits.max_call_depth（缺省 10,常量表）
 - 超限返回 DEPTH_EXCEEDED 且不建子实例——父层按步骤失败走升级链
@@ -1407,10 +1410,10 @@ Constraints:
 Id: dynamic-spec-gate
 Goal: 运行时生成的 HopSpec 文本经同一道门成为可执行物——文法坏/含不可逆动作/越预算在门口拒,不漂运行期
 Inputs:
-- generated_md: markdown   # 运行时生成的 spec/片段文本（LLM 产物）
-- context: yaml            # 准入语境（父实例 work_zone/预算余量/call 深度）
+- generated_md % markdown   # 运行时生成的 spec/片段文本（LLM 产物）
+- context % yaml            # 准入语境（父实例 work_zone/预算余量/call 深度）
 Outputs:
-- admitted_path: line      # 过门产物的落盘路径（拒绝时无）
+- admitted_path % line      # 过门产物的落盘路径（拒绝时无）
 ```
 
 1. **落盘先行（D1 作者定 2026-08-26;适用范围修订同日——review 抓 D1 与 replan 既有内联提交协议次序矛盾〔先落盘 vs 先消费后落盘〕,裁定 **D1 只约束动态 callee**:replan 维持内联提交+验证通过后沉淀落盘的成熟协议,门的"统一"收窄为 validate/禁 commit/预算三件,D1 是动态 callee 专属件）**：生成文本先落盘再消费,变量空间只传**路径**不传全文——落盘即候选记录（渐进固化的原料）,审计有实物,大文本不在变量空间流动。**目录与命名规范**：
@@ -1441,11 +1444,11 @@ Id: engine-subtask-free-expand
 Goal: 空的 subtask free 到步时不执行、停下向 caller 索计划——请求携执行时上下文,展开物过闸后接续执行
 
 ## Inputs
-- 容器契约: yaml   # subtask free 的 ← 输入名+→ 交付声明+描述
-- 执行时上下文: yaml # ← 输入变量此刻的实际值(deflate 后)——盲规划禁止
+- 容器契约 % yaml   # subtask free 的 ← 输入名+→ 交付声明+描述
+- 执行时上下文 % yaml # ← 输入变量此刻的实际值(deflate 后)——盲规划禁止
 
 ## Outputs
-- 展开请求: yaml   # adaptive_needed 形态,reason='initial_plan'
+- 展开请求 % yaml   # adaptive_needed 形态,reason='initial_plan'
 ```
 
 **类型约定（HopType,字段逐条）**：
@@ -1544,10 +1547,10 @@ Goal: 空的 subtask free 到步时不执行、停下向 caller 索计划——�
 Id: specfile-writeback
 Goal: replan 改树后把源文件的 spec 段同步为新计划——叙事段字节原样,写回经校验才算数,失败可回滚不伤源文件
 Inputs:
-- spec_path: line     # 源文件路径（内存态实例无此项即跳过——与候选文件同判据）
-- new_ast: yaml       # 引擎真身（replan 后的 AST）
+- spec_path % line     # 源文件路径（内存态实例无此项即跳过——与候选文件同判据）
+- new_ast % yaml       # 引擎真身（replan 后的 AST）
 Outputs:
-- written: bool       # 写回成败（失败不拦 replan——镜像滞后可容忍,真身错误不可容忍）
+- written % bool       # 写回成败（失败不拦 replan——镜像滞后可容忍,真身错误不可容忍）
 ```
 
 四件套（作者定 2026-08-26,"直接写回不合适,需要备份"）：
@@ -1625,10 +1628,10 @@ Id: engine-abort
 Goal: 把一个非终态实例标记为主动中止的终态,跨进程持久,幂等,历史全保留
 
 ## Inputs
-- reason: text  # 中止原因（人话,如"用户放弃"——入账供事后追溯,可省缺省 '(user abort)'）
+- reason % text  # 中止原因（人话,如"用户放弃"——入账供事后追溯,可省缺省 '(user abort)'）
 
 ## Outputs
-- 终态: text  # 恒 'aborted'——status/账面自此如实呈现,不再谎报 running
+- 终态 % text  # 恒 'aborted'——status/账面自此如实呈现,不再谎报 running
 ```
 
 **类型约定（HopType,字段逐条）**：
@@ -1715,9 +1718,9 @@ hopjit resume [--instance id]
 Id: recover
 Goal: 把崩溃中断实例的悬空 running 步骤重置为 pending 幂等重跑,不破坏刻意持有 running 的结构状态
 Inputs:
-- instance_dir: line     # 实例快照目录
+- instance_dir % line     # 实例快照目录
 Outputs:
-- engine: yaml           # 可继续 next 循环的引擎实例
+- engine % yaml           # 可继续 next 循环的引擎实例
 Constraints:
 - **默认极性=只重跑最后干活的节点**（2026-09-03 作者拍"2 还用问么"反转——原极性"凡 running 一律回 pending,撞坑再逐个豁免"是黑名单式:每新增带状态的容器类型默认先被误重置,撞了才补〔0050 loop 事故正是此模式产物,branch 豁免长期零测试裸奔同源〕。新极性白名单式:可执行叶子重置重跑,容器默认保留——容器 running 是"这段结构走到一半"的结构状态,里面记着选路/圈数/位置等不可重来的决策,重置=决策作废重做与既成事实打架;新容器类型天然安全零豁免维护）
 - 容器重置两形态不是例外,是同一原则的另一半（2026-09-04 作者纠框架:"有啥例外了,这些也都是正在执行最后的节点啊"）——重置判据统一为**崩溃时正在执行的节点**:叶子在干活干到一半要重做;**未决策的 branch**（全部直接 children 均 pending——判据=任一直接 child 已离开 pending——**skipped/running/done/failed 四态皆决策已发生的凭据**〔选路在 handleBranchEntry 同步原子完成后 persist,不存在半选中间态〕;不能只认 skipped:单 case 形态〔C2 合法 if-then〕命中置 running 无兄弟可 skip,2026-09-04 review 实抓旧判据恒 false 误判）与**未进圈的 loop**（loop_counters 无账）被重置是因为引擎正执行到它们的**入口决策**,它们就是那一刻的"最后节点";已选路/已进圈的容器不重置,因为它们的活（入口决策）早已干完落盘,running 只剩结构语境。一句话:**没落盘的工作重做,落盘的决定不动**。**worker 子实例的 scope 掩码祖先先于此两判**（实装首轮测试实抓:掩码祖先可以是 loop,其圈数账在父实例不在 worker 自己账上——"无账"判据在 worker 视角恒真,误杀路标。掩码祖先的入口决策活在父账,worker 无从判也无权判,恒保留）
@@ -1786,8 +1789,8 @@ recover(instance_dir):
 所有 `.json` 文件权限 0600，写入使用原子写入（见崩溃恢复章节）。vars.json 合并所有变量为单文件，避免每步骤 N 次 fsync 的 I/O 放大。写入顺序：vars.json → state.json。
 
 **spec.json 是运行时 AST 快照、随 replan 演化**（[[../concepts/HopSpec V3配套HopJIT运行时能力#^anc-exec-durable-resume]] 实例状态含可变 AST）：常态下 AST init 后不变，每步只改 state/vars，spec.json 无需重写（性能：避免每步序列化整树）。
-- **v1 实况**：FilePersistence.saveSnapshot 恒重写 spec.json（正确性优先、不漏写——replan 后忘写的风险大于每步整树序列化的开销,spec 通常不大）,"仅 replan 触发重写"的脏标记优化归 v2（2026-09-12 0088 批补记——此前该 v1 简化只在代码注释有账,设计正文写的是相反的"引擎区分"）。
-- 但 **adaptive replan 替换 subtask children 后改了 AST**——此时 `saveSnapshot` 必须**重写 spec.json**，否则跨进程 load 读到的 AST 不含 replan 的新 children（执行逻辑回退，此前的真实 bug）——v1 恒重写天然覆盖此要求;v2 上脏标记优化时 replan 路径必须置脏。
+- **现行（2026-09-30 todo/0130,内容寻址）**：FilePersistence.saveSnapshot 每步仍调 writeSpec,但 writeSpec 按内容哈希去重——真身在 run 根 `specs/<sha>.json` 只落一份,实例 spec.json 只存引用;AST 没变时一个字节都不重写,变了（replan）就落新真身。"恒写不漏"的正确性保证不变,每步整树重写与每实例整份复制两层放大同时消掉（hopissues/0115:hopkb 单批 2309 份 1.62G 只有 3 种内容）。权威 [[persistence#^anc-provider-spec-content-addressed]]。演进：v1（至 2026-09-30）恒重写整份,"仅 replan 触发重写"的脏标记曾归 v2,现被内容寻址取代——脏标记只消按步重写消不掉按实例复制。
+- 但 **adaptive replan 替换 subtask children 后改了 AST**——此时 `saveSnapshot` 必须让盘上 spec 反映新树，否则跨进程 load 读到的 AST 不含 replan 的新 children（执行逻辑回退，此前的真实 bug）——内容寻址下新 AST 自然是新哈希、新真身、引用改指,天然覆盖此要求,无需脏标记。
 - 注意区分 **spec 源文件不可变**（SSR，[[../concepts/HopSpec V3核心规范#^anc-exec-adaptive-fallback]]）vs 此运行时 AST 快照可变——两者不同。
 
 **终态落盘（2026-08-26,hopissues/hoplogic3/0043——"暂停有卡,终局有据"的终局半边）**：run 转 completed/failed 时终态必须随快照落盘。
@@ -1837,6 +1840,105 @@ recover(instance_dir):
 - **只读入口不拦**（status/vars/validate/list;MCP 的 run_status/list_runs）——看账无害,跨通道可观测恰是排查双执行的手段;
 - **缺席宽容**（字段不在场=旧版建的 run）：不拒——存量 run 升级引擎后照常驱动,首个推进入口**补写**本通道值（从此有账;两通道谁先来谁认领,竞态窗口=旧 run 首次推进一次,可接受）;
 - **子实例继承**：call/parallel 子实例随父通道（`init --parent` 落 cli;MCP 进程内子实例落 mcp）——一棵执行树恒单通道,收割/应答跨通道同拒。
+
+**state.json 写入序号核对（同通道两进程的过时覆盖拦截）** ^anc-exec-state-seq-guard
+
+（2026-09-26 作者拍 A 案"版本号核对",todo/0114。）上条驱动通道管的是"这个 run 归哪条通道";本条管的是"同一条通道里,是哪个进程的账"。两者正交:通道核对不动,本条另加一道。
+
+**病因与实撞**：2026-09-22 宏观任务验收与成绩 T3（deep-validate × Ling-3.0-Flash）复跑,同一个 state_dir 里的同一个 run（6ce0b58f-9946-4c40-b620-ee8e2596a4ac）被两个 MCP 进程同时推进。
+- 第一个驱动脚本跑在沙箱里,Ling 端点不在沙箱允许主机名单上,每次续跑都撞网络暂停回到 paused,它按协议每 70 秒续跑一次;
+- 第二个驱动脚本在沙箱外对同一个 run 续跑,11:51:59 拿到 completed,但第一个没被杀掉;
+- 第一个进程内存里的账一直停在"步骤 2.1 网络暂停",在 run 完成之后又发了 6 次 resumeRun,每次都把整份 state.json 覆写回去——盘上显示步骤 2.1 回到 pending、步骤 2 回到 running,看上去"没跑完"。hoplog 是追加写的没被污染,最后靠 hoplog 定案。
+
+**两道旧闸为什么拦不住**：
+- resumeRun 的 INVALID_STATE 预检判的是**本进程注册表里**那一项的 state——第一个进程的注册项确实是 paused,放行;
+- claimDriverChannel 比的是**本进程引擎对象**的 driverChannel 字段——两个进程都是 mcp 通道,名字相同就放行;
+- state.json 由 writeAtomic 整份覆写（写临时文件、fsync、rename）,写之前不看盘上现状。所以谁最后写,盘上就是谁的账。
+
+**做法**：state.json 带一个单调递增的写入序号 `state_seq` 和最后写入者 `last_writer`;引擎每次写盘前回读盘上序号,盘上比本进程内存里的大,说明别的进程在本进程加载之后写过——响亮拒绝,不写任何文件。MCP 的 resume_run / stop_run 在动任何状态之前先做同一核对。
+
+**能力契约（HopTrait）**：
+
+```markdown
+# Spec: state.json 写入序号核对
+Id: engine-state-seq-guard
+Goal: 实例目录落盘前判断本进程内存里的账是否已被另一个进程的写入超越;超越则拒绝覆盖并报出是谁、何时写的,否则序号加一后写入
+
+## Inputs
+- instance_dir % line   # 本引擎绑定的实例目录（engine.instanceDir;为空=没有落盘文件,不核对）
+- mem_seq % line        # 本进程内存里的序号（加载时从盘上 state_seq 取,缺席为 0;本进程每写一次加一）
+
+## Outputs
+- verdict % line        # fresh（可写,写入序号=mem_seq+1）| stale（拒绝,抛 STATE_STALE,不写任何文件）
+- stale_message % text  # verdict=stale 时的报文全文（格式见下方"报文"）
+```
+
+**类型约定（HopType,字段逐条）**：
+
+- `StateFile.state_seq?: number`——写入序号。引擎每次成功写盘加一;缺席=旧版本引擎写的文件,按 0 算。子实例（calls/、parallel/ 下）的 state.json 各自计数,互不相干。
+- `StateFile.last_writer?: { pid: number; at: string }`——最后一次写这份 state.json 的进程:`pid` 是 `process.pid`,`at` 是写入时刻的 ISO 8601 字符串。只用于报文里点名"谁写的",不参与判定。
+- `ExecutionEngine.stateSeq: number`（私有）——本进程内存里的序号。`load` 取盘上 `state_seq`,缺席为 0;`initExecution` 在第一次写盘前取 `readStateSeq(instanceDir).seq`（新实例目录与净室重建的子实例目录里没有文件,得 0;万一目录里已有旧 state.json,init 是显式的"从头开始",沿用盘上序号接着往上加,init 自己不会撞 STATE_STALE,而先前加载了旧账的进程再写盘会被拦）。只读访问器 `getStateSeq()`。
+- `readStateSeq(dir) → { seq: number; last_writer?: { pid; at } }`——persistence.ts 导出。只读 state.json 里这两个字段;文件不在、读不出、解析失败、字段缺席都返回 `seq: 0`（不抛——读不出的文件本来就会被这次写盘修好,判定只关心"有没有更新的账"）。
+- `ExecutionEngine.assertStateFresh(): void`——公开。`instanceDir` 为空直接返回;否则 `readStateSeq(instanceDir).seq > stateSeq` 时抛以 `STATE_STALE:` 开头的 Error,否则返回。persist 与 MCP 预检共用这一个函数。
+- `ErrorCode.STATE_STALE`——登记进错误码枚举与 [[shared-errors#^anc-error-error-code]] 表,致命组（不可重试:重试同一份过时的账只会再被拒,正路是丢弃重载）。
+
+**关键逻辑（HopSop）**：
+
+```
+persist():
+  1. persistence 或 spec 缺席 → 返回（原样）
+  2. assertStateFresh()——盘上序号 > stateSeq → 抛 STATE_STALE（此刻 vars.json/state.json/spec.json 都还没写）
+  3. prev = stateSeq;stateSeq = prev + 1
+  4. saveSnapshot({ state: buildStateFile() 带 state_seq=stateSeq、last_writer={pid, 现在} , vars, spec })
+     失败 → stateSeq = prev,原异常上抛（内存序号与盘上保持一致）
+  5. hoplog flush（原样）
+
+persistToolJournal():
+  try persist()
+  catch e:
+    e 的文字以 'STATE_STALE:' 开头 → 原样上抛（不许在工具日志路径上静默绕过核对）
+    其余 → 吞掉（原语义:纯内存单测没有持久化上下文）
+
+MCP resumeRun(runId, …):
+  1. 注册表取项;没有则 restoreRun 从盘上加载（加载出的引擎 stateSeq=盘上值,天然新鲜）
+  2. assertStateFresh() 抛 STATE_STALE →
+       该项不在 running → 从注册表移出（下次调用走 restoreRun 从盘上重新加载）
+       该项在 running → 不移出（在飞的 dispatcher 下次写盘自己撞 STATE_STALE,run 转 failed,run_status 看得见）
+       返回 { error: { code: 'STATE_STALE', message } }——不翻状态、不注入答案
+  3. claimDriverChannel('mcp')……（原有各道核对,顺序不变）
+
+MCP stopRun(runId):
+  1. 注册表没有 → RUN_NOT_FOUND（原样,stop_run 只认注册表）
+  2. 终态 → 幂等返回现状（原样,不写任何东西）
+  3. assertStateFresh() 抛 STATE_STALE → 同 resumeRun 第 2 步（移出规则相同）,返回 STATE_STALE——不 requestAbortCascade、不写 aborted.json、不删 paused.json
+  4. claimDriverChannel('mcp')……（原样）
+```
+
+**报文**（`assertStateFresh` 抛出的原文,N/M/X/T 为实值;盘上没有 last_writer 时 pid 与时间写"未知"）：
+
+```
+STATE_STALE: 盘上 state.json 已被另一个进程（pid X，写于 T）推进到序号 N，本进程内存里的账还停在序号 M——拒绝覆盖。请丢弃本进程的账，从盘上重新加载后再继续（MCP：再调一次 resume_run 会从快照恢复；CLI：重新执行命令）
+```
+
+**为什么核对放在 engine.persist 里,不放进 FilePersistence.saveSnapshot**：
+- 序号是引擎的账——和 driver_channel 一样,由 buildStateFile 写出、load 读回;放在引擎里,PersistenceProvider 接口一个字都不用改;
+- 放在调 saveSnapshot 之前,判定为过时时 vars.json 也不会被写（saveSnapshot 内部先写 vars.json 再写 state.json,放进去就得在里面再拆一次顺序）;
+- 只对有实例目录的引擎生效（`instanceDir` 非空——FilePersistence 与 load 出来的引擎）。
+
+**为什么 MCP 预检放在通道核对之前**：通道核对在旧 run 缺席时会**认领**（给内存里的引擎写 driverChannel,下次 persist 落盘）——过时的账不该先认领再被拒;先判新鲜,再谈通道。
+
+**适用面与不适用面**：
+- 适用:一切经 engine.persist 的写盘（三十多个调用点全覆盖,包括 persistToolJournal）;MCP resume_run / stop_run 的入口预检;
+- CLI 不改:每条 CLI 命令是新进程、每次从盘上加载,过时窗口只在单条命令执行期内;推进类命令的 catch 走 errorExit,STATE_STALE 原样打到 stderr、退出码 1;
+- MemoryPersistence（没有实例目录）:不存在跨进程问题,不核对（序号照常在内存里加,无害）;
+- 只读入口（status/vars/run_status/list_runs 与各处只读 load）:不写盘,不核对;
+- paused.json（问题卡）、aborted.json（墓碑）、命令参数文件等 state.json 以外的写入不在本条范围——问题卡是交付件,状态以 state.json 为准;
+- 子实例:各自的 state.json 各自计数;子实例重新 init 时整目录删除重建（^anc-exec-call-reinit-clean）,序号从 0 起。
+
+**不设防的面（已接受的局限）**：
+- 两个进程恰好**同时在跑**时,都可能各自花掉一次 LLM 调用,才在写盘那一刻被拦下（作者没选加锁方案——锁方案要处理进程死掉后留下的陈旧锁,生命周期问题更重）;
+- 新旧引擎版本混跑:旧版本写盘不带序号,新版本读到按 0 算,盘上序号不会大于内存,照写不拦;
+- 盘上序号小于内存（人工回滚文件、旧版本引擎覆写过）:判据只拦"盘上更新",不拦"盘上更旧"。
 
 > 完整 HostConfig 恢复不走独立文件——Provider 是运行时对象不可序列化，由宿主 resume 时重新注入（原 DEBT-05 已收口,实装形态见 [[mcp-server#^anc-mcp-run-restore]]）；doc-ref 必需的非敏感子集经 `host_context` 入 state.json（`^anc-exec-host-context-persist`）。
 

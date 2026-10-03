@@ -1,0 +1,78 @@
+```python
+import ast
+import re
+import json
+import sys
+
+def check_function_length(node, filename):
+    violations = []
+    
+    # 遍历语法树中的所有函数定义和类
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, ast.FunctionDef) or isinstance(child, ast.AsyncFunctionDef):
+            # 计算函数体的行数，不包含装饰器
+            start_lineno = child.lineno
+            end_lineno = child.end_lineno
+            
+            # 函数长度 = 从 def 行到函数体最后一行（含首尾）
+            func_length = end_lineno - start_lineno + 1
+            
+            # 检查是否超过 40 行
+            if func_length > 40:
+                violations.append(f"{filename}:{start_lineno}: 函数 '{child.name}' 长度为 {func_length} 行，超过 40 行限制")
+            
+            # 递归检查嵌套函数
+            for stmt in child.body:
+                if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    nested_violations = check_function_length(stmt, filename)
+                    violations.extend(nested_violations)
+                    
+        elif isinstance(child, ast.ClassDef):
+            # 检查类里的方法（包括普通方法和异步方法）
+            for method in child.body:
+                if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    start_lineno = method.lineno
+                    end_lineno = method.end_lineno
+                    func_length = end_lineno - start_lineno + 1
+                    
+                    if func_length > 40:
+                        violations.append(f"{filename}:{start_lineno}: 方法 '{method.name}' 在类 '{child.name}' 中长度为 {func_length} 行，超过 40 行限制")
+                        
+                    # 检查嵌套在方法内的函数
+                    for stmt in method.body:
+                        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            nested_violations = check_function_length(stmt, filename)
+                            violations.extend(nested_violations)
+                            
+    return violations
+
+def main():
+    if len(sys.argv) < 2:
+        sys.exit(1)
+        
+    filename = sys.argv[1]
+    
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except Exception as e:
+        print(f"无法读取文件: {filename}", file=sys.stderr)
+        sys.exit(1)
+        
+    try:
+        tree = ast.parse(content, filename=filename)
+    except SyntaxError as e:
+        print(f"{filename}:{e.lineno}: 语法错误: {e.msg}", file=sys.stderr)
+        sys.exit(1)
+        
+    violations = check_function_length(tree, filename)
+    
+    if violations:
+        for msg in violations:
+            print(msg, file=sys.stderr)
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+main()
+```

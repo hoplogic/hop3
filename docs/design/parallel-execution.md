@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-09-25T11:49+0800
+	last_sync: 2026-09-27T20:38+0800
 	note: parallel 执行设计。§U 现行权威。2026-08-11：P0/P0.5/P2 交付+真机九场景验收过；P1 生产可靠四契约设计定形（对账/超时/协作中断/收割入轨），第三件 paused 让名额摘除归 HITL 挂账。
 %%
 
@@ -64,13 +64,13 @@ StateFile 增可选字段 `inflight: [InflightCall]`——随既有 writeAtomic 
 struct: InflightCall
   Id: inflight-call
   Fields:
-    - step_id: line         # 标注步骤 id（call 或 subtask，两派发单位共用本账）
-    - iter: number          # loop 体内派发时的迭代序号（1 起）——子实例目录后缀、collect 序；兄弟位恒 1
-    - child_instance: line  # 子实例 id：<step_id>.<iter>（目录：call→calls/<ci>/，subtask→parallel/<ci>/）
-    - host_container: line  # 收齐点/杀活域＝最近的**任务容器**（subtask/case/loop）祖先（2026-08-13 作者定形）：case 就是 branch 下的 subtask,自身即事务即边界;branch 是唯一透明结构（[case parallel] 被派发时边界穿过 branch 落上层任务容器）;loop 无远程特权——中间隔着 subtask/case 时边界收窄到最近那层。推演根据=失败走边界 retry,边界越过更近事务则 retry 归属随远处结构漂移（抖动）,事务语义失效。同根据废弃"声明驱动穿透边界"候选（B 案:边界=沿 + → 声明链的最近声明容器,中间容器透明——穿透使失败上报越过就近事务,retry 归属抖动;讨论记录 2026-08-13,不再重议）
-    - dispatched_at: line   # 派发时刻（ISO 时间戳）——crash-resume 账龄二分与超时判定的基准
-    - status: line          # 枚举 inflight/killed——killed=主线失败清场终态；paused（让名额）随并行 HITL 增补
-    - params: yaml          # 可选。派发时入参快照（2026-08-13 随 stale_launch 增——重拼启动命令必须用派发时值:loop 推进后 itemVar 现值≠派发时值,现算必错〔实测 iter1 重拼吃到 iter2 的值,[21,21]〕;老账无此字段时现算兜底）
+    - step_id % line         # 标注步骤 id（call 或 subtask，两派发单位共用本账）
+    - iter % number          # loop 体内派发时的迭代序号（1 起）——子实例目录后缀、collect 序；兄弟位恒 1
+    - child_instance % line  # 子实例 id：<step_id>.<iter>（目录：call→calls/<ci>/，subtask→parallel/<ci>/）
+    - host_container % line  # 收齐点/杀活域＝最近的**任务容器**（subtask/case/loop）祖先（2026-08-13 作者定形）：case 就是 branch 下的 subtask,自身即事务即边界;branch 是唯一透明结构（[case parallel] 被派发时边界穿过 branch 落上层任务容器）;loop 无远程特权——中间隔着 subtask/case 时边界收窄到最近那层。推演根据=失败走边界 retry,边界越过更近事务则 retry 归属随远处结构漂移（抖动）,事务语义失效。同根据废弃"声明驱动穿透边界"候选（B 案:边界=沿 + → 声明链的最近声明容器,中间容器透明——穿透使失败上报越过就近事务,retry 归属抖动;讨论记录 2026-08-13,不再重议）
+    - dispatched_at % line   # 派发时刻（ISO 时间戳）——crash-resume 账龄二分与超时判定的基准
+    - status % line          # 枚举 inflight/killed——killed=主线失败清场终态；paused（让名额）随并行 HITL 增补
+    - params % yaml          # 可选。派发时入参快照（2026-08-13 随 stale_launch 增——重拼启动命令必须用派发时值:loop 推进后 itemVar 现值≠派发时值,现算必错〔实测 iter1 重拼吃到 iter2 的值,[21,21]〕;老账无此字段时现算兜底）
 ```
 
 （TS 形态是代码层投影，在 src/runtime-types.ts `InflightCall`——设计以本 HopType 为准。）
@@ -593,10 +593,10 @@ parallel 容器支持 `for-each` 动态展开：spec 中定义一个 child 模�
 **语法**（2026-08-07 重构后现行文法——for-each 子句入 loop 步骤头，旧 `+ → item : for-each list` 伪输出行已废除）：
 ```
 2. [loop for-each reviewer in reviewers, parallel] 审查员并行评审
-  + → report: [text]
+  + → report % [text]
   2.1. [subtask] 评审模板（child 模板，运行时展开为 N 份）
     - ← reviewer, doc_content
-    + → report: text
+    + → report % text
 ```
 
 - `← reviewers`：声明输入列表（必须是 `[T]` 类型的已定义变量）
@@ -648,10 +648,10 @@ parallel 容器支持 `for-each` 动态展开：spec 中定义一个 child 模�
 Id: join_foreach_collect
 Goal: 把 N 个 worker 的单项产出按 collect 子句收进容器 listVar,落父变量空间,并标全部合成 ID 终态
 Inputs:
-- parallel_step_id: line   # for-each parallel 容器 id
-- child_results: yaml      # 合成ID → { vars, failed }（由 CLI 收集端按期望集填充,见 9c'）
+- parallel_step_id % line   # for-each parallel 容器 id
+- child_results % yaml      # 合成ID → { vars, failed }（由 CLI 收集端按期望集填充,见 9c'）
 Outputs:
-- merged: yaml             # listVar 列表落父空间（按合成 ID 序号排列）
+- merged % yaml             # listVar 列表落父空间（按合成 ID 序号排列）
 Constraints:
 - 必须遍历 child_results 的全部合成 ID——spec 树里只有模板 child {P}.1,用 getChildren 会漏 N-1 个
 - child failed → 不贡献收集元素,列表变短（函数级 fail:列表乱序下槽位无归属,填 null 不知是谁的;
@@ -681,10 +681,10 @@ joinParallel(parallel_step_id, child_results):
 Id: join_collect_fill
 Goal: 按期望 child 集读各子实例快照,填充 childResults 交 joinParallel——漏 worker 响亮拒绝,陈旧目录不混入
 Inputs:
-- parallel_step_id: line
-- instance_dir: line       # 父实例目录（子实例在 parallel/ 下）
+- parallel_step_id % line
+- instance_dir % line       # 父实例目录（子实例在 parallel/ 下）
 Outputs:
-- child_results: yaml      # 期望集内全部合成 ID → { vars, failed, log }
+- child_results % yaml      # 期望集内全部合成 ID → { vars, failed, log }
 Constraints:
 - 期望集=事实来源:for-each 按 listVar 长度推算合成 ID（{P}.1…{P}.N）;静态取 spec children。
   禁用"扫 parallel/ 目录"口径——未启动的 worker 没有子目录,扫目录会静默漏掉产出残缺 merge;

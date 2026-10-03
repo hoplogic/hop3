@@ -3,7 +3,7 @@
 	source: [[HopSpec V3核心规范]]
 	source_id: hopspec-v3-core
 	type: compact
-	last_sync: 2026-06-18T12:44+0800
+	last_sync: 2026-09-27T20:38+0800
 	note: LLM 构建 HopSpec 时的 system prompt 速查卡
 %%
 
@@ -21,11 +21,11 @@ Constraints:                       # 可选，含预期目标和硬性限制
 - @knowledge <关键词>              # 可选，声明需检索的领域知识
 Types:                             # 可选，跨步骤复用的结构体
 - TypeName:  # 说明
-  - field: type  # 说明
+  - field % type  # 说明
 Inputs:                            # 可选，Spec 级输入
-- var: type  # 说明
+- var % type  # 说明
 Outputs:                           # 可选，Spec 级输出
-- var: type  # 说明
+- var % type  # 说明
 ## Steps
 N. [type] 一句话任务描述
 ```
@@ -74,7 +74,7 @@ act 和 commit 可选结构化 body（Python 风格缩进块），放在 `>` 指
 ```
 N. [act] 执行数据转换
   - ← raw_data
-  + → result: text
+  + → result % text
   > ```hop_python
     temp = split(raw_data, "\n")
     filtered = filter_lines(temp, "ERROR")
@@ -120,53 +120,53 @@ Constraints:
 
 Types:
 - FeedbackItem:  # 单条用户反馈
-  - source: line  # 来源渠道
-  - content: text  # 反馈内容
-  - severity: int  # 严重程度 1-5
+  - source % line  # 来源渠道
+  - content % text  # 反馈内容
+  - severity % int  # 严重程度 1-5
 
 Inputs:
-- channels: [line]  # 数据源渠道列表
+- channels % [line]  # 数据源渠道列表
 
 Outputs:
-- report: markdown  # 改进报告
-- actions: [line]  # 行动项列表
+- report % markdown  # 改进报告
+- actions % [line]  # 行动项列表
 
 ## Steps
 1. [act] 从各渠道拉取原始反馈数据
   - ← channels
-  + → raw_feedback: [FeedbackItem]  # 原始反馈列表
+  + → raw_feedback % [FeedbackItem]  # 原始反馈列表
   > ```hop_python
     raw_feedback = fetch_feedback(channels: channels)
     ```
 2. [reason] 按主题聚类并识别高频问题
   - ← raw_feedback
-  + → clusters: [line]  # 主题聚类标签
-  + → top_issues: [line]  # Top-5 高频问题
+  + → clusters % [line]  # 主题聚类标签
+  + → top_issues % [line]  # Top-5 高频问题
   > 关注 severity ≥ 3 的条目，提取共性模式
   > @knowledge 文本聚类最佳实践
 3. [branch] 按问题严重度决定报告深度
   - ← top_issues
-  + → report: markdown  # 改进报告（branch 聚合输出）
-  + → actions: [line]  # 行动项（branch 聚合输出）
+  + → report % markdown  # 改进报告（branch 聚合输出）
+  + → actions % [line]  # 行动项（branch 聚合输出）
   3.1. [case] 存在高严重度问题 (any_severity_gte(top_issues, 4))
-    + → report: markdown  # 同名填充
-    + → actions: [line]
+    + → report % markdown  # 同名填充
+    + → actions % [line]
     3.1.1. [reason] 生成详细改进报告含根因分析
       - ← raw_feedback, clusters, top_issues
       + → report, actions
   3.2. [case] 仅低中严重度 (default)
-    + → report: markdown  # 同名填充
-    + → actions: [line]
+    + → report % markdown  # 同名填充
+    + → actions % [line]
     3.2.1. [reason] 生成常规改进摘要
       - ← clusters, top_issues
       + → report, actions
 4. [subtask retry=2] 验证行动项覆盖度
-  + → coverage_ok: bool  # 是否全覆盖
-  + → coverage_note: text  # 覆盖说明
+  + → coverage_ok % bool  # 是否全覆盖
+  + → coverage_note % text  # 覆盖说明
   4.1. [check] 验证行动项覆盖所有高频问题
     - ← top_issues, actions
-    + → coverage_ok: bool  # 判定槽
-    + → coverage_note: text  # 说明槽
+    + → coverage_ok % bool  # 判定槽
+    + → coverage_note % text  # 说明槽
 5. [exit] 交付改进报告和行动清单
   + → report, actions
 ```

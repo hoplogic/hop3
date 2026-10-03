@@ -3,7 +3,7 @@
 	source: [[step-dispatcher]], [[shared-providers]], [[../concepts/HopSpec V3配套HopJIT运行时能力]]
 	source_id: hopjit-step-dispatcher, hopjit-shared-providers, hopjit-runtime
 	type: extend
-	last_sync: 2026-08-22T20:02+0800
+	last_sync: 2026-09-27T20:38+0800
 	note: standalone 执行的 MCP server 形态设计（2026-08-06 作者拍板 MCP 方案）。薄壳包 StepDispatcher 进程内 API，常驻进程解开 HITL 跨进程死结。一期=server 独立可验；二期=Codex 能力门三层分派接入。
 %%
 
@@ -19,6 +19,7 @@
 | 关键决策 | 决策 | — |
 | 工具面契约 | 契约 | `anc-mcp-tools` |
 | stop_run 中止细则 | 契约 | `anc-mcp-stop-run` |
+| run_approved_command 执行细则 | 契约 | `anc-mcp-run-command` |
 | HITL 与运行生命周期 | 契约 | `anc-mcp-run-lifecycle` |
 | server 重启后 run 恢复 | 契约 | `anc-mcp-run-restore` |
 | 配置与凭证 | 契约 | `anc-mcp-config`（schema 权威在 [[shared-providers#^anc-config-standalone-schema]]） |
@@ -27,7 +28,9 @@
 
 ## 定位【契约】 ^anc-struct-mcp-server
 
-> **模块版本**：mcp-server `v0.17.0`（2026-09-25）。本版=resume_run 带 child_instance 时在状态翻转之前同步核对待答队列,核对不中当场返回 CHILD_NOT_IN_QUEUE、run 保持 paused（todo/0105 缺陷 B,兑现 hopissues/0094 期望行为第 ② 条）。
+> **模块版本**：mcp-server `v0.19.1`（2026-10-01 工程链 review 修复：run_approved_command 细则六处对齐代码——state_dir 可选/返回加 duration_ms 与 account_error/HopSop 按代码顺序重排并补命中支/timeout 三钳命名常量/cwd 相对路径与 ws 缺席落点/hoplog 目录已删与账写失败两分支;工具面表行归位;自有码清单补登四码;删死码 STATE_READ_FAILED）。上版 v0.19.0（2026-09-30）新增第六个工具 `run_approved_command`——在某个 run 的上下文里执行一条命令：授权只认该 run 的任务卡《已批准命令》前缀清单（不认 hopjit.yaml 项目级白名单）,执行经 runWhitelistedCommand 原语（hopjit 恒拒/shell:false/失败分辨继承）,账追加进该 run 的 hoplog;纯读盘不重建 engine（todo/0132 承接 hopissues/0114——/hop 复用模式 driver 每条命令过载体权限闸反复弹窗;作者定按任务批准、账归 run、"就是执行一步而已"）。契约见下文「run_approved_command 执行细则」节。上版 v0.18.1（2026-09-27）配置加载认 provider 新键 thinking_disable_unsupported本版=配置加载认 provider 新键 thinking_disable_unsupported（只认布尔,非 anthropic 协议写 true 拒）,env 快照在其为 true 时派 `{SERVICE_ID}_THINKING_DISABLE_UNSUPPORTED=true`,多 provider env 注入键名单同批补登（todo/0118）。
+> - 上版 v0.18.0（2026-09-26）=resume_run/stop_run 在通道核对之前预检 state.json 写入序号,本进程注册项的账已被另一个进程写得更新时返回 STATE_STALE、不改状态,非 running 的过时注册项移出注册表（todo/0114）。
+> - 上版 v0.17.0（2026-09-25）=resume_run 带 child_instance 时在状态翻转之前同步核对待答队列,核对不中当场返回 CHILD_NOT_IN_QUEUE、run 保持 paused（todo/0105 缺陷 B,兑现 hopissues/0094 期望行为第 ② 条）。
 > - 上版 v0.16.1（2026-09-18）=工程链 review 补账。补账内容:多 provider env 注入键名单补 `_AUTH` 与 `_MAX_OUTPUT_TOKENS、`{SERVICE_ID}_THINKING`（provider 级思考缺省,0100 批次——2026-09-20 review 批补登）` 两键;auth/revision_prompt 两新配置键的 schema 权威在 [[shared-providers#^anc-config-standalone-schema]]、行为权威各在其锚,本文档只登键名单——1cc47f7b 自称'mcp-server v 随批'未兑现的账本版清。
 > - 上版 v0.16.0（2026-09-10）,内容为 0084 批一四件（M1 并发 run 上限配置化/M2 合并补 language+文法核/M3 restore 补装 model_engine〔与 startRun 公共化真同源〕/M4 restore env 换重读面）。
 > - 0.x 未承诺稳定。**MCP 工具名+输入/输出 schema 是对外稳定面**——载体注册配置依赖之，破坏即破坏已注册用户。
@@ -47,9 +50,9 @@
 - **StepDispatcher 的薄封装**：每个 MCP 工具对应 Dispatcher/注册表的一次操作（start_run→new StepDispatcher + runSpec、resume_run→dispatcher.resume、run_status→注册表查询）。进程内直调，不经 CLI 子进程（沿 [[step-dispatcher]] 决策 2"热路径不经 CLI"）
 - **与 hop-cli 零耦合**：不 import cli.ts，不共享输出分流逻辑（MCP 有自己的结构化响应通道）；共享的是 cli-types 的响应类型词汇（ExecutionPaused 等）
 - **持久化沿用 FilePersistence**：run 状态内存为主（常驻进程），FilePersistence 快照照旧落 `.hopstate/`——server 崩溃后的恢复能力即既有 durable resume 能力，不新增持久化机制
-- **HopLog 恒开且缺省 debug 级**（2026-08-07 G11 落实补定；级别条款 2026-08-22 作者定方案③——实撞：info 级不记 prompt 全文，L2c 重试反馈在不在、LLM 每攻实际看见什么外部无从核验，走查被误导为"重试无记忆"）：start_run 一律带 logDir（`<state_dir>/../.hoplog`，同复用模式 driver 惯例），**日志级别缺省 `debug`**。
+- **HopLog 恒开、缺省 info 级、保留上限缺省 3 个 run**（2026-08-07 G11 落实补定;级别缺省 2026-09-30 todo/0127 作者定 debug→info 并加 `log_retention.max_runs` 缺省 3——对外分发后防塞爆硬盘,权威 [[spec-observability#^anc-obs-log-levels]] / [[spec-observability#^anc-obs-log-retention]];2026-08-22 曾定缺省 debug,前提"个人开发场景体积可承受"已变）：start_run 一律带 logDir（`<state_dir>/../.hoplog`，同复用模式 driver 惯例）。
   - 理由:standalone 的执行内幕（LLM 调用/工具执行）全在 server 进程内，**执行日志是外部核验过程轨迹的唯一通道**（e2e"核真过程"原则 `^anc-meta-layer-test` 的本模块落点），info 级只记 model/tokens 不记 prompt 正文，"唯一通道"名存实亡;
-  - 个人开发场景日志体积可承受；嫌大经配置口降级：StandaloneConfig 新增 `log_level` 字段（debug|info|warn，两级合并项目级赢，schema 权威 [[shared-providers#^anc-config-standalone-schema]]）;
+  - 排障要全息经配置口升级：StandaloneConfig `log_level: debug`（debug|info|warn，两级合并项目级赢，schema 权威 [[shared-providers#^anc-config-standalone-schema]]）;保留数经 `log_retention: { max_runs: N }` 调;
   - 与复用模式缺省 info 的分野：复用模式 CC 即推理 LLM、caller 生态自有观测面；standalone 没有第二通道
 - **transport 可扩展**【决策注记】：server 核心（工具 handler）与 transport 分离——v1 仅 stdio（MCP SDK 标准），将来需要非 agent 消费方（curl/CI）时同一核外挂 HTTP transport，不重写（2026-08-06 方案对比结论：MCP 为主，HTTP daemon 为记录在案的演进出口）
 
@@ -57,8 +60,8 @@
 
 | 符号 | 种类 | 出口文件 | 用途（谁依赖） | 稳定性 |
 |---|---|---|---|---|
-| MCP 工具 `start_run` / `run_status` / `resume_run` / `list_runs` / `stop_run` | 协议工具 | mcp-server.ts（bin 入口 `hopjit-mcp`） | 载体注册配置（.mcp.json / config.toml）——**对外稳定面** | provisional |
-| `loadStandaloneConfig` / `providerToHostConfig` / `collectSpecTools` / `preflightProviderKeys` / `HopjitMcpCore` / `buildServer` | 函数/类 | mcp-server.ts | **仅测试消费**（mcp-server.test.ts）——非跨模块出口，不承诺稳定；跨模块 import 即边界违规 | internal-testable |
+| MCP 工具 `start_run` / `run_status` / `resume_run` / `list_runs` / `stop_run` / `run_approved_command` | 协议工具 | mcp-server.ts（bin 入口 `hopjit-mcp`） | 载体注册配置（.mcp.json / config.toml）——**对外稳定面** | provisional |
+| `loadStandaloneConfig` / `providerToHostConfig` / `collectSpecTools` / `preflightProviderKeys` / `HopjitMcpCore`（含 `runCommand` 方法——run_approved_command 工具的可单测本体） / `buildServer` | 函数/类 | mcp-server.ts | **仅测试消费**（mcp-server.test.ts）——非跨模块出口，不承诺稳定；跨模块 import 即边界违规 | internal-testable |
 | `mergeConfigs` | 函数 | mcp-server.ts | 两级配置逐节合并（测试直测合并语义——0005 server 同名替换语义著文配套） | stable |
 | `buildEnvSnapshot` | 函数 | mcp-server.ts | run 级 env 快照构造单点（测试直测键集契约——0008③ 封闭集下键集即契约,startRun/restore 同函数） | stable |
 | `ProviderEntry` / `StandaloneConfig` | 类型 | mcp-server.ts | 仅测试消费（同上）；schema 语义权威在 [[shared-providers#^anc-config-standalone-schema]]，此处是其 TS 形态 | internal-testable |
@@ -72,7 +75,7 @@ Fields：
 - `config: StandaloneConfig`——启动时从 `~/.hopjit/config.yaml` 加载（`HOPJIT_CONFIG` 环境变量可覆盖路径——测试/多环境用，2026-08-08 审计回写）；出现明文 key 即启动失败
 
 trait：
-- `serve`——装配 MCP SDK server + stdio transport，注册五工具，进入服务循环
+- `serve`——装配 MCP SDK server + stdio transport，注册六工具，进入服务循环
 - `dispatchTool`——工具调用路由：校验入参 schema → 操作注册表/Dispatcher → 组装结构化响应
 
 **④ 核心 impl 的主要 HopSpec 逻辑**：
@@ -173,7 +176,7 @@ Constraints:
 
 ## 工具面契约【契约】 ^anc-mcp-tools
 
-五工具，输入/输出均 JSON schema 锁定（MCP SDK inputSchema）：
+六工具，输入/输出均 JSON schema 锁定（MCP SDK inputSchema）：
 
 | 工具 | 入参 | 返回 | 语义 |
 |---|---|---|---|
@@ -182,6 +185,47 @@ Constraints:
 | `resume_run` | `run_id`、`step_id`、`answer`(object)、`state_dir`(可,同左——相对路径按 server cwd 解析,workspace 锚定的 run 须回传 start_run 返回的绝对路径)、`child_instance`(可——**子实例 HITL 队列应答路由**,携=答队列里那张卡,缺省=顶层/call_path 既有路由,见 [[parallel-execution#^anc-exec-parallel-hitl-queue]]) | `{ run_id, status: 'running' }` 或错误 | 透传 dispatcher.resume（answer 规范化在 Engine，`^anc-exec-confirm-answer`）。**带 child_instance 时先同步核对再受理（todo/0105,2026-09-25）**：状态核对之后、step_id 预检与状态翻转之前,查 dispatcher 待答队列与引擎在飞账——队列里没有这张卡、在飞账上也没有该 child_instance 的 paused 项,当场返回 `{ error: { code: 'CHILD_NOT_IN_QUEUE', message } }`,run 状态/暂停载荷/失败记录一概不动（仍是 paused,载荷可再取）;跨进程恢复路（队列空但在飞账有该 child 的 paused 项）照旧放行。此前实现先置 running 并同步回 `{status:'running'}`,dispatcher 异步拒收后才复原 paused——调用方只看得见假 running。判定流程与拒因文字单一来源见 [[parallel-execution#^anc-exec-parallel-hitl-queue]] 第 4 条。**与 start_run 同为 job 式异步**——注入后立即返回，后续进度轮询 run_status（resume 后是多次 LLM 调用，分钟级，同步等待必顶爆 MCP 工具超时——2026-08-06 真机验收实撞后改定）。对非 paused run 调用 → 错误不推进 |
 | `list_runs` | — | `{ runs: [{run_id, status, spec_path, started_at}] }` | 注册表快照，供 carrier 崩溃后重认领 |
 | `stop_run` | `run_id`(必) | `{ run_id, status }`（受理后即回;终态 run 幂等返回现状） | **主动中止 run**（2026-08-22 作者定"hopjit 应该能自己杀自己的子任务"——此前失控 run 只能杀 server 重启会话止损,两次实撞）。语义：running → 调该 run dispatcher 的 `requestAbortCascade()`（协作式中断:步间检查生效,不打断执行中的单步——与 parallel 杀活同一 aborted 标志机制,级联面见 [[step-dispatcher#^anc-struct-step-dispatcher-exports]] 调度组）——**级联 abort 全部在飞子 dispatcher**（parallel worker/暂停 call 帧/执行中的串行 call 子层三张表,深递归/并行都停,不留孤儿继续烧钱）;paused → 直接标 aborted（无在飞活动）;completed/failed/aborted → 幂等返回现状不报错;未知 run_id → RUN_NOT_FOUND。中止落账：run 状态记 `aborted`（终态,list_runs/run_status 可见）+ 实例目录落墓碑标记 `aborted.json`（跨重启终局——restore 见标记即拒 RUN_ABORTED）,引擎快照照常落盘——aborted run 的 .hopstate 保留,可人工检视,不支持 resume（中止是终局不是暂停,同进程注册表拒 + 跨重启墓碑拒双防线,细则见 ^anc-mcp-stop-run）。注解 `readOnlyHint: false, destructiveHint: true`（丢弃在飞进度,如实标破坏性） |
+| `run_approved_command` | `state_dir`(可,缺省 `.hopstate` 按 server cwd 解析——与 run_status 同款,起跑时用了 workspace_dir 的 run 须传绝对路径)、`instance_id`(必)、`argv`(必,string[] 非空)、`cwd`(可,缺省该 run 的 workspace_dir;相对路径按 workspace_dir 解析;须落 workspace 内)、`timeout_sec`(可,缺省 300 上限 3600 下限 1)、`caller_step`(可,只写进账) | `{ returncode, stdout, stderr, duration_ms, truncated: { stdout, stderr }, account_error? }` 或结构化错 INSTANCE_NOT_FOUND / CORRUPT_STATE_FILE / APPROVAL_REQUIRED / COMMAND_FAILED / CWD_OUTSIDE_WORKSPACE | **在该 run 的上下文里执行一条已批准命令**（2026-09-30 todo/0132）：授权=该 run 任务卡《已批准命令》段的 argv 前缀逐项相等（[[spec-parser#^anc-rule-approved-commands]]）,**不看 hopjit.yaml commands:**;执行经 runWhitelistedCommand（hopjit 恒拒优先/shell:false/失败三类分辨）;账进该 run 的 hoplog 顶层 `command:` 块。纯读盘（readSpec/readState）+ spawn + append,不重建 engine、不碰注册表——run 在不在本 server 里都能调。注解 `readOnlyHint: false, destructiveHint: false, openWorldHint: true`（命令可联网,如实标）。细则见下文「run_approved_command 执行细则」节 |
+
+### run_approved_command 执行细则【契约】 ^anc-mcp-run-command
+
+**来由**：/hop 复用模式下 driver 干活全走载体自己的 Bash,每条命令过 Claude Code 权限闸——manual 模式前缀规则遇 `cd X;`/管道/参数变动即失配逐条弹窗;联网命令要逐条关沙箱;auto 模式分类器对同类动作时放时拒（hopissues/0114,用户原话"这么做每次都要授权,太蠢了"）。引擎已有更合适的管控原语 [[act-body#^anc-exec-command-primitive]],只是复用模式 driver 碰不到。作者三句定形：批准的单位是任务不是命令名（不放项目级大口子）;命令在该 run 的上下文里执行、账归该 run;"就是执行一步而已"——不重建 engine。与 [[../../hopissues 0071]]"/hop 禁调 start_run"并列不冲突：走 MCP 的只是命令这一口,run 的驱动与推理仍在主对话。
+
+```
+contract: RunCommand
+  Id: mcp-run-command
+  Goal: 在指定 run 的上下文里执行一条命令——授权来自该 run 的任务卡,执行经引擎命令原语,账进该 run 的 hoplog;载体只需一次性放行本工具,此后逐条执行零弹窗
+  Constraints:
+  - 授权只认该 run 任务卡的《已批准命令》清单（header.approved_commands,从 <state_dir>/<instance_id>/spec.json 经 readSpec 取——0130 内容寻址引用形态只此一读口）。匹配=某条前缀的每个词元与 argv 对应位相等且 argv 不短于前缀;argv[0] 相同但后续词元不同不算（`python3 scripts/ssh_exec.py` 批不放行 `python3 evil.py`）
+  - 不认 hopjit.yaml commands:——那是引擎自己执行 body 时的项目级白名单;本入口是外部 agent 发起的,粒度必须到任务。拒绝报文指向卡的《已批准命令》段,不指向 hopjit.yaml
+  - 执行恒经 runWhitelistedCommand（白名单位传 [argv[0]] 只为复用原语——hopjit 恒拒优先于一切、shell:false 恒定、ENOENT 两因/ENOBUFS/ETIMEDOUT 分辨指路全继承;真闸在上一条）。原语抛错 → COMMAND_FAILED 携原报文
+  - cwd 缺省该 run 的 workspace_dir（state.json host_context）;显式传的相对路径按 workspace_dir 解析,绝对路径原样;两者都须落 workspace 真实根内（resolveRealDeep 后 isWithinDir）,越界拒——命令不出沙箱。workspace_dir 缺席（host_context 没落它的旧快照）→ cwd 落 server 进程 cwd 且不判越界（没有边界可判,不硬造）
+  - 账：state.json 的 hoplog_run_dir 在场且该目录仍存在 → HopLog.resume(runDir).recordCommand 追加顶层 `command:` 块（字段见 [[spec-observability#^anc-obs-command-block]]）;缺席或目录已被 max_runs 轮转删掉 → `<instance_dir>/commands.log` 追加一行 JSON 兜底（账不丢,只是换了落点）。账里记原始 stdout/stderr 字节数;回给调用方各截 64KB 并在 truncated 标记。**账写失败不吞执行结果**：命令已经跑了,记账抛错（目录不可写等）折进返回体 `account_error` 字段,returncode/stdout 照常返回——调用方必须知道命令已执行
+  - 不重建 engine / hostConfig / 注册表：纯 readState + readSpec + spawnSync + append。run 目录不在 → INSTANCE_NOT_FOUND;spec.json 坏 → CORRUPT_STATE_FILE;都是结构化错不炸 server
+  - 同步 spawnSync 阻塞 server 事件循环——单 server 命令串行,timeout 兜（缺省 300s 上限 3600s）;长命令是调用方拆分的事,设计如实记不掩
+  - 人工闸不放宽：[commit] 前置 check final/confirm、confirm/ask 停问真人一律照旧——本工具只替代"载体逐条弹窗"这一层
+  - 工具名 `run_approved_command`（2026-10-01 作者改,原 `run_command`——"这个名字非常容易被封":载体权限分类器按工具名判风险,`run_command` 字面即"跑任意命令";名字里带 approved 与段名《已批准命令》/错误码 APPROVAL_REQUIRED 同词根,agent 读名即知它受卡约束）。锚名 ^anc-mcp-run-command、方法名 runCommand、hoplog `command:` 块名、常量 RUN_COMMAND_* 不随改——只改对外工具名与 skill/文档
+  - **工具 description 与拒绝报文自身是对 agent 的教材**（不走 /hop 的 agent 也只从这里学;被拒那一刻读的是报文）：两处同口径,必须写进授权三要素——什么任务（授权绑 run,instance_id 取快照清单）、什么核验（命令级前缀逐词相等 + hopjit 恒拒 + cwd 在工作区;任务级由步骤类型定探索态/提交态）、才可以执行;以及被拒时的处置——APPROVAL_REQUIRED 是任务授权范围要不要扩,归人决定,调用方停下问人,不自己加卡、不改走载体 Bash 绕过
+```
+
+**类型约定（HopType）**：入参 `{ state_dir?: string; instance_id: string; argv: string[]; cwd?: string; timeout_sec?: number; caller_step?: string }`（state_dir 缺省 `.hopstate`,相对 server cwd;caller_step 只写进账）;返回 `{ returncode: number; stdout: string; stderr: string; duration_ms: number; truncated: { stdout: boolean; stderr: boolean }; account_error?: string }`（account_error 只在记账失败时在场,携原报文）;错误 `{ error: { code: 'INSTANCE_NOT_FOUND'|'CORRUPT_STATE_FILE'|'APPROVAL_REQUIRED'|'COMMAND_FAILED'|'CWD_OUTSIDE_WORKSPACE', message } }`（快照不可读/非 JSON/非对象 persistence 一律抛 CORRUPT_STATE_FILE 前缀,本工具透传;曾多列一码 STATE_READ_FAILED,review 补测试时发现它是死分支——persistence 不会漏出别的读错,删）。两个命名常量 `RUN_COMMAND_TIMEOUT_DEFAULT_SEC = 300` / `RUN_COMMAND_TIMEOUT_MAX_SEC = 3600`（mcp-server.ts 导出,inputSchema describe 与本节数字同源——review 抓五处字面量）。
+
+**关键逻辑（HopSop）**：
+
+```
+run_approved_command(state_dir?, instance_id, argv, cwd?, timeout_sec?, caller_step?):
+1. instDir = resolve(state_dir ?? '.hopstate', instance_id); [条件(无 state.json)] → INSTANCE_NOT_FOUND
+2. spec = readSpec(instDir); st = readState(instDir)——两读同一 try：抛错 → CORRUPT_STATE_FILE 携原报文（state 提前到这里读:坏快照在授权判定之前就报,比先报 APPROVAL_REQUIRED 更诚实）; approved = spec.header.approved_commands ?? []
+3. [条件(argv 空)] → APPROVAL_REQUIRED("argv 为空");[条件(argv[0] 是 hopjit 或路径尾段 hopjit)] → COMMAND_FAILED("不得执行 hopjit……写进《已批准命令》也无效")——恒拒先于匹配,否则拒绝报文会教人往卡上加 hopjit 行（真机烟测实抓）
+4. [条件(不存在 p ∈ approved: p.length ≤ argv.length 且 ∀i p[i]===argv[i])] → APPROVAL_REQUIRED("命令 <argv 前三项…> 不在本任务卡《已批准命令》里。这是任务授权范围要不要扩的问题,请停下问用户：批则在卡上加一行 `- <argv 前缀>` 后重起 run,不批则这一条走载体自己的审批。不要自己把命令加进卡,不要换通道绕过")——报文与 description、/hop skill 三处同口径（2026-10-01 review 面二抓首版报文把'加卡重起'与'改走载体 Bash'并列、无'归人决定',agent 被拒时读的正是报文）;[条件(命中)] → 继续第 5 步
+5. ws = st.host_context?.workspace_dir; cwdEff = cwd 缺席 ? (ws ?? server cwd) : (isAbsolute(cwd) ? cwd : resolve(ws ?? server cwd, cwd))
+   [条件(ws 在场 且 !isWithinDir(resolveRealDeep(cwdEff), resolveRealDeep(ws)))] → CWD_OUTSIDE_WORKSPACE;ws 缺席 → 不判越界
+6. timeoutSec = min(max(1, floor(timeout_sec ?? RUN_COMMAND_TIMEOUT_DEFAULT_SEC)), RUN_COMMAND_TIMEOUT_MAX_SEC); t0=now; r = runWhitelistedCommand(argv, { whitelist:[argv[0]], cwd: cwdEff, timeoutSec, maxBuffer: 4MB, label:'run_approved_command' })（抛 → COMMAND_FAILED）
+7. 账（try）：[条件(st.hoplog_run_dir 在场 且 目录存在)] HopLog.resume(st.hoplog_run_dir).recordCommand({argv, cwd: cwdEff, returncode, duration_ms: now-t0, stdout_bytes, stderr_bytes, truncated, caller_step?})
+        [否则] appendFile(instDir/commands.log, JSON 行 + "\n")
+        [catch] account_error = 原报文——不抛,命令已执行,结果必须回给调用方
+8. 返回 { returncode, stdout: 截 64KB 注明, stderr: 截 64KB 注明, duration_ms, truncated, account_error? }
+```
 
 ### stop_run 中止细则【契约】 ^anc-mcp-stop-run
 
@@ -204,11 +248,12 @@ Constraints:
 
 - 复用码 `CHILD_NOT_IN_QUEUE`（2026-09-25 todo/0105 登记）:resume_run 带 child_instance 而待答队列与在飞账都不中时同步返回;码的语义权威与拒因文字在 [[parallel-execution#^anc-exec-parallel-hitl-queue]] 第 4 条（dispatcher.resume 异步拒收与本模块同步核对共用同一拒因函数）,本模块只登记"resume_run 会同步返回它";
 
-- 自有码清单：`RUN_LIMIT`/`SPEC_NOT_FOUND`/`SPEC_INVALID`/`TOOLS_UNAVAILABLE`/`TOOLS_FILE_INVALID`/`TOOLS_NAME_CONFLICT`/`TOOLS_ASSEMBLY_FAILED`/`HOP_ENV_CREDENTIAL_REJECTED`/`CONFIG_INVALID`/`INIT_FAILED`/`RUN_NOT_FOUND`/`RUN_ABORTED`;
+- 自有码清单：`RUN_LIMIT`/`SPEC_NOT_FOUND`/`SPEC_INVALID`/`TOOLS_UNAVAILABLE`/`TOOLS_FILE_INVALID`/`TOOLS_NAME_CONFLICT`/`TOOLS_ASSEMBLY_FAILED`/`HOP_ENV_CREDENTIAL_REJECTED`/`CONFIG_INVALID`/`INIT_FAILED`/`RUN_NOT_FOUND`/`RUN_ABORTED`/`INSTANCE_NOT_FOUND`/`APPROVAL_REQUIRED`/`COMMAND_FAILED`/`CWD_OUTSIDE_WORKSPACE`;
+  - run_approved_command 四码〔INSTANCE_NOT_FOUND 快照目录不在/APPROVAL_REQUIRED 不在卡上清单/COMMAND_FAILED 原语抛错含 hopjit 恒拒与超时/CWD_OUTSIDE_WORKSPACE 越 workspace,^anc-mcp-run-command;另 CORRUPT_STATE_FILE 是 persistence 的码本工具透传,不列自有〕;
   - `TOOLS_ASSEMBLY_FAILED`〔装配兜底档——识别按 tools-composite 报文前缀,前缀漂移时降级为兜底码不丢结构化,九审注〕;
   - `CONFIG_INVALID`〔每 run 重读的项目级配置在场但非法——文法/凭证违规响亮拒,十二审〕;
   - `RUN_ABORTED`〔restore 撞 aborted 墓碑标记——已主动中止的 run 拒绝复活,^anc-mcp-stop-run 第4条〕;
-- 补登记录:后五码 2026-08-17 0004/0005/0007 批次补登,TOOLS_FILE_INVALID 系实装早于登记的存量欠账同批清;
+- 补登记录:后五码 2026-08-17 0004/0005/0007 批次补登,TOOLS_FILE_INVALID 系实装早于登记的存量欠账同批清;run_approved_command 四码 2026-10-01 工程链 review 补登（0132 批落码时只写进 HopType 漏了本清单）;
 - 码域分界:run 生命周期与协议入参错误是本模块的关注点、不进引擎错误码表（塞进 shared-errors 会稀释引擎码域语义；2026-08-07 review 改口：原"不新造错误体系"表述与实现不符，以实现为准修订设计）。
 
 **工具注解（ToolAnnotations，2026-08-10 真机实撞补定）**：全部工具必须携带 MCP 标准注解。
@@ -231,6 +276,10 @@ running | paused → stop_run → aborted（终态,不可 resume）
 - **驱动通道落账与跨通道拒**（2026-08-27 两模式并存三改的安全半边,权威 [[exec-engine#^anc-exec-driver-channel]]——本节只记 MCP 侧接线）：`startRun` 建 run 落 `driver_channel: 'mcp'`;
   - `resumeRun`/`stopRun` 恢复快照后核通道——撞 `cli` 建的 run → 结构化错误 `DRIVER_CHANNEL_MISMATCH` 指路 `hopjit submit_and_fetch_next`,不改状态;
   - `run_status`/`list_runs` 只读不拦（跨通道可观测恰是排查双执行的手段);字段缺席（旧 run）宽容并由首个推进入口认领。
+- **同通道两进程的过时账预检**（2026-09-26,todo/0114,权威 [[exec-engine#^anc-exec-state-seq-guard]]——本节只记 MCP 侧接线）：两个 MCP server 进程对同一 state_dir 里的同一个 run 都有注册项时,通道核对拦不住（两边都是 mcp）,注册表的 state 也只反映本进程的内存。接线三条：
+  - `resumeRun` 在取到注册项（或经 restoreRun 从盘上恢复出注册项）之后、`claimDriverChannel` 之前调引擎的 `assertStateFresh()`;`stopRun` 在注册表查不到（RUN_NOT_FOUND）与终态幂等返回两道之后、`claimDriverChannel` 之前调同一函数;
+  - 命中过时 → 返回 `{ error: { code: 'STATE_STALE', message } }`,message 即引擎报文原文（点名写入者 pid、写入时刻、盘上序号与本进程序号,指路"再调一次 resume_run 会从快照恢复"）;不翻状态、不注入答案、不 requestAbortCascade、不写 aborted.json、不删 paused.json;
+  - 该注册项不在 running → 从注册表移出,同一进程下一次 resume_run 走 restoreRun 从盘上重新加载（兑现报文里的指路）;在 running → 不移出,在飞的 dispatcher 下次写盘自己撞 STATE_STALE,run 按既有异步 catch 转 failed,run_status 看得见。
 - **宿主断开即退出（进程生命周期收口,四十七审——孤儿 server 实撞:两个历史会话的 server 挂了两天,谁都不负责杀它）** ^anc-mcp-shutdown-on-disconnect：stdio 传输的 server 生命随宿主——宿主会话退出关闭管道后 server 没有存在意义（paused run 有快照落盘,下个 server 经 ^anc-mcp-run-restore 恢复——孤儿进程反而零价值）。契约三条：
   - ①`transport.onclose`（宿主正常断开）与 `process.stdin` 的 `end`/`close`（管道关闭）都挂退出钩,触发即 `process.exit(0)`——在飞 run 的中断即崩溃中断,快照落盘由既有 persist 时机保证,不做优雅收尾（等在飞完成=不确定时长的僵尸期,退出语义要干脆）;
   - ②退出前 stderr 一行留痕（"宿主断开,server 退出;在飞/暂停 run 可经 resume_run 恢复"）;
@@ -257,10 +306,10 @@ running | paused → stop_run → aborted（终态,不可 resume）
 Id: restore_run
 Goal: server 重启后,把 .hopstate/<runId>/ 快照重建为注册表内可 resume 的 run
 Inputs:
-- run_id: line           # 待恢复实例 id
-- state_dir: line        # 快照目录（缺省 .hopstate,resume_run 工具可选参数;相对路径按 server cwd 解析——workspace 锚定的 run 传 start_run 返回的绝对路径,与工具表 run_status/resume_run 行同口径）
+- run_id % line           # 待恢复实例 id
+- state_dir % line        # 快照目录（缺省 .hopstate,resume_run 工具可选参数;相对路径按 server cwd 解析——workspace 锚定的 run 传 start_run 返回的绝对路径,与工具表 run_status/resume_run 行同口径）
 Outputs:
-- entry: yaml            # 重建的 RunEntry（state=paused）,或结构化错误
+- entry % yaml            # 重建的 RunEntry（state=paused）,或结构化错误
 Constraints:
 - 快照不存在 → RUN_NOT_FOUND（真不存在,不误恢复）
 - 快照损坏/凭证缺失/Dispatcher 构造失败 → RESTORE_FAILED（结构化返回,不炸 server;快照未动,修好可重试）
@@ -343,7 +392,7 @@ trait: RunNotifyHook
 struct: NotifyConfig
   Id: notify-config
   Fields:
-    - channel: line     # 通道枚举,现只 dingtalk;将来 wechat/mail 扩员
+    - channel % line     # 通道枚举,现只 dingtalk;将来 wechat/mail 扩员
 # 凭证不进配置——通道自己读约定环境变量（dingtalk=DINGTALK_WEBHOOK/DINGTALK_SECRET）,
 # config 只声明"用哪个通道"。两级合并=项目级赢（逐键覆盖,与 env 同律）。
 ```
@@ -379,6 +428,7 @@ struct: NotifyConfig
 - **全部条目**在启动时注入本进程路由环境：`{SERVICE_ID大写}_API_KEY` / `_BASE_URL` / `_PROTOCOL` / `_AUTH` / `_MAX_OUTPUT_TOKENS`;
   - `_AUTH`（第四项 2026-09-18 随 auth:bearer 档加入,仅 bearer 时写键——getClientForService 按它选鉴权头形态,schema 权威 [[shared-providers#^anc-config-standalone-schema]] auth 行）;
   - `_MAX_OUTPUT_TOKENS`（输出预算解析链第 3 级,前批次既有本行漏登随批补）;
+  - `_THINKING` 与 `_THINKING_DISABLE_UNSUPPORTED`（配了才写键:前者是 provider 级思考缺省,五级链第 4 级;后者 2026-09-27 todo/0118 加入,只在 provider 声明 `thinking_disable_unsupported: true` 时写 `true`——dispatcher 在五级链算出"关"时据此改发 `output_config: {effort: "low"}`。schema 权威 [[shared-providers#^anc-config-standalone-schema]],行为权威 [[step-dispatcher#^anc-exec-thinking-disable-unsupported]]）;
   - `_PROTOCOL` 2026-08-12 随 openai 协议加入，getClientForService 按它选适配器，缺省 anthropic；即 [[step-dispatcher]] getClientForService 的多服务约定;
 - spec 的 `service/model` 引用按 service_id 命中对应后端，不静默回退默认 client（错后端=烧错钱）。`default_model` 映射 ModelEngine.default_model（缺省 providers[0].model）。key 始终只在本进程 env，不出进程（隔离纪律不变）。
 - **v1 边界（v2 复审点）**：路由走进程 env 意味着同 server 全部 run 共享一套 provider 集合——v1 单配置文件下语义一致无冲突；若将来出现"不同 run 用不同 provider 集合"的需求（多配置/每 run 覆写），env 通道会串台，须改为显式传 ModelEngine 路由表（依赖驱动决策，触发即复审）。
@@ -391,7 +441,7 @@ struct: NotifyConfig
 
 ## 载体注册与薄协议（二期）【契约】 ^anc-mcp-carrier-integration
 
-- 注册：CC 项目 `.mcp.json` / Codex `~/.codex/config.toml [mcp_servers]`，命令 `hopjit-mcp`（包 bin 第二入口）。**`install-skill --mcp` 同步注册**（2026-08-16 作者定——装壳+注册一个动作;显式 flag 即授权,原『不代注册』的越权论据消解）：
+- 注册：CC 项目 `.mcp.json` / Codex `~/.codex/config.toml [mcp_servers]`，命令 `hopjit-mcp`（包 bin 第二入口）。**`install-skill` 缺省同步注册**（2026-08-16 作者定装壳+注册一个动作,当时为显式 flag `--mcp`;2026-10-01 作者定"缺省安装 mcp"后不再要 flag,`--mcp` 留兼容别名——权威 [[hop-cli#^anc-cli-install-skill]]）：
   - CC 合并写 `<cwd>/.mcp.json`（保留既有其他 server）;Codex 追加 `[mcp_servers.hopjit]` 块（含 `env_vars` 凭证名透传——值不落盘只写名,干净环境实撞防线）;
   - 已有 hopjit 条目跳过（--force 亦不覆盖注册——配置是用户资产,提示自查）；
 - standalone 是**独立薄协议、不在降级链上**（2026-08-10 作者拍板，契约见 [[codex-driver-carrier#^anc-driver-codex-standalone-dispatch]]）：hopjit MCP 工具面在会话可见（决策 3：注册即 opt-in）即选定 standalone——main 走 start_run → 轮询 run_status → HITL 经 resume_run → YAML 终态四步薄壳，全程零 hopjit CLI、零 subagent、零运行时环境判定。

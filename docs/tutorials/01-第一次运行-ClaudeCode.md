@@ -3,7 +3,7 @@
 	source: [[../../USAGE]]
 	source_id: hopjit-usage
 	type: extend
-	last_sync: 2026-08-30T13:41+0800
+	last_sync: 2026-10-01T15:53+0800
 	note: 新手教程 1——从安装到在 CC 里跑通第一个 example spec 的完整实操（USAGE 是速查，本文是带预期输出的手把手版）
 %%
 
@@ -29,11 +29,10 @@ hopjit --version
 hopjit install-skill --demo
 ```
 
-输出 `status: ok`（YAML 格式——CLI 缺省输出给人看的 YAML；机器/脚本用 `--json`）。**重启 Claude Code**（或新开会话），输入 `/` 应能看到三个 skill 补全：
+输出 `status: ok`（YAML 格式——CLI 缺省输出给人看的 YAML；机器/脚本用 `--json`）。这一步同时把 hopjit 的 MCP server 注册进当前项目、自举了独立模式的配置、并放行了 run_approved_command 工具（任务卡里批准的命令不再逐条弹窗）——都不需要你再配。**重启 Claude Code**（或新开会话），输入 `/` 应能看到 `/hop` 和 `--demo` 装的三个演示 skill：
 
-- `/demo-coffee-week` —— `--demo` 附装的演示 skill（下一步就用它；不想装 demo 就去掉 `--demo`。demo 件统一 `demo-` 前缀，好认也好整批删）
-- `/hopspec` —— 驱动引擎执行任意 spec（通用驱动，本篇后半主角）
-- `/hopbuild` —— 把自然语言 skill 翻译成 HopSpec（见 [[07-升级你的自然语言skill]]）
+- `/hop` —— HopSpec 的唯一入口：日常活、跑现成 spec、翻译/修订 spec 都从这里进（本篇后半主角）。跑 spec、翻译 skill 这些能力仍装在盘上，由 /hop 按你说的话分派，不占你的 skill 菜单
+- `/demo-coffee-week` `/demo-fact-check` `/demo-rename` —— `--demo` 附装的演示 skill（下一步用第一个；不想装 demo 就去掉 `--demo`。demo 件统一 `demo-` 前缀，好认也好整批删）
 
 > 进阶：`--plus` 会另装两个真正干活的研究件 `/hop-fact-check`（事实核查）与 `/hop-deep-research`（深度研究），并自动把它们要用的检索/浏览器工具配置并入 `~/.hopjit/config.yaml`——装完只差一个 `export DASHSCOPE_API_KEY=<百炼key>`。首跑先不用管它，跑通 demo 后想上真活再回来加。
 
@@ -76,12 +75,12 @@ hopjit validate examples/coffee-week.md
 # → status: ok（YAML；错误时 errors 列表逐条列出）
 ```
 
-## 第 5 步：用通用驱动跑（`/hopspec run`）
+## 第 5 步：用 /hop 跑一份现成的 spec
 
 第 3 步的 `/demo-coffee-week` 内部委托的就是这条通用驱动——任何 spec 都能这样跑，不用先 pack 成具名 skill。在仓库目录里打开 Claude Code，输入：
 
 ```
-/hopspec run examples/coffee-week.md
+/hop 跑 examples/coffee-week.md
 ```
 
 接下来会发生什么（对照着看，别慌）：
@@ -93,8 +92,7 @@ hopjit validate examples/coffee-week.md
 执行状态全程落在 `.hopstate/` 目录（已建议 gitignore）。两个随时可用的命令：
 
 ```
-/hopspec status    # 看进度
-/hopspec resume    # 从中断处恢复（比如 Claude Code 会话断了）
+/hop                # 看进度 / 接着跑（会话断了也一样）
 ```
 
 ## 第 6 步：体验人机介入点（HopSpec 的灵魂）
@@ -102,7 +100,7 @@ hopjit validate examples/coffee-week.md
 coffee-week 是全自动的。换一个**会停下来问你**的：
 
 ```
-/hopspec run examples/doc-review.md
+/hop 跑 examples/doc-review.md
 ```
 
 这个 spec 里有 `[ask]` 步骤（确认文档定位、选评审模式）——执行到那里引擎会**暂停**，Claude Code 把问题和候选项呈给你，你选完才继续。注意两点：
@@ -114,7 +112,7 @@ coffee-week 是全自动的。换一个**会停下来问你**的：
 
 | 症状 | 处置 |
 |---|---|
-| `/hopspec` 不在列表 | 确认 install-skill 输出 ok；**重启 Claude Code** |
+| `/hop` 不在列表 | 确认 install-skill 输出 ok；**重启 Claude Code** |
 | skill 说找不到引擎 | `npm i -g @hoplogic/hopjit` 装好重试（skill 用 `command -v hopjit` 一条命令定位，找不到即报错，不做多级探测） |
 | validate 报 errors | 按提示修 spec——errors 挡执行，warnings 不挡 |
 | 想干净重跑 | 不要 `rm -rf .hopstate`——每次 run 自建独立实例目录，旧实例不干扰；实在想隔离就换 `--state-dir` |
@@ -123,5 +121,5 @@ coffee-week 是全自动的。换一个**会停下来问你**的：
 
 主线顺序读：[[02-读懂一份spec]]（地基：五分钟建立全景）→ [[03-探索与提交]] → [[D10-hop_python计算体]] → [[05-并行与遍历]] → [[06-实战-事实核查器]] → [[07-升级你的自然语言skill]]。
 
-- 任务变长变频后想省对话额度、换轻量模型：独立模式（standalone）——配置一次后用 **`/hopspec-mcp run`** 跑（`/hopspec` 恒复用模式，两命令并存名字即模式），配置步骤见 `USAGE.md` §6、取舍详见 [[D8-模型与工具配置]] 开头；
+- 任务变长变频后想省对话额度、换轻量模型：独立模式（standalone）——对 /hop 说"走 MCP 跑 xxx"（/hop 会按独立模式分派），配置步骤见 `USAGE.md` §6、取舍详见 [[D8-模型与工具配置]] 开头；
 - 语法完整参考：`docs/concepts/HopSpec V3语法参考.md`；引擎内幕：`ARCHITECTURE.md`。

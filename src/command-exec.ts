@@ -54,6 +54,19 @@ export interface RunCommandOptions {
 }
 
 /**
+ * body 口 subprocess.run 的白名单 = 宿主 hopjit.yaml commands: ∪ 本 spec《已批准命令》段各行的命令名
+ * （argv[0]）——同一张任务卡不写两遍（^anc-exec-command-primitive 并集条,todo/0132）。只并命令名不并前缀:
+ * body 是 spec 作者写死、经 validate 的确定性代码;前缀级匹配只在 mcp-server run_approved_command 做。两边都缺席
+ * 返回 undefined（=关死,缺省安全不变）;hopjit 即便写进卡也由原语恒拒兜底。工具面 run_script 不并。
+ */
+// @a: anc-exec-command-primitive
+export function unionApprovedCommandNames(whitelist: string[] | undefined, approved: string[][] | undefined): string[] | undefined {
+  const names = (approved ?? []).map(p => p[0]).filter((n): n is string => typeof n === 'string' && n.length > 0);
+  if (!whitelist?.length && !names.length) return whitelist;
+  return [...new Set([...(whitelist ?? []), ...names])];
+}
+
+/**
  * 白名单管控下执行一个命令。argv[0]=命令名,其余为参数（参数列表制不经 shell）。
  * 抛出的 Error 带修法指路,由调用方包装成自己的失败形态。
  */

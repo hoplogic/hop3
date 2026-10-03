@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-09-26T00:02+0800
+	last_sync: 2026-09-29T16:58+0800
 	note: StepDispatcher 组件定义 + impl run_spec, execute_step。内容分级（决策/契约/说明）+ 6 个定义锚点
 %%
 
@@ -54,6 +54,7 @@
 | 烧穿疑似反刍分流（正文空/in-band 高重复两形态） | 契约 | `anc-exec-thinking-exhausted`（归截断闸节内） |
 | thinking 五级优先链（记名册>@thinking>routing_rules>provider 缺省>步骤类型缺省） | 契约 | `anc-exec-thinking-routing`（2026-09-20 review 批补登——旧欠;新锚一并） |
 | @thinking 步骤标注（单步思考开关,B 案独立标注） | 契约 | `anc-exec-thinking-step-annotation` |
+| 思考关不掉的端点改发 effort: low（五级链结果为关时的请求替换） | 契约 | `anc-exec-thinking-disable-unsupported` |
 | API 密钥管理 | 契约 | — |
 | 多模型路由 | 契约 | `anc-exec-model-routing` |
 | 路由解析 | 契约 | `anc-exec-model-resolve` |
@@ -65,12 +66,25 @@
 
 ## 定位【契约】 ^anc-struct-step-dispatcher
 
-> **模块版本**：step-dispatcher `v0.33.0`（2026-09-26）。本版=产出被 schema 校验拒收且正文里有疑似工具调用文字时，重做反馈与耗尽原因各追加一段条件式提示（todo/0110 probe 3,见 ^anc-exec-text-toolcall-hint）。上版 v0.32.0 并行子任务里 per_parallel_child 打开的工具 server 各自独占进程（todo/0112）。再上版 v0.31.2 超窗错误在 handleStepReady 失败时记 fail_kind=deterministic（todo/0116）。再上版 v0.31.1 网络暂停补可观测性说明、恢复面拒因文字提成导出函数 childNotInQueueMessage（todo/0105）。0.x 未承诺稳定。定位边界：独立模式驱动适配层，复用模式不经本模块。**逐版演进史归 git log**（升版在下表加一行速览，演进论证归 commit message）；条款细节以正文各锚点条款为权威，下表只记"哪版加了什么、实撞出处在哪"。
+> **模块版本**：step-dispatcher `v0.40.2`（2026-09-29）。本版=工程链 review 修复:裸冒号修复的解析点清单改成逐一列出六处加一处诊断点;yaml 解析失败反馈的常见原因补"值以反引号、@ 或 % 开头";HopType 补键起始列与续行定义,HopSop 补三个停止出口;执行证据机核补使用点②的 HopSop、代码判法与标题的等价说明、reason 步授写类工具的已知边界（todo/0123）。上版 v0.40.1=裸冒号修复给报错行加引号时连同续行（下面缩进深于键起始列的连续非空行）一起并入同一个值,续行位置置空行（^anc-exec-output-inline-colon-repair "加引号时连同续行一起并入"段,ppt qwen-flash 第四跑步 4.1 修订轮实撞）。上版 v0.40.0=执行证据机核只核 act 步,reason 步整个不进本闸（不拒收、不剥 no_change）,工具清单重试轮追加句对 reason 步也不渲染（^anc-exec-act-evidence-gate "适用范围"段,deep-validate × qwen-flash 实撞）。上版 v0.39.1=裸冒号修复加第二种命中形态:报错行的值以反引号、`@` 或 `%` 开头时整值加引号（^anc-exec-output-inline-colon-repair,ppt qwen-flash 步 4.1 实撞）。上版 v0.39.0=值里含英文冒号加空格的裸值按 YAML 报错行逐行修复后重解析,yaml 型校验把"解析失败"与"真散文"分开报（^anc-exec-output-inline-colon-repair,hb2 qwen-flash 头部契约门实撞）。上版 v0.38.0=端点不可达（ECONNREFUSED/ENOTFOUND/EPERM）从网络暂停门分出走 fail-fast：首次即判不退避、抛 ENDPOINT_UNREACHABLE 走 failStep 到 run failed,报文含 service_id/base_url/错误码（hopissues/0106,见 ^anc-exec-network-pause 末条）。上版 v0.37.0=模型输出里"顶格声明输出名 + 全角冒号"的键行在解析前规范成半角,值里的全角冒号不动;单输出没剥到标签时返回原文（见 ^anc-exec-output-fullwidth-key-colon,作者拍 A=todo/decision/20260928-输出键行全角冒号.md）。空响应重发提醒文案改引用 prompt 模块导出的常量 EMPTY_RETRY_NOTE（文案一字不变）。上版 v0.36.0=非流式长请求不再被 node 内建 fetch 缺省的 300 秒时限先掐断：新增运行时依赖 undici,五个客户端构造点都带上按引擎等待上限配置的连接设置,SDK 内部重试关掉;等满等待上限的请求从"网络中断"里分出来，报"客户端等待超过 N 分钟"且不重试（todo/0117,见 ^anc-exec-nonstreaming-timeout 与 ^anc-exec-api-retry "客户端等待超时"条）。上版 v0.35.0=思考关不掉的端点：provider 声明 `thinking_disable_unsupported: true` 后，五级链算出"关思考"时请求不发 `thinking: {type: disabled}`，改发 `output_config: {effort: "low"}`（todo/0118,见 ^anc-exec-thinking-disable-unsupported）。上版 v0.34.3=执行证据机核的 no_change 剥除范围从"只在零工具放行路径剥"扩到"重试轮且工具面在场就剥"，调了工具还写 no_change 的轮次也剥，并记 warn（T9 sdc×qwen3.8-27b 第六次复测实撞,见 ^anc-exec-act-evidence-gate "剥除范围"段）。上版 v0.34.2=执行证据机核拒收文案的开头改引用 prompt 模块导出的常量 ACT_EVIDENCE_GATE_PREFIX（文案一字不变）,供修正指令渲染认出机核拒收;成本护栏条补指针:工具次数用完的重做反馈单独渲染（见 prompt-assembler v0.27.0）。上版 v0.34.1=输出截断报文写出请求上限与实际输出两个数，实际输出远低于请求上限时明说是端点自带上限、改本地配置没有用（todo/0113,见 ^anc-exec-output-truncation-loud "端点自带上限的分辨"）。上版 v0.34.0 执行证据机核的 no_change 出口改成旁路声明：放行后剥掉这一行再解析产出，只交 no_change 时用专用文案拒收（todo/0111,见 ^anc-exec-act-evidence-gate）。再上版 v0.33.0 产出被 schema 校验拒收且正文里有疑似工具调用文字时，重做反馈与耗尽原因各追加一段条件式提示（todo/0110 probe 3,见 ^anc-exec-text-toolcall-hint）。更早的 v0.32.0 并行子任务里 per_parallel_child 打开的工具 server 各自独占进程（todo/0112）。再上版 v0.31.2 超窗错误在 handleStepReady 失败时记 fail_kind=deterministic（todo/0116）。再上版 v0.31.1 网络暂停补可观测性说明、恢复面拒因文字提成导出函数 childNotInQueueMessage（todo/0105）。0.x 未承诺稳定。定位边界：独立模式驱动适配层，复用模式不经本模块。**逐版演进史归 git log**（升版在下表加一行速览，演进论证归 commit message）；条款细节以正文各锚点条款为权威，下表只记"哪版加了什么、实撞出处在哪"。
 
 **版本速览表**（新→旧）：
 
 | 版本 | 内容一句话 | 要点与实撞出处 |
 |---|---|---|
+| v0.40.2 | 工程链 review 修复:裸冒号修复与执行证据机核的设计补齐 | ^anc-exec-output-inline-colon-repair:解析点清单逐一列出（六处+诊断点,旧文"四处"是引号前缀修复立条时的计数）;反馈常见原因补保留字符开头一条（validator 反馈文案同改）;HopType 定义键起始列（含列表前缀 `- `）、两种命中形态与续行;HopSop 补"报错不带行号/行号越界/32 次用尽"出口;测试成对补形态①必要条件反例与接线面。 ^anc-exec-act-evidence-gate:补使用点②（重试轮追加句渲染信号）HopSop、代码判"不等于 reason"与标题"只核 act"的等价说明、reason 步授写类工具的已知边界待拍（todo/0123）。来源=变速箱 qwen-flash 适配工程链 review（审查对象 214b92a0..19f757ed） |
+| v0.40.1 | 裸冒号修复加引号时连同续行并入 | ^anc-exec-output-inline-colon-repair 增段:键值行已有行内值时,下面缩进深于键起始列的连续非空行是同一个值的续行,去首尾空白以一个空格接进值后整值加引号,续行位置置空行（行数不变）。实撞=ppt qwen-flash 第四跑步 4.1 修订轮,第 5 页裸冒号值跨两行、续行以反引号开头,只给首行加引号后续行被孤立再误修,pages 落空归一空列表,4.6 打回"pages 是空的"烧尽重试,run 失败（21.7 万 tokens） |
+| v0.40.0 | 执行证据机核只核 act 步 | ^anc-exec-act-evidence-gate 增"适用范围"段:reason 步的交付物是产出文字本身,重试轮零工具按反馈改文字是合法形态,整个不进本闸;两个使用点同分道（dispatcher 机核区块跳过、工具清单重试轮追加句不渲染）。实撞=deep-validate 步 2.1（reason,声明 read 读卸载大件）× qwen-flash:第 2、3 轮按反馈改对了报告、零工具、没写 no_change,两轮被拒,重试耗尽;规约教写 no_change 复跑同样死 |
+| v0.39.1 | 裸冒号修复加第二种命中形态:值以反引号、@ 或 % 开头 | ^anc-exec-output-inline-colon-repair 增段:报错行是键值形态且值以 YAML 保留字符（反引号、@）或指令起始符 % 开头时,不论值里有无冒号加空格都整值加引号,与裸冒号形态同一循环同一停止条件;引号、流式集合、块式标量、锚点、别名、标签、注释起始符仍不归本修复。实撞=ppt qwen-flash 步 4.1 content_points 以反引号开头,pages 解析落空归一空列表,交付零页演示文稿且全程无报错 |
+| v0.39.0 | 值里裸冒号修复 + yaml 解析失败反馈点名出错行 | 新锚 ^anc-exec-output-inline-colon-repair:repairInlineColonScalars 按解析器报错行逐行把"不加引号且含英文冒号加空格"的值整值加引号,与引号前缀修复串联成 repairYamlScalars,四处解析点改调串联版;checkValue 对 yaml 解析失败报"第 N 行（原文）解析失败"加常见原因,解析出文字才报散文。实撞=hb2 qwen-flash 变体 4.2 七次输出四次撞,旧反馈误报散文致三次重试同因死 |
+| v0.38.0 | 端点不可达 fail-fast | ^anc-exec-network-pause 末条:classifyError 归 network 且错误链带 ECONNREFUSED/ENOTFOUND/EPERM → 定性 unreachable 分档,首次即判不退避,抛 ENDPOINT_UNREACHABLE 前缀不进暂停门走 failStep 到 run failed,报文含 service_id/base_url/错误码。实撞=hopissues/0106（hop3 真机:dead provider 90s+ 永 running 静默挂死） |
+| v0.37.0 | 键行全角冒号等同半角 | 新锚 ^anc-exec-output-fullwidth-key-colon（HopTrait/HopSop）:parseStepOutput 取值前把顶格声明输出名（可带双引号）后紧跟的全角 `：` 换成 `: `,单输出与多输出全部解析路径吃规范化文本;单输出没剥到标签时返回原文保真;值里、缩进行、非声明名行不动。实撞=glm-5.3-flash ppt `slide_ok： true` 三连重试烧尽,全集 6 个任务 33 处;作者拍 A=todo/decision/20260928-输出键行全角冒号.md |
+| v0.36.0 | 非流式长请求不再被 300 秒掐断,等满上限不再当网络中断重试 | ^anc-exec-nonstreaming-timeout 新增"连接设置"段（HopTrait/HopType/HopSop）:undici Agent 的 headersTimeout/bodyTimeout 取 client 级等待上限,经 fetchOptions 传给三种协议共五个构造点;client 级上限改按 service 解析;SDK maxRetries 置 0。^anc-exec-api-retry 重试表加"客户端等待超时"行:classify 先认 undici 超时错误码归 timeout,timeout 且耗时 ≥ 本次等待上限 90% → 不重试,抛 `CLIENT_TIMEOUT:` 文案,不走网络暂停。实撞=todo/0117（glm-5.3-flash 单发 3—8 分钟,约 300 秒处 UND_ERR_HEADERS_TIMEOUT,再按网络瞬断重试 6 次,约 35 分钟后报"网络中断"）;作者拍方向 A=todo/decision/20260927-非流式超时修法加undici依赖.md |
+| v0.35.0 | 思考关不掉的端点改发 effort: low | 新锚 ^anc-exec-thinking-disable-unsupported（todo/0118,作者拍"配置声明关不掉，改发少想"）:ProviderEntry 新增可选 `thinking_disable_unsupported: true`;五级链照常计算,结果为"关"且目标端点声明了关不掉时,请求改发 `output_config: {effort: "low"}`、不带 thinking 键,五级一视同仁;hoplog llm.thinking 摘要新增 `effort:low` 值,从发送口请求对象抄。实撞=glm-5.3-flash 收到 thinking disabled 报 400,烧穿记名册的止血重试反而让步骤必败 |
+| v0.34.3 | no_change 剥除范围扩到调了工具的重试轮 | ^anc-exec-act-evidence-gate 剥除条件由"A B C 三条成立"放宽到"A B 两条成立",拒收条件不变;调了工具仍写 no_change 记 warn。实撞=T9 sdc×qwen3.8-27b r6 第 3 次尝试:五字段产出完整,尾随一行 no_change 使产出被解析成两个键的对象,类型校验误报缺字段 |
+| v0.34.2 | 机核拒收文案开头提为共享常量 | ^anc-exec-act-evidence-gate 文案一字不变,开头一段改引用 prompt.ts 导出的 ACT_EVIDENCE_GATE_PREFIX;^anc-exec-cost-guardrails 补重做反馈指针。实撞=T9 sdc×qwen3.8-27b r5,见 prompt-assembler v0.27.0 |
+| v0.34.1 | 截断报文分辨端点自带上限 | ^anc-exec-output-truncation-loud 契约句改定并新增"端点自带上限的分辨"段（todo/0113,作者拍 A 案"先量再批换端点"）:三个抛错点共用导出函数 truncationAdvice,报文恒写请求 max_tokens 与实际 output_tokens 两个数;output_tokens < 请求值×0.9 判端点自带上限,明说改本地配置没有用并点名探针 run-output-cap;前缀与重试行为不变。实撞:百炼 claude-code-proxy 端点 4096 硬上限忽略请求 65536,旧报文叫人调大早已是 65536 的本地上限,T7 ppt 4.2 与 T2 fact check L 5.2 两跑约 10 万 tokens 白烧 |
+| v0.34.0 | 执行证据机核的 no_change 出口改成旁路声明 | ^anc-exec-act-evidence-gate 第二出口改定（todo/0111）:放行后把 no_change 键块（键行+缩进续行,与 extractSelfReportKey 读取范围一致）从响应文本剥掉再解析产出;剥空=只交了 no_change 没交产出,用专用文案拒收并点名本步输出名;拒收文案与重试轮工具清单句改教"产出照声明完整交,另起一行写 no_change";补 HopTrait/HopType/HopSop。按产出语义值放行的方案不做（语义判断,违本闸机械立场）。实撞:T9 sdc×qwen3.8-27b 步 5.1.1 只交一行 no_change 被类型校验以缺字段判死 |
 | v0.33.0 | 产出被拒时正文疑似工具调用的附加提示 | 新锚 ^anc-exec-text-toolcall-hint:SCHEMA_MISMATCH 算子级重试的重做与耗尽两处,按本步最近一次终轮响应正文识别五种文字形态的工具调用,在原校验报文后追加条件式提示（工具名、在不在本步可用清单、可用的有哪些,"如果这段是产出内容本身，忽略本提示"收尾）;通过校验的产出不碰。实撞=todo/0110（Ling 在无 bash 的步骤里 9 轮把 `<tool_call>bash` 写成正文,反馈只说形态不对） |
 | v0.32.0 | 并行子任务独占开关打开的工具 server 进程 | ^anc-exec-standalone-parallel "worker 共享父 ToolProvider"段加例外条款:三个并行注入点（过期子实例重建、并行子任务、并行 call 子实例）注入父工具面的派生视图（[[tool-interface#^anc-exec-tool-composite]] forkForParallelChild）,开关全关时仍是父的同一个对象;子任务收场关派生视图自有成员,暂停不关。实撞=todo/0112（deep research 5 个并行子任务共用一个 playwright 进程互抢浏览器） |
 | v0.31.2 | 超窗错误产生点记确定性类别 | 错误分类表上下文溢出行:handleStepReady 捕获到以超窗前缀开头的错误时 failStep 传 fail_kind='deterministic'（[[exec-engine#^anc-exec-deterministic-no-retry]] "档次判定只看失败原因的开头"条款的产生点半边）。实撞=todo/0116（判定打回意见引用超窗前缀字样被当事务级确定性失败） |
@@ -117,7 +131,8 @@
 | `childNotInQueueMessage` | 函数 | dispatcher.ts | CHILD_NOT_IN_QUEUE 拒因文字单一来源（dispatcher.resume 异步拒收与 mcp-server resume_run 同步核对共用,[[parallel-execution#^anc-exec-parallel-hitl-queue]] 第 4 条;todo/0105） | provisional |
 | `DirSpecProvider` | 类 | dispatcher.ts | 缺省 SpecProvider（调用方 spec 同目录寻址，standalone 入口/测试构造注入；决策见 [[shared-providers#^anc-provider-spec-default]]） | provisional |
 | `ProtocolClient` / `LlmErrorKind` | 类型 | protocol-openai.ts | LLM 调用协议句柄与错误类别枚举（dispatcher 内部消费+测试） | provisional |
-| `wrapAnthropicClient` / `makeOpenAiClient` | 函数 | protocol-openai.ts | 双协议客户端构造（dispatcher 构造分派消费） | provisional |
+| `wrapAnthropicClient` / `makeOpenAiClient` / `makeOpenAiResponsesClient` | 函数 | protocol-openai.ts | 三协议客户端构造（dispatcher 构造分派消费;openai 两个构造函数 v0.36.0 起收 waitMs,自己建连接设置） | provisional |
+| `nonstreamingWaitMs` / `longWaitFetchOptions` | 函数 | protocol-openai.ts | 等待上限换算公式（按 max_tokens,唯一一处）与长等待连接设置构造（undici Agent,两个时限取等待上限）——dispatcher 构造点与重试分派消费（^anc-exec-nonstreaming-timeout,v0.36.0） | provisional |
 
 > **内部（表外即内部）**：各 execute*/build* 私有调度方法、API 请求组装 helper。
 
@@ -215,17 +230,17 @@ Id: run_spec
 Goal: 驱动 HopSpec 规约的完整执行，直到所有步骤完成或失败上报
 
 Inputs:
-- spec_source: text  # HopSpec markdown 原文或文件路径
-- run_params: yaml   # 运行参数：Spec Inputs 的初始值（可选）
+- spec_source % text  # HopSpec markdown 原文或文件路径
+- run_params % yaml   # 运行参数：Spec Inputs 的初始值（可选）
 
 Outputs:
-- result: yaml       # Spec 的 Outputs 变量集合
-- status: line       # completed | failed
+- result % yaml       # Spec 的 Outputs 变量集合
+- status % line       # completed | failed
 
 ## Steps
 1. [act] 调用 hopjit init 解析并初始化执行实例
   - ← spec_source, run_params
-  + → instance_id: line  # 执行实例 ID
+  + → instance_id % line  # 执行实例 ID
   > 调用 Engine 的 init_execution，传入 spec_source 和 run_params
   > 返回 instance_id；若解析或验证失败则展示 errors 并终止
 
@@ -234,7 +249,7 @@ Outputs:
 
   2.1. [act] 调用 hopjit debug_step 获取下一步上下文
     - ← instance_id
-    + → next_resp: yaml  # NextResponse（5 种形状之一）
+    + → next_resp % yaml  # NextResponse（5 种形状之一）
     > 调用 Engine 的 next_step，传入 instance_id，返回 NextResponse（5 种形状之一）
 
   2.2. [branch] 按 NextResponse.status 分派
@@ -258,7 +273,7 @@ Outputs:
         + → none
         2.2.3.1.1. [act] （已删）None 前置检查——2026-08-09 None 闸废除,None 输入照常交执行体
           - ← next_resp
-          + → has_none_inputs: bool
+          + → has_none_inputs % bool
           > 若任何输入变量值为 null（None），跳过 API 调用，直接 fail step
           > 返回 { status: 'error', code: 'MISSING_INPUT', message: 'Required input X is None' }
           > 不消耗 API 调用配额——失败处置在 Engine 层已决定，无需 LLM 推理
@@ -272,13 +287,13 @@ Outputs:
           2.2.3.1.2.2. [case] has_none_inputs = false
             2.2.3.1.2.2.1. 调用 execute_step：根据步骤类型执行
               - ← next_resp
-              + → step_result: yaml  # 步骤输出或暂停信号
+              + → step_result % yaml  # 步骤输出或暂停信号
             2.2.3.1.2.2.2. [branch] 按 step_result 类型分派
               + → none
               2.2.3.1.2.2.2.1. [case] step_result 为暂停信号（confirm/commit 触发 HITL）
                 2.2.3.1.2.2.2.1.1. [act] 输出暂停信号，退出循环等待外部回复
                   - ← next_resp, step_result
-                  + → pause_signal: ExecutionPaused
+                  + → pause_signal % ExecutionPaused
                   > 构造 ExecutionPaused JSON，含 presented_data 和 response_options
                   > run_spec 返回 pause_signal 给调用方（不调 hopjit submit_and_fetch_next）
                   > 调用方呈现暂停信号给用户 → 用户回复
@@ -295,7 +310,7 @@ Outputs:
     2.2.4. [case] status = 'adaptive_needed'（需要重规划）
       2.2.4.1. [reason] 分析失败原因，基于 subtask_contract 设计新步骤
         - ← next_resp
-        + → new_steps: text  # 新 children 的 HopSpec Steps markdown
+        + → new_steps % text  # 新 children 的 HopSpec Steps markdown
         > 参考 next_resp.retry_history 避免重复失败策略
         > 新步骤必须满足 next_resp.subtask_contract.outputs
       2.2.4.2. [act] 提交重规划
@@ -423,22 +438,22 @@ Constraints:
 Id: dispatcher-resume
 Goal: 注入 caller 对暂停步骤的决策，继续执行循环直到下一个终态/暂停点
 Inputs:
-- step_id: line     # 暂停的 confirm/ask 步骤
-- answer: yaml      # caller 决策（注入为步骤输出）
-- call_path: [line] # 可选。多层 call 暂停帧的调用链——非空则剥头下钻直达挂起帧
+- step_id % line     # 暂停的 confirm/ask 步骤
+- answer % yaml      # caller 决策（注入为步骤输出）
+- call_path % [line] # 可选。多层 call 暂停帧的调用链——非空则剥头下钻直达挂起帧
 Outputs:
-- result: yaml      # RunResult（completed/failed/paused;paused+rejected={code,message}=answer 被拒未推进,修正后可重试——0016）
+- result % yaml      # RunResult（completed/failed/paused;paused+rejected={code,message}=answer 被拒未推进,修正后可重试——0016）
 
 # Spec: 跨进程恢复
 Id: dispatcher-resume-spec
 Goal: 从持久化快照重建执行状态后恢复——注入决策续跑（对账在飞、重建 worker 见 §U2）
 Inputs:
-- persistence: PersistenceProvider
-- step_id: line
-- answer: yaml
-- host_config: HostConfig
+- persistence % PersistenceProvider
+- step_id % line
+- answer % yaml
+- host_config % HostConfig
 Outputs:
-- result: yaml      # RunResult
+- result % yaml      # RunResult
 ```
 
 （代码层投影：dispatcher.ts `StepDispatcher.resume(stepId, answer, callPath?)` 与 `resumeSpec`——设计以本契约为准。）
@@ -505,13 +520,13 @@ Id: resume_spec
 Goal: 从暂停（CITL 决策注入）或崩溃中断点恢复执行
 
 Inputs:
-- instance_id: line  # 已有执行实例 ID
-- step_id: line      # 暂停步骤 ID（CITL 恢复时必填，崩溃恢复为空）
-- answer: yaml       # caller 决策（CITL 恢复时必填）
+- instance_id % line  # 已有执行实例 ID
+- step_id % line      # 暂停步骤 ID（CITL 恢复时必填，崩溃恢复为空）
+- answer % yaml       # caller 决策（CITL 恢复时必填）
 
 Outputs:
-- result: yaml       # Spec 的 Outputs 变量集合
-- status: line       # completed | failed | paused（再次暂停）
+- result % yaml       # Spec 的 Outputs 变量集合
+- status % line       # completed | failed | paused（再次暂停）
 
 ## Steps
 1. [act] 从 PersistenceProvider 恢复引擎状态
@@ -603,10 +618,10 @@ resolveCalleeId(node, readVar):
 # Spec: 独立模式执行 call 步骤
 Goal: 解析 callee spec 并嵌套执行，把子 Outputs 按映射回填父变量；子层 confirm/ask 直达顶层 caller
 Inputs:
-- call_step: CallStep         # callee_spec_id + param_mapping/output_mapping
-- call_depth: number          # 本帧深度（顶层 run 为 0）
+- call_step % CallStep         # callee_spec_id + param_mapping/output_mapping
+- call_depth % number          # 本帧深度（顶层 run 为 0）
 Outputs:
-- step_result: yaml           # 子 Outputs 映射回父的变量集，或暂停信号
+- step_result % yaml           # 子 Outputs 映射回父的变量集，或暂停信号
 Constraints:
 - 无 SpecProvider 或 resolve 返回 null → fail UNKNOWN_SPEC（不猜路径）
 - call_depth ≥ max_call_depth（缺省 10，resource_limits.max_call_depth 覆盖）→ fail DEPTH_EXCEEDED，不建子实例
@@ -740,9 +755,9 @@ resume(stepId, answer, call_path?):
 # Spec: 独立模式执行 parallel 批
 Goal: 把 nextParallelBatch 吐出的 children 并发执行（各自内存态子引擎），全部终态后 joinParallel 合并回父
 Inputs:
-- batch: ParallelReady        # 引擎批量吐出的就绪 children（已排除含 confirm/ask 子树）
+- batch % ParallelReady        # 引擎批量吐出的就绪 children（已排除含 confirm/ask 子树）
 Outputs:
-- join_result: yaml           # joinParallel 合并结果（收集列表/同名提升落父变量空间）
+- join_result % yaml           # joinParallel 合并结果（收集列表/同名提升落父变量空间）
 Constraints:
 - 并发窗口 ≤ max_concurrent_workers（缺省 5）——超出的 children 排队，任一完成即补位
 - 失败 child 不阻塞兄弟（全部跑到终态才 join；失败不贡献收集元素——列表变短，2026-08-09 定稿）
@@ -790,10 +805,10 @@ Id: execute_step
 Goal: 根据步骤类型分派执行，返回步骤输出
 
 Inputs:
-- next_resp: yaml  # StepReady（来自 hopjit debug_step，status = 'step_ready'）
+- next_resp % yaml  # StepReady（来自 hopjit debug_step，status = 'step_ready'）
 
 Outputs:
-- step_result: yaml  # 步骤输出变量，结构符合 next_resp.context.output_schema
+- step_result % yaml  # 步骤输出变量，结构符合 next_resp.context.output_schema
 
 ## Steps
 1. [branch] 按 next_resp.step_type 分派
@@ -843,7 +858,7 @@ Outputs:
   1.6. [case] step_type = call
     1.6.1. [act] 初始化子 Spec 执行实例
       - ← next_resp
-      + → child_instance_id: line  # 子实例 ID
+      + → child_instance_id % line  # 子实例 ID
       > 调用 Engine 的 init_execution，传入 callee spec 路径、父实例 ID、call 步骤 ID 和映射后的参数
     1.6.2. 调用 run_spec：递归执行子规约
       - ← child_instance_id
@@ -912,9 +927,9 @@ handle_lack_of_info(step_id, lack_of_info, context, knowledge_provider?):
 # Spec: standalone reason 步执行
 Goal: reason 步在 standalone 下与复用模式能力对等——可推理、可用受控工具读料，产出仍按声明 schema 解析
 Inputs:
-- step: StepReady  # reason 步（无 body——reason 本无 body 形态）
+- step % StepReady  # reason 步（无 body——reason 本无 body 形态）
 Outputs:
-- outputs: yaml  # 按声明 schema 解析的产出（经既有 parseStepOutput 阶梯,lack_of_info/tool_failure 前置探测照常）
+- outputs % yaml  # 按声明 schema 解析的产出（经既有 parseStepOutput 阶梯,lack_of_info/tool_failure 前置探测照常）
 Constraints:
 - **reason 的工具面全按节点声明下发（2026-09-18 修订——basic 族不再恒下发）**：`- 工具:` 声明什么下发什么（basic 与 special 同一文法零分档差异）,零声明=零工具面走单发纯推理。原"basic 恒下发"口径废除——那是 2026-09-01 救 anchor-audit 真饥荒时的实装选择,救的是"少数 reason 步真要读盘",给的却是全部 reason 步无条件十一件;弱模型实撞:Qwen3.8-27B 在输入全实值的最简 reason 步上七轮全灭 20 轮工具空转,文字五级+结果语义两级干预全部无效,直连探针实证长供给×满配工具面走偏 5/6 而 0 工具 3/3 交出正确产出——闲置工具面对弱执行者不是备而不用,是行为吸引子;声明制同时天然把用工具步的工具面压到少数几件（Qwen ≤3 件档 0/6 走偏）。act 步不动（act 本就是干活步,basic 恒下发照旧）
 - requires_commit=true 的工具恒不下发（"不能 commit 写"——reason 与 act free 同一条不可逆红线;list 期过滤,非运行期拒）
@@ -1046,13 +1061,102 @@ completeStep(step_id, outputs) 早判区（既有 lack_of_info 判定之后并�
 | A 重试轮 | step.context.retry_feedback 非空 | 本步带着修复反馈重做（首轮不核——首轮零工具的合法形态多） |
 | B 工具面在场 | 本步实际下发 tools 非空 | 工具面本就为空的步，零调用天然合法 |
 | C 零调用 | toolCallLog.length === 0 | 全程一次工具没发 |
-| D 无如实声明 | 产出无顶格 `no_change:` 自报键 | 有自报=走第二出口放行留痕（见下） |
+| D 无如实声明 | 终轮响应文本里没有任何一行以 `no_change:` 开头（出现在任意行首都算，不要求在产出之前） | 有自报=走第二出口：放行留痕，并把这一行当旁路声明剥掉后再解析产出（见下；剥除不只在放行路径——A、B 两条成立的轮次里调了工具也照剥，见"剥除范围"段） |
 
-四与门全真（三信号 + 产出无 `no_change` 自报键）→ 交卷拒收：throw SCHEMA_MISMATCH 前缀错误，上浮 handleStepReady 的失败链走**容器级重试**（吃 subtask retry 预算——不新建预算面，**不送判官**；注：不是算子级 SCHEMA 环——那条通道只接 completeStep 返回的响应码，执行期 throw 走容器链，首版设计陈述有误经阅卷勘正）。反馈文案指路双出口："带着修复反馈重做本步却一次工具都没调——要么真调工具修改盘面，要么在产出顶格写一行 `no_change: 原因` 如实声明未做修改；复述工单不算修复。"
+**适用范围：只核 act 步（含 act free），reason 步整个不进本闸**（v0.40.0，2026-09-29 deep-validate × qwen-flash 实撞）。本闸防的是"声称改了盘面其实没动手"——前提是这一步的交付物落在盘面上，产出文字只是对盘面动作的陈述。reason 步不是这样：它的交付物就是产出文字本身，工具只是读料的增强（[[#^anc-exec-reason-tools]]"reason 总能纯推理产出"），重试轮只按反馈改产出文字、一次工具都不调，是最常见的合法形态，没有"虚构的盘面动作"可以核。**实撞**：deep-validate 步 2.1（reason，声明 `- 工具: read` 只为读被卸载的大件 spec 全文）第 1 轮被判官以"P10 风险条目缺坑位"打回；第 2、3 轮 qwen-flash 都按反馈把报告改对了（P10 补上"坑位：步骤 4.3"），都没调工具，也都没写 no_change 行，两轮都被本闸拒收，subtask 重试耗尽，run failed——在规约步骤说明里加一句教写 no_change 的话复跑，两轮照样不写，同样死法。靠教学让模型在 reason 步写这一行，是在为一道本不该拦它的闸买单。判定用的是 step_type，机械可判，不做语义猜测。同一分道的使用点共两处：①本闸拒收与 no_change 剥除（dispatcher 执行证据机核区块，reason 步跳过整个区块——首轮、重试轮都原文不动，与"工具面为空"同一处置）；②工具清单重试轮追加句（prompt 工具清单渲染的 retryRound 信号，reason 步不传——那句话"反馈要求修改盘面的必须真调工具落实"和 no_change 出口，对 reason 步既不适用也无闸可对应，渲染出来只会误导；渲染层条款见 [[prompt-assembler#^anc-exec-tool-manifest-supply]] 第 6 面）。
 
-**第二出口的机械形态**：`no_change: 原因` 顶格自报键——与 tool_failure/lack_of_info 同族文法（extractSelfReportKey 行首键匹配，机械可判非语义猜测）。自报在场 → 放行 + warn 留痕（"零工具重做轮携 no_change 自报"入 HopLog，审计面可对账真伪——虚构者若学会写 no_change 谎称没改，判官对着盘面与工单立刻现形，谎言从"烧判官全审"降级为"一行 warn 可查账"）。为什么不是"拒一轮后放行"：那等于机核只拦一次，虚构者重复虚构一轮就过，防线名存实亡。
+- **代码判法与标题的关系**：两个使用点在代码里判的都是"step_type 不等于 reason",不是"step_type 等于 act"。在现行可达路径上两者等价——走到工具循环的只有 act 与 reason 两类（check 步不下发工具;commit 步没有 body 会在校验期被 B7 规则拒载,有 body 则由 body 解释器执行、不进工具循环）。变异核证实证过这一点:把判法改成"等于 act"全量测试结果不变。
+- **已知边界（待拍板,todo/0123）**：reason 步可以被授予写类工具（write、edit_file 等不带 requires_commit 标记的工具,按 [[#^anc-exec-reason-tools]] 会下发）。这种 reason 步的交付物有一部分落在盘面上,本闸不核它,重试轮不调工具就声称"已写好文件"不会被拦。现行库内没有给 reason 步授写类工具的规约,属于潜在漏洞;修法有三个方向（工具面含写类工具的 reason 步照样进闸 / 禁止给 reason 步授写类工具 / 接受并写明边界）,上层没有锁死,待作者拍板。
 
-**误伤面（宁窄不宽）**：首轮恒不核（零误伤）；重试轮真无需动盘的形态（重试因产出皮病、纯文本改措辞）按反馈写一行 no_change 即过——代价一行文字且反馈教路。不做产出语义判定（"看起来声称修了"这类猜测不进判定条件；no_change 是行首键匹配不是语义判定）——拦不全可以（判官兜底仍在）。
+四与门全真（三信号 + 响应里无 `no_change` 自报行）→ 交卷拒收：throw SCHEMA_MISMATCH 前缀错误，上浮 handleStepReady 的失败链走**容器级重试**（吃 subtask retry 预算——不新建预算面，**不送判官**；注：不是算子级 SCHEMA 环——那条通道只接 completeStep 返回的响应码，执行期 throw 走容器链，首版设计陈述有误经阅卷勘正）。反馈文案原文（指路双出口；开头一段"SCHEMA_MISMATCH: 带着修复反馈重做本步却一次工具都没调"是 prompt 模块导出的常量 `ACT_EVIDENCE_GATE_PREFIX`,dispatcher 抛错时引用——修正指令渲染靠这段开头认出机核拒收,不再给它套形态指引,见 [[prompt-assembler#^anc-exec-l2c-retry-feedback]]）：
+
+> SCHEMA_MISMATCH: 带着修复反馈重做本步却一次工具都没调——要么真调工具修改盘面；要么确实无需修改或做不到时，产出照本步输出声明完整交，另起一行顶格写 `no_change: 原因` 如实声明未做修改（这一行不占产出的位置，也不能代替产出）；复述工单不算修复
+
+**第二出口 = 旁路声明**（2026-09-26 todo/0111 改定）：`no_change: 原因` 是与 tool_failure/lack_of_info 同族文法的行首自报键（extractSelfReportKey 行首键匹配，机械可判非语义猜测）。它是**旁路声明**：只告诉引擎"本轮如实没改盘面"，不是产出的一部分，也不能代替产出。自报在场 → 放行 + warn 留痕（"零工具重做轮携 no_change 自报"入 HopLog，审计面可对账真伪——虚构者若学会写 no_change 谎称没改，判官对着盘面与工单立刻现形，谎言从"烧判官全审"降级为"一行 warn 可查账"），然后把这个键块从响应文本里剥掉，剥后的文本才交产出解析。为什么不是"拒一轮后放行"：那等于机核只拦一次，虚构者重复虚构一轮就过，防线名存实亡。
+
+为什么必须剥：首版放行后什么都不改，no_change 行原样进产出解析——单输出 text 步的值会混进这一行；结构化输出声明的步骤（复合类型、带必填字段）更糟，模型照首版文案"在产出顶格写一行"的字面，常常整份产出只剩这一行，类型校验必然报缺字段判死。**实撞**（todo/0111，T9 sdc×qwen3.8-27b 步 5.1.1，输出声明 `guard_result: GuardResult` 五字段）：第 3/4 轮交了规约明文允许的降档产出（status: 降档需人裁）因零工具被拒；第 5 轮照文案只写一行 no_change，闸放行后被类型校验以"缺字段 clause_id"判死，retry 耗尽，run failed——出口成了死门。
+
+**剥除范围：重试轮且工具面在场就剥，不看调没调工具**（v0.34.3，T9 sdc×qwen3.8-27b 第六次复测实撞）。v0.34.0 只在放行路径（零工具）剥，调了工具的重试轮原文不动。可重试反馈与工具清单在所有"重试轮+工具面在场"的轮次都教了 no_change 出口，模型不会精确区分"这轮我调没调过工具"——r6 第 3 次尝试先列目录、读文件（调了工具），产出末尾照样顶格写了一行 no_change，这一行原样进解析，完整的五字段产出被解析成两个键的对象，类型校验报"缺字段 clause_id"，重试耗尽。判据仍是机械的行首键匹配：教过这个出口的轮次（A、B 两条成立）都按旁路声明剥；拒收条件不变（仍要四条全真）；调了工具还写 no_change 记一条 warn，自述"没改"与工具调用记录可对账。
+
+**能力契约（HopTrait）**：
+
+```
+# Spec: 执行证据机核
+Id: act-evidence-gate
+Goal: 重试轮里工具面在场却一次工具都没调的交卷，要么拒收重做，要么凭行首 no_change 自报放行；
+      放行时 no_change 只作旁路声明，产出仍按本步输出声明解析与校验
+Inputs:
+- step_type % line  # 本步步骤类型（reason 步不进本闸）
+- response_text % text  # 终轮响应的全部文本块拼接（extractTextContent）
+- retry_feedback % text  # 本步修复反馈，空=首轮
+- tools_sent % [line]  # 本步实际下发的工具名
+- tool_call_count % int  # 本步工具循环全程的调用次数
+- output_names % [line]  # 本步输出声明的变量名
+Outputs:
+- parse_text % text  # 交给 parseStepOutput 的文本（重试轮且工具面在场、响应里有 no_change 键块时=剥掉该键块后的文本；其余情形=原文）
+Constraints:
+- step_type 为 reason 时整个不核不剥，parse_text = response_text（reason 的交付物是产出文字本身，没有盘面动作可核）
+- 拒收只在四与门全真时发生；剥除在 A、B 两条成立（重试轮且工具面在场）时就做，不看调没调工具——这两条成立的轮次都教过 no_change 出口；首轮、工具面为空两种情形原文不动，不剥
+- 剥除范围与 extractSelfReportKey 的读取范围一致，不多剥不少剥
+- 不做产出语义判定：不看产出字段的值像不像"认输"
+- 剥完还有内容的，一律照走既有解析与类型校验（缺字段照报缺字段）
+```
+
+**类型约定（HopType）——旁路自报键块**：
+
+- 键行：第一条匹配 `^no_change\s*:` 的行（行首顶格，任意行位）；
+- 续行：键行之后连续的、以空白字符开头的非空行（其间的空行一并算进键块），遇到第一条顶格的非空行即止——与 extractSelfReportKey 收集续行的规则逐字一致；
+- 剥除 = 从文本里删掉键行、续行以及它们之间的空行；键块前后的其他文本原样保留、原序拼接；
+- 只剥第一个键块（与 extractSelfReportKey 只读第一个匹配同口径）。
+
+**HopSop（放行路径）**：
+
+```
+# impl act_evidence_gate（executeActWithTools 终轮无 tool_use 分支内，全败 warn 之后、lack_of_info/tool_failure 探测之前）
+1. [branch] 判前三条
+  1.0. [case(step_type == reason)] parse_text = response_text（不核不剥）
+  1.1. [case(retry_feedback 非空 且 tools_sent 非空 且 tool_call_count == 0)]
+    1.1.1. [act] noChange = extractSelfReportKey(response_text, 'no_change')
+    1.1.2. [branch] 判 D
+      1.1.2.1. [case(noChange 缺席)] 抛 SCHEMA_MISMATCH（反馈文案原文见上）
+      1.1.2.2. [case(noChange 在场)]
+        - [act] recordWarn（"执行证据机核放行:零工具重做轮携 no_change 自报（原因）——审计面可对账真伪"）
+        - [act] parse_text = stripSelfReportKey(response_text, 'no_change')
+        - [check] parse_text 去空白后为空 → 抛 SCHEMA_MISMATCH 剥空专用文案（原文见下）
+  1.2. [case(retry_feedback 非空 且 tools_sent 非空 且 tool_call_count > 0)]
+    1.2.1. [act] noChange = extractSelfReportKey(response_text, 'no_change')
+    1.2.2. [branch] noChange 在场 → recordWarn（"本轮调用了工具仍写 no_change 自报,已按旁路声明剥掉——审计面可对账"）；parse_text = stripSelfReportKey(response_text, 'no_change')；剥空同 1.1.2.2 专用文案拒收。noChange 缺席 → parse_text = response_text
+  1.3. [case(else)] parse_text = response_text（不剥）
+2. [act] 后续 lack_of_info / tool_failure 探测、lastFinalTurn 记录、parseStepOutput 全部改吃 parse_text
+   （parseStepOutput 按单输出 unwrapSelfLabeled / 多输出 YAML 解析的既有两条路照常走）
+
+# impl 使用点②:工具清单重试轮追加句的渲染信号（prompt 组装,buildToolManifest 调用处）
+1. [branch] 算 retryRound
+  1.1. [case(retry_feedback 非空 且 step_type != reason)] retryRound = true → 清单头渲染重试轮追加句
+  1.2. [case(else)] retryRound = false → 清单按首轮形态渲染（reason 步重试轮走这里）
+```
+
+**剥空专用拒收文案原文**（`<输出名>` 按本步输出声明的变量名逐个列出，以顿号相连）：
+
+> SCHEMA_MISMATCH: 只交了 `no_change` 自报、没有交产出——no_change 只是旁路声明，不能代替产出。产出仍须按本步输出声明完整交（本步要交：<输出名>），做不到的就在产出里如实写明做不到的情况；`no_change: 原因` 另起一行写在产出之外
+
+为什么要专用文案：不剥时这种响应会被类型校验报成"缺字段 clause_id"一类，模型看了以为是格式问题，看不出真正要它做的是"把产出也交上"；剥空后若直接交 parseStepOutput，会得到空响应错误，同样说不清。
+
+**正反例**：
+
+- T9 第 5 轮原文（只有一行 no_change）→ 剥空 → 专用文案拒收（正——不再以"缺字段"判死）；
+- 完整 guard_result 五字段产出 + 另起一行 no_change（行在产出之前或之后都一样）→ 产出正常收、warn 在场（正）；
+- 单输出 text 步：`result: 未做修改…` 后跟 no_change 行 → result 值不含 no_change 那一行（正）；
+- no_change 键行后跟缩进续行 → 续行一并剥掉，不进产出（正）；
+- T9 第 3/4 轮原文（合法降档产出、无 no_change）→ 仍拒收（反——闸本身不放宽，文案教它另起一行补 no_change）；
+- 首轮响应里恰好有一行 `no_change: …` → 不核也不剥，原样进解析（反——没教过这个出口的轮次不动它）；
+- reason 步（声明了 read 工具）重试轮零调用、无 no_change、按反馈改好的完整产出 → 不拒收，产出正常收（正——deep-validate 2.1 × qwen-flash 实撞形态）；同一形态放在 act 步上 → 仍拒收（反——act 的闸不因本条放宽）；
+- reason 步重试轮产出里带一行 no_change → 不剥，原样进解析（reason 步从未被教过这个出口，与首轮同一处置）；
+- 重试轮调了工具、产出 guard_result 五字段完整、下面又顶格写一行 no_change（T9 r6 第 3 次尝试原文）→ 剥掉这一行、产出正常收、warn 在场（正——修前这一行原样进解析,整份产出被解析成 `{guard_result, no_change}` 两个键的对象,单键剥层不触发,类型校验报"缺字段 clause_id",而模型的五个字段其实都在）。
+
+**不做的方案**：按产出字段的语义值放行（例如 status 落在"降档需人裁"这类枚举值上就视为已如实声明）——要引擎理解"哪个字段的哪个值算认输"，是语义判断，与本闸"行首键匹配、机械可判"的立场相反。正确降档产出吃拒收的连带问题改由教学面治（见随批半件：重试轮工具清单同时教 no_change 出口，降档产出另起一行写 no_change 即一次过）。
+
+**误伤面（宁窄不宽）**：首轮恒不核（零误伤）；重试轮真无需动盘的形态（重试因产出皮病、纯文本改措辞）与做不到而如实降档的形态，产出照声明交、另起一行写 no_change 即过——代价一行文字且反馈与工具清单都教路。不做产出语义判定（"看起来声称修了"这类猜测不进判定条件；no_change 是行首键匹配不是语义判定）——拦不全可以（判官兜底仍在）。
 
 **与既有机制的分工**（三者正交，同区块落码）：
 
@@ -1062,7 +1166,7 @@ completeStep(step_id, outputs) 早判区（既有 lack_of_info 判定之后并�
 | 本机核 | 该调没调（重试轮声称完成） | 拒收重做 |
 | 同签名断路器（^anc-exec-toolloop-repeat-break） | 重复调同一工具同参数 | 抛断 |
 
-**随批半件（渲染层分道）**：工具清单前导句"任务不需要工具时严格禁止调用"（prompt.ts 工具清单节）在重试轮修错场景方向反了——给虚构完成递了合法出口。修=按 retry_feedback 在场分道：首轮维持原句（闲置工具面是行为吸引子，P2 的正确防线）；重试轮追加"但本轮带着修复反馈——反馈要求修改盘面的，必须真调工具落实，禁止只在产出里声称已修"。
+**随批半件（渲染层分道）**：工具清单前导句"任务不需要工具时严格禁止调用"（prompt.ts 工具清单节）在重试轮修错场景方向反了——给虚构完成递了合法出口。修=按 retry_feedback 在场分道（v0.40.0 起 reason 步不走分道，恒按首轮渲染——本闸不核 reason，见"适用范围"段）：首轮维持原句（闲置工具面是行为吸引子，P2 的正确防线）；重试轮追加"但本轮带着修复反馈——反馈要求修改盘面的，必须真调工具落实，禁止只在产出里声称已修"。2026-09-26（todo/0111）重试轮这句同时教合法出口（与 tool_failure 出口"教出口必教下文"同族）——追加句全文改为："**但本轮带着修复反馈**——反馈要求修改盘面的，必须真调工具落实；禁止只在产出里声称已修（引擎会机械核对本步工具调用记录，零调用却声称完成会被当场拒收重做）。确实无需修改或做不到的，产出照本步输出声明完整交，另起一行顶格写 `no_change: 原因` 如实声明未做修改（这一行不占产出的位置，也不能代替产出）。"首轮不渲染这句（首轮没有这道闸）。
 
 **挂账不入本批**：判官工单膨胀（单轮 18.5K）属 hopbuild2 spec 面且 D96/D97 判官瘦身已治过一轮，归 hb2 下轮观察（0095 卡 2e 销账行注明）。
 
@@ -1268,11 +1372,11 @@ Constraints:
 
 ```
 FinalTurnRecord:   # dispatcher 每步一份（按 step_id 存），只保留最近一次
-- text: text  # 本步最近一次模型终轮响应的正文——text 块按原样拼接的原文，不是解析后的产出值
-- tool_names: list<line>  # 这次调用实际下发给模型的工具名清单（executeActWithTools 里过滤后的 tools 的 name）；单发 reason/check 恒为空列表
+- text % text  # 本步最近一次模型终轮响应的正文——text 块按原样拼接的原文，不是解析后的产出值
+- tool_names % list<line>  # 这次调用实际下发给模型的工具名清单（executeActWithTools 里过滤后的 tools 的 name）；单发 reason/check 恒为空列表
 
 TextToolCall:   # 识别函数 detectTextToolCall 的返回；正文里没有任何疑似形态时返回空（undefined）
-- tool_name: line?  # 从文字形态里取到的工具名；取不到时缺席（仍判为疑似工具调用）
+- tool_name % line?  # 从文字形态里取到的工具名；取不到时缺席（仍判为疑似工具调用）
 ```
 
 **关键逻辑（HopSop）**：
@@ -1467,7 +1571,95 @@ LLM 用中文写结构化内容时高频产出这种行：`risk_point: "陶寺=�
 
 契约：恢复阶梯的 YAML 解析失败后、放弃恢复之前,做**引号前缀行修复重试**——逐行找 `键: "…"裸文` 形态,把整值重包成合法带引号标量（内部引号转义）,修复后再试一次 yamlLoad;修复只动命中行,其余行原样;二次解析仍失败才判真散文放弃。
 - 命中正则:值位以 `"` 开头、闭合引号后**紧邻**非空白字符——取严不含"引号后空格再接文字"形态:紧邻要求同时保护了 `k: "a" # comment` 这类合法行不被误重包;空格间隔的非法形态不修复,如实走原失败路径;
-- 四处 yamlLoad 解析点一个修复原语（同病同治）：①恢复阶梯②档（validator recoverOutputValues——声明输出的字符串值恢复）;②parseYamlStructure（validator——yaml 型 checkValue 与 coerceOutputValues 共用判据面;**注意语义**:修复接入此处=yaml 类型校验的采纳面同步放宽,含引号前缀行的字符串值修复后能过 yaml 型校验,这是有意的行为面变化不是实现细节）;③④dispatcher 多输出路径的整文与围栏内容两处（经 yamlLoadWithRepairImpl）。
+- 立条时四处 yamlLoad 解析点一个修复原语（同病同治）：①恢复阶梯②档（validator recoverOutputValues——声明输出的字符串值恢复）;②parseYamlStructure（validator——yaml 型 checkValue 与 coerceOutputValues 共用判据面;**注意语义**:修复接入此处=yaml 类型校验的采纳面同步放宽,含引号前缀行的字符串值修复后能过 yaml 型校验,这是有意的行为面变化不是实现细节）;③④dispatcher 多输出路径的整文与围栏内容两处（经 yamlLoadWithRepairImpl）。之后解析点扩到六处加一处诊断点,现行完整清单见下一条 ^anc-exec-output-inline-colon-repair 修复半边末项——本修复与裸冒号修复经 `repairYamlScalars` 串联,覆盖面恒相同。
+
+**值里含英文冒号加空格的裸值修复重试（2026-09-29 hb2 qwen-flash 变体首跑实撞）** ^anc-exec-output-inline-colon-repair
+
+模型写结构化内容时,常在不加引号的值里写出英文冒号加空格：`说明: 模式（new: 新事故, update: 状态更新）`。YAML 规定不加引号的值里不能出现"冒号加空格"（会被当成又一层键值对）,这一行就让整份 YAML 解析失败。
+- 实撞:hopbuild2 头部契约门（步 4.2,单输出 yaml）,qwen-flash 7 次输出里 4 次在 mode 输入的说明值里这样写,其余内容完好;规约 4.2 正文早已明文教"说明值含英文冒号加空格必须整条加引号",模型仍 4/7 违反——与恢复阶梯"教学清不了零"同一条定律;
+- 雪上加霜的是反馈误诊:校验层把"解析失败"报成"实际是散文文本",模型照着反馈去删散文、改形态,没人告诉它是哪一行的冒号,subtask 三次重试死在同一个原因上（7.5 万 tokens）。
+
+契约（修复半边）：引号前缀行修复之后仍解析失败,做**报错行引导的裸冒号修复**——按 YAML 解析器报出的出错行号取那一行,若它是 `<缩进>[- ]键: 值` 形态、值不以引号或 YAML 结构起始符（`" ' [ { | > & * ! % @` 和反引号、井号）开头、且值里含英文冒号加空格,就把整值重包成合法带双引号的字符串（内部引号转义）,再解析一次;还失败且报错行换到了另一行同形态行,继续修（上限 32 次防御）;报错行不是这种形态即停,如实走原失败路径。
+- 为什么按报错行修而不是全文扫描:块式标量（`|` 后面的多行文本,如工具面 rendered）里的行合法地含"冒号加空格",全文扫描会给它们加上引号、改掉内容;解析器只会在真正出错的行上报错,按报错行修就碰不到块式标量里的行;
+- 为什么安全:块式映射里不加引号的值本来就不允许出现冒号加空格,这种行不存在"另一种合法读法",加引号是唯一的还原;
+- 修复原语 `repairInlineColonScalars` 与引号前缀修复串联成 `repairYamlScalars`（先引号前缀、后裸冒号）,凡是"直载失败后试修复"的解析点都改调串联版。解析点共六处加一处诊断点,逐一列出（上一条引号前缀修复写的"四处"是它立条时的计数,之后解析点增加,以本清单为准）：
+  1. validator `recoverOutputValues` 恢复阶梯第②档（声明输出的字符串值恢复）;
+  2. validator `parseYamlStructure`（yaml 型 checkValue 与 coerceOutputValues 共用的判据面——修复接入此处=yaml 型校验的采纳面同步放宽,是有意的行为面变化）;
+  3. dispatcher 多输出路径整文解析（经 `yamlLoadWithRepairImpl`,下同）;
+  4. dispatcher 多输出路径围栏内容单解（^anc-exec-output-fence-content-retry）;
+  5. dispatcher 多输出路径尾部键块单解（^anc-exec-output-tail-yaml-retry）;
+  6. dispatcher 单输出自标注剥壳第四形态（空值键行加顶格列表,^anc-exec-output-parse-self-labeled）;
+  - 诊断点:validator `yamlParseFailure`——不产出值,只在修复后的文本上取报错行号与原文,供下面反馈半边点名出错行。
+
+**同一修复的第二种命中形态:值以反引号、`@` 或 `%` 开头（2026-09-29 ppt qwen-flash 实撞）**。YAML 把反引号和 `@` 定为保留字符、`%` 定为指令起始符,不加引号的值拿它们开头,解析器同样报"bad indentation of a mapping entry"。中文写作里用反引号标出专名极常见：`content_points: \`工程实现链规范\`。先于其余一切文档……`。
+- 实撞:ppt 步 4.1 逐页规格（多输出,pages 为列表）,qwen-flash 输出内容完好,一行 content_points 以反引号开头,整文解析失败 → 回退逐行正则取不到列表 → pages 为 null → 宽容度条款归一成空列表,只记一条告警;后面逐页生成零页、终检"slide 数 == 页数"是 0 == 0 照样通过,**交付了一份零页的空演示文稿,全程无报错**;
+- 契约:报错行是 `<缩进>[- ]键: 值` 形态、值以反引号、`@` 或 `%` 开头时,不论值里有没有冒号加空格,都整值重包成带双引号的字符串——与裸冒号形态走同一个按报错行逐行修的循环、同一套停止条件（同行二次报错即停、非这两种形态即停、上限 32 次）;
+- 为什么安全:这三个字符开头的不加引号值在 YAML 里没有任何合法读法,加引号是唯一的还原;引号、`[` `{` `|` `>` `&` `*` `!` `#` 开头的值仍不归本修复——它们各有合法语义（引号串、流式集合、块式标量、锚点、别名、标签、注释）,强行加引号会改掉合法内容。
+
+**加引号时连同续行一起并入（2026-09-29 ppt qwen-flash 第四跑实撞）**。不加引号的值可以跨多行写:键值行后面紧跟着缩进比键更深的行,YAML 把它们当成同一个值的续行,折成一个空格接上。只给第一行加引号、续行留在原地,续行就成了孤立的一行,解析器接着在续行上报错——续行若恰好长得像 `第4站: \`架构\`。…`,还会被当成新的键值行去重包,同一行第二次报错后修复停止,整份输出照样解析失败。
+- 实撞:ppt 步 4.1 修订轮,qwen-flash 输出完整 6 页,第 5 页 `content_points: 第3站: \`架构语言 HopType\`。……` 下面接一行缩进更深的 `第4站: \`架构\`。……`（模型想换行,写成了普通值的续行）;第一行按裸冒号形态加了引号,续行被孤立再被误修,pages 落空归一成空列表,4.6 打回"pages 是空的",重试烧尽,run 失败（21.7 万 tokens）;
+- 契约:给第 n 行加引号时,往下收集续行——非空、缩进比该行键的起始列更深的连续行（遇到空行或缩进不深于键的行即止）;把它们去掉首尾空白后用一个空格与第 n 行的值接起来（与 YAML 对普通多行值的折行读法相同）,整值重包成带双引号的字符串写回第 n 行,被收走的续行改成空行（行数不变,反馈里的行号仍与模型原文一致）;
+- 为什么安全:键值行已经有行内值时,下面缩进更深的行在 YAML 里只能是这个值的续行,不可能是嵌套映射（行内值后面不能再挂子映射）,并入是唯一的还原;没有行内值的键行（`key:` 后面空着,下面是嵌套结构）本来就不命中本修复。
+
+契约（反馈半边）：yaml 型校验对字符串值判不合格时,**解析失败与真散文分开报**——解析器报错的,反馈写明"第 N 行（该行原文,超过 120 字截断加省略号）YAML 解析失败"与常见原因（值里含英文冒号加空格要整值加双引号、值以反引号或 @ 或 % 开头要整值加双引号、值以引号开头却没把整值包住——三条病因与修复半边的两种命中形态加引号前缀修复一一对应,修复修不好时模型从反馈里拿得到病因）,并说"只修这一行,其余内容不必改";解析成功但得到的是一段文字（不是对象或列表）的,才报"实际是散文文本"。报错行号与原文取自修复后的文本（两种修复都不增删行,行号与模型原文一致）。
+
+**能力契约（HopTrait）**：
+
+```
+# Spec: 值里裸冒号修复
+Id: yaml-inline-colon-repair
+Goal: 把"不加引号、值里含英文冒号加空格"或"不加引号、值以反引号/@/% 开头"而炸掉 YAML 解析的键值行（连同它的续行）整值加上引号,让内容完好的结构化输出能被解析
+Inputs:
+- text % text   # 一段解析失败的 YAML 文本（已剥围栏,已过引号前缀修复）
+Outputs:
+- repaired % text   # 修复后的文本;一处都没修时与 text 逐字相同
+Constraints:
+- 只修 YAML 解析器报错的那一行,不做全文扫描（块式标量里合法的"冒号加空格"不碰）
+- 该行必须是 `<缩进>[- ]键: 值` 形态,且满足两种命中之一:①值不以 " ' [ { | > & * ! % @ 反引号 井号 开头,且值里含英文冒号加空格;②值以反引号、@ 或 % 开头（YAML 保留字符与指令起始符,不加引号时无合法读法）;都不满足则停止,原样返回
+- 整值用 JSON 字符串形态重包（内部双引号与反斜杠转义）,键与缩进不动,不增删行
+- 该行下面缩进比键起始列更深的连续非空行是同一个值的续行:去首尾空白后以一个空格接到值后面一起重包,续行位置改成空行
+- 修一行后重新解析,报错换到另一行同形态行就接着修;同一行报错两次即停;总次数上限 32
+```
+
+**类型约定（HopType）**：本条不引入新类型——输入输出都是字符串。判定用到的几个行级概念逐条定义：
+
+- 报错行号：js-yaml 抛出的 YAMLException 的 `mark.line`（从 0 起数）,反馈里展示时加一;异常不带行号、或行号不小于总行数时,视为"没有可修的报错行";
+- 键值行形态：`<缩进>[- ]<键>:<至少一个空白><值>`。键的首字符不能是空白、冒号、双引号、单引号、井号、横杠（防止 `- : :` 这类残行被当成键）,键里不含冒号;
+- 键起始列：该行开头的空白字符数,**加上**列表项前缀 `- ` 的两个字符（有前缀时）——即键名第一个字符所在的列。例：`  - 说明: …` 的键起始列是 4;
+- 形态①命中：值的首字符不是 `" ' [ { | > & * ! % @` 、反引号、井号、冒号或空白,且值里含英文冒号加空格;
+- 形态②命中：值的首字符是反引号、`@` 或 `%`;
+- 续行：第 n 行之后的连续行,每一行都非空且开头空白数大于键起始列;遇到第一条空行、或开头空白数不大于键起始列的行即止（该行不算续行）。
+
+**关键逻辑（HopSop）**：
+
+```
+# impl repairYamlScalars(text)   # 六处解析点加一处诊断点共用的串联修复
+1. [act] t = repairQuotedPrefixScalars(text)          # 第一道:引号前缀全行扫描（既有契约）
+2. [act] t = repairInlineColonScalars(t)              # 第二道:裸冒号按报错行逐行修（本条）
+3. [act] 返回 t                                       # 两道都没命中则与 text 逐字相同,调用方按相等判"无修复"
+
+# impl repairInlineColonScalars(t)
+1. [loop 至多 32 次]
+  1.1. [act] 解析 t;成功 → 返回 t
+  1.2. [branch] 取报错行号 n
+    1.2.1. [case(异常不带行号,或 n 不小于总行数)] 返回 t
+    1.2.2. [case(n 已修过)] 返回 t（同一行报错两次=加引号没治好,不再重复修）
+    1.2.3. [case(第 n 行形态①命中)] 进 1.3
+    1.2.4. [case(第 n 行形态②命中)] 进 1.3（两种形态对值首字符的要求互斥,不会同时命中）
+    1.2.5. [case(else)] 返回 t（交调用方走原失败路径）
+  1.3. [act] 收第 n 行下面的续行（定义见 HopType）,去首尾空白以一个空格接进值,整值用 JSON 字符串形态加双引号写回第 n 行,续行位置置空行,记 n 已修
+2. [act] 32 次用尽仍未解析成功 → 返回当前 t（已修的行保留,交调用方再解析一次,多半仍失败走原失败路径）
+3. 一行都没修过时返回的是入参 text 本身（逐字相同）,调用方据此判"无修复"跳过二次解析
+
+# impl checkValue 的 yaml 分支（字符串值）
+1. [act] 剥围栏 → 解析;失败则 repairYamlScalars 后再解析
+2. [branch]
+  2.1. [case(解析出对象或列表)] 合格
+  2.2. [case(解析器仍报错)] 报"第 N 行（该行原文,截断）YAML 解析失败"+常见原因+"只修这一行"
+  2.3. [case(解析出标量文字)] 报"实际是散文文本——直接返回结构本身"
+```
+
+- 测试成对：正例=hb2 实撞形态（inputs 列表项里 `说明: 模式（new: 新事故, update: 状态更新）`）修复后解出完整对象、两行同病逐行都修、yaml 型声明端到端归一成结构、dispatcher 多输出侧接线解出全键、解析失败的反馈含"第 N 行"与该行原文;反例=块式标量（`rendered: |`）里含冒号加空格的行原样不动、值以引号开头的行不归本修复（不重包）、真散文仍报"散文文本"、报错行不是键值形态时原样返回。第二种命中形态另成对:正例=ppt 实撞形态（列表项里 `content_points: \`专名\`。正文` 以反引号开头,值里无冒号加空格）修复后解出完整列表、`@` 开头同治、dispatcher 多输出侧列表输出不再落空;反例=值中间含反引号的合法行原样不动（不以反引号开头就不命中）、`&` 锚点与 `*` 别名开头的合法行不被重包。续行并入另成对:正例=ppt 第四跑实撞形态（列表项里裸冒号值跨两行,续行以反引号开头）修复后解出完整列表、该值等于两行以一个空格接起;反例=紧跟的下一个同级键（缩进不深于键）不被并入、原样作为下一个键解析。形态①的必要条件"值里含冒号加空格"另成反例:报错行是键值形态、值里没有冒号加空格（如缩进写坏的列表 `items: - a` 下接 `  - b`）→ 不修、原样返回（撤掉这个条件会把坏结构改写成一个字符串收下,形态①正例全绿看不出来）。接线面另成对:恢复阶梯第②档（recoverOutputValues）对值里裸冒号的列表经修复解出结构（正）;反馈半边断言精确行号、该行原文与三条病因,超过 120 字的行截断加省略号（正）。
 
 **散文导语+裸 YAML（无围栏）的尾部键块单解（2026-08-31 doc-review 第十次验证实撞——提取病族第三形态,多输出侧补齐与单输出"尾部自标签收窄"同款契约）** ^anc-exec-output-tail-yaml-retry
 
@@ -1477,8 +1669,61 @@ LLM 第三种高频形态："[thinking] 思考散文＋**裸 YAML 键值块**（
 
 契约：多输出提取链在整文 yamlLoad 失败（或未命中声明键）、且围栏内容单解不适用（无围栏）后、落回退逐行之前,做**尾部键块单解**——找**首个顶格 `<声明键>:` 打头的行**（任一声明键命中即可）,从该行起截到文末,对这段单独再试 yamlLoad（经引号前缀修复原语,与其他解析点同罩）;解出对象且命中任一声明键 → 按声明键提取返回;仍不成 YAML → 照旧回退逐行。
 - **与单输出"尾部自标签收窄"同一形态契约**（"思考可以写在前面,但产出必须以 YAML 键值收尾"——作者 2026-08-31 定,L4 输出格式例教的正是此形态）:单输出从最后一个自标签行收,多输出从首个声明键顶格行收（多键块内的后续键是内容不是新起点,取首不取尾）;
-- 散文行含键名字样不误触:判据是**顶格**（行首零缩进）+键名+半角冒号,思考散文里的行内提及不在顶格位;
+- 散文行含键名字样不误触:判据是**顶格**（行首零缩进）+键名+冒号,思考散文里的行内提及不在顶格位;冒号认半角,也认紧跟声明键名的全角 `：`（全角在进入本阶梯之前已被规范成半角,见下条 ^anc-exec-output-fullwidth-key-colon）;
 - 三形态阶梯全景（围栏内容单解→引号前缀修复→尾部键块单解）覆盖"散文+围栏"/"值内引号片段"/"散文+裸 YAML"——共同哲学:内容完好时提取层不判死,形态修复尽头才认真散文。
+
+**键行里紧跟声明输出名的全角冒号等同半角（2026-09-28 flash 全集实撞,作者拍 A——决策档 todo/decision/20260928-输出键行全角冒号.md）** ^anc-exec-output-fullwidth-key-colon
+
+模型用中文思考、收尾写输出键时,常把键名后的冒号顺手打成全角：`slide_ok： true`。YAML 只认半角冒号,这一行就不是键值对;上面各级解析都找不到声明键,最后判"声明的输出未产出"让模型重做——而它重做还是写全角,重试次数就这样白白用光。
+- 实撞：glm-5.3-flash 跑 ppt,每页自检步要输出 `slide_ok` 与 `slide_issue`,四项判据逐条核完、结论"判定通过",最后一行写成 `slide_ok： true`,连续三次重试都这样写,第 6 页一页烧 22.9 万 tokens,整格约 29 万 tokens 耗在这一个标点上;
+- 全集日志里 glm-flash 在 6 个任务里写过全角冒号键行（ppt 15 处、deep research 6 处、hb2 6 处、deep validate S 4 处、fact check M 1 处、合同 route 1 处）,qwen-flash 零处;
+- 库里全角冒号容忍已有两处（规约解析的工具授权行 i18n.md、hopbuild2 声明区）,模型输出键行这一处原先没有规定,代码只认半角。
+
+**现行规则**：parseStepOutput 在空响应闸之后、任何取值路径之前,先对响应文本做一次**键行冒号规范化**,之后单输出与多输出的全部解析路径（整文 YAML、围栏内容单解、尾部键块单解、逐行回退、单输出自标签收窄）都吃规范化后的文本。规范化只动一个位置：
+- **哪一行**：顶格（行首零缩进）、以某个**本步声明过的输出名**打头的行,输出名可带一对双引号（`"slide_ok"：`）;
+- **动哪个字符**：输出名（及可选的空格/制表符）后面紧跟的那一个全角冒号 `：`,换成半角冒号加一个空格 `: `——加空格是因为 YAML 里 `key:true`（冒号后无空格）不算键值对,模型写的 `report_ok：true` 正是这种紧贴形态;
+- **不动什么**：值里的全角冒号（`slide_issue： 结论：通过` 只换第一个）;带缩进的行（块标量正文、嵌套结构里的行,那是内容不是本步的键行）;不以声明输出名打头的行（散文里的"结论：通过"）;半角冒号的行原样。
+
+**单输出"全文即值"的保真**：单输出步骤没有标签行时是全文即值——此时值里恰好有一行 `输出名：…` 也属内容,不能被改写。所以单输出路径的规则是：自标签收窄**真的剥下了标签**（返回值与规范化后全文不同）才采用收窄结果;没剥（返回的就是全文）则返回**原文**,规范化对值零影响。
+
+为什么只认"声明过的输出名紧跟的冒号"：这个位置的全角与半角在语义上没有任何歧义——模型要写的就是这个键,只是标点打成了全角。引擎在这里替它规范标点,不是猜它的意思;而值里的全角冒号是内容,一个都不碰。误触面与半角完全相同（散文里恰好有一行以输出名加冒号顶格打头,半角时本来就会被当成键行）,不新增一类风险。
+
+提示侧配套：交付格式说明在中文描述的步骤里多一句"键名后的冒号用半角"（见 [[prompt-assembler#^anc-exec-format-example-structural]] 同批次追加的"半角冒号提示"段）——解析侧兜住已经写成全角的,提示侧减少写成全角的次数。
+
+**能力契约（HopTrait）**：
+
+```
+# Spec: 输出键行冒号规范化
+Id: output-key-colon-normalize
+Goal: 把模型响应里"顶格声明输出名 + 全角冒号"的键行改成半角冒号,让后续解析路径都能认出这个键
+Inputs:
+- text % text           # 模型响应的正文全文（已过截断闸与空响应闸）
+- output_names % [line] # 本步声明的全部输出名
+Outputs:
+- normalized % text     # 规范化后的全文;没有命中行时与 text 逐字相同
+Constraints:
+- 只改顶格、以某个 output_names 成员（可带一对双引号）打头、后面（隔着可选空格/制表符）紧跟全角 `：` 的行,且每行只改这一个字符
+- 全角 `：` 换成 `: `（半角冒号加一个空格）
+- 带缩进的行、不以声明输出名打头的行、值里的全角冒号一律原样
+- 输出名按字面匹配（正则元字符转义）,`slide_ok` 不命中 `slide_ok_extra：`
+```
+
+**类型约定（HopType）**：本条不引入新类型——输入是字符串与声明输出名列表（OutputDecl[] 的 name 字段）,输出是字符串。
+
+**关键逻辑（HopSop）**：
+
+```
+# impl parseStepOutput 的取值前处理
+1. [act] 截断闸、空响应闸照旧（本条不改这两道闸）
+2. [act] normalized = 输出键行冒号规范化(text, schema 的全部 name)
+3. [branch] 按声明输出个数
+  3.1. [case(单输出)]
+    3.1.1. [act] unwrapped = unwrapSelfLabeled(normalized.trim(), name)
+    3.1.2. [act] 值 = (unwrapped 与 normalized.trim() 不同) ? unwrapped : text.trim()   # 没剥标签=全文即值,返回原文
+  3.2. [case(多输出)] 整文 YAML → 围栏内容单解 → 尾部键块单解 → 逐行回退,四级都吃 normalized（各级判据不变）
+```
+
+- 测试成对：正例=`slide_ok： true` 两输出步取到布尔 true、`report_ok：true`（紧贴无空格）取到 true、单输出散文+`名： 值` 尾行收到值、带双引号键 `"slide_ok"：` 取到;反例=值里的全角冒号原样（`slide_issue： 结论：通过` 取到 `结论：通过`）、单输出无标签全文即值时值里 `名：…` 行原样、带缩进的 `  名：` 行不改、`slide_ok_extra：` 不命中 `slide_ok`。
 
 **长输出请求超时随 max_tokens 缩放** ^anc-exec-nonstreaming-timeout
 
@@ -1498,11 +1743,65 @@ LLM 第三种高频形态："[thinking] 思考散文＋**裸 YAML 键值块**（
 （2026-08-18 buildtest 实撞——输出预算升 32768 后 SDK 拒发）：Anthropic SDK 对非流式请求按 max_tokens 估算耗时（`max_tokens/128000 × 60min`）,超 10 分钟且 **client 级 timeout 未设** → 抛 `Streaming is required for operations that may take longer than 10 minutes`（预检拒发,请求根本没出网——engine 层收到的是步骤 fail）。
 - **预检只看 client 构造 `_options.timeout`,per-request 第二参不进预检判断**（v0.8.7 首修落在 create 第二参=修错层,复跑实证同错;SDK 0.111 源码 `timeout = this._client._options.timeout; if (!body.stream && timeout == null) → 预检抛`）。
 
-契约：**两处 `new Anthropic({...})` 构造点**（defaultClient/getClientForService per-service）**显式给 client 级 timeout**——`max(10min, resolveMaxOutputTokens()/128000 × 60min)`,与 SDK 估算同式。
+契约：**客户端的等待上限按输出上限换算，公式只有一处**——`nonstreamingWaitMs(maxTokens) = max(10min, ceil(maxTokens/128000 × 60min))`（protocol-openai.ts 导出,与 SDK 估算同式）。两个用法：
+- **client 级等待上限**（`nonstreamingTimeoutMs(serviceId)`）= `nonstreamingWaitMs(resolveMaxOutputTokens(serviceId))`——按这个客户端所属 service 解析输出上限（缺省客户端传 `'default'`,与实际请求取 max_tokens 的解析同源）。它给三样东西用：SDK 构造期 timeout（解锁 SDK 预检）、undici 连接设置的两个时限（见下"连接设置"）。这个客户端发出的任何请求，max_tokens 都不超过这个解析值，所以 client 级上限恒 ≥ 单次请求的上限;
+- **单次请求等待上限** = `nonstreamingWaitMs(request.max_tokens)`——三种协议的 create 都作为 SDK 第二参 `{ timeout }` 传入（真实 HTTP 等待按请求精确）;同一个数也是 callLlmWithRetry 判"客户端等待超时"和报错文案里"N 分钟"的依据（^anc-exec-api-retry "客户端等待超时"条）。
 - 缺省 32768 换算约 15.4min——2026-08-27 缺省抬升随更,^anc-exec-output-budget;大预算按同一换算放宽,client 级已设即跳过预检;
-- 注:client 级 timeout 用全局解析不带 serviceId——provider 声明更大上限时实际请求可能超此换算,属已知宽松边,撞到再收;
-- create 第二参的 per-request timeout 保留（真实 HTTP 超时按请求精确,与预检解锁分层不冗余）;
-- 不引入流式（IR 形状不变,mock 面零迁移）；openai 协议路径无此预检不涉。
+- 原注记"client 级 timeout 用全局解析不带 serviceId,provider 声明更大上限时是已知宽松边"已消解：v0.36.0 起 client 级按 service 解析;
+- 不引入流式（IR 形状不变,mock 面零迁移;流式改造不在 todo/0117 范围）。
+
+**SDK 之下还有一层 300 秒的时限：连接设置（v0.36.0,todo/0117,2026-09-27 作者拍方向 A"新增 undici 依赖"）**：两个 SDK 都走 node 内建 fetch,内建 fetch（undici）对"等响应头"有自己的缺省时限 300 秒（headersTimeout）,对"两次收到数据之间的间隔"也是 300 秒（bodyTimeout）。非流式请求要等模型整段生成完才回响应头，所以生成超过 300 秒的请求一律在第 300 秒被掐断，上面给 SDK 的长 timeout 根本轮不到生效。
+- 实撞出处：glm-5.3-flash（思考恒开，单发 3—8 分钟）变速箱测评在约 300 秒处报 `UND_ERR_HEADERS_TIMEOUT`;本机复现：假服务器 310 秒才回，SDK timeout 设 15 分钟、maxRetries 0,301.6 秒报 `APIConnectionTimeoutError`;
+- 修法：新增运行时依赖 `undici@^7`,用它的 `Agent` 建一个连接设置，两个时限都取 client 级等待上限（同源，不另立数字），经 SDK 构造选项 `fetchOptions: { dispatcher }` 传入。两个 SDK（@anthropic-ai/sdk 0.111、openai 7.4）的构造选项都有 `fetchOptions`（类型 MergedRequestInit,含 `dispatcher` 字段），SDK 每次请求把它并进 fetch 的第二参;
+- **五个客户端构造点全部带上**：构造函数里的缺省客户端（anthropic / openai-chat / openai-responses 三选一）与 getClientForService 里按 service 建的客户端（同样三选一）。openai 两个构造函数 `makeOpenAiClient` / `makeOpenAiResponsesClient` 的入参加 `waitMs`（client 级等待上限），由它们自己建连接设置;
+- 同一批次三个客户端的 SDK 构造期都给 `maxRetries: 0`——理由见 ^anc-exec-api-retry "SDK 内部重试关掉"条。
+
+**能力契约（HopTrait）**：
+
+```
+# Spec: 长等待连接设置
+Id: long-wait-fetch-options
+Goal: 给 SDK 客户端一份连接设置，让 node 内建 fetch 等响应头、等数据的时限与引擎的等待上限一致，
+      不再被 undici 缺省的 300 秒先掐断
+Inputs:
+- wait_ms % int  # client 级等待上限（毫秒），= nonstreamingTimeoutMs(serviceId)，不另立数字
+- extra % yaml   # 可选。undici Agent 的其它构造选项；只给测试注入假连接（connect）用，生产不传
+Outputs:
+- fetch_options % yaml  # { dispatcher: undici Agent }，原样作为 SDK 构造选项 fetchOptions
+Constraints:
+- headersTimeout 与 bodyTimeout 恒等于 wait_ms；extra 里带同名键也被 wait_ms 盖掉
+- 五个客户端构造点（缺省客户端三协议 + 按 service 建客户端三协议）全部经本函数取连接设置，不各写各的
+- 同一个客户端里 SDK 构造期 timeout 也取 wait_ms（Anthropic 用它解锁预检；OpenAI 同值）
+- 每个客户端一份连接设置（Agent 自带连接池，随客户端缓存复用）
+```
+
+**类型约定（HopType）**：
+
+```
+struct: LongWaitFetchOptions
+  Id: long-wait-fetch-options-type
+  Fields:
+    - dispatcher % yaml  # undici Agent 实例，构造参数：
+                        #   headersTimeout: int  等响应头的最长时间（毫秒）= wait_ms
+                        #   bodyTimeout: int     响应体两次收到数据之间的最长间隔（毫秒）= wait_ms
+                        #   其余 Agent 选项取 undici 缺省（测试可经 extra 注入 connect）
+```
+
+**HopSop（客户端构造）**：
+
+```
+# impl 构造一个协议客户端(serviceId, protocol, 凭证)
+1. [act] wait_ms = nonstreamingTimeoutMs(serviceId)   # 缺省客户端 serviceId='default'
+2. [act] fetch_options = longWaitFetchOptions(wait_ms)
+3. [branch] 按 protocol 建客户端
+  3.1. [case(anthropic)] new Anthropic({ 凭证..., timeout: wait_ms, maxRetries: 0, fetchOptions: fetch_options })，再经 wrapAnthropicClient 包一层
+  3.2. [case(openai-chat)] makeOpenAiClient({ 凭证..., waitMs: wait_ms })——内部 new OpenAI({ 凭证..., timeout: wait_ms, maxRetries: 0, fetchOptions: longWaitFetchOptions(wait_ms) })
+  3.3. [case(openai-responses)] makeOpenAiResponsesClient({ 凭证..., waitMs: wait_ms })——同 3.2
+4. [act] 每次 create：SDK 第二参 { timeout: nonstreamingWaitMs(request.max_tokens) }
+```
+
+- 为什么单次请求的 timeout 可以小于连接设置的时限：单次请求 timeout 管"等响应头"这一段，到点由 SDK 自己中止;连接设置只要不比它短就不会抢先掐断。反过来如果连接设置比单次请求短，就又回到了本条要治的病。
+- undici 版本：`^7`（装入时 7.30.0,要求 node ≥ 20.18.1;本库 engines 写 node ≥ 20,node 20.0—20.18.0 装包时 npm 只报 engines 警告不拦——属已知边界，见 todo/0117 处置记录）。
 
 **空响应响亮失败** ^anc-exec-output-empty-loud
 
@@ -1531,9 +1830,70 @@ LLM 第三种高频形态："[thinking] 思考散文＋**裸 YAML 键值块**（
 （2026-08-18 buildtest 实撞——静默截断产出错误归因反馈）：`stop_reason=max_tokens` 表示输出被上限掐断。
 - thinking 型模型可把全部输出预算烧在推理上,text 空——实撞:v4-pro 16384 tokens 全 thinking,node_result="" 被当正常值收下,下游 validate 报"片段为空",重试反馈教模型"你没产出"=错误归因,同因必死。
 
-契约：解析输出前先判 `stop_reason === 'max_tokens'` → **抛 OUTPUT_TRUNCATED 响亮失败**（消息含实际 output_tokens 与上限、指路 `HOPJIT_MAX_OUTPUT_TOKENS`/`resource_limits.max_output_tokens` 调参）——部分产出也不收（截断值是残值,收下=毒值下游）;openai 协议 `finish_reason=length` 已映射同值同治。
+契约：解析输出前先判 `stop_reason === 'max_tokens'` → **抛 OUTPUT_TRUNCATED 响亮失败**（报文必含两个数：本次请求实发的 `max_tokens` 与响应实际的 `output_tokens`；建议按下面"端点自带上限的分辨"分两种写）——部分产出也不收（截断值是残值,收下=毒值下游）;openai 协议 `finish_reason=length` 已映射同值同治。
 - **覆盖面=全部 LLM 响应消费点**：parseStepOutput（reason/check/act 终轮）、pipelineCall（replan 三段——二十五审抓:绕过 parseStepOutput,截断半截产出静默入 replan）、**工具循环带 tool_use 的轮次**（二十六审抓:掐在工具参数生成中途时半截参数会被直接拿去执行工具——write 类工具吃残缺参数比收残值更危险,判在工具执行前）;
 - 与守卫『禁止静默跳过』同根：预算不够是环境问题,须显式失败指路,不许装作模型没干活。
+
+**端点自带上限的分辨（todo/0113,2026-09-26 作者拍 A 案"先量再批换端点"）**
+
+为什么要分：有的端点对单次响应自带输出上限，而且忽略请求里的 max_tokens。
+- 实撞：qwen3.8-27b 经阿里云百炼 claude-code-proxy 端点（provider `bailian_qwen`）,请求写 max_tokens=65536，响应回来 `stop_reason=max_tokens`、`output_tokens=4096`。旧报文只写 output_tokens 并叫人"调大 HOPJIT_MAX_OUTPUT_TOKENS 或 resource_limits.max_output_tokens"——而本地上限早已是 65536，调多大都没用。宏观任务验收与成绩 T7 ppt 生成的步骤 4.2 与 T2 fact check L 的步骤 5.2 两格都照这个误导重试（后者三次都截在 4096），两跑约 10 万 tokens 白烧；
+- 本地上限掐断时 output_tokens 等于请求值（Anthropic 协议计数含 thinking 块）；端点自带上限掐断时 output_tokens 明显低于请求值。报文同时写出两个数，读者一眼就能分辨；引擎再按数值替读者判一次，给出对症的建议。
+
+判据（纯数值比较，不做语义判断）：
+- 请求值与 output_tokens 都拿得到，且 `output_tokens < 请求值 × 0.9` → 判"端点自带上限"；
+- 为什么阈值是 0.9：本地上限掐断时两数相等，留一成余量容纳个别端点计数上的小出入；实撞的 4096 对 65536 相差 16 倍，阈值取 0.5 到 0.95 结论都一样，不敏感；
+- 否则（两数相近，或任一个拿不到）→ 按本地上限掐断写。
+
+三个抛错点共用一个导出函数 **`truncationAdvice(requestedMaxTokens, outputTokens)`**（src/dispatcher.ts 顶层），由它产出报文里"两个数 + 建议"这一截；各站点只在前面拼自己的站点半句：
+- parseStepOutput（reason/check/act 终轮）：`OUTPUT_TRUNCATED: 输出被 max_tokens 上限掐断，产出不完整不可用`；
+- pipelineCall（replan 流水线段）：`OUTPUT_TRUNCATED: replan 流水线段输出被 max_tokens 掐断`；
+- 工具循环带 tool_use 的轮次：`OUTPUT_TRUNCATED: 工具循环轮输出被 max_tokens 掐断，工具参数可能残缺,不执行`。
+
+请求值取"产生这条响应的那个请求"实发的 max_tokens：
+- pipelineCall 取 `request.max_tokens`；
+- 工具循环两处（带 tool_use 轮、终轮进 parseStepOutput）取 `loopRequest.max_tokens`（重发时只换 messages，max_tokens 不变）；
+- executeReasonOrCheck 取实际发出请求的 max_tokens——上下文溢出后改用激进重组的 retryRequest 重发时，取 retryRequest 的值；
+- parseStepOutput 手里没有请求，由调用点经可选第四参数 `requestedMaxTokens` 传入；不传（如测试直调）按"拿不到"处理。
+
+`truncationAdvice` 产出的三种文字（X=请求值，Y=output_tokens，拿不到的数位写 `?`）：
+- **本地上限掐断**：`（本次请求上限 max_tokens=X，实际输出 output_tokens=Y）——调大 HOPJIT_MAX_OUTPUT_TOKENS、resource_limits.max_output_tokens 或 provider 的 max_output_tokens`
+- **端点自带上限**：`（本次请求上限 max_tokens=X，实际输出 output_tokens=Y）——实际输出远低于请求上限，是端点自己的输出上限掐断的，与本地配置无关，改本地上限配置没有用。核实端点能力（探针 model-gearbox/probes/run-output-cap.mjs）、换不带此上限的端点，或把本步产出拆小`
+- **回落（任一个数拿不到）**：与本地上限掐断同文，拿不到的数位写 `?`，例：`（本次请求上限 max_tokens=?，实际输出 output_tokens=16384）——调大 HOPJIT_MAX_OUTPUT_TOKENS、resource_limits.max_output_tokens 或 provider 的 max_output_tokens`
+
+失败语义不变：前缀仍是 `OUTPUT_TRUNCATED:`，仍在 engine 的步级瞬态前缀里按既有规则重试（首撞免扣预算）；反刍分流（THINKING_EXHAUSTED）照旧先于本报文判。
+- 为什么本批次不改重试：端点自带上限时重试大概率同样截在同一个数（T2 实撞三次都截 4096），改成直接失败能省重试钱；但那是失败语义变更，作者这次只拍了报文与探针，重试行为留作后续观察项（记在 todo/0113 处置记录）。
+
+**能力契约（HopTrait）**：
+
+```
+# Spec: 截断报文
+Id: truncation-advice
+Goal: 输出被 max_tokens 掐断时，报文写出请求上限与实际输出两个数，并按两数关系给出对症建议——
+      端点自带上限时明说"改本地配置没有用"，本地上限掐断时指路三个调参位
+Inputs:
+- requested_max_tokens % int  # 产生本响应的那个请求实发的 max_tokens；拿不到=缺席
+- output_tokens % int  # 响应 usage.output_tokens；拿不到=缺席
+Outputs:
+- advice % line  # 拼在站点半句后面的"（两个数）——建议"一截
+Constraints:
+- 两个数恒写出，拿不到的写 ?
+- 判定只做数值比较（output_tokens < requested_max_tokens × 0.9），不看响应内容
+- 不改前缀、不改失败语义；三个抛错点都经本函数出建议，不各写各的
+```
+
+**HopSop（判据分支）**：
+
+```
+# impl truncationAdvice(requestedMaxTokens, outputTokens)
+1. [act] X = requestedMaxTokens 是有限数 ? requestedMaxTokens : '?'；Y = outputTokens 是有限数 ? outputTokens : '?'
+2. [act] nums = "（本次请求上限 max_tokens=X，实际输出 output_tokens=Y）"
+3. [branch] 判端点自带上限
+  3.1. [case(X 与 Y 都是数 且 Y < X × 0.9)] 返回 nums + "——实际输出远低于请求上限……或把本步产出拆小"（全文见上）
+  3.2. [case(else)] 返回 nums + "——调大 HOPJIT_MAX_OUTPUT_TOKENS、resource_limits.max_output_tokens 或 provider 的 max_output_tokens"
+```
+
+端点的真实输出上限由探针 `model-gearbox/probes/run-output-cap.mjs` 实测，机读表落 `model-gearbox/probes/output-cap/endpoint-output-caps.yaml`——报文里点名探针，是给读者一个核实的动作，而不是让引擎运行时去查表（引擎不读 model-gearbox）。
 
 **烧穿疑似反刍,报文分流+留档线下（hopissues/hoplogic3/0060,2026-09-01 作者定轻量案"thinking 爆了直接报 thinking 异常,可能是反刍,留档线下分析即可"——弃流式检测〔动非流式既有架构不值〕;2026-09-02 二批重修:reopen 主诉 in-band 形态+留档静默失效+确定性口袋漏配+死站点删除+封顶口径写实,五面一批）**：两个截断站点（parseStepOutput 主闸、replan 流水线段）在抛错前做零成本判定,命中两形态之一即报文换 `THINKING_EXHAUSTED` 前缀并留档：
 - **形态①正文全空**（thinking 通道烧穿——预算全烧推理块,零可见产出）：`stop_reason=max_tokens` 且可见正文 text 为空/全空白;
@@ -1551,6 +1911,7 @@ LLM 第三种高频形态："[thinking] 思考散文＋**裸 YAML 键值块**（
 
 - **记名**：dispatcher 持步号集合，checkThinkingExhausted 命中且有步号即记名；
 - **降档**：buildApiRequest 装配时步号在册 → thinking 强制 `{type:'disabled'}`，覆盖 route 声明与端点缺省——正文都写不出来时先降档保底拿产出，推理质量其次。协议面：deepseek anthropic 协议端点两值实测认；openai-chat 协议 thinking 参数静默丢弃零影响；openai-responses 把 disabled 映为 reasoning.effort:'low'（0020 批次两点映射）——记名强制 disabled 在该协议上实发最低思考档，降档保底方向同；
+  - 目标端点在 provider 配置里声明了 `thinking_disable_unsupported: true`（思考关不掉，收到 disabled 报 400——glm-5.3-flash 实测）时，降档的实发形态换成 `output_config: {effort: "low"}`、不带 thinking 键，见 ^anc-exec-thinking-disable-unsupported。止血方向不变（把思考压到最低），只是换一种端点认的写法；不做这个替换，止血在这类端点上会变成"重试发 disabled → 400 → 步骤必败"；
 - **记名 sticky 到 dispatcher 实例生命周期**：该步此后恒降档——反刍绑定的是该步的输入形态，形态不随轮次变；replan 流水线段无步号不记名（自有 ADAPTIVE_PIPELINE 通道）；
 - **与既有反证的分界**：act 工具循环 thinking:disabled 打转的 2026-08-20 反证不与本条冲突——那是"全程禁"的路由配置面，本条是"烧穿后的止损降档"，前提已是该步带 thinking 跑不出正文。 ^anc-exec-thinking-exhausted
 
@@ -1680,8 +2041,10 @@ StepDispatcher 直调 Anthropic API，需处理以下错误场景。ErrorCode �
 |------|-----------|-----------|------|
 | 限流 | 429 | RATE_LIMITED | 指数退避重试：1s → 2s → 4s → 8s（最多 4 次）。若仍失败，失败该步骤并触发上层 retry。 |
 | 服务端错误 | 529, 5xx | API_SERVER_ERROR | 指数退避重试：1s → 2s → 4s（最多 3 次）。超过则 fail step。 |
-| 网络超时 | — | API_TIMEOUT | 指数退避重试最多 **6 次**,退避封顶 60s（1s→2s→4s→8s→16s→32s,总耐受约 2 分钟——v0.14.1 A 半边,dr17 实撞:旧 2 次×短退避总耐受 3 秒,1 分钟网络中断 43 秒烧穿全树）。耗尽走**网络暂停**（B 半边,见下——不 fail step）。 |
-| 网络错误 | — | API_NETWORK_ERROR | 同上（timeout/network 同档同待遇）。 |
+| 网络超时 | — | API_TIMEOUT | 指数退避重试最多 **6 次**,退避封顶 60s（1s→2s→4s→8s→16s→32s,总耐受约 2 分钟——v0.14.1 A 半边,dr17 实撞:旧 2 次×短退避总耐受 3 秒,1 分钟网络中断 43 秒烧穿全树）。耗尽走**网络暂停**（B 半边,见下——不 fail step）。只管**短超时**（连接超时、系统层 ETIMEDOUT 这类，失败前等待时长不到本次请求等待上限的 90%）;等满了等待上限的归下一行。 |
+| 客户端等待超时 | — | —（失败原因前缀 `CLIENT_TIMEOUT:`） | **不重试**（v0.36.0,todo/0117）。判据与文案见下"客户端等待超时"条。不走网络暂停,直接以 `CLIENT_TIMEOUT:` 前缀 fail step,交给步骤级 retry（subtask retry 预算）决定要不要整步重跑。 |
+| 网络错误 | — | API_NETWORK_ERROR | 同"网络超时"行（timeout/network 同档同待遇）。 |
+| 端点不可达 | — | ENDPOINT_UNREACHABLE | **不重试**,首次即以 `ENDPOINT_UNREACHABLE:` 前缀 fail step（fail_kind=deterministic）。`ECONNREFUSED`/`ENOTFOUND`/`EPERM` 是配置指向死端点或系统策略不放行的确定性结果,见 [[#^anc-exec-network-pause]] 末条（hopissues/0106）。 |
 
 **网络类失败上传时挂可读前缀（2026-08-23 作者定"同意"）**：executionLoop 兜层把步骤失败原因写进 failStep 前,`classifyError` 判 `network`/`timeout` 的错误文案改写为 `NETWORK_ERROR: 网络中断（非内容问题——与产出质量无关,原文: <原文案>）`。
 - 实撞出处:dr10 两处 `reason: terminated`——undici fetch 断流的原始文案直接落 FailRecord,经 L2c 塞给下一轮 LLM——"上次失败原因:terminated"零信息量,LLM 会试图"修正"一个网络故障;走查者也分不清内容失败与环境失败。
@@ -1689,6 +2052,35 @@ StepDispatcher 直调 Anthropic API，需处理以下错误场景。ErrorCode �
 **分类兜底按文案识别裸网络异常（2026-08-24 D61,dr14 实抓）**：两协议 classify 的 `other` 兜底前,message 命中 undici/Node 网络文案集（`terminated` / `fetch failed` / `socket hang up` / `ECONNRESET` / `ECONNREFUSED` / `ETIMEDOUT` / `EPIPE`,完整词或错误码形态精确匹配——不裸含子串防误伤业务文案）→ 归 `network` 档,获得 2 次重试与耗尽挂前缀的完整待遇。
 - 实撞出处:`classifyError` 只认 SDK 错误类 instanceof,但 SDK 只包装"请求发起阶段"的错误;流读取中途断的 undici 裸 TypeError〔`terminated`〕不经包装直接穿透,落 `other` 档=0 重试+原样抛,裸文案再次进 FailRecord——D58 前缀被绕过,dr14 一子块判定器就此烧掉走兜底;
 - 探针实证:连接拒→APIConnectionError 正确归 network;流中断→裸 TypeError 漏网。
+- **v0.36.0 补一条先于文案兜底的判据**：错误本身或它的 cause 链上带 undici 错误码 `UND_ERR_HEADERS_TIMEOUT`（等响应头超时）或 `UND_ERR_BODY_TIMEOUT`（等数据超时）→ 归 `timeout` 档，不归 `network`。实测：数据中途停满 bodyTimeout 时抛的是裸 `TypeError('terminated')`,cause 是 BodyTimeoutError——按文案兜底会被当成网络断流，再按网络瞬断重试 6 次;它其实是"等满了时限"，要进下一条的客户端等待超时判定。cause 链最多往下看 5 层（防环）。
+
+**客户端等待超时（v0.36.0,todo/0117,2026-09-27）**：一次请求等满了引擎给它的等待上限（^anc-exec-nonstreaming-timeout 的单次请求等待上限）仍没收到完整响应。它和网络瞬断是两回事：
+- 网络瞬断等一等就好，重试有意义;等待超时是这次请求本身就要那么久（模型思考长、产出长），同样的请求再发一遍大概率同样等满，每次重试又是至少 10 分钟外加一整轮生成的费用。todo/0117 的放大形态：旧规则把它当网络错误重试 6 次，每次等满，约 35 分钟后才以"网络中断"失败，文案还把排查方向引到网络上;
+- **判据**（callLlmWithRetry 内，纯机械）：`classifyError` 判 `timeout`,且这次尝试从发出到失败的耗时 ≥ 本次请求等待上限的 90%。为什么要看耗时：`timeout` 档里还混着短超时——SDK 对 fetch 抛错按文案 `/timed? ?out/` 判超时，undici 连接超时（10 秒）、系统层 `ETIMEDOUT` 都会被包成同一个 `APIConnectionTimeoutError`,错误对象上分不出来，只有耗时分得出来。90% 留的余量给 undici 的粗粒度计时器（可能早触发约 1 秒）;最小上限 10 分钟时余量 1 分钟，远大于连接超时与系统层超时的量级，两类不会混;
+- **重试次数 0**：理由一，同因必重（见上）;理由二，步骤级还有一层 retry,由 spec 作者按 subtask retry 预算控制，要不要再花一轮钱归那一层定，API 层不替它加码;理由三，不走网络暂停——暂停后 resume 会把同一个请求原样重发，等满后再次失败，暂停只是把失败推迟到人来点恢复之后;
+- **报错文案**（新前缀 `CLIENT_TIMEOUT:`,不再说"网络中断"）：`CLIENT_TIMEOUT: 客户端等待超过 <N> 分钟仍没收到模型的完整回复，按等待上限中止（不是网络中断，也与产出内容无关——这次请求本身耗时超过了引擎给它的等待上限；等待上限按本次请求的 max_tokens=<X> 换算，每 128000 tokens 60 分钟、最少 10 分钟。可以精简本步产出，或换更快的端点；调大输出上限〔HOPJIT_MAX_OUTPUT_TOKENS / resource_limits.max_output_tokens / provider 的 max_output_tokens〕会按比例放宽等待上限。原文: <原文案>）`。N = 本次请求等待上限换算成分钟、向上取整;实例上下文水位越 75% 线时照旧追加 ^anc-exec-ctx-watermark ③的体量提示;
+- **下游消费点**：①engine 的失败分档只看失败原因开头（[[exec-engine#^anc-exec-deterministic-no-retry]]）,`CLIENT_TIMEOUT:` 不在瞬态与事务级两张前缀清单里，按普通失败走 subtask retry 预算——本批次不改 engine;②executeStep 的网络暂停只认 `NETWORK_ERROR:` 前缀，本前缀不命中，照常 failStep;③L6 修正指令把它当执行过程类失败说实话、不套"检查产出形态"的指引（[[prompt-assembler#^anc-exec-l2c-retry-feedback]] v0.28.0）。
+
+**SDK 内部重试关掉（v0.36.0,同批次）**：两个 SDK 构造选项 `maxRetries` 缺省 2——SDK 在连接错误、超时、408/409/429/5xx 上自己先重试 2 次，引擎看到的每一次失败背后其实是 3 次请求。实测（SDK timeout 1 秒、缺省重试）：假服务器被打了 3 次。
+- 这让上面的重试表不成立（网络档写 6 次，实际最多 21 次请求），也让"客户端等待超时不重试"做不到：SDK 的单次请求计时到点后先自己重试 2 次，一个 15 分钟上限的请求要等 45 分钟引擎才看到失败;
+- SDK 的重试不分错误类型，只能整体开关（只对超时关掉没有公开入口）。所以三个客户端构造期一律 `maxRetries: 0`,重试全部归引擎这一层，重试表写几次就是几次;
+- 代价：限流（429）与服务端错误（5xx）的实际请求次数从"引擎次数 × 3"降到重试表写的次数，SDK 对 `retry-after` 响应头的遵从也随之没了（引擎退避是固定的 1s→2s→4s→8s）。按时间算，SDK 那两次内部重试的退避约 0.5s + 1s,429 档总耐受从约 22 秒降到约 15 秒。是否要把 429 档次数调高或让引擎读 `retry-after`,留作观察项（todo/0117 处置记录）。
+
+**HopSop（callLlmWithRetry 单次失败的分派,v0.36.0 后）**：
+
+```
+# impl callLlmWithRetry 的 catch 段(err, attempt, request, elapsed_ms)
+1. [act] kind = client.classifyError(err)   # 两协议 classify 都先认 undici 超时错误码归 timeout,再走文案兜底
+2. [branch] 按 kind 分派
+  2.1. [case(temperature_rejected 且请求带 temperature)] 剥掉 temperature,不计次数立即重发(既有)
+  2.2. [case(auth 或 context_overflow)] 原样抛(既有)
+  2.2b. [case(unreachable)] 端点不可达——不重试,抛 ENDPOINT_UNREACHABLE 文案(service_id/base_url/错误码三样,
+       见下 ^anc-exec-network-pause 末条;hopissues/0106)
+  2.3. [case(timeout 且 elapsed_ms ≥ nonstreamingWaitMs(request.max_tokens) × 0.9)] 客户端等待超时——
+       不重试,抛 CLIENT_TIMEOUT 文案(N=等待上限分钟数向上取整,X=request.max_tokens,水位越线追加体量提示)
+  2.4. [case(else)] 按 getMaxRetries(kind) 判:还有次数 → 退避后重发;次数用完且 kind 是 network/timeout →
+       抛 NETWORK_ERROR 文案(既有);其余原样抛
+```
 
 **网络暂停（B 半边,v0.14.1 2026-08-25 作者定 A+B）** ^anc-exec-network-pause：API 层网络/超时重试耗尽后**不进 failStep**——executeStep 的 catch 识别 `NETWORK_ERROR:` 前缀,把该步状态回置 pending（与 crash-recovery 的 running→pending 同语义:步骤未产生任何效果,重执行安全）,persist 后向上返回 `paused`,`pause_reason: 'network'`,载荷携 step_id 与网络错误原文。
 - 实撞出处:dr17——1 分钟网络中断,NETWORK_ERROR 被当普通步骤失败吃容器内容重试预算,CalleeFailure 逐层上炸,顶层三连发间隔 7-8 秒无退避全秒死,43 秒烧穿 run failed 整树报废;网络类失败与产出质量无关,烧内容预算是把'必活'〔等一等就好〕当'必死'处理。
@@ -1710,6 +2102,12 @@ StepDispatcher 直调 Anthropic API，需处理以下错误场景。ErrorCode �
 **可观测性（todo/0105,2026-09-25）**：网络暂停不落问题卡,但在状态账留有两样盘上痕迹——该步回置 pending、事件流最后一条是 network_pause（随 state.json 持久化）;串行调用子层的网络暂停在父实例目录 `calls/<子实例>/` 的子快照里。命令行 status 据此判出 paused（pause_reason=network,嵌套时带 call_path）,判定权威在 [[hop-cli#^anc-cli-status-nested-pause]]。本模块的暂停与恢复语义不因此改变。0081 批次曾把网络暂停写成 status 的"显式不覆盖"边界,被 0105 实撞推翻,演进来由见彼锚。
 
 旧条款"网络失败不占带反馈重跑名额"的 L2c 文案半边保留（防 subtask worker 路径与历史 state 里的存量 NETWORK_ERROR 记录）。
+
+**端点不可达不入网络暂停门——fail-fast（hopissues/0106,2026-09-28）**：网络暂停的前提是"必活〔等一等就好〕"——这只对**瞬时**网络故障成立（断流/重置/DNS 抖动）。连接被拒（`ECONNREFUSED`——目标端口无进程监听）不是瞬时故障,是配置指向了死端点（base_url 拼错/端口填错/provider 未启动）,等多久都不会好。把它送进暂停门=run 永远 paused、载体反复轮询无终态无报错,用户拿到的是静默挂死（hop3 真机 90s+ 实撞）。判据与处置：
+- **判据**：classifyError 在归 `network` 档之前先看错误链（本体或 cause 链,与 undici 超时码同法看 5 层,含 undici 双栈聚合错的 `errors[]`）——带 `ECONNREFUSED`（端口无监听）、`ENOTFOUND`（主机名解析不到）或 `EPERM`（connect 被系统策略拒绝——沙箱/防火墙未放行该地址,Claude Code 沙箱内直连未白名单 IP 即此形态）错误码 → 定性为**端点不可达**（`unreachable`）,与瞬时 `network` 分档;
+- **重试**：不可达不走 6 次退避——首次即判（连接拒绝是确定性结果,重试只是烧时间）;
+- **终态**：抛 `ENDPOINT_UNREACHABLE:` 前缀（非 `NETWORK_ERROR:`）,executeStep 的 catch 不进暂停门,走 failStep 且 **fail_kind 传 `deterministic`**（与 CONTEXT_OVERFLOW 同款——死端点下容器 retry 每一轮都同因,重跑只是把秒败重复 N 次;记确定性后引擎按事务级直达兜底,[[exec-engine#^anc-exec-deterministic-no-retry]]）→ run `failed`;报文含 service_id、base_url、错误码三样（"配了哪个后端、指向哪、为什么连不上"——用户一眼定位）;
+- **边界**：只对 `ECONNREFUSED`/`ENOTFOUND`/`EPERM` 三码分档（三者都是"配置或策略决定的确定性结果",不随时间自愈）——`ECONNRESET`/`ETIMEDOUT`/`EAI_AGAIN`/`terminated` 维持瞬时网络待遇（它们真可能等一等就好;`EAI_AGAIN` 是 DNS 暂时失败,与 `ENOTFOUND` 的"名字不存在"不同档）;报告方 probe 判据=90s 内 failed 且错误含不可达语义,本条恒满足（首次即判,秒级）。
 | 认证失败 | 401 | AUTH_FAILURE | **不重试**，立即 abort 整个 run_spec。密钥问题无法通过重试修复。 |
 | 上下文溢出 | 400 | CONTEXT_OVERFLOW | **不重试 API 调用**。按路径分治：reason/check 单发路径捕获后调用 `PromptAssembler.reassemble_aggressive(context)` 激进压缩，重试 API 调用 1 次；工具循环路径走压缩降级（见 [[#^anc-exec-toolloop-ctx-degrade]]）。两路径二次仍溢出都以 `CONTEXT_OVERFLOW:` 前缀 fail step——该前缀入确定性不重试口袋（[[exec-engine#^anc-exec-deterministic-no-retry]]），容器 retry 不原样重跑。**handleStepReady 捕获到以该前缀开头的错误时,failStep 传 fail_kind='deterministic'**（新错误产生点用枚举,todo/0116——引擎判档次只看失败原因开头,不再对整段做子串匹配;类别随失败记录走,不靠文字识别）。 |
 
@@ -1735,7 +2133,7 @@ API 层重试和 subtask 级 retry 是两层独立机制：
 - **API 层重试**（StepDispatcher 内部）：处理瞬时网络/服务故障，对 Engine 透明——步骤要么成功完成，要么以最终失败状态到达 `hopjit submit_and_fetch_next/fail`
 - **subtask 级 retry**（ExecutionEngine.fail_step）：处理步骤逻辑失败（check 失败、LLM 输出不合理等），触发重跑或 adaptive replan
 
-API 错误不回传到 Engine 的 fail_step 除非 API 层重试全部耗尽——此时步骤以最终失败状态进入 fail_step 流程。
+API 错误不回传到 Engine 的 fail_step 除非 API 层重试全部耗尽——此时步骤以最终失败状态进入 fail_step 流程。客户端等待超时（`CLIENT_TIMEOUT:`,v0.36.0）在 API 层零重试，直接以最终失败状态进入 fail_step——要不要整步重跑归 subtask 级 retry 定。
 
 ---
 
@@ -1840,6 +2238,81 @@ StepDispatcher 支持多 LLM 服务路由：不同步骤可路由到不同模型
 - **使用判据（真机反证记档 2026-08-20）**：disabled 只该用在'一次性直出且模式固定'的调用面——**无 body 的 act/commit 是自主规划的多轮工具编排,恰需推理,禁配 disabled**（实撞:act disabled 下 flash 步骤2〔读原文落盘,此前 6 工具即完〕工具循环打转 20 轮 MAX_TOOL_ITERATIONS 耗尽,run 终局——thinking 省预算的收益在规划型调用面倒挂为致命退化）;带 body 的 act/check 引擎直执零 LLM 本就不发请求,配了无义。
   - 2026-09-20 五级链落地后归一注记——本段禁令针对 routing_rules 整类配 disabled〔当年实撞形态:act 整类关思考致工具循环打转〕,与级 5 的逐格缺省不冲突:级 5 恰把 act free〔真正的工具编排形态〕定为恒开,而'act 无 body 未标 free'是 B7 反模式形态〔本该带 body 的机械步〕缺省关——两者对象有别。
 - hopbuild 场景结论:无安全的 disabled 面,hopjit.yaml 留端点缺省;机制保留供确有把握的场景（如纯格式转换的 reason 步）。 ^anc-exec-thinking-routing
+
+**思考关不掉的端点：五级链结果为"关"时改发 `effort: low`**（todo/0118，2026-09-27 作者拍"配置声明关不掉，改发少想"，决策存档 todo/decision/20260927-思考关不掉的端点改发少想.md） ^anc-exec-thinking-disable-unsupported
+
+问题：有的端点思考永远开着，请求里带 `thinking: {type: "disabled"}` 直接报 400。实测 glm-5.3-flash 报文是"该模型始终思考，不支持关闭思考；请使用 low、high 或 max"。上面五级链里会发 disabled 的有第 1、2、3、4、5 各级，其中第 4、5 级可以靠 provider 配 `thinking: enabled` 压住，但第 1 级（烧穿记名册）、第 2 级（步骤 `@thinking off`）、第 3 级（routing_rules 的 disabled）优先级都比 provider 级高，压不住。第 1 级最要命：它是运行中自动触发的止血机制，在这类端点上变成"某步烧穿 → 重试轮发 disabled → 400 → 步骤必败"。
+
+规则：provider 配置可以声明 `thinking_disable_unsupported: true`（schema 权威 [[shared-providers#^anc-config-standalone-schema]] ProviderEntry 同名行），意思是"这个端点的思考关不掉"。
+
+- 五级链照常计算，一级不改；
+- 算出来是"开"（`{type: enabled, budget_tokens: N}`）：照常发，不管端点有没有声明——声明只影响"关"的结果；
+- 算出来是"关"、且目标端点声明了关不掉：请求里**不带 thinking 键**，改带 `output_config: {effort: "low"}`。第 1、2、3、4、5 级算出的"关"一视同仁，不区分是哪一级给的；
+- 没声明（字段缺席或写 false）的端点行为逐字节不变，照旧发 `{type: disabled}`；
+- 同一 provider 既写 `thinking: disabled` 又写 `thinking_disable_unsupported: true` 不拒：第 4 级给出"关"，照上一条换成 effort low，含义就是"这个端点缺省尽量少想"。
+
+为什么是 `effort: low`：这是该类端点上唯一实测有效的"少想"手段（maintainers/模型端点票.md glm-5.3-flash 节）——effort low 把思考压到约 17 个字符、总输出 14 token，两发一致答案正确；`budget_tokens` 基本无效（1024 与 16000 思考长度无可见差别），所以不走"enabled 加小预算"。报 400 的报文自己点名了 low/high/max 三个 effort 档位。语义上这等于把"关思考"在这类端点上落实为"尽量少想"：`@thinking off` 在这类端点上的含义就是最低思考档；烧穿止血的方向（先压思考、保住正文）不变。
+
+"目标端点"怎么认：取本次请求路由到的 service_id（resolveModel 的结果，含步骤 `@model` 覆盖）。路由落缺省 provider（service_id 为 default）时回退首 provider 的声明——与第 4 级 provider 缺省的回退同一套规则、同一个取值函数，理由也相同：唯一 provider 配了声明却不写路由时，不回退就静默失效。
+
+两条请求路径同一个点生效：单发路径 buildApiRequest 与工具循环路径 executeActWithTools 的 loopRequest 都经 resolveThinkingParam 装配思考参数，替换就做在 resolveThinkingParam 的出口，两条路径不各写一份。
+
+**能力契约（HopTrait）**：
+
+```
+# Spec: 思考参数装配（含关不掉端点的替换）
+Id: resolve-thinking-param
+Goal: 为一次 LLM 请求给出实际要放进请求体的思考相关参数——五级链算出开或关;
+      关的结果落到声明了关不掉的端点时,换成该端点认的最低思考档写法
+Inputs:
+- step_type % line  # 本次调用的步骤类别 act/commit/reason/check/replan
+- step % yaml  # 当前步骤（replan 调用时缺席）
+- service_id % line  # 本次请求路由到的服务（resolveModel 结果）
+- route_thinking % line  # routing_rules 带出的 enabled|disabled,缺席=未配
+- max_output % int  # 本次请求的 max_tokens
+Outputs:
+- request_fields % yaml  # 要展开进请求对象的字段,三种形态之一（见下方 HopType）
+Constraints:
+- 五级链的计算与本契约新增的替换彼此独立:替换只看五级链的最终结果和目标端点的声明,不看是哪一级给的结果
+- 只替换"关"的结果,"开"的结果无论端点声明与否都原样发
+- 未声明关不掉的端点,输出与替换规则引入前逐字节相同
+- 输出里 thinking 与 output_config 两个键至多出现一个,不会同时出现
+- 单发路径与工具循环路径共用本契约,不各写一份
+```
+
+**类型约定（HopType）——request_fields 的三种形态**：
+
+- 开：`{thinking: {type: "enabled", budget_tokens: N}}`——N 为 max_output 的一半，下限夹 1024、上限夹 max_output−1（规则见上文五级链条款）；
+- 关（端点未声明关不掉）：`{thinking: {type: "disabled"}}`；
+- 关（端点声明了关不掉）：`{output_config: {effort: "low"}}`——effort 固定为字符串 `"low"`，不带 format 等其他 output_config 子键，也不带 thinking 键。
+
+**关键逻辑（HopSop）**：
+
+```
+# impl resolve_thinking_param（dispatcher 私有方法;buildApiRequest 与 executeActWithTools 共用）
+1. [act] decision = resolve_thinking_decision(step_type, step, route_thinking, service_id, max_output)
+   # 原五级链原样搬进本子函数,一行不改:记名册 > @thinking > routing_rules > provider 缺省 > 步骤类型缺省
+2. [branch] 看 decision
+  2.1. [case(decision 是开)] 返回 {thinking: decision}
+  2.2. [case(decision 是关)]
+    2.2.1. [act] unsupported = provider_env_of(service_id, "THINKING_DISABLE_UNSUPPORTED")
+       # 读 env 快照键 {SERVICE_ID}_THINKING_DISABLE_UNSUPPORTED;service_id 为 default 且本键缺席时
+       # 回退首 provider 的同名键——与第 4 级读 {SID}_THINKING 共用同一个取值函数
+    2.2.2. [branch] unsupported == "true" → 返回 {output_config: {effort: "low"}};否则 → 返回 {thinking: {type: "disabled"}}
+```
+
+**请求体透传**：Anthropic SDK（package.json 锁 `^0.111.0`）的 `MessageCreateParamsNonStreaming` 类型自带 `output_config?: {effort?: 'low'|'medium'|'high'|'xhigh'|'max'|null; format?: ...}` 字段，`messages.create` 只剥 `user_profile_id` 一个键，其余请求字段原样作请求体发出——不需要额外的透传入口。本地假 HTTP 服务器实抓请求体已验证（结论记在 todo/0118 处置记录与该批次 commit message）。
+
+**协议边界**：本声明只对 anthropic 协议有意义，配置加载期对非 anthropic 协议的 provider 写 `thinking_disable_unsupported: true` 响亮拒（理由：openai-responses 适配器本就把 disabled 映成 `reasoning.effort: low`，不会 400；openai-chat 适配器不透传任何思考参数。两种协议下这个声明都不会产生任何效果，允许写就是静默失效）。
+
+**观测（记录点在发送边界）**：hoplog 每轮 `llm.thinking` 摘要从发送口实际请求对象抄，新增一个取值 `effort:low`（请求带 `output_config.effort` 时记 `effort:<档位>`）；原有三个取值 `enabled:budget=N` / `disabled` / `absent` 不变。单发路径与工具循环路径的两处记录共用同一个摘要函数，不各写一份——probe 要核"这一步实发了 effort low"，看的就是这个字段。
+
+**使用点清单**（规则改一处要核这几处）：
+
+1. resolveThinkingParam 出口的替换（单发与工具循环两路径共用）；
+2. 第 1 级烧穿记名册的降档（^anc-exec-thinking-exhausted"降档"条已加指针）；
+3. 两处 hoplog `llm.thinking` 摘要；
+4. 配置加载期文法核与 env 快照派发（mcp-server.ts loadStandaloneConfig / buildEnvSnapshot）。
 
 **协议面**：wire 协议三档 `anthropic` | `openai-chat` | `openai-responses`（v0.7.0 双档,0020 批次扩三档,per-provider 声明——协议适配层见 ^anc-exec-protocol-adapter）。
 - Anthropic 格式后端（DeepSeek `api.deepseek.com/anthropic`/代理网关 zenmux/oneapi/litellm）经 `base_url` 切换;
@@ -1959,11 +2432,13 @@ routing:
 Id: protocol-client
 Goal: 按内部 IR（Anthropic 消息形状）发起一次 LLM 调用并返回 IR 形状响应；错误归一为类别枚举
 Inputs:
-- request: yaml   # IR：model/system(顶层字段)/messages/max_tokens/temperature/tools?/thinking?（thinking 各协议自译:anthropic 直传/openai-chat 不透传/openai-responses 映 reasoning.effort——0020 review 批补,Trait 入口与转换规则条款对齐）
+- request % yaml   # IR：model/system(顶层字段)/messages/max_tokens/temperature/tools?/thinking?（thinking 各协议自译:anthropic 直传/openai-chat 不透传/openai-responses 映 reasoning.effort——0020 review 批补,Trait 入口与转换规则条款对齐）
 Outputs:
-- response: yaml  # IR：content:[{type:'text',text} | {type:'tool_use',id,name,input}]/stop_reason(end_turn|tool_use|max_tokens)/usage:{input_tokens,output_tokens}——工具循环轮次响应携 tool_use 块（0020 review 批补:批前只写 text 块,工具轮响应面缺席）
+- response % yaml  # IR：content:[{type:'text',text} | {type:'tool_use',id,name,input}]/stop_reason(end_turn|tool_use|max_tokens)/usage:{input_tokens,output_tokens}——工具循环轮次响应携 tool_use 块（0020 review 批补:批前只写 text 块,工具轮响应面缺席）
 Constraints:
 - classifyError(err) → 枚举 rate_limited/server_error/timeout/network/auth/context_overflow/temperature_rejected/other——dispatcher 重试策略按类别分派，不再 instanceof SDK 错误类
+- classifyError 判 timeout 的来源:SDK 超时错误类,或错误本身/cause 链上带 undici 等待超时错误码（UND_ERR_HEADERS_TIMEOUT / UND_ERR_BODY_TIMEOUT）——后者先于裸网络文案兜底判（v0.36.0,^anc-exec-api-retry D61 条）
+- 构造时带长等待连接设置、SDK 内部重试关掉（maxRetries 0）,create 给 SDK 第二参 { timeout: 单次请求等待上限 }（^anc-exec-nonstreaming-timeout,v0.36.0）
 - 构造时显式传 apiKey/baseURL，切断 SDK 隐式 env 读取（openai SDK 自读 OPENAI_API_KEY 同 anthropic SDK 自读 AUTH_TOKEN——standalone 不变量 2"显式压过隐式"，401 实撞同型预防）
 ```
 
@@ -1973,10 +2448,10 @@ Constraints:
 struct: ProtocolClientHandle
   Id: protocol-client-handle
   Fields:
-    - protocol: line  # 枚举 anthropic/openai-chat/openai-responses（三值现役,见 shared-providers ProviderEntry）
-    - create: yaml    # (request: IR) → Promise<IR 响应>
-    - classifyError: yaml  # (err) → 错误类别枚举
-    - supportsToolLoop: bool  # 该协议能否承载 LLM 工具循环（anthropic/openai-responses=true,openai-chat=false）——dispatcher 工具循环闸与 reason 降级道判它,不再比对协议枚举名（能力谓词:新协议接入改一处,枚举比对散点会漏——0020 批立）
+    - protocol % line  # 枚举 anthropic/openai-chat/openai-responses（三值现役,见 shared-providers ProviderEntry）
+    - create % yaml    # (request: IR) → Promise<IR 响应>
+    - classifyError % yaml  # (err) → 错误类别枚举
+    - supportsToolLoop % bool  # 该协议能否承载 LLM 工具循环（anthropic/openai-responses=true,openai-chat=false）——dispatcher 工具循环闸与 reason 降级道判它,不再比对协议枚举名（能力谓词:新协议接入改一处,枚举比对散点会漏——0020 批立）
 ```
 
 **openai-chat 适配器的转换规则**：
@@ -2038,12 +2513,12 @@ struct: ProtocolClientHandle
 Id: model-resolve
 Goal: 给一个待执行步骤解析出 service_id+model——spec 面三级软偏好（缺席 warn 落级沿链向下）,系统面加载期已核直取,链尾恒有缺省必有归宿不报错
 Inputs:
-- category: line      # 路由类别 RoutingCategory（act/commit/reason/check/replan）
-- step: yaml          # 可选。StepReady（@model 标注经它取）
-- spec_config: yaml   # spec Config 段（models 逐类别/model 单默认）
-- model_engine: yaml  # 系统层 ModelEngine（routing_rules/default_model）
+- category % line      # 路由类别 RoutingCategory（act/commit/reason/check/replan）
+- step % yaml          # 可选。StepReady（@model 标注经它取）
+- spec_config % yaml   # spec Config 段（models 逐类别/model 单默认）
+- model_engine % yaml  # 系统层 ModelEngine（routing_rules/default_model）
 Outputs:
-- resolved: yaml      # { service_id, model }
+- resolved % yaml      # { service_id, model }
 ```
 
 ```
@@ -2179,7 +2654,7 @@ build_api_request(context, step_type, step):
 
 ### 1. tool_use 迭代上限
 
-act 步骤的 tool_use loop 最多执行 N 次工具调用（默认 20，可通过 Config 覆盖）。超过上限后以 MAX_TOOL_ITERATIONS 错误 fail step，由 subtask retry 机制处理。
+act 步骤的 tool_use loop 最多执行 N 次工具调用（默认 20，可通过 Config 覆盖）。超过上限后以 MAX_TOOL_ITERATIONS 错误 fail step，由 subtask retry 机制处理。重做轮的修正指令对这个原因单独渲染（说明是工具次数用完、不是产出形态问题，并教"文件还在接着改、省着用工具、做不完按降级交并写 no_change"），见 [[prompt-assembler#^anc-exec-l2c-retry-feedback]] 材料段"执行过程类失败"条。
 
 ```
 execute_act_with_tools(context, max_iterations = host_config.resource_limits?.max_tool_iterations ?? 20):

@@ -3,8 +3,8 @@
 	source: [[../../hopbuild/SKILL]]
 	source_id: hopbuild-skill
 	type: compact
-	last_sync: 2026-08-18T01:39+0800
-	note: 教程 7——收官应用:用 /hopbuild 把自然语言 skill 翻译成 hopskill（SKILL.md 是翻译器的完整契约，本文是用户视角的上手版）
+	last_sync: 2026-10-01T17:01+0800
+	note: 教程 7——收官应用:经 /hop 分派 hopbuild 把自然语言 skill 翻译成 hopskill（SKILL.md 是翻译器的完整契约，本文是用户视角的上手版）
 %%
 
 # 教程 7 · 把你的自然语言 skill 升级为 hopskill
@@ -12,7 +12,7 @@
 **目标**：拿一个你自己的**自然语言 skill**（纯散文写的 SKILL.md，英文文档中亦称 prose skill），翻译成 HopSpec 规约（**hopskill**），跑起来，体会两者的差别。
 **前提**：完成教程 1（引擎和 skill 已装好）。读过 03-05 三篇的话，翻译产物的审计（第 3 步）会做得深得多。
 
-> Codex 用户注：翻译器 `/hopbuild` 目前仅 CC 载体提供——在 CC 里完成翻译即可，产物 spec 两载体通用。
+> Codex 用户注：翻译器 hopbuild 目前仅 CC 载体提供（对 /hop 说"把 xxx 翻译成 spec"即分派到它）——在 CC 里完成翻译即可，产物 spec 两载体通用。
 
 ## 为什么要升级
 
@@ -37,7 +37,7 @@ hopskill 把这三条从"靠记忆"变成**引擎结构化强制**：遍历翻�
 Claude Code 命令（翻译器目前仅 CC 载体提供；Codex 用户在 CC 里翻译，产物两载体通用）：
 
 ```
-/hopbuild .claude/skills/你的skill/SKILL.md
+/hop 把 .claude/skills/你的skill/SKILL.md 翻译成 spec
 ```
 
 （不给路径它会列出你 `.claude/skills/` 下的候选让你挑。）
@@ -55,20 +55,20 @@ Claude Code 命令（翻译器目前仅 CC 载体提供；Codex 用户在 CC 里
 Claude Code 命令：
 
 ```
-/hopspec run 生成的spec.md
+/hop 跑 生成的spec.md
 ```
 
 Codex 命令（spec 两载体通用）：
 
 ```
-$hopspec run 生成的spec.md
+$hop 跑 生成的spec.md
 ```
 
 体感上和教程 1 一样，但注意与自然语言版跑同一任务的差别：
 
 - 遍历是引擎 fan-out 的（parallel worker 并发），不是 LLM 凭记性逐个来；
 - 到 confirm 时**必定**停下问你——哪怕答案"显而易见"；
-- 中断后 `/hopspec resume` 从断点继续——自然语言 skill 断了只能重头。
+- 中断后对 `/hop` 说"接着跑"从断点继续——自然语言 skill 断了只能重头。
 
 ## 第 5 步（可选）：迭代——小改自己动手，成批修正交给 hopfix
 
@@ -77,7 +77,7 @@ $hopspec run 生成的spec.md
 改一两个字自己动手就好；**要改的地方多了、或者你担心手改引入新问题，用 hopfix**——它是专门做定向修正的工具：你把修正意见写成一段话（哪一步有什么问题、想改成什么样），它定位到具体步骤逐处改，改完自动把三道关：机械核对"只有你点名的地方变了"、语义核对"改的确实是你要的"、然后把修正稿和改动清单呈给你确认，你点头它才写回（写回前自动留原件快照，随时可回滚）。
 
 ```
-/hopfix 生成的spec.md——步骤 3 的说明里××是错别字；步骤 5 的阈值应该是 30000 不是 300000
+/hop 修一下 生成的spec.md：步骤 3 的说明里××是错别字；步骤 5 的阈值应该是 30000 不是 300000
 ```
 
 （一句话把"哪份 spec、要改什么"说清就行——不用记参数格式；意见多的时候直接把整份检查报告贴进来也行。）

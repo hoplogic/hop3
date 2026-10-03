@@ -1,0 +1,130 @@
+```python
+import ast
+import re
+import json
+import sys
+
+def get_function_params(func_node):
+    params = []
+    for arg in func_node.args.args:
+        if arg.arg not in ('self', 'cls'):
+            params.append(arg.arg)
+    if func_node.args.vararg:
+        params.append(func_node.args.vararg.arg)
+    for arg in func_node.args.kwonlyargs:
+        if arg.arg not in ('self', 'cls'):
+            params.append(arg.arg)
+    if func_node.args.kwarg:
+        params.append(func_node.args.kwarg.arg)
+    return params
+
+def extract_docstring(node):
+    if node.body and isinstance(node.body[0], ast.Expr):
+        first_child = node.body[0].value
+        if isinstance(first_child, ast.Str):
+            return first_child.s
+    return None
+
+def is_public_function(node):
+    if isinstance(node, ast.FunctionDef) and node.name.startswith('_'):
+        return False
+    if isinstance(node, ast.AsyncFunctionDef) and node.name.startswith('_'):
+        return False
+    if isinstance(node, ast.FunctionDef) and node.name == '__init__':
+        return False
+    if isinstance(node, ast.FunctionDef) and node.name == '__repr__':
+        return False
+    if isinstance(node, ast.FunctionDef) and node.name == '__str__':
+        return False
+    if isinstance(node, ast.FunctionDef) and node.name == '__eq__':
+        return False
+    if isinstance(node, ast.FunctionDef) and node.name == '__ne__':
+        return False
+    if isinstance(node, ast.FunctionDef) and node.name == '__hash__':
+        return False
+    if isinstance(node, ast.FunctionDef) and node.name == '__len__':
+        return False
+    if isinstance(node, ast.FunctionDef) and node.name == '__bool__':
+        return False
+    if isinstance(node, ast.FunctionDef) and node.name == '__getitem__':
+        return False
+    if isinstance(node, ast.FunctionDef) and node.name == '__setitem__':
+        return False
+    if isinstance(node, ast.FunctionDef) and node.name == '__delitem__':
+        return False
+    if isinstance(node, ast.FunctionDef) and node.name == '__contains__':
+        return False
+    if isinstance(node, ast.FunctionDef) and node.name == '__iter__':
+        return False
+    if isinstance(node, ast.FunctionDef) and node.name == '__next__':
+        return False
+    if isinstance(node, ast.FunctionDef) and node.name == '__enter__':
+        return False
+    if isinstance(node, ast.FunctionDef) and node.name == '__exit__':
+        return False
+    return True
+
+def check_file(path):
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except OSError as e:
+        print(f"Error reading file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not content.strip():
+        sys.exit(0)
+
+    try:
+        tree = ast.parse(content)
+    except SyntaxError as e:
+        print(f"Syntax error in file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    violations = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+            if not is_public_function(node):
+                continue
+
+            docstring = extract_docstring(node)
+            if not docstring:
+                violations.append(f"{node.lineno}: missing docstring")
+                continue
+
+            params = get_function_params(node)
+            if not params:
+                continue
+
+            for param in params:
+                pattern = r'\b' + re.escape(param) + r'\b'
+                if not re.search(pattern, docstring):
+                    violations.append(f"{node.lineno}: docstring does not mention parameter '{param}'")
+
+        elif isinstance(node, ast.ClassDef):
+            for member in node.body:
+                if isinstance(member, ast.FunctionDef) or isinstance(member, ast.AsyncFunctionDef):
+                    if not is_public_function(member):
+                        continue
+                    docstring = extract_docstring(member)
+                    if not docstring:
+                        violations.append(f"{member.lineno}: missing docstring")
+                        continue
+                    params = get_function_params(member)
+                    if not params:
+                        continue
+                    for param in params:
+                        pattern = r'\b' + re.escape(param) + r'\b'
+                        if not re.search(pattern, docstring):
+                            violations.append(f"{member.lineno}: docstring does not mention parameter '{param}'")
+
+    if violations:
+        for violation in violations:
+            print(violation, file=sys.stderr)
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+check_file(sys.argv[1])
+```

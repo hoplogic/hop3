@@ -3,8 +3,11 @@
 model: Qwen3.8-27B            # 响应体 model 字段实测值(百炼回报小写 qwen3.8-27b)
 provider_ref: bailian_qwen    # 参考接入:dashscope claude-code-proxy 端点,auth: bearer(只认 Authorization: Bearer,x-api-key 报 InvalidApiKey)
 endpoint_note: https://dashscope.aliyuncs.com/api/v2/apps/claude-code-proxy;有工具模板注入但件质量好扛得住(对照 theta 注入+量化合谋致七轮打环)
-context_window: 262144
-max_output_tokens: 65536      # 端点实测认
+context_window: 1000203       # 端点实测(run-context-window,2026-09-28,百炼 claude-code-proxy 端点):收下 1000203 输入 token,估算 105 万时 400 拒收
+  #   ("Range of input length should be [1, 1048576]"),约 100 万。收下的 12 发(最大 100 万)全部答对开头暗号——名义与实用一致,超窗时报错拒收(不静默截断)。
+  #   分两次量:第一次量到 896289 后百炼账户欠费,充值后续量出上界。原值 262144 是按模型名义规格记的,已被实测推翻。
+  #   注意输出端仍是 4096 硬帽(见 max_output_tokens):能读进 100 万,一次最多写 4096。表=../probes/context-window/endpoint-context-windows.yaml
+max_output_tokens: 4096       # 百炼 claude-code-proxy 端点硬帽，请求更大值被忽略（请求 65536 两发都在 output_tokens=4096、stop_reason=max_tokens 处被掐断;探针 run-output-cap,2026-09-26,表 ../probes/output-cap/endpoint-output-caps.yaml）。原值 65536 标"端点实测认"是误记——长产出步撞帽见 todo/0113
 measured: 2026-09-18          # 百炼五卷完整评测+extract 阶梯 XS/S/M 三格
 
 dims:
@@ -16,17 +19,20 @@ dims:
   tool_use: mid                    # 判官卷 read 3 次取料即停(何时停的判断在场!);TOOL_LOOP_REPEAT 五卷全零(theta 版 118 次系端点病)
   structured_delivery: mid-weak    # 双指标制(2026-09-19 作者定'给更有体感的指标'):嵌套复杂度=全深度可达(对象列表/三层嵌套/结构值全 6/6——失分与嵌套深度无关);**容错后=strong**(裸皮失分 T2/T5 0/6 全是纯围栏病,引擎 fence-recovery 三层容忍全吸收,路由按容错后档走)。裸皮细账:简单 schema 稳;复杂列表首轮散文高发但能自愈;修正上下文触发散文回退(S 档攻3实锤)。G5 探针(2026-09-19,n=6):T1/T3/T4/T6 全 6/6(含三层嵌套!)但 T2/T5 0/6——十二发全部纯围栏包裹(明文禁令在场照披 ```yaml,剥掉围栏内容与结构全对):结构能力在场,病是特定题面诱发的围栏习惯——**引擎下已被既有三层容忍吸收**(解析层剥任意语言标签围栏/散文+围栏单解/值级恢复阶梯,^anc-exec-output-fence-recovery 族;实证:两轮 hb2 真机 SCHEMA 零),探针不剥是度量口径(测裸皮不记防线功劳),引擎场景无需新防线
   code_generation: {python: mid, sql: strong}   # G6 代码生成(2026-09-23 第二版题目:Python 与 SQL 各三档,n=6,隐藏测试判分,自愈回路最多 2 轮)。Python(规范条款→校验脚本,引擎同款语法沙箱内执行):一次写对 简单/普通/复杂=6/6·4/6·3/6,自愈后=6/6·6/6·5/6;42 轮提交 6 轮被沙箱拒(hasattr 等白名单外符号)。复杂档(文档字符串须提到每个参数)公开过隐藏挂 1/6——漏查仅位置参数。SQL(取数需求→SQLite 查询,结果集全等判分):三档全 6/6 一次写对,含连续登录段这类窗口函数题。适配:SQL 取数可放手派;Python 脚本普通档以上要配验证回路(自愈能救回大半),复杂档产物须有隐藏测试或人工复核。HopSpec 写作归 hopbuild2 构建卷考
-  feedback_correction: weak        # 硬短板实锤(P3 本质=指令散文序列理解能力,2026-09-18 作者定名):extract 修订 0/9——命令读到内容也理解(复述准确/拆分分析推对)但多命令竞争时按篇幅裁决错边,行为跟生成命令走;短卷命令唯一化后 6/6("说到、想对、做不到"=裁决失败非理解失败)
+  feedback_correction: strong-on-current-engine   # 2026-09-28 库内仪器重测(run-revision-ab,n=6,引擎真实装配考卷,产物 ../probes/extract-scaling/run-revision-ab-bailian_qwen-2026-09-28/):
+    # 现行引擎标准态修订 prompt 6/6、修订短 prompt 6/6,两条意见(补每杯毫克数与四杯总量/改行号)全落实、没点名处原样。
+    # 下面 9-18 的 0/9 是当时引擎标准态下的读数,现行标准态已不再复现(9-18 考卷是手拼的已丢失,说不清是哪处引擎改动治好的)。
+    # 真实任务里的 hb2 修错步"零工具虚构完成"是工具环节的病(见 adapt.step_notes),不在这张直连考卷的考查面内。
+    # 旧注(9-18):硬短板实锤(P3 本质=指令散文序列理解能力,2026-09-18 作者定名):extract 修订 0/9——命令读到内容也理解(复述准确/拆分分析推对)但多命令竞争时按篇幅裁决错边,行为跟生成命令走;短卷命令唯一化后 6/6("说到、想对、做不到"=裁决失败非理解失败)
   domain_knowledge: untested        # G7 领域知识充分度(2026-09-19 作者立维度——轻量模型专属短板:参数量小领域知识存量少,与推理能力独立;探针=跨领域对照卷待建;适配面=doc-ref/@knowledge 知识供给,缺多少喂多少不换模型)
   knowledge_acquisition: untested-positive-signals  # G8 渐进知识获取(2026-09-19 作者立——缺知识时察觉→检索→筛选→使用四环闭环;与 G7 存量半边成对):初步正向(real-task-scaling fact-check S 档完赛:检索链正常;四环观测待正式定档)
 
-act_free:
+act_free:                          # run-act-free-stability 全 30 格 × n=6=180 发,真引擎,百炼 claude-code-proxy 端点(2026-09-21)。曲线账=../probes/act-free-stability/run-bailian_qwen-2026-09-21-v2/
   reliability_curve:
-    long_supply_7k:                # theta 端点旧数据作废;百炼件未按阶梯重测(五卷行为间接证据:工具节制正常)
-      untested: true
-    tool_required:
-      dv_read_pattern: { rate: 1.0, n: 1 }   # 判官卷 read 3 次即转产出——正用半边首个数据点
-  rating: untested-curve-positive-signals
+    noise_only: { short: {t0: 1.0, t1: 1.0, t3: 1.0, t5: 1.0, t10: 1.0}, mid: {t0: 1.0, t1: 1.0, t3: 1.0, t5: 1.0, t10: 1.0}, long: {t0: 1.0, t1: 1.0, t3: 1.0, t5: 1.0, t10: 1.0}, n: 6 }
+    tool_required: { short: {t1: 1.0, t3: 1.0, t5: 1.0, t10: 1.0}, mid: {t1: 1.0, t3: 1.0, t5: 1.0, t10: 1.0}, long: {t1: 1.0, t3: 1.0, t5: 1.0, t10: 1.0}, n: 6 }
+    zero_tool_control: { short: 0.0, mid: 0.0, long: 0.0, n: 6 }   # 0 工具×需要工具=设计内必死对照格;实测行为=编数字交卷(1234/150/450),没有一发如实说"做不到"
+  rating: full-tolerance           # 需要工具的非零工具格与不需要工具的格全部 1.00(theta 端点旧数据已作废,此为百炼端点重测值;细节见 adapt.max_inline_tools 注释)
 subtask_free: weak-observed        # B4 实撞:60KB 核心流程被收成 subtask free 空壳——它会"用"这个档位当逃生舱,到步展开质量未测
 extract_scaling:                   # 结构化提取阶梯(见 ../probes/extract-scaling/)
   # ── 单发裸测曲线(run-task-complexity 仪器,n=6,2026-09-18——引擎内旧账见下:引擎混入 P3 病后数字更差) ──
@@ -34,21 +40,25 @@ extract_scaling:                   # 结构化提取阶梯(见 ../probes/extract
   s_4pts_bare: { pass: '6/6', n: 6 }
   m_9pts_bare: { pass: '6/6', n: 6 }
   l_18pts_bare: { pass: '6/6', n: 6 }
-  xl_40pts_bare: { pass: '2/6', n: 6 }    # 坍塌起点:漏 2-3 点/type 漂移
-  xxl_80pts_bare: { pass: '1/6', n: 6 }
+  xl_40pts_bare: { pass: '2/6', n: 6 }    # 坍塌起点:漏 2-3 点/type 漂移。换端点复核同为 2/6(见下行)
+  xxl_80pts_bare: { pass: '1/6', n: 6 }   # 原读数,在 4096 输出硬帽的百炼 claude-code-proxy 端点上量的,当时有回复在固定 7829 字符处截断,曾标存疑。
+    # 换端点复核(2026-09-28,作者同意在临时配置加 qwen27_apps):同模型走百炼 /apps/anthropic 端点(输出上限 32768)、显式关思考、n=6——
+    #   XL 2/6、XXL 2/6,十二发零截断,失分全是真漏点(每发漏 1—9 个)与 type 标错。存疑解除:这两档低分是模型自己的提取能力,不是端点截断;
+    #   XXL 在无帽端点上是 2/6,比原读数多一发,差在抽样波动范围内。复核产物=../probes/extract-scaling/run-qwen27_apps-nothinking-2026-09-28/
   # G2 结论:裸提取界在 18~40 点之间——引擎内 S 档三攻烧尽的旧账是 P3 的账不是 G2 的(裸单发命令唯一即做对,与修订短卷 6/6 同源互证)
   xs_2pts: { pass: 1, n: 1 }
   s_4pts:  { pass: 0, n: 1 }       # 三攻烧尽:schema 散文回退(修正上下文触发)
   m_9pts:  { pass: 0, n: 1 }       # 三轮烧尽:复合断言拆分意见六轮不落地
   revision_success: { rate: 0.0, n: 9 }   # 修订落实 0/9——主短板(引擎标准态全量 prompt 下)
   revision_short_prompt: { rate: 1.0, n: 6 }   # 同意见同端点换修订短 prompt(2.6K,无从头教学框架):三关 6/6 全绿——病理=框架压制非模型改不动,对照组同日 0/6 复现散文前置(见 probes/extract-scaling/ 对照实验节)
+  revision_ab_2026_09_28: { standard: '6/6', short: '6/6', n: 6 }   # 库内仪器 run-revision-ab 重测:两档都四关全过,短卷已无优势(见 dims.feedback_correction)
   revision_short_engine: { verified: true, n: 1 }   # 引擎 revision_prompt:short 档真机:修订轮三条意见全落实含数值增补(hoplog /tmp/claude-502/rev-short-live/)——直连结论引擎内复现
 
 adapt:
   max_inline_tools: 11             # 基础族满配实测档(2026-09-21 grid.yaml 全格实测,run-act-free-stability.mjs 首跑:3 供给长度×5 工具面档×2 任务型×n=6=180 发,rating=full-tolerance——noise 侧 15 格全 1.00〔工具在场零乱摸,含 8.9K 长供给×11 件满配〕,tool_required 侧 12 格全 1.00〔该用时一发用对〕;唯一非绿=0 工具×tool_required 三格 0.00,系设计内必死对照格〔零工具读不了文件〕,实测行为=编造数字交卷(1234/150 这类)而非如实报"无法完成"——零工具死角的虚构完成旁证,与修错步虚构同族,执行证据机核对此型免疫〔首轮不核〕但值得知情。曲线账=probes/act-free-stability/run-bailian_qwen-2026-09-21-v2/。仪器缺陷史:首跑任务设计误用"数 75 行 ERROR 计数"——那测的是长文计数能力(mid 档起塌)不是工具耐受,任务改单点标记提取后能力面平坦,工具面信号纯净;首跑数据留 run-bailian_qwen-2026-09-21/ 作长文计数弱的旁证不作耐受档)
   thinking: uncontrollable         # 百炼 claude-code-proxy 不透传 thinking 参数——2026-09-19 实证:请求 thinking enabled(budget 2048)响应仍只有 text 块零 thinking 块(Ling 同法请求即返回 thinking 块,对照排除请求写法问题)。思考开关对本端点不可控,方法 8(机械步关思考)与'重推理步开思考'两个手柄都没有——依赖推理裁量的步慎路由本模型
   build_target_profile: qwen3.8-27b       # hb2 目标执行档已立(D98 ^anc-build-target-profile,2026-09-19 真机验收):deepseek 构建 target_profile=qwen3.8-27b 定制产物(incident 语料,49.4 万 tokens 修检零烧尽,产物 11.5KB vs 27b 自建 6.4KB 空心件),27b 独立执行该产物 2.7 万 tokens completed——五个封闭化把关步全程零自反(mode/triage/update/trim 四关首轮全过;复盘关首轮判 false 意见四条全具体可落实,修订短卷一轮改过复验 true——P3 短卷与封闭把关协同实证);零工具循环失控零烧穿。"deepseek 构建+27b 执行"组合可用。27b 自建 hb2 已走通(2026-09-21 七跑连环批,作者驳"能力天花板"定性拍"现在就修"后教学对症七轮:产物 12.2KB validate 零 error,SEV 表/角色/复盘要素全进产物,对空心件翻 3.8 倍超 deepseek 基线 11.5KB——空心病灶全数为构建器教学与机核病〔判定自造判据/机核容错六形态/忠实关误判/裁剪死角等,D100 系修复〕,零模型墙;n=1,成本约七跑各 40-100 万 tokens 含学费,量产构建仍首选 deepseek——自建"能走通"与"性价比"是两件事)
-  revision_prompt: short           # 已实装实证(标准态修订必死 0/9→引擎 short 档修订三条意见全落实——0095 档案消费链落地后由本键自动供值)
+  revision_prompt: short           # 2026-09-28 重测两档都 6/6,短卷对本模型已不是必需;保留 short 是因为它无害且有引擎真机验证,改回 standard 可换回提示缓存。旧注:已实装实证(标准态修订必死 0/9→引擎 short 档修订三条意见全落实——0095 档案消费链落地后由本键自动供值)
   step_notes: 提取类步骤按 extract 曲线切分(裸单发界 18~40 点;引擎全量供给下按 P3 折损预留);重试型把关步配短卷修订已可用;check 步禁自审(判官自反,见 dims.check_judge)——弱执行+强把关是本模型的正确用法(实测 qwen 执行+deepseek 判官 S 档全链完赛 9.1 万 tokens)。hb2 丙案实测(2026-09-18,incident 8KB,判官/commit 路由 deepseek):能走完全程 46.4 万 tokens completed,但修检 10 轮烧尽剩 5 实质缺陷 accept;产物 3.2KB vs deepseek 基线 12KB 同步数(结构壳全肉空,B4 空心同型)。修错步落不下去的病理经逐轮验尸改判(2026-09-19,报告 /tmp/claude-502/observer-hb2-27b-repair/report.md):**零工具虚构完成**——10 个重试轮一次工具没调(每轮 2-5 秒/64-268 token),读完工单直接编"修了 N 处"的 fix_note 交卷,判官点破照旧;不是 P3 供给淹没(工单被充分读取,fix_note 编号对得上),短卷不对症,治法=执行证据机核(0095 2e 新方子)。同语料复跑(2026-09-19,格式例修复后引擎)对照:39.3 万 tokens 完赛,步 2 零打回,产物 6.4KB(比上轮 3.2KB 厚——首轮构建质量波动),修检烧尽同款复现、虚构 fix_note 同款复现("修了8处"连续四轮逐字相同)——病根未修复现符合预期,格式例修复对 27b 无害
 
 # ── theta(antchat)端点勘误段(2026-09-18 定案,证据 vault: AI·小谢尔顿/qwen工具面着魔案例) ──

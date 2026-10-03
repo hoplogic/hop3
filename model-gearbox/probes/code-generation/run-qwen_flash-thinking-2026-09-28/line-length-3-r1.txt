@@ -1,0 +1,30 @@
+```python
+import sys
+
+if len(sys.argv) < 2:
+    print("Error: no file path provided.", file=sys.stderr)
+    sys.exit(1)
+
+file_path = sys.argv[1]
+violations = []
+
+try:
+    with open(file_path, 'rt', encoding='utf-8') as f:
+        lines = f.readlines()
+except OSError as e:
+    print(f"Error: {e}", file=sys.stderr)
+    sys.exit(1)
+
+for idx, line in enumerate(lines, 1):
+    cleaned_line = line.rstrip('\r\n')
+    length = len(cleaned_line)
+    if length > 100:
+        violations.append((idx, length))
+
+if violations:
+    for idx, length in violations:
+        print(f"Line {idx}: {length} characters (exceeds 100)", file=sys.stderr)
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

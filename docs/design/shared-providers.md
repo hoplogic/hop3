@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-08-22T20:02+0800
+	last_sync: 2026-09-29T02:00+0800
 	note: shared-providers 模块设计——Provider 三件套接口(Tool/Knowledge/Identity+Persistence/Spec) + 宿主配置类型(HostConfig/Sandbox/ModelEngine/ResourceLimits)。引擎内核↔宿主的契约边界。2026-07-02 从 shared-types.md 抽出独立成文。
 %%
 
@@ -33,7 +33,11 @@ HopAnt 作为典型使用方：CapabilityLayer → ToolProvider，KnowledgeLayer
 
 ## shared-providers 模块定位【契约】 ^anc-struct-shared-providers
 
-> **模块版本**：shared-providers `v0.14.0`（2026-09-20）。本版=ProviderEntry 新增可选 thinking 键（provider 级思考缺省显式化——端点缺省互相相反且不可见,同 spec 换模型思考行为静默翻转;作者定'统一'的落点=配置层显式化,0100 批;env 键 {SERVICE_ID}_THINKING 同披,两处清单义务同批履行）。
+> **模块版本**：shared-providers `v0.16.1`（2026-10-01 出口表加常量 RUN_APPROVED_COMMAND_TOOL——工具名单一事实源,两消费点）。上版 v0.16.0（2026-09-30）。本版=两接口各加一个可选方法（出口表加符号,旧消费方不受影响）：`ToolProvider.registerWorkZoneRoot?(root)` 收本 run 实例树的 work_zone 根、`PersistenceProvider.getWorkZoneRoots?()` 报本实例与祖先实例的 work_zone 集合——todo/0124 work_zone 豁免改按 run 登记,契约 [[tools/file-tools#^anc-exec-work-zone-registry]]。
+>
+> - 上版（v0.15.1,2026-09-29）ToolDef.description 改标 text（注册件并入 notes 后可能多行）、returns 注明外挂件由 Composite list() 从 output_schema 渲染填入（todo/0122）。上版 v0.15.0（2026-09-27）=ProviderEntry 新增可选布尔键 thinking_disable_unsupported（声明端点思考关不掉——glm-5.3-flash 收到 thinking disabled 报 400;为 true 时五级链算出"关"的请求改发 output_config effort low,行为权威 [[step-dispatcher#^anc-exec-thinking-disable-unsupported]],todo/0118;env 键 {SERVICE_ID}_THINKING_DISABLE_UNSUPPORTED 同披,env_snapshot 键集清单同批改）。
+>
+> - 上版 v0.14.0（2026-09-20）=ProviderEntry 新增可选 thinking 键（provider 级思考缺省显式化——端点缺省互相相反且不可见,同 spec 换模型思考行为静默翻转;作者定'统一'的落点=配置层显式化,0100 批;env 键 {SERVICE_ID}_THINKING 同披,两处清单义务同批履行）。
 >
 > - 上版 v0.13.0（2026-09-18）=schema 权威补账两键+auth 生效面契约。工程链 review 面一/面二/面四三面同抓:ProviderEntry struct 补 auth 行〔含 defaultClient 生效面与 bearer 双臂关键逻辑——原实装只罩显式路由,缺省 provider 路径漏装同批代码修复〕/StandaloneConfig struct 补 revision_prompt 行/"八节"清单句升十节与配置参考对齐。
 >   struct 自称唯一定义处而字段漏登,是 v0.12.1 同型病第三犯,本版起新增顶层键两处清单同批改列为本句执行义务；
@@ -60,6 +64,7 @@ HopAnt 作为典型使用方：CapabilityLayer → ToolProvider，KnowledgeLayer
 | `ModelEngine` / `ModelRoute` | 类型 | provider-types.ts | 模型路由配置（dispatcher 消费） | provisional |
 | `RoutingCategory` / `ROUTING_CATEGORIES` | 类型+常量 | provider-types.ts | 模型路由类别（act/commit/reason/check/replan——类型与运行期闸同源,消 ModelRoute 类型与类别枚举双向失配） | provisional |
 | `ENGINE_DEFAULT_MODEL` | 常量 | provider-types.ts | 引擎缺省模型单一事实源（dispatcher 路由兜底+install-skill CC 缺省两消费点——0086 续账修:原各写死字面量,引擎升缺省 install 侧静默旧值） | provisional |
+| `RUN_APPROVED_COMMAND_TOOL` | 常量 | provider-types.ts | hopjit-mcp 按任务卡放行执行的工具名单一事实源（mcp-server 注册名 + cli install-skill 写 CC 放行条目两消费点——2026-10-01 作者改名 run_command→run_approved_command,见 [[mcp-server#^anc-mcp-run-command]]） | provisional |
 | `SpecProvider` / `SpecSource` | 类型 | provider-types.ts | call 子 spec 解析接口与源结构（dispatcher 独立模式 call 递归消费,缺省实现 DirSpecProvider 在 dispatcher——DEBT-04 实装时从"内部"转正,本表漏随更） | stable |
 | `credentialLikeHopEnvKey` | 函数 | provider-types.ts | hop_env 凭证形态键名闸（覆盖链三级共用——mcp-server 配置/params 级、cli params 级、engine ask 级;0004） | stable |
 | `ENGINE_BUILTIN_SPECIAL_TOOL_NAMES` | 常量 | provider-types.ts | 引擎内建特殊工具族名单（树编辑四件+validate_spec+read_spec_tree——prompt 层1 L4 通道分道消费,名单住共享层 0 层向依赖才合法;与 DefaultToolProvider 注册面同源性由 tools.test.ts 钉住,9332adaf 定层时漏登本表,审计 symbol_not_public 抓后补） | provisional |
@@ -80,37 +85,49 @@ HopAnt 作为典型使用方：CapabilityLayer → ToolProvider，KnowledgeLayer
 Id: tool-provider-execute
 Goal: 按名执行一次工具调用，返回结构化结果
 Inputs:
-- tool_name: line
-- tool_args: yaml
-- write_scope: enum(work_zone,workspace)  # 可选。调用方步骤语境的写域声明（act/check→work_zone,commit→workspace;缺省按 work_zone 窄域处理,信号缺席不静默放宽）——内置文件工具写侧六件消费,外部/宿主工具自然忽略。见 [[tools/file-tools#^anc-exec-builtin-file-tools]] 分域条款(2026-08-28)
+- tool_name % line
+- tool_args % yaml
+- write_scope % enum(work_zone,workspace)  # 可选。调用方步骤语境的写域声明（act/check→work_zone,commit→workspace;缺省按 work_zone 窄域处理,信号缺席不静默放宽）——内置文件工具写侧六件消费,外部/宿主工具自然忽略。见 [[tools/file-tools#^anc-exec-builtin-file-tools]] 分域条款(2026-08-28)
 Outputs:
-- result: ToolResult
+- result % ToolResult
 
 # Spec: 工具清单
 Id: tool-provider-list
 Goal: 列出本 Provider 注册的全部工具定义（引擎注入 prompt/校验用）
 Outputs:
-- tools: [ToolDef]
+- tools % [ToolDef]
+
+# Spec: 登记涂鸦区根（可选方法,2026-09-30 todo/0124）
+Id: tool-provider-register-work-zone-root
+Goal: 收下一条本次运行实例树的 work_zone 根路径,供文件工具的 work_zone 豁免判定——不实现的 Provider（外部 MCP 成员/宿主注入件/测试替身）被 engine 跳过;Composite 转发给实现了它的成员。判据与路由权威 [[tools/file-tools#^anc-exec-work-zone-registry]]
+Inputs:
+- root % line  # work_zone 目录绝对路径（原始形态,提供者自行再取真实路径）
+
+# Spec: 设涂鸦区范围（可选方法,2026-09-30 todo/0126）
+Id: tool-provider-set-work-zone-scope
+Goal: 告诉提供者"当前执行实例的 work_zone 是哪条（写根）、本 run 顶层实例目录是哪个（读树）"——写豁免只认 own,读豁免认 tree 内任意 work_zone;每次 engine.getWorkZone() 都调,后调覆盖先调。不实现者被 engine 跳过;Composite 转发。权威 [[tools/file-tools#^anc-exec-work-zone-registry]]
+Inputs:
+- scope % yaml  # { own: 当前实例 work_zone 绝对路径; tree?: 顶层实例目录绝对路径（无目录布局的 persistence 缺席） }
 ```
 
 ```
 struct: ToolResult
   Id: tool-result
   Fields:
-    - result: yaml        # 字符串或结构化对象——为对象时序列化传入 API messages 统一为 JSON 字符串
-    - content_type: line  # 可选。枚举 text/json，默认 text——仅供消费端决定是否 JSON.parse 还原
-    - success: bool
-    - audit: yaml         # 可选。审计元信息随 HopLog tool: 块（^anc-obs-audit）：server（外部归属,Composite 装配层填）/duration_ms（耗时）/discarded_text_blocks（多 text 块取首块的丢弃计数,binding 层填——0006 留痕;十一审补登:audit 字段实装于工具接口批,struct 漏登存量欠+0006 新字段一并清）
+    - result % yaml        # 字符串或结构化对象——为对象时序列化传入 API messages 统一为 JSON 字符串
+    - content_type % line  # 可选。枚举 text/json，默认 text——仅供消费端决定是否 JSON.parse 还原
+    - success % bool
+    - audit % yaml         # 可选。审计元信息随 HopLog tool: 块（^anc-obs-audit）：server（外部归属,Composite 装配层填）/duration_ms（耗时）/discarded_text_blocks（多 text 块取首块的丢弃计数,binding 层填——0006 留痕;十一审补登:audit 字段实装于工具接口批,struct 漏登存量欠+0006 新字段一并清）
 
 struct: ToolDef
   Id: tool-def
   Fields:
-    - name: line
-    - description: line
-    - input_schema: yaml     # JSON Schema 格式
-    - requires_commit: bool  # true = 有不可逆副作用，仅 commit 步骤可调用
-    - category: line         # basic | special（缺省 special——basic=基础文件族零声明恒可用,special=须节点 `- 工具:` 声明才对无 body 的 act 可用;分档语义权威 [[tool-interface]] v0.6.0,0054 批引入本表补登）
-    - returns: line          # 可选。返回值形状一句话人读描述（L4 清单渲染"返回:"行的料源——内置件逐件如实写;外挂件不用此字段,其形状归注册面 output_schema。^anc-exec-tool-manifest-supply）
+    - name % line
+    - description % text      # 注册件经 Composite list() 并入注册面 notes 后可能多行（[[tool-interface#^anc-tool-params-notes]] 消费面①落点）
+    - input_schema % yaml     # JSON Schema 格式
+    - requires_commit % bool  # true = 有不可逆副作用，仅 commit 步骤可调用
+    - category % line         # basic | special（缺省 special——basic=基础文件族零声明恒可用,special=须节点 `- 工具:` 声明才对无 body 的 act 可用;分档语义权威 [[tool-interface]] v0.6.0,0054 批引入本表补登）
+    - returns % line          # 可选。返回值形状一句话人读描述（L4 清单渲染"返回:"行的料源——内置件逐件如实写;外挂件的绑定成员不填此字段,由 Composite 的 list() 从注册面 output_schema 按中性词渲染后填入——[[tool-interface#^anc-exec-tool-composite]] list() 段。^anc-exec-tool-manifest-supply）
 ```
 
 （TS 形态是代码层投影，在 src/provider-types.ts——设计以本 HopType 为准；下同，本文其余接口不再逐个注记。）
@@ -131,19 +148,19 @@ struct: ToolDef
 Id: knowledge-provider-retrieve
 Goal: 按 query 检索宿主知识片段，供 prompt L2 注入
 Inputs:
-- query: line
-- max_results: number
+- query % line
+- max_results % number
 Outputs:
-- fragments: [KnowledgeFragment]
+- fragments % [KnowledgeFragment]
 ```
 
 ```
 struct: KnowledgeFragment
   Id: knowledge-fragment
   Fields:
-    - source_id: line
-    - content: text
-    - relevance: line  # 枚举 high/medium/low
+    - source_id % line
+    - content % text
+    - relevance % line  # 枚举 high/medium/low
 ```
 
 默认实现：无（不提供时 PromptAssembler 跳过知识注入层，L1 恢复全部 token 预算）。
@@ -152,15 +169,17 @@ struct: KnowledgeFragment
 
 > **实现模块见 [[persistence]]**（persistence.ts，模块锚点 `^anc-provider-persistence`）。本节是 PersistenceProvider 接口契约（引擎状态快照存取抽象，支撑双模式驱动）。
 
-**能力契约（HopTrait）**——五个方法：`init(instanceId, spec)` 创建实例存储空间 / `saveSnapshot(snapshot)` 状态+变量原子保存 / `loadSnapshot()` 恢复（resume 用）/ `exists()` 是否有可恢复状态 / `getWorkZone()` 实例 work_zone 绝对路径（driver @file 临时文件区；Memory 实现返回空串=无文件区）。
+**能力契约（HopTrait）**——五个方法：`init(instanceId, spec)` 创建实例存储空间 / `saveSnapshot(snapshot)` 状态+变量原子保存 / `loadSnapshot()` 恢复（resume 用）/ `exists()` 是否有可恢复状态 / `getWorkZone()` 实例 work_zone 绝对路径（driver @file 临时文件区；Memory 实现首次调用时在系统临时区惰性自建 `hopjit-workzone-*` 并返回真路径,见 [[exec-engine#^anc-exec-work-zone]]——2026-08-10 起,原"返回空串"是此前形态）。
+
+可选第六个方法 `getWorkZoneRoots(): string[]`（2026-09-30 todo/0124）：返回本实例 work_zone 加全部祖先实例 work_zone 的绝对路径清单,自身在首位——engine 据此把本 run 实例树的涂鸦区集合登记给文件工具提供者;FilePersistence 按实例目录布局上溯,MemoryPersistence 返回 [tmpdir 根];缺席时 engine 只登记 getWorkZone() 一条。判据与路由权威 [[tools/file-tools#^anc-exec-work-zone-registry]]。
 
 ```
 struct: EngineSnapshot
   Id: engine-snapshot
   Fields:
-    - spec: SpecAST    # replan 演化后的现行 AST
-    - state: StateFile # 执行态全集（步骤状态/重试/循环计数/在飞记账等）——字段权威见 runtime-types.ts StateFile 与 [[exec-engine#^anc-exec-state-persistence]]，此处不复制清单
-    - vars: VarsFile   # 变量空间（v2 scope 树）
+    - spec % SpecAST    # replan 演化后的现行 AST
+    - state % StateFile # 执行态全集（步骤状态/重试/循环计数/在飞记账等）——字段权威见 runtime-types.ts StateFile 与 [[exec-engine#^anc-exec-state-persistence]]，此处不复制清单
+    - vars % VarsFile   # 变量空间（v2 scope 树）
 ```
 
 - **FilePersistence**（复用模式）：快照 ↔ `.hopstate/<instance_id>/` 文件。CLI 每个命令是独立进程，状态必须外置存活
@@ -176,14 +195,14 @@ struct: EngineSnapshot
 struct: Credential
   Id: credential
   Fields:
-    - type: line    # 枚举 api_key/ak_sk/bearer_token/oauth
-    - values: yaml  # 键值对——如 { api_key: 'xxx' } 或 { access_key: 'xxx', secret_key: 'yyy' }
+    - type % line    # 枚举 api_key/ak_sk/bearer_token/oauth
+    - values % yaml  # 键值对——如 { api_key: 'xxx' } 或 { access_key: 'xxx', secret_key: 'yyy' }
 
 struct: ServiceEntry
   Id: service-entry
   Fields:
-    - service_id: line   # 如 tavily / openai / anthropic
-    - description: line
+    - service_id % line   # 如 tavily / openai / anthropic
+    - description % line
 ```
 
 IdentityProvider 为外部服务调用提供身份凭证（API key、ak/sk、token 等）。StepDispatcher 在调用外部服务前通过 `get_credential(service_id)` 获取凭证。
@@ -206,15 +225,15 @@ IdentityProvider 为外部服务调用提供身份凭证（API key、ak/sk、tok
 struct: SpecSource
   Id: spec-source
   Fields:
-    - spec_id: line
-    - source: markdown  # HopSpec 全文
-    - version: line     # 可选。引擎只透传/审计（记入 HopLog callee 旁），不内置版本解析
+    - spec_id % line
+    - source % markdown  # HopSpec 全文
+    - version % line     # 可选。引擎只透传/审计（记入 HopLog callee 旁），不内置版本解析
 
 struct: SpecEntry
   Id: spec-entry
   Fields:
-    - spec_id: line
-    - description: line
+    - spec_id % line
+    - description % line
 ```
 
 `SpecProvider` 为 `call` 步骤解析被调子 spec——`callee_spec_id`（裸名字，如 `text-normalize`）经此定位具体 spec 源。寻址逻辑（版本策略、来源校验、同名消歧）归宿主 Provider，引擎不硬编码（npm 式：registry 决定解析，lockfile 是宿主的事）。`resolve` 应是确定性的（同一 id 解析到同一 spec）。
@@ -243,16 +262,16 @@ standalone 场景（MCP server / 测试）Spec 作者写 `[call text-normalize]`
 struct: ModelEngine
   Id: model-engine
   Fields:
-    - default_service_id: line     # 默认 LLM 服务标识（如 anthropic）
-    - default_model: line          # 默认模型
-    - routing_rules: [ModelRoute]  # 可选。按步骤类型/标注路由
+    - default_service_id % line     # 默认 LLM 服务标识（如 anthropic）
+    - default_model % line          # 默认模型
+    - routing_rules % [ModelRoute]  # 可选。按步骤类型/标注路由
 
 struct: ModelRoute
   Id: model-route
   Fields:
-    - match: yaml       # 匹配条件——当前仅 step_type（RoutingCategory：act/commit/reason/check/replan——路由类别=可执行步骤类别∪replan 元编程档;confirm/ask 是介入点无 LLM、call 是引擎递归,均不路由。宿主直注（不经 StandaloneConfig 加载闸）由本类型编译期约束,JS 宿主绕过类型面时责任在宿主——运行期未知类别永不匹配,不设第二道闸）
-    - service_id: line  # 目标服务标识
-    - model: line       # 目标模型名
+    - match % yaml       # 匹配条件——当前仅 step_type（RoutingCategory：act/commit/reason/check/replan——路由类别=可执行步骤类别∪replan 元编程档;confirm/ask 是介入点无 LLM、call 是引擎递归,均不路由。宿主直注（不经 StandaloneConfig 加载闸）由本类型编译期约束,JS 宿主绕过类型面时责任在宿主——运行期未知类别永不匹配,不设第二道闸）
+    - service_id % line  # 目标服务标识
+    - model % line       # 目标模型名
 ```
 
 路由优先级（从高到低）：步骤 `@model` 标注 > Spec `Config.models[类别]`（两层分档 2026-08-13——spec 层逐类别继承,commit 无专键吃 act 键） > Spec `Config.model` > `routing_rules` step_type 匹配 > `ModelEngine.default_model` > 宿主 `ANTHROPIC_MODEL` fallback > `HostConfig.model` > 硬编码默认。
@@ -272,10 +291,10 @@ struct: ModelRoute
 Id: standalone-config-load
 Goal: 从系统级 ~/.hopjit/config.yaml 与项目级 <项目根>/hopjit.yaml 两文件装出一份合法 StandaloneConfig——文法坏/引用坏在加载期响亮拒,不漂运行期
 Inputs:
-- config_path: line   # 可选。HOPJIT_CONFIG 显式指定=单文件语义（只用它不合并）
-- project_dir: line   # 项目根（组合根 cwd;查找焊死不逐级向上搜）
+- config_path % line   # 可选。HOPJIT_CONFIG 显式指定=单文件语义（只用它不合并）
+- project_dir % line   # 项目根（组合根 cwd;查找焊死不逐级向上搜）
 Outputs:
-- config: StandaloneConfig   # 合并后配置（跨节引用已核）
+- config % StandaloneConfig   # 合并后配置（跨节引用已核）
 ```
 
 **加载合并校验（HopSop）**：
@@ -287,7 +306,7 @@ Outputs:
 2. [act] 逐文件读取+文法核（单文件自含的错当场拒）：parseConfigFile(系统级,存在才读) / parseConfigFile(项目级,存在才读)
   > 文法核=各节形状（providers/routing_rules/resource_limits/commands/notify/log_level/language/env——0084 批三随实况勘正,原"五节"旧账）/step_type ∈ ROUTING_CATEGORIES/明文 api_key 拒/hop_env_ 前缀与凭证形态键拒/~ 归一
   > 两级全缺席 → STANDALONE_CONFIG_MISSING fail
-3. [act] mergeConfigs 逐节合并（项目级赢）：providers 按 service_id 键合并 / routing_rules 按 step_type 键合并 / env 逐键合并 / resource_limits 逐键合并 / tool_servers 取名并集（同名 server 项目级整体替换;工具名跨级判重归装配层）/ **commands 并集去重**（review F1:原返回体无此键,双文件部署 commands 整键蒸发恒关死——并集条款首次兑现）/ default_model、notify、log_level、language 各自在场即赢（language 曾漏合并——0084 M2 修,commands 前车同型复发;本列节 0084 批三随实况补全,原文只列 6 节——实况 10 节(盘点时点 9 节,M2 补 language 后 10)）
+3. [act] mergeConfigs 逐节合并（项目级赢）：providers 按 service_id 键合并 / routing_rules 按 step_type 键合并 / env 逐键合并 / resource_limits 逐键合并 / tool_servers 取名并集（同名 server 项目级整体替换;工具名跨级判重归装配层）/ **commands 并集去重**（review F1:原返回体无此键,双文件部署 commands 整键蒸发恒关死——并集条款首次兑现）/ default_model、notify、log_level、log_retention、language 各自在场即赢（language 曾漏合并——0084 M2 修,commands 前车同型复发;本列节 0084 批三随实况补全,原文只列 6 节——实况 10 节(盘点时点 9 节,M2 补 language 后 10)）
 4. [check] 合并后校验（BUG-E 时点条款——引用核只能对合并后 providers 做）：
   > providers 非空;routing_rules[].model 与 default_model 引用的 service 都在合并后 providers 内,拼错即拒
 ```
@@ -295,7 +314,7 @@ Outputs:
 **每 run 重读（reloadProjectConfig,与上同一套文法/引用核）**：数据面节重读项目级赢、providers 恒启动期快照——语义四条与实撞史见下方"项目根定义与每 run 重读"条款。
 
 - **routing_rules 条目可选 `thinking: enabled|disabled`**（形态 B 2026-08-20——权威 [[step-dispatcher#^anc-exec-thinking-routing]],此处 schema 登记）；
-- **两文件同一 schema，十节全部可选**：providers / default_model / routing_rules / tool_servers / env（hop_env_* 环境参数）/ **resource_limits** / **commands**（subprocess.run 白名单,并集合并） / log_level / **language** / **revision_prompt**。
+- **两文件同一 schema，十一节全部可选**：providers / default_model / routing_rules / tool_servers / env（hop_env_* 环境参数）/ **resource_limits** / **commands**（subprocess.run 白名单,并集合并） / log_level / **log_retention**（2026-09-30 todo/0127）/ **language** / **revision_prompt**。
   - 十节清单与配置参考 §零 清单同源——两处此前各漏各的,review 面一抓成员不同后统一;2026-09-18 review 再抓同型复发〔配置参考先改十节本句停八节〕,新增顶层键两处清单同批改是本句的执行义务
 - **逐节合并，项目级赢**：providers 按 service_id 合并（项目可加私有后端/覆盖同名）;routing_rules 按 step_type 合并;tool_servers 取并集、工具名跨两级判重 fail-fast（同名不覆盖不遮蔽——Composite 装配同款纪律）;default_model 项目级在场即赢。合并哲学与 spec Config.models 逐键继承同源：项目只写差异；
   - **跨节引用的校验时点=合并后**（2026-08-13 BUG-E 实撞钉死）：routing_rules/default_model 的"引用 service 必须在 providers 内"只能对**合并后**的 providers 核——项目级文件合法形态就是只有 routing_rules+tool_servers（providers 归系统级），逐文件核引用必然把合法形态误拒〔实撞:providers undefined 直接崩 server 启动〕。逐文件仍核**文法**（step_type 枚举/条目形状/明文 key 拒绝——单文件自含的错），引用核延后；
@@ -315,29 +334,31 @@ Outputs:
 struct: StandaloneConfig
   Id: standalone-config
   Fields:
-    - providers: [ProviderEntry]  # 至少 1 条；首条为默认 provider
-    - default_model: line         # 可选。全局默认模型——"service/model" 两段式或裸 model
-    - tool_servers: yaml          # 可选。外部工具注册（原独立 hoptools.yaml 整节收编——文法权威 [[tool-interface#^anc-config-tool-registry]] 不变）
-    - commands: [line]            # 可选。subprocess.run 命令白名单（人话名"允许哪些命令",装入 sandbox.runtime.available——执行契约 [[act-body#^anc-exec-subprocess-run]],对外文法 [[../reference/配置参考#^anc-ref-commands]]）;两级合并=并集去重;形状=非空字符串列表(加载期核,标量/混型 fail-fast——review F4:零核时标量退化子串白名单)
-    - env: yaml                   # 可选。spec 环境参数（hop_env_* 命名空间,概念权威 [[../concepts/HopSpec V3核心规范#^anc-config-hop-env]]）——全名键值映射（hop_env_kb_root: /path）;两级逐键合并项目级赢;键必须 hop_env_ 前缀（文法闸:非前缀键拒——防业务配置混入）;值禁凭证形态（键名**以 `_key/_token/_secret/_password` 结尾**即拒——尾锚定非'含':`hop_env_keyring_path`〔含 key 语义是路径〕这类键'含'判会误杀,凭证键名习惯是后缀位;2026-08-17 hopissues/hoplogic3/0004 口径裁定,原'含'表述随代码修正。**闸为共用纯函数 `credentialLikeHopEnvKey`（provider-types.ts）,覆盖链三级〔配置 env 节/params 传入/ask 回填〕同判**——原实现只堵配置一级,params 与 ask 两路凭证照收且随 host_context 落盘,概念层:614'或经 params 传入'承诺落空;对外文法权威 [[../reference/配置参考#^anc-ref-hop-env]]）
-    - routing_rules: yaml         # 可选。系统层按类别路由（两层配置的系统半边——spec 层 Config.models 逐类别继承本层,见 [[step-dispatcher#^anc-exec-model-resolve]]）。列表项 {step_type, model}——step_type ∈ act/commit/reason/check/replan,model 为 service/model 引用或裸 model;解析入 ModelEngine.routing_rules
-    - log_level: line             # 可选。HopLog 记录级别 debug|info|warn——standalone 缺省 debug（2026-08-22 作者定:执行日志是 standalone 唯一核验通道,info 不记 prompt 正文即黑箱,条款权威 [[mcp-server#^anc-struct-mcp-server]] HopLog 恒开条）;两级合并项目级赢;非法值加载期拒（同 resource_limits 文法核姿势——静默漂过=级别悄悄错档）
-    - resource_limits: yaml       # 可选。资源限制逐键映射（RL_KEYS 白名单文法核,未知键拒;两级逐键合并项目级赢;env HOPJIT_MAX_OUTPUT_TOKENS 仍最高）。九键:max_tool_iterations/max_context_tokens/max_output_tokens/max_replan_attempts/max_concurrent_workers/max_call_depth/timeout_seconds/parallel_child_timeout_seconds/**max_concurrent_runs**（2026-09-10 todo/0084 M1 新增——server 级并发 run 上限,缺省 4:防失控烧费的保守默认,批量场景显式调大=知情授权;server 级判定读启动期合并后配置,不入每 run 重读面——与 providers 快照同理由;原为 mcp-server 源码裸常量,批量验证第 5 run 被拒实撞后配置化）
-    - language: line              # 可选。关键词语言 en|zh（缺省 en;概念权威 i18n 设计）;两级合并项目级赢（与 log_level 同规则——2026-09-10 todo/0084 M2 补:此前 mergeConfigs 漏本键,项目级 zh 在 MCP 侧静默蒸发落 en 与 CLI 劈叉,dist 实跑实证;同批补文法核:非 en|zh 加载期响亮拒,不静默当 en）
-    - revision_prompt: line       # 可选。修订供给档 standard|short,缺省 standard（弱模型档打回重试轮换短卷——行为权威 [[prompt-assembler#^anc-exec-revision-short-weak]],本表只登 schema 户口;两级合并项目级赢〔0084 M2 同款——新顶层键必须同步 mergeConfigs〕;文法核坏值加载期响亮拒;env HOPJIT_REVISION_PROMPT 每 run 可覆盖;最终户口=model-gearbox 档案 adapt.revision_prompt,档案消费链落地后本键降为人工覆盖位）
-    - notify: yaml                # 可选。通知渠道声明 {channel: dingtalk}——三与门第二门(per-run hop_notify×本节×凭证env),权威 [[mcp-server#^anc-mcp-notify-hook]];两级合并项目级赢(0084 批三补记——struct 此前漏列本键,实况 mcp-server.ts StandaloneConfig.notify 与文法核 :304 俱在)
+    - providers % [ProviderEntry]  # 至少 1 条；首条为默认 provider
+    - default_model % line         # 可选。全局默认模型——"service/model" 两段式或裸 model
+    - tool_servers % yaml          # 可选。外部工具注册（原独立 hoptools.yaml 整节收编——文法权威 [[tool-interface#^anc-config-tool-registry]] 不变）
+    - commands % [line]            # 可选。subprocess.run 命令白名单（人话名"允许哪些命令",装入 sandbox.runtime.available——执行契约 [[act-body#^anc-exec-subprocess-run]],对外文法 [[../reference/配置参考#^anc-ref-commands]]）;两级合并=并集去重;形状=非空字符串列表(加载期核,标量/混型 fail-fast——review F4:零核时标量退化子串白名单)
+    - env % yaml                   # 可选。spec 环境参数（hop_env_* 命名空间,概念权威 [[../concepts/HopSpec V3核心规范#^anc-config-hop-env]]）——全名键值映射（hop_env_kb_root: /path）;两级逐键合并项目级赢;键必须 hop_env_ 前缀（文法闸:非前缀键拒——防业务配置混入）;值禁凭证形态（键名**以 `_key/_token/_secret/_password` 结尾**即拒——尾锚定非'含':`hop_env_keyring_path`〔含 key 语义是路径〕这类键'含'判会误杀,凭证键名习惯是后缀位;2026-08-17 hopissues/hoplogic3/0004 口径裁定,原'含'表述随代码修正。**闸为共用纯函数 `credentialLikeHopEnvKey`（provider-types.ts）,覆盖链三级〔配置 env 节/params 传入/ask 回填〕同判**——原实现只堵配置一级,params 与 ask 两路凭证照收且随 host_context 落盘,概念层:614'或经 params 传入'承诺落空;对外文法权威 [[../reference/配置参考#^anc-ref-hop-env]]）
+    - routing_rules % yaml         # 可选。系统层按类别路由（两层配置的系统半边——spec 层 Config.models 逐类别继承本层,见 [[step-dispatcher#^anc-exec-model-resolve]]）。列表项 {step_type, model}——step_type ∈ act/commit/reason/check/replan,model 为 service/model 引用或裸 model;解析入 ModelEngine.routing_rules
+    - log_level % line             # 可选。HopLog 记录级别 debug|info|warn——缺省 info（2026-09-30 todo/0127 作者定,原 2026-08-22 定的缺省 debug 因对外分发防塞爆硬盘收回;条款权威 [[spec-observability#^anc-obs-log-levels]]）;两级合并项目级赢;非法值加载期拒（同 resource_limits 文法核姿势——静默漂过=级别悄悄错档）
+    - log_retention % yaml         # 可选。日志保留上限 `{ max_runs: 正整数 }`,缺省 max_runs=3——新建 run 前把日志根目录下多出的最老 run 整目录删掉（[[spec-observability#^anc-obs-log-retention]]）;两级合并项目级赢;max_runs 非正整数加载期拒
+    - resource_limits % yaml       # 可选。资源限制逐键映射（RL_KEYS 白名单文法核,未知键拒;两级逐键合并项目级赢;env HOPJIT_MAX_OUTPUT_TOKENS 仍最高）。九键:max_tool_iterations/max_context_tokens/max_output_tokens/max_replan_attempts/max_concurrent_workers/max_call_depth/timeout_seconds/parallel_child_timeout_seconds/**max_concurrent_runs**（2026-09-10 todo/0084 M1 新增——server 级并发 run 上限,缺省 4:防失控烧费的保守默认,批量场景显式调大=知情授权;server 级判定读启动期合并后配置,不入每 run 重读面——与 providers 快照同理由;原为 mcp-server 源码裸常量,批量验证第 5 run 被拒实撞后配置化）
+    - language % line              # 可选。关键词语言 en|zh（缺省 en;概念权威 i18n 设计）;两级合并项目级赢（与 log_level 同规则——2026-09-10 todo/0084 M2 补:此前 mergeConfigs 漏本键,项目级 zh 在 MCP 侧静默蒸发落 en 与 CLI 劈叉,dist 实跑实证;同批补文法核:非 en|zh 加载期响亮拒,不静默当 en）
+    - revision_prompt % line       # 可选。修订供给档 standard|short,缺省 standard（弱模型档打回重试轮换短卷——行为权威 [[prompt-assembler#^anc-exec-revision-short-weak]],本表只登 schema 户口;两级合并项目级赢〔0084 M2 同款——新顶层键必须同步 mergeConfigs〕;文法核坏值加载期响亮拒;env HOPJIT_REVISION_PROMPT 每 run 可覆盖;最终户口=model-gearbox 档案 adapt.revision_prompt,档案消费链落地后本键降为人工覆盖位）
+    - notify % yaml                # 可选。通知渠道声明 {channel: dingtalk}——三与门第二门(per-run hop_notify×本节×凭证env),权威 [[mcp-server#^anc-mcp-notify-hook]];两级合并项目级赢(0084 批三补记——struct 此前漏列本键,实况 mcp-server.ts StandaloneConfig.notify 与文法核 :304 俱在)
 
 struct: ProviderEntry
   Id: provider-entry
   Fields:
-    - service_id: line   # 路由标识；[A-Za-z_][A-Za-z0-9_]*，大小写归一后全局唯一，default 为保留字
-    - protocol: line     # wire 报文格式枚举（作者定拆 2026-08-13——'openai'一词罩两套报文用户会疑惑）：anthropic=Messages API 兼容 / openai-chat=OpenAI chat/completions 兼容 / openai-responses=OpenAI Responses API 兼容（0020 批实装 2026-09-20——OpenAI 官方生态工具循环正路,OpenAI/DeepSeek `/v1/responses`/xAI/vLLM/Azure 原生支持;此前系枚举预留）。0.x 干净拆不留 'openai' 旧值——留着旧值歧义就还在。三档工具循环能力:anthropic/openai-responses 原生支持,openai-chat 不支持（fail-fast 指路）,见 [[step-dispatcher#^anc-exec-protocol-adapter]]
-    - base_url: line     # API 端点（如 https://api.deepseek.com/anthropic）
-    - model: line        # 该 provider 的默认模型
-    - api_key_env: line  # 环境变量名引用——唯一合法凭证形态；[A-Za-z_][A-Za-z0-9_]*
-    - max_output_tokens: int  # 可选。该 provider 模型的输出上限（2026-08-27 作者定"按 LLM 的上限去设置,Ln 门限自己控制"——引擎缺省按模型能力发满,产出多大归 spec 输出声明约束,不由全局池一刀切;缺省落解析链下级）
-    - auth: line         # 可选。鉴权头形态枚举 api-key|bearer,缺省 api-key（x-api-key 头,与既有逐字节同）;bearer=Authorization: Bearer 头,走 SDK authToken 通道且 apiKey 置 null 防双头（只认 Bearer 的网关实测百炼 claude-code-proxy 对 x-api-key 报 InvalidApiKey）。生效面=显式 service 路由与缺省 provider（defaultClient）两路（2026-09-18 工程链 review 抓缺省路径漏装后补齐——原实装只罩显式路由,唯一 provider 配 bearer 不写路由时静默发错头）;路由 env 键 {SERVICE_ID}_AUTH=bearer,与 _PROTOCOL 同披;文法核坏值加载期响亮拒。对外文法 [[../reference/配置参考#^anc-ref-config-contract]] auth 行
-    - thinking: line     # 可选。该 provider 的思考缺省枚举 enabled|disabled——配了就对每个走该 provider 的请求恒显式发 thinking 参数,不配落引擎内建步骤类型缺省（五级链第 5 级——恒发参数,详见 [[step-dispatcher#^anc-exec-thinking-routing]];"不发参数吃端点缺省"形态已随五级链退场）。动因（2026-09-20 作者问"ling 和 ds 缺省思考状态不一样,以后是不是需要统一"）:各端点的思考缺省互相相反（deepseek 缺省开/antchat 缺省关）且对调用方不可见——同一份 spec 换模型跑,思考行为静默翻转,度量与费用两头被隐式差坑（实撞:Ling 全部历史 G1 数据是思考关档,复测才知推理档被低估三倍位数）。本键把"缺省"从端点的私有事实变成配置里可审计的显式事实——统一的落点在我们的配置层,不在端点。优先级=思考决策链第 4 级（记名册/步骤标注/routing_rules 全压过它,五级链见 [[step-dispatcher#^anc-exec-thinking-routing]]）;路由 env 键 {SERVICE_ID}_THINKING,与 _AUTH 同披;文法核坏值加载期响亮拒 ^anc-exec-thinking-provider-default
+    - service_id % line   # 路由标识；[A-Za-z_][A-Za-z0-9_]*，大小写归一后全局唯一，default 为保留字
+    - protocol % line     # wire 报文格式枚举（作者定拆 2026-08-13——'openai'一词罩两套报文用户会疑惑）：anthropic=Messages API 兼容 / openai-chat=OpenAI chat/completions 兼容 / openai-responses=OpenAI Responses API 兼容（0020 批实装 2026-09-20——OpenAI 官方生态工具循环正路,OpenAI/DeepSeek `/v1/responses`/xAI/vLLM/Azure 原生支持;此前系枚举预留）。0.x 干净拆不留 'openai' 旧值——留着旧值歧义就还在。三档工具循环能力:anthropic/openai-responses 原生支持,openai-chat 不支持（fail-fast 指路）,见 [[step-dispatcher#^anc-exec-protocol-adapter]]
+    - base_url % line     # API 端点（如 https://api.deepseek.com/anthropic）
+    - model % line        # 该 provider 的默认模型
+    - api_key_env % line  # 环境变量名引用——唯一合法凭证形态；[A-Za-z_][A-Za-z0-9_]*
+    - max_output_tokens % int  # 可选。该 provider 模型的输出上限（2026-08-27 作者定"按 LLM 的上限去设置,Ln 门限自己控制"——引擎缺省按模型能力发满,产出多大归 spec 输出声明约束,不由全局池一刀切;缺省落解析链下级）
+    - auth % line         # 可选。鉴权头形态枚举 api-key|bearer,缺省 api-key（x-api-key 头,与既有逐字节同）;bearer=Authorization: Bearer 头,走 SDK authToken 通道且 apiKey 置 null 防双头（只认 Bearer 的网关实测百炼 claude-code-proxy 对 x-api-key 报 InvalidApiKey）。生效面=显式 service 路由与缺省 provider（defaultClient）两路（2026-09-18 工程链 review 抓缺省路径漏装后补齐——原实装只罩显式路由,唯一 provider 配 bearer 不写路由时静默发错头）;路由 env 键 {SERVICE_ID}_AUTH=bearer,与 _PROTOCOL 同披;文法核坏值加载期响亮拒。对外文法 [[../reference/配置参考#^anc-ref-config-contract]] auth 行
+    - thinking % line     # 可选。该 provider 的思考缺省枚举 enabled|disabled——配了就对每个走该 provider 的请求恒显式发 thinking 参数,不配落引擎内建步骤类型缺省（五级链第 5 级——恒发参数,详见 [[step-dispatcher#^anc-exec-thinking-routing]];"不发参数吃端点缺省"形态已随五级链退场）。动因（2026-09-20 作者问"ling 和 ds 缺省思考状态不一样,以后是不是需要统一"）:各端点的思考缺省互相相反（deepseek 缺省开/antchat 缺省关）且对调用方不可见——同一份 spec 换模型跑,思考行为静默翻转,度量与费用两头被隐式差坑（实撞:Ling 全部历史 G1 数据是思考关档,复测才知推理档被低估三倍位数）。本键把"缺省"从端点的私有事实变成配置里可审计的显式事实——统一的落点在我们的配置层,不在端点。优先级=思考决策链第 4 级（记名册/步骤标注/routing_rules 全压过它,五级链见 [[step-dispatcher#^anc-exec-thinking-routing]]）;路由 env 键 {SERVICE_ID}_THINKING,与 _AUTH 同披;文法核坏值加载期响亮拒 ^anc-exec-thinking-provider-default
+    - thinking_disable_unsupported % bool  # 可选,缺省 false。声明"这个端点的思考关不掉"——请求带 thinking {type: disabled} 会被端点 400 拒收（实测 glm-5.3-flash,报文"该模型始终思考，不支持关闭思考；请使用 low、high 或 max"）。为 true 时,思考五级链算出"关"的请求改发 output_config {effort: "low"}、不带 thinking 键;算出"开"的请求不受影响;五级链各级给出的"关"一视同仁（行为权威 [[step-dispatcher#^anc-exec-thinking-disable-unsupported]]）。类型只认 YAML 布尔 true/false,字符串"true"、数字 1 等其他类型加载期响亮拒;只对 protocol: anthropic 有意义,非 anthropic 协议写 true 加载期响亮拒（openai-responses 适配器本就把 disabled 映成 reasoning.effort low,openai-chat 不透传思考参数,写了等于静默失效）。路由 env 键 {SERVICE_ID}_THINKING_DISABLE_UNSUPPORTED=true,只在值为 true 时披发,与 _THINKING 同路由消费（缺省 provider 回退首 provider 同名键）
 ```
 
 **配置样例（~/.hopjit/config.yaml，两协议各一条——百炼两形态端点做对照）**【说明】：
@@ -393,63 +414,63 @@ default_model: bailian_oai/qwen3.7-max
 struct: HostConfig
   Id: host-config
   Fields:
-    - workspace_dir: line              # 工作目录（必填）——DefaultToolProvider 的 cwd
-    - sandbox: SandboxConfig           # act 步骤资源边界（四维度）
-    - tool_provider: ToolProvider      # 可选。不提供则用 DefaultToolProvider
-    - knowledge_provider: KnowledgeProvider  # 可选。不提供则无知识注入
-    - identity_provider: IdentityProvider    # 可选。不提供则从环境变量/YAML 自动构建
-    - api_key: line                    # LLM API key（最简配置的 fallback）
-    - base_url: line                   # 可选。API 代理网关（如 https://zenmux.ai/api/anthropic）
-    - model: line                      # 可选。全局默认模型——model_name 或 service/model 两段式
-    - model_engine: ModelEngine        # 可选。多模型路由配置——不提供则从 api_key+base_url 构建单服务
-    - resource_limits: ResourceLimits  # 可选。单步资源上限
-    - spec_provider: SpecProvider      # 可选。call 子 spec 解析注入位（独立模式 call 递归消费）
-    - protocol: line                   # 可选。LLM wire 协议枚举 anthropic/openai-chat/openai-responses（三值现役,0020 批撤预留），缺省 anthropic——复用模式与存量注入零变化；standalone 由 provider 条目带入
-    - tool_registry: [ToolServerEntry] # 可选。外部工具注册条目（hoptools.yaml 加载产物,文法权威 [[tool-interface#^anc-config-tool-registry]]）——CompositeToolProvider 装配消费；缺省无外部工具
-    - env_snapshot: yaml               # 可选。进程环境快照（run 隔离不变量,权威 [[../ARCHITECTURE#^anc-run-isolation]]）：组合根构造 HostConfig 时把运行期会消费的 env 键一次性冻结——**快照是封闭集,键集即契约**（0008③:漏键=该环境变量 standalone 下静默失效,原'等'字含糊致实装只冻 providers 三键）。键集两类=providers 派生六键（{SERVICE}_API_KEY/_BASE_URL/_PROTOCOL 恒派;_AUTH/_THINKING/_MAX_OUTPUT_TOKENS 配了才派——2026-09-20 review 批清账:三个条件键随各自特性批入码,本清单漏更）+固定透传六键（ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN/ANTHROPIC_API_KEY/HOPJIT_ANTHROPIC_API_KEY/ANTHROPIC_MODEL/HOPJIT_MAX_OUTPUT_TOKENS——dispatcher envOf 固定键消费点全集,新增消费点必须同步透传表;CLAUDE_CODE_MAX_OUTPUT_TOKENS 已摘,0084 批三随实况勘正——该键语义属 CC 宿主,引擎捡它=跨受众误配,^anc-exec-output-budget 摘除记录）;构造单点 buildEnvSnapshot,startRun/restore 同函数;引擎内核运行期只查快照禁直读 process.env——外部/它 run 改 env 不再影响在飞 run。缺省未提供时内核回退直读（存量兼容,组合根逐个收编后收紧）
-    - hop_env: yaml                    # 可选。spec 环境参数表（组合根按覆盖链合成:配置两级→params 覆盖;ask 回填运行时并入——doc-ref 展开/body 只读注入/prompt 值表三消费面,概念权威 ^anc-config-hop-env。与 env_snapshot 分立:那是进程环境快照〔含凭证,不落盘〕,这是 spec 环境参数〔非密,可落盘〕。组合根合成表时同步把值为绝对路径的声明根扩入 sandbox read allowed——写配置即授权,授权面与声明面同一动作,见 [[doc-ref#^anc-exec-doc-ref-hop-env]]）
+    - workspace_dir % line              # 工作目录（必填）——DefaultToolProvider 的 cwd
+    - sandbox % SandboxConfig           # act 步骤资源边界（四维度）
+    - tool_provider % ToolProvider      # 可选。不提供则用 DefaultToolProvider
+    - knowledge_provider % KnowledgeProvider  # 可选。不提供则无知识注入
+    - identity_provider % IdentityProvider    # 可选。不提供则从环境变量/YAML 自动构建
+    - api_key % line                    # LLM API key（最简配置的 fallback）
+    - base_url % line                   # 可选。API 代理网关（如 https://zenmux.ai/api/anthropic）
+    - model % line                      # 可选。全局默认模型——model_name 或 service/model 两段式
+    - model_engine % ModelEngine        # 可选。多模型路由配置——不提供则从 api_key+base_url 构建单服务
+    - resource_limits % ResourceLimits  # 可选。单步资源上限
+    - spec_provider % SpecProvider      # 可选。call 子 spec 解析注入位（独立模式 call 递归消费）
+    - protocol % line                   # 可选。LLM wire 协议枚举 anthropic/openai-chat/openai-responses（三值现役,0020 批撤预留），缺省 anthropic——复用模式与存量注入零变化；standalone 由 provider 条目带入
+    - tool_registry % [ToolServerEntry] # 可选。外部工具注册条目（hoptools.yaml 加载产物,文法权威 [[tool-interface#^anc-config-tool-registry]]）——CompositeToolProvider 装配消费；缺省无外部工具
+    - env_snapshot % yaml               # 可选。进程环境快照（run 隔离不变量,权威 [[../ARCHITECTURE#^anc-run-isolation]]）：组合根构造 HostConfig 时把运行期会消费的 env 键一次性冻结——**快照是封闭集,键集即契约**（0008③:漏键=该环境变量 standalone 下静默失效,原'等'字含糊致实装只冻 providers 三键）。键集两类=providers 派生七键（{SERVICE}_API_KEY/_BASE_URL/_PROTOCOL 恒派;_AUTH/_THINKING/_MAX_OUTPUT_TOKENS/_THINKING_DISABLE_UNSUPPORTED 配了才派——2026-09-20 review 批清账:三个条件键随各自特性批入码,本清单漏更;_THINKING_DISABLE_UNSUPPORTED 2026-09-27 todo/0118 随批加,只在值为 true 时派）+固定透传六键（ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN/ANTHROPIC_API_KEY/HOPJIT_ANTHROPIC_API_KEY/ANTHROPIC_MODEL/HOPJIT_MAX_OUTPUT_TOKENS——dispatcher envOf 固定键消费点全集,新增消费点必须同步透传表;CLAUDE_CODE_MAX_OUTPUT_TOKENS 已摘,0084 批三随实况勘正——该键语义属 CC 宿主,引擎捡它=跨受众误配,^anc-exec-output-budget 摘除记录）;构造单点 buildEnvSnapshot,startRun/restore 同函数;引擎内核运行期只查快照禁直读 process.env——外部/它 run 改 env 不再影响在飞 run。缺省未提供时内核回退直读（存量兼容,组合根逐个收编后收紧）
+    - hop_env % yaml                    # 可选。spec 环境参数表（组合根按覆盖链合成:配置两级→params 覆盖;ask 回填运行时并入——doc-ref 展开/body 只读注入/prompt 值表三消费面,概念权威 ^anc-config-hop-env。与 env_snapshot 分立:那是进程环境快照〔含凭证,不落盘〕,这是 spec 环境参数〔非密,可落盘〕。组合根合成表时同步把值为绝对路径的声明根扩入 sandbox read allowed——写配置即授权,授权面与声明面同一动作,见 [[doc-ref#^anc-exec-doc-ref-hop-env]]）
 
 struct: SandboxConfig
   Id: sandbox-config
   Fields:
-    - filesystem: FilesystemSandbox
-    - network: NetworkSandbox
-    - runtime: RuntimeSandbox
-    - database: DatabaseSandbox        # 可选
+    - filesystem % FilesystemSandbox
+    - network % NetworkSandbox
+    - runtime % RuntimeSandbox
+    - database % DatabaseSandbox        # 可选
 
 struct: FilesystemSandbox
   Id: filesystem-sandbox
   Fields:
-    - workspace_dir: line              # 工作区根目录——内部可自由写、删、试验
-    - read_access: yaml                # 三清单：allowed（可自由读的路径/glob）/ denied（绝对禁读——密钥凭证类）/ confirm_required（需 confirm 步骤后才能读）
+    - workspace_dir % line              # 工作区根目录——内部可自由写、删、试验
+    - read_access % yaml                # 三清单：allowed（可自由读的路径/glob）/ denied（绝对禁读——密钥凭证类）/ confirm_required（需 confirm 步骤后才能读）
 
 struct: NetworkSandbox
   Id: network-sandbox
   Fields:
-    - trusted_hosts: [line]            # 可信域名白名单
+    - trusted_hosts % [line]            # 可信域名白名单
 
 struct: RuntimeSandbox
   Id: runtime-sandbox
   Fields:
-    - available: [line]                # 可用运行时声明（如 python / node / uv / pdf / ocr）
+    - available % [line]                # 可用运行时声明（如 python / node / uv / pdf / ocr）
 
 struct: DatabaseSandbox
   Id: database-sandbox
   Fields:
-    - temp_databases: [line]           # 临时库——act 可读写（重做安全，可重建）
-    - readonly_databases: [line]       # 可选。只读库——act 只能查询，写入需 commit
+    - temp_databases % [line]           # 临时库——act 可读写（重做安全，可重建）
+    - readonly_databases % [line]       # 可选。只读库——act 只能查询，写入需 commit
 
 struct: ResourceLimits
   Id: resource-limits
   Fields:
-    - max_tool_iterations: number      # 默认 20
-    - max_context_tokens: number       # PromptAssembler 上下文预算，缺省 10000（prompt.ts BUDGET_DEFAULT——0084 批三勘正:原文写"4000/有 KnowledgeProvider 时 4400"是旧账,预算已不随 KnowledgeProvider 切换）。兼作工具循环模型窗预检线（×0.8 触发压缩降级，见 [[step-dispatcher#^anc-exec-toolloop-ctx-degrade]]）——不配则无预检，只保留撞墙补救
-    - max_output_tokens: number        # API max_tokens 参数，缺省 32768（dispatcher DEFAULT_MAX_OUTPUT_TOKENS,2026-08-27 自 16384 抬升——0084 批三勘正旧账 4096）
-    - max_replan_attempts: number      # 默认 3
-    - max_concurrent_workers: number   # 可选。parallel 并发名额（含主线），默认 5。见 [[parallel-execution#^anc-exec-parallel-dispatch-model]]
-    - max_call_depth: number           # 可选。call 嵌套深度上限，默认 10——运行时超限 fail DEPTH_EXCEEDED（独立模式 Dispatcher 递归前检、复用模式 init --parent 按 calls/ 目录层数检）
-    - timeout_seconds: number          # 可选。单步超时（默认无限）
-    - parallel_child_timeout_seconds: number  # 可选。parallel 在飞子实例活性上限——缺省不超时，显式配置才生效（超时管 running 卡死，不管等人）。见 [[parallel-execution#^anc-exec-parallel-timeout]]
+    - max_tool_iterations % number      # 默认 20
+    - max_context_tokens % number       # PromptAssembler 上下文预算，缺省 10000（prompt.ts BUDGET_DEFAULT——0084 批三勘正:原文写"4000/有 KnowledgeProvider 时 4400"是旧账,预算已不随 KnowledgeProvider 切换）。兼作工具循环模型窗预检线（×0.8 触发压缩降级，见 [[step-dispatcher#^anc-exec-toolloop-ctx-degrade]]）——不配则无预检，只保留撞墙补救
+    - max_output_tokens % number        # API max_tokens 参数，缺省 32768（dispatcher DEFAULT_MAX_OUTPUT_TOKENS,2026-08-27 自 16384 抬升——0084 批三勘正旧账 4096）
+    - max_replan_attempts % number      # 默认 3
+    - max_concurrent_workers % number   # 可选。parallel 并发名额（含主线），默认 5。见 [[parallel-execution#^anc-exec-parallel-dispatch-model]]
+    - max_call_depth % number           # 可选。call 嵌套深度上限，默认 10——运行时超限 fail DEPTH_EXCEEDED（独立模式 Dispatcher 递归前检、复用模式 init --parent 按 calls/ 目录层数检）
+    - timeout_seconds % number          # 可选。单步超时（默认无限）
+    - parallel_child_timeout_seconds % number  # 可选。parallel 在飞子实例活性上限——缺省不超时，显式配置才生效（超时管 running 卡死，不管等人）。见 [[parallel-execution#^anc-exec-parallel-timeout]]
 ```
 
 （TS 形态是代码层投影，在 provider-types.ts——设计以本 HopType 为准。）

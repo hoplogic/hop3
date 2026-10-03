@@ -108,6 +108,49 @@ describe('loadStandaloneConfig', () => {
     expect('ANTCHAT_THINKING' in snap).toBe(false);
   });
 
+  // @v: anc-exec-thinking-disable-unsupported —— 思考关不掉的端点声明（todo/0118）:只认布尔;
+  // true 时快照披发 {SID}_THINKING_DISABLE_UNSUPPORTED=true 供 dispatcher 出口替换;false/缺席不披发;
+  // 非 anthropic 协议写 true 加载期拒（其它协议不消费该键,写了等于静默失效）
+  describe('providers thinking_disable_unsupported', () => {
+    const mk = (line: string | null, protocol = 'anthropic') => writeConfig([
+      'providers:',
+      '  - service_id: glm_flash',
+      `    protocol: ${protocol}`,
+      '    base_url: https://example.invalid/anthropic',
+      '    model: glm-5.3-flash',
+      '    api_key_env: HOPJIT_TEST_KEY_ENV',
+      '    thinking: enabled',
+      ...(line === null ? [] : [`    thinking_disable_unsupported: ${line}`]),
+    ].join('\n'));
+    const snapOf = (path: string) => {
+      const c = loadStandaloneConfig(path);
+      return { c, snap: buildEnvSnapshot(c, new Map([[c.providers[0], 'k']]) as never) };
+    };
+
+    it('正例：true 合法加载,快照披发 GLM_FLASH_THINKING_DISABLE_UNSUPPORTED=true,与 thinking: enabled 并存', () => {
+      const { c, snap } = snapOf(mk('true'));
+      expect((c.providers[0] as { thinking_disable_unsupported?: boolean }).thinking_disable_unsupported).toBe(true);
+      expect(snap['GLM_FLASH_THINKING_DISABLE_UNSUPPORTED']).toBe('true');
+      expect(snap['GLM_FLASH_THINKING']).toBe('enabled');
+    });
+
+    it('反例：false 与缺席都不披发该键（未声明的端点行为不变）', () => {
+      expect('GLM_FLASH_THINKING_DISABLE_UNSUPPORTED' in snapOf(mk('false')).snap).toBe(false);
+      expect('GLM_FLASH_THINKING_DISABLE_UNSUPPORTED' in snapOf(mk(null)).snap).toBe(false);
+    });
+
+    it('反例：类型错（字符串 "true"、数字 1）加载期拒,报错点名字段', () => {
+      expect(() => loadStandaloneConfig(mk('"true"'))).toThrow(/thinking_disable_unsupported 须为布尔/);
+      expect(() => loadStandaloneConfig(mk('1'))).toThrow(/thinking_disable_unsupported 须为布尔/);
+    });
+
+    it('反例：非 anthropic 协议写 true 加载期拒;写 false 放行', () => {
+      expect(() => loadStandaloneConfig(mk('true', 'openai-chat'))).toThrow(/只对 protocol: anthropic 有效/);
+      expect(() => loadStandaloneConfig(mk('true', 'openai-responses'))).toThrow(/只对 protocol: anthropic 有效/);
+      expect(() => loadStandaloneConfig(mk('false', 'openai-chat'))).not.toThrow();
+    });
+  });
+
   it('JSON 语法写进 config.yaml 仍可解析（YAML 超集——不构成第二格式）', () => {
     const p = writeConfig(JSON.stringify({ providers: [VALID_PROVIDER] }), 0o600, 'config.yaml');
     const c = loadStandaloneConfig(p);
@@ -573,7 +616,7 @@ g
     expect((st['outputs'] as Record<string, unknown>)['y']).toBe(5);
   });
 
-  // @v: anc-exec-parallel-hitl-queue, anc-exec-call-child-persist（37轮review:server重启后队列是空的,
+  // @v: anc-exec-parallel-hitl-queue, anc-exec-call-child-persist —（37轮review:server重启后队列是空的,
   // caller拿旧卡child来答——账上paused→resumeSpec重派发重暂停,同名child新卡入队后按原答继续;探针实证
   // completed vals=[5]。双锚:落盘批连锁修①〔分派判据改退火标记〕的击杀面钉——TRACEABILITY 卡引用本钉）
   it('U4b：server 重启后按旧卡 child_instance 应答 → 重派发重暂停接原答,completed', async () => {
@@ -1361,17 +1404,22 @@ describe('HopjitMcpCore resume 状态机（mock dispatcher）', () => {
 // @v: anc-mcp-tools —— buildServer 工具注册面（zod schema 是对外稳定面，此前零直接测试）
 // @v: anc-struct-standalone-endpoint —— standalone 对外形态（五工具装配）
 describe('buildServer 工具面', () => {
-  it('注册恰好五工具且名称与契约一致（stop_run 2026-08-22 补——主动中止面）', async () => {
+  it('注册恰好六工具且名称与契约一致（stop_run 2026-08-22 补——主动中止面;run_approved_command 2026-09-30 补——任务卡授权命令面）', async () => {
     const { buildServer: build } = await import('../src/mcp-server.js');
     const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
     const server = build(core);
     // McpServer 内部注册表（SDK 私有结构，仅断言工具名集合——形状断言到此为止，行为归冒烟/真机）
     const tools = (server as any)._registeredTools;
-    expect(Object.keys(tools).sort()).toEqual(['list_runs', 'resume_run', 'run_status', 'start_run', 'stop_run']);
+    expect(Object.keys(tools).sort()).toEqual(['list_runs', 'resume_run', 'run_approved_command', 'run_status', 'start_run', 'stop_run']);
     expect(tools['start_run'].inputSchema).toBeTruthy();   // schema 存在（zod 对象）
     // stop_run 注解逐项（^anc-mcp-stop-run——destructiveHint 丢弃在飞进度如实标破坏性;
     // idempotentHint 终态幂等是设计点名条款,review 补断言）
     expect(tools['stop_run'].annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
+    // run_approved_command 注解（^anc-mcp-run-command——openWorldHint 如实 true:命令可联网,server 不在载体 Bash 沙箱里）
+    expect(tools['run_approved_command'].annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: false });
+    // description 是对 agent 的教材（^anc-mcp-run-command 契约）：授权三要素 + 被拒处置都要在 // @v: anc-mcp-run-command
+    const desc = String(tools['run_approved_command'].description);
+    for (const kw of ['什么任务', '什么核验', '才可以执行', 'APPROVAL_REQUIRED', '归人决定', '不得自己把命令加进卡']) expect(desc).toContain(kw);
   });
 });
 
@@ -1780,10 +1828,9 @@ describe('resource_limits 配置节', () => {
   });
 });
 
-// log_level 配置节（2026-08-22 作者定方案③——standalone 缺省 debug:执行日志是唯一核验通道,
-// info 不记 prompt 正文即黑箱;实撞:L2c 反馈在不在外部无从核验,走查误判"重试无记忆"）
-// @v: anc-config-standalone-schema
-describe('log_level 配置节（standalone 缺省 debug）', () => {
+// log_level 配置节（缺省 info——2026-09-30 todo/0127 作者定,对外分发防塞爆硬盘;2026-08-22 曾定 debug）
+// @v: anc-config-standalone-schema, anc-obs-log-levels
+describe('log_level 配置节（standalone 缺省 info）', () => {
   const base = ['providers:', '  - service_id: x', '    protocol: anthropic',
     '    base_url: https://x.invalid', '    model: m', '    api_key_env: HOPJIT_TEST_KEY_ENV'].join('\n') + '\n';
 
@@ -1798,7 +1845,18 @@ describe('log_level 配置节（standalone 缺省 debug）', () => {
     expect(mergeConfigs({ providers: [VALID_PROVIDER], log_level: 'info' }, { providers: [] }).log_level).toBe('info');   // 项目级缺席回退系统级
   });
 
-  it('正例：未配置 → startRun 落 debug 级 hoplog（main.yaml 头 level: debug,prompt 全文可核）', async () => {
+  // @v: anc-obs-log-retention
+  it('log_retention：max_runs 非正整数加载期拒;合法过;mergeConfigs 项目级赢', () => {
+    expect(() => loadStandaloneConfig(writeConfig(base + 'log_retention:\n  max_runs: 0\n'))).toThrow(/log_retention\.max_runs 须为正整数/);
+    expect(() => loadStandaloneConfig(writeConfig(base + 'log_retention:\n  max_runs: many\n'))).toThrow(/log_retention\.max_runs 须为正整数/);
+    expect(() => loadStandaloneConfig(writeConfig(base + 'log_retention: 5\n'))).toThrow(/log_retention\.max_runs 须为正整数/);
+    expect(loadStandaloneConfig(writeConfig(base + 'log_retention:\n  max_runs: 7\n')).log_retention).toEqual({ max_runs: 7 });
+    const merged = mergeConfigs({ providers: [VALID_PROVIDER], log_retention: { max_runs: 3 } }, { providers: [], log_retention: { max_runs: 9 } });
+    expect(merged.log_retention).toEqual({ max_runs: 9 });
+    expect(mergeConfigs({ providers: [VALID_PROVIDER], log_retention: { max_runs: 3 } }, { providers: [] }).log_retention).toEqual({ max_runs: 3 });
+  });
+
+  it('正例：未配置 → startRun 落 info 级 hoplog（main.yaml 头 level: info）;配置 log_level: debug 才记 prompt 全文', async () => {
     process.env['HOPJIT_CONFIG'] = '/hermetic/no-project-reload.yaml';
     try {
       const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
@@ -1812,7 +1870,7 @@ describe('log_level 配置节（standalone 缺省 debug）', () => {
       const entry = [...(core as any).runs.values()][0] as { dispatcher: { getEngine: () => { getHopLogRunDir: () => string | null } } };
       const runDir = entry.dispatcher.getEngine().getHopLogRunDir();
       expect(runDir).toBeTruthy();
-      expect(readFileSync(join(runDir!, 'main.yaml'), 'utf-8')).toMatch(/^level: debug$/m);
+      expect(readFileSync(join(runDir!, 'main.yaml'), 'utf-8')).toMatch(/^level: info$/m);
     } finally { delete process.env['HOPJIT_CONFIG']; }
   });
 
@@ -2809,6 +2867,117 @@ g
       const st = JSON.parse(readFileSync(join(sd, runId, 'state.json'), 'utf-8'));
       expect(st.driver_channel).toBe('mcp');
     } finally { delete process.env['HOPJIT_CONFIG']; }
+  });
+});
+
+// state.json 写入序号核对 MCP 侧（todo/0114——两个 MCP server 进程对同一 state_dir 的同一 run 都有注册项,
+// 通道核对拦不住〔两边都是 mcp〕;两个 HopjitMcpCore 模拟两个进程,各自的注册项与引擎是各自的内存账）
+// @v: anc-exec-state-seq-guard
+describe('state.json 写入序号核对（MCP 侧预检）', () => {
+  beforeAll(() => { process.env['HOPJIT_TEST_KEY_ENV'] = 'sk-test-fake'; });
+  const SPEC = `# T
+Id: t-seq-mcp
+## Goal
+g
+## Inputs
+- base: int  # 底数
+
+## Outputs
+- result: int  # 结果
+
+## Steps
+1. [act] 备料
+  - ← base
+  + → prepared: int  # 备好的数
+  > 纯计算
+  > \`\`\`hop_python
+  > prepared = base + 1
+  > \`\`\`
+2. [ask require_human=true] 请确认数值
+  - ← prepared
+  + → result: int  # 人确认的值
+`;
+  function pausedMcpSnapshot(): { stateDir: string; runId: string; instDir: string } {
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-seq-'));
+    const specPath = join(dir, 'seq-t.md');
+    writeFileSync(specPath, SPEC);
+    const stateDir = join(dir, '.hopstate');
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC, {
+      workspace_dir: dir,
+      sandbox: { filesystem: { workspace_dir: '.', read_access: { allowed: ['.'], denied: [], confirm_required: [] } }, network: { trusted_hosts: [] }, runtime: { available: [] } },
+      api_key: 'x',
+    }, { stateDir, params: { base: 41 }, specPath, driverChannel: 'mcp' });
+    expect(init.status).toBe('ok');
+    let n = engine.nextStep();
+    while (n.status === 'step_ready') { engine.completeStep(n.step_id, { prepared: 42 }); n = engine.nextStep(); }
+    expect(n.status).toBe('paused');
+    const runId = (init as { instance_id: string }).instance_id;
+    return { stateDir, runId, instDir: join(stateDir, runId) };
+  }
+  // 另一个进程写了一次盘（内容不变,只把盘上序号推高——模拟"别的进程推进过"）
+  function otherProcessWrites(instDir: string): void {
+    const other = ExecutionEngine.load(instDir);
+    (other as unknown as { persist(): void }).persist();
+  }
+
+  it('反例：B 先恢复出注册项,A 把 run 推进到 completed,B 再 resumeRun → STATE_STALE,state.json 不被覆盖', async () => {
+    process.env['HOPJIT_CONFIG'] = '/hermetic/no-project-reload.yaml';
+    try {
+      const { stateDir, runId, instDir } = pausedMcpSnapshot();
+      const coreA = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
+      const coreB = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
+      const restored = (coreB as any).restoreRun(runId, stateDir);
+      expect('error' in restored).toBe(false);
+      const ra = coreA.resumeRun(runId, '2', { result: 42 }, stateDir) as { error?: unknown };
+      expect(ra.error).toBeUndefined();
+      for (let i = 0; i < 50; i++) {
+        if (coreA.runStatus(runId)['status'] === 'completed') break;
+        await new Promise(res => setTimeout(res, 50));
+      }
+      expect(coreA.runStatus(runId)['status']).toBe('completed');
+      const before = readFileSync(join(instDir, 'state.json'));
+      const rb = coreB.resumeRun(runId, '2', { result: 99 }, stateDir) as { error?: { code: string; message: string } };
+      expect(rb.error?.code).toBe('STATE_STALE');
+      expect(rb.error?.message).toMatch(/^STATE_STALE: 盘上 state\.json 已被另一个进程（pid \d+，写于 .+）推进到序号 \d+，本进程内存里的账还停在序号 \d+——拒绝覆盖。/);
+      expect(readFileSync(join(instDir, 'state.json')).equals(before)).toBe(true);
+      expect(JSON.parse(before.toString()).terminal_state).toBe('completed');
+    } finally { delete process.env['HOPJIT_CONFIG']; }
+  });
+
+  it('反例：同样情形下 B 调 stopRun → STATE_STALE,不写 aborted.json、不动 state.json;running 注册项不移出', () => {
+    const { stateDir, runId, instDir } = pausedMcpSnapshot();
+    const coreB = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
+    (coreB as any).restoreRun(runId, stateDir);
+    otherProcessWrites(instDir);
+    const before = readFileSync(join(instDir, 'state.json'));
+    const r = coreB.stopRun(runId) as { error?: { code: string } };
+    expect(r.error?.code).toBe('STATE_STALE');
+    expect(existsSync(join(instDir, 'aborted.json'))).toBe(false);
+    expect(readFileSync(join(instDir, 'state.json')).equals(before)).toBe(true);
+    expect((coreB as any).runs.has(runId)).toBe(false);   // paused 注册项移出
+    // running 的注册项:拒但不移出（在飞 dispatcher 下次写盘自己撞 STATE_STALE）
+    (coreB as any).restoreRun(runId, stateDir);
+    (coreB as any).runs.get(runId).state = 'running';
+    otherProcessWrites(instDir);
+    const r2 = coreB.stopRun(runId) as { error?: { code: string } };
+    expect(r2.error?.code).toBe('STATE_STALE');
+    expect((coreB as any).runs.has(runId)).toBe(true);
+    expect(existsSync(join(instDir, 'aborted.json'))).toBe(false);
+  });
+
+  it('正例：过时注册项被移出后,B 再调 resumeRun 走从盘上重新加载,不再 STATE_STALE', () => {
+    const { stateDir, runId, instDir } = pausedMcpSnapshot();
+    const coreB = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
+    (coreB as any).restoreRun(runId, stateDir);
+    otherProcessWrites(instDir);
+    const r1 = coreB.resumeRun(runId, '2', { result: 42 }, stateDir) as { error?: { code: string } };
+    expect(r1.error?.code).toBe('STATE_STALE');
+    expect((coreB as any).runs.has(runId)).toBe(false);
+    const diskSeq = JSON.parse(readFileSync(join(instDir, 'state.json'), 'utf-8')).state_seq;
+    const r2 = coreB.resumeRun(runId, '2', { result: 42 }, stateDir) as { error?: unknown; status?: string };
+    expect(r2.error).toBeUndefined();
+    expect((coreB as any).runs.get(runId).dispatcher.getEngine().getStateSeq()).toBeGreaterThanOrEqual(diskSeq);
   });
 });
 

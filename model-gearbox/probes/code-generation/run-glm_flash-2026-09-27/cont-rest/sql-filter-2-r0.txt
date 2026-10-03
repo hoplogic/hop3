@@ -1,0 +1,17 @@
+查询思路：
+
+- `status = 'paid'` 直接用等号精确匹配（SQLite 默认 BINARY 排序规则，大小写敏感，`'PAID'`、`'paid '` 都不相等），并显式加 `COLLATE BINARY` 保险；注意不能用 `LIKE`（不区分大小写）也不能 `TRIM/LOWER`。
+- `amount >= 100`：NULL 参与比较结果为 NULL（视为不满足），自动排除 NULL，另加 `IS NOT NULL` 明确语义。
+- 时间范围直接用字符串比较（该格式下字典序即时间序），上界精确到 `'2026-03-31 23:59:59'`，保证 3 月 31 日全天包含；不能用 `BETWEEN '2026-03-01' AND '2026-03-31'`（会把 31 日的时刻排除掉）。
+- 排序：`amount DESC, id DESC`，与需求一致。
+
+```sql
+SELECT id, customer_id, amount
+FROM orders
+WHERE status = 'paid' COLLATE BINARY
+  AND amount IS NOT NULL
+  AND amount >= 100
+  AND created_at >= '2026-03-01 00:00:00'
+  AND created_at <= '2026-03-31 23:59:59'
+ORDER BY amount DESC, id DESC;
+```

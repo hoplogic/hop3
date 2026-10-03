@@ -2,8 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 // @module: tools ^anc-struct-tools
-import { readFileSync, writeFileSync, appendFileSync, realpathSync, readdirSync, statSync, mkdirSync, renameSync, unlinkSync, existsSync } from 'node:fs';
-import { resolve, isAbsolute } from 'node:path';
+import { readFileSync, writeFileSync, appendFileSync, realpathSync, readdirSync, statSync, lstatSync, readlinkSync, mkdirSync, renameSync, unlinkSync, existsSync } from 'node:fs';
+import { resolve, isAbsolute, normalize, dirname, basename, join, sep } from 'node:path';
 import type { ToolProvider, ToolDef, ToolResult, HostConfig, SandboxConfig, WriteScope } from './provider-types.js';
 import { runSandboxedPython } from './py-sandbox.js';   // Python 语法沙箱（.py 脚本一律先审后跑——^anc-pysb-exec） // @a: anc-exec-builtin-run-script
 import { parseSpec, parseFragment, serializeFragment } from './parser.js';
@@ -22,41 +22,75 @@ function contentToText(v: unknown): string {
   return String(v);
 }
 
+/** edit_file 零匹配提示：old_text 首个非空行在文件里最接近的至多 3 行。比较前两边都去掉行首空白与 #、
+ * 去掉 [...] 段、压缩空白;规范化相等排最前,其余按字符二元组 Dice ≥0.5 降序。// @a: anc-exec-builtin-edit-file-tool */
+function nearestLines(content: string, oldText: string): { line: number; text: string }[] {
+  const norm = (s: string) => s.replace(/^[\s#]+/, '').replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim();
+  const bigrams = (s: string) => { const out: string[] = []; for (let i = 0; i < s.length - 1; i++) out.push(s.slice(i, i + 2)); return out; };
+  const dice = (a: string, b: string) => {
+    const x = bigrams(a), y = bigrams(b);
+    if (!x.length || !y.length) return a === b ? 1 : 0;
+    const pool = new Map<string, number>();
+    for (const g of y) pool.set(g, (pool.get(g) ?? 0) + 1);
+    let hit = 0;
+    for (const g of x) { const c = pool.get(g) ?? 0; if (c > 0) { hit++; pool.set(g, c - 1); } }
+    return (2 * hit) / (x.length + y.length);
+  };
+  const target = norm(oldText.split('\n').find(l => l.trim()) ?? '');
+  if (!target) return [];
+  return content.split('\n')
+    .map((text, i) => ({ line: i + 1, text, score: norm(text) === target ? 2 : dice(norm(text), target) }))
+    .filter(c => c.text.trim() && c.score >= 0.5)
+    .sort((a, b) => b.score - a.score || a.line - b.line)
+    .slice(0, 3)
+    .map(({ line, text }) => ({ line, text }));
+}
+
 function resolveReal(p: string): string {
   try { return realpathSync(p); } catch { return p; }
 }
 
-// work_zone 路径判定：.hopstate/<instance>/work_zone/ 是引擎划定的实例涂鸦区——
-// work_zone_path() 返回其绝对路径，读写工具对它放行（.hopstate 禁令与绝对路径禁令的唯一豁免）。
-// 见 ^anc-exec-work-zone。// @a: anc-exec-work-zone
-// .hopstate 内任意深度的 work_zone 段（子实例三段路径 .hopstate/<父>/parallel|calls/<cid>/work_zone/——
-// 2026-08-30 审计实抓 [^/]+ 单段致 standalone 子实例写自身 work_zone 误拒）。// @a: anc-exec-work-zone
-const WORK_ZONE_RE = /(^|\/)\.hopstate\/.+?\/work_zone(\/|$)|\/hopjit-workzone-[^/]+(\/|$)/;
-// 判定第三支:注册根前缀（0066——state-dir 名不含 .hopstate 字面时前两支全不中,work_zone_path()
-// 产物被自家绝对路径禁令拒。发出侧〔persistence getWorkZone〕是事实源,创建/取用时注册真实根,
-// 判定不再只靠字面名猜;前两支保留存量兼容〔跨进程场景注册未发生时惯例名仍通〕）。// @a: anc-exec-work-zone
-const REGISTERED_WORK_ZONE_ROOTS = new Set<string>();
-/** work_zone 真实根注册——persistence 发出 work_zone 路径时登记（根须已过 resolveReal,与判定侧 realpath 同基准）。见 [[tools/file-tools#^anc-exec-write-scope]] */
-export function registerWorkZoneRoot(root: string): void { if (root) REGISTERED_WORK_ZONE_ROOTS.add(root); }
-/** work_zone 涂鸦区路径判定——.hopstate 禁令与绝对路径禁令的唯一豁免（消费方=本文件写侧校验;export 供测试判据复用）。三支:字面正则两形态+注册根前缀。见 [[exec-engine#^anc-exec-work-zone]] */
-export function isWorkZonePath(p: string): boolean {
-  if (WORK_ZONE_RE.test(p)) return true;
-  for (const root of REGISTERED_WORK_ZONE_ROOTS) {
-    if (p === root || p.startsWith(root + '/')) return true;
+// 校验链上"目标路径"的真实路径——目标不存在也解析到底（最近已存在祖先的真实路径+剩余段;末段悬空软链顺链接目标继续,
+// 相对链接目标以软链所在目录的真实路径为基准——与 OS 解析同基准）。旧实现 resolveReal 在目标不存在时退回未解析
+// 形态,经软链父目录新建文件即逃出 workspace（hopissues/0112 批次 probe 实证）。失败即拒:只数软链跳数,超限抛错,
+// 不返回未解析形态（未解析路径字面常在 workspace 内,返回它等于放行）。见 [[tools/file-tools#^anc-exec-tool-path-resolve]]
+// @a: anc-exec-tool-path-resolve
+const MAX_SYMLINK_HOPS = 40;   // 与 Linux 内核 MAXSYMLINKS 同值
+/** 路径的真实形态——目标存在取 realpath;不存在则逐级上溯祖先解析软链后拼回尾段（软链跳数超 40 抛错不放行）。mcp-server run_approved_command 的 cwd 越界判共用。 */
+export function resolveRealDeep(p: string, hops = 0): string {
+  try { return realpathSync(p); } catch { /* 目标不存在或链路断,往下解析 */ }
+  let isLink = false;
+  try { isLink = lstatSync(p).isSymbolicLink(); } catch { /* 不存在,按祖先解析 */ }
+  if (isLink) {
+    if (hops >= MAX_SYMLINK_HOPS) throw new Error(`Symlink chain too deep or cyclic: ${p}`);
+    return resolveRealDeep(resolve(resolveRealDeep(dirname(p), hops), readlinkSync(p)), hops + 1);
   }
-  return false;
+  const parent = dirname(p);
+  if (parent === p) return p;   // 已到文件系统根
+  return join(resolveRealDeep(parent, hops), basename(p));   // 上溯祖先不计跳数
 }
 
-// 解析 workspace 相对路径（禁绝对路径 / `..`）。复用于 DefaultToolProvider 与 doc-ref。
-// @a: anc-exec-tool-permission
+// "p 在目录 root 内"——恒带路径分隔符边界（裸 startsWith 会把 /x/proj2 当成 /x/proj 之内,probe 实证可越界覆盖）。
+// 两参须已统一成同一形态（都取真实路径或都取字面）。// @a: anc-exec-tool-path-resolve
+/** p 是否落在目录 root 内（含相等）——带路径分隔符边界;两参须同为真实路径或同为字面。 */
+export function isWithinDir(p: string, root: string): boolean {
+  if (p === root) return true;
+  return p.startsWith(root.endsWith(sep) ? root : root + sep);
+}
+
+// 解析文件工具 path 入参:workspace 相对路径按根拼接;绝对路径落在 workspace 内即认（与相对写法落同一处）,
+// 外则拒且报文点名 workspace 根;含 .. 一律拒。复用于 DefaultToolProvider 与 doc-ref。
+// 只管形态与落区——软链逃逸由校验链的真实路径判定拦（hopissues/0112 前是"一律禁绝对路径"）。
+// @a: anc-exec-tool-permission, anc-exec-tool-path-resolve
 export function resolveWorkspacePath(workspaceDir: string, filePath: string): string {
-  if (isAbsolute(filePath)) {
-    throw new Error(`Absolute paths are forbidden: ${filePath}`);
-  }
   if (filePath.includes('..')) {
     throw new Error(`Path traversal (..) is forbidden: ${filePath}`);
   }
-  return resolve(workspaceDir, filePath);
+  if (!isAbsolute(filePath)) return resolve(workspaceDir, filePath);
+  const p = normalize(filePath);
+  // 字面判 或 真实路径判（macOS /tmp→/private/tmp:字面 /tmp/… 对已取真实路径的根字面不中）
+  if (isWithinDir(p, workspaceDir) || isWithinDir(resolveRealDeep(p), resolveReal(workspaceDir))) return p;
+  throw new Error(`Absolute path outside workspace: ${filePath}（workspace 根: ${workspaceDir}——写 workspace 相对路径,或写落在 workspace 内的绝对路径）`);
 }
 
 // 路径是否匹配某模式（子串命中 或 realpath 前缀命中）。denied/confirm_required 共用同一判据。
@@ -80,7 +114,7 @@ function pathMatches(realPath: string, pattern: string): boolean {
 // 抽自 DefaultToolProvider.validateFileAccess 的 read 分支，供 doc-ref 复用。
 // @a: anc-exec-tool-permission
 export function validateReadAccess(sandbox: SandboxConfig, resolvedPath: string): void {
-  const realPath = resolveReal(resolvedPath);
+  const realPath = resolveRealDeep(resolvedPath);   // @a: anc-exec-tool-path-resolve
   const fs = sandbox.filesystem;
   const wsDir = resolveReal(resolve(fs.workspace_dir));
   for (const denied of fs.read_access.denied) {
@@ -93,10 +127,10 @@ export function validateReadAccess(sandbox: SandboxConfig, resolvedPath: string)
       throw new Error(`Read requires confirm: ${realPath} (act steps cannot confirm)`);
     }
   }
-  if (realPath.startsWith(wsDir)) return;
+  if (isWithinDir(realPath, wsDir)) return;
   for (const allowed of fs.read_access.allowed) {
     const allowedReal = resolveReal(resolve(allowed));
-    if (realPath.startsWith(allowedReal)) return;
+    if (isWithinDir(realPath, allowedReal)) return;
   }
   throw new Error(`Read outside allowed paths: ${realPath}`);
 }
@@ -222,7 +256,7 @@ const EDIT_FILE_TOOL: ToolDef = {
   },
   requires_commit: false,
   category: 'basic',   // 文件读写族恒 basic（0054——零声明可用）
-  returns: "替换回执一句话（文本,含替换处字节偏移,如 'Replaced 1 occurrence at byte N in <path>'）",
+  returns: "替换回执一句话（文本,含替换处字符偏移,如 'Replaced 1 occurrence at char N in <path>'）",
 };
 
 // search_file 单文件子串搜索（2026-09-05 作者拍"rg 类工具两件立todo",todo/0070——D81 定向读盘
@@ -899,7 +933,13 @@ export class DefaultToolProvider implements ToolProvider { // @a: anc-exec-tool-
     const content = readFileSync(resolved, 'utf-8');
     const n = content.split(oldText).length - 1;
     if (n === 0) {
-      return { result: `未找到匹配（old_text 头 80 字符:${oldText.slice(0, 80)}）`, success: false, content_type: 'text' };
+      // 零匹配附最接近行：凭记忆写 old_text 的调用方看不出错在哪（hb2 qwen-flash 修错步十几轮零匹配实撞），
+      // 给出文件原文让下一次照抄——仍拒绝不自动纠正（宁拒不猜）
+      const near = nearestLines(content, oldText);
+      const hint = near.length
+        ? `。文件里最接近的行（old_text 须逐字照抄原文,含行首空格与 # 号）: ${near.map(l => `第 ${l.line} 行 ${JSON.stringify(l.text)}`).join('; ')}`
+        : '';
+      return { result: `未找到匹配（old_text 头 80 字符:${oldText.slice(0, 80)}）${hint}`, success: false, content_type: 'text' };
     }
     if (n >= 2) {
       return { result: `匹配 ${n} 处,请提供更长的唯一上下文`, success: false, content_type: 'text' };
@@ -985,16 +1025,56 @@ export class DefaultToolProvider implements ToolProvider { // @a: anc-exec-tool-
     };
   }
 
+  // work_zone 豁免读写分权（^anc-exec-work-zone-registry;todo/0124 按 run 登记 → todo/0126 作者定"可以读,但不应该能写"）：
+  // 写只认当前执行实例的 work_zone（own——standalone 父子兄弟共用本提供者,"谁在写"只能用 engine 每次 getWorkZone 推来的
+  // 时序信号表达,不能用集合）;读认本 run 顶层实例目录（tree）内任意 work_zone 段（按目录布局判,祖先/兄弟/后代一网打尽,
+  // 后代动态创建枚举必滞后）,readableRoots 只作 tree 缺席（MemoryPersistence）的兜底。各存原始+真实两形态——
+  // resolvePath 吃 work_zone_path() 原始产物,validateFileAccess 吃真实路径（0066 probe 实证只认一种另一点失配）。
+  // @a: anc-exec-work-zone-registry
+  private readableRoots = new Set<string>();
+  private ownRoots = new Set<string>();
+  private treeRoots = new Set<string>();
+  private static bothForms(p: string): string[] {
+    const out = [normalize(p)];
+    // 真实形态解析失败（软链超限/成环）只留原始形态——登记在响应组装点被调,抛错会炸整个响应;少一形态只是它不豁免（todo/0125 条目 2）
+    try { out.push(resolveRealDeep(p)); } catch { /* 病态 state-dir 软链 */ }
+    return out;
+  }
+  registerWorkZoneRoot(root: string): void {
+    if (!root) return;
+    for (const f of DefaultToolProvider.bothForms(root)) this.readableRoots.add(f);
+  }
+  setWorkZoneScope(scope: { own: string; tree?: string }): void {
+    this.ownRoots = new Set(scope.own ? DefaultToolProvider.bothForms(scope.own) : []);
+    this.treeRoots = new Set(scope.tree ? DefaultToolProvider.bothForms(scope.tree) : []);
+  }
+  private isOwnWorkZone(p: string): boolean {
+    for (const root of this.ownRoots) if (isWithinDir(p, root)) return true;
+    return false;
+  }
+  private isReadableWorkZone(p: string): boolean {
+    if (this.isOwnWorkZone(p)) return true;
+    for (const root of this.treeRoots) {
+      if (!isWithinDir(p, root)) continue;
+      // 相对 tree 的路径按分隔符切段,须含整段 work_zone（work_zonefake 不算;实例目录下的 state.json/vars.json 不算）
+      const rel = p === root ? '' : p.slice(root.endsWith(sep) ? root.length : root.length + 1);
+      if (rel.split(sep).includes('work_zone')) return true;
+    }
+    for (const root of this.readableRoots) if (isWithinDir(p, root)) return true;
+    return false;
+  }
+
   private resolvePath(filePath: string): string {
-    // work_zone 绝对路径放行（work_zone_path() 的产物）——其余绝对路径照拒
-    if (isAbsolute(filePath) && !filePath.includes('..') && isWorkZonePath(filePath)) return filePath;
+    // 本 run 涂鸦区绝对路径放行（work_zone_path() 的产物,work_zone 可在 workspace 外）——其余绝对路径
+    // 交 resolveWorkspacePath 判落区（workspace 内认,外拒）// @a: anc-exec-work-zone-registry
+    if (isAbsolute(filePath) && !filePath.includes('..') && this.isReadableWorkZone(normalize(filePath))) return filePath;
     return resolveWorkspacePath(this.workspaceDir, filePath);
   }
 
   private validateFileAccess(resolvedPath: string, operation: 'read' | 'write', scope: WriteScope = 'work_zone'): void {
-    const realPath = resolveReal(resolvedPath);
-    // work_zone 是引擎划定的实例涂鸦区：读写全放行（.hopstate 禁令的唯一豁免）
-    if (isWorkZonePath(realPath)) return;
+    const realPath = resolveRealDeep(resolvedPath);   // 目标不存在也解析父目录软链 // @a: anc-exec-tool-path-resolve
+    // 涂鸦区豁免读写分权（todo/0126）：读认本 run 实例树内任意 work_zone;写只认当前实例自己的。// @a: anc-exec-work-zone-registry
+    if (operation === 'read' ? this.isReadableWorkZone(realPath) : this.isOwnWorkZone(realPath)) return;
     if (operation === 'write') {
       // 写侧分域（2026-08-28 作者定,契约 [[tools/file-tools#^anc-exec-builtin-file-tools]]）：act/check
       // 语境（'work_zone'）写域=仅 work_zone——探索段写的都是中间产物,散落 workspace 会被
@@ -1004,7 +1084,7 @@ export class DefaultToolProvider implements ToolProvider { // @a: anc-exec-tool-
         throw new Error(`WORK_ZONE_ONLY: act/check 步骤的写域限 work_zone 涂鸦区（中间产物用 work_zone_path() 取路径）——持久产物写盘归 [commit] 步骤承载: ${realPath}`);
       }
       const wsDir = resolveReal(resolve(this.sandbox.filesystem.workspace_dir));
-      if (!realPath.startsWith(wsDir)) {
+      if (!isWithinDir(realPath, wsDir)) {
         throw new Error(`Write outside workspace sandbox: ${realPath}`);
       }
       if (realPath.includes('.hopstate')) {

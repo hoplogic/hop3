@@ -66,7 +66,7 @@ HopJIT 分为引擎核心 + 两个驱动适配层，通过 Provider 接口解耦
 | 组件 | 职责 | 环境依赖 |
 |------|------|---------|
 | StepDispatcher | LLM 调用循环、模型路由、凭证解析 | Anthropic SDK / 网络 |
-| MCP server（hopjit-mcp） | standalone 对外协议壳——五工具（start/status/resume/list/stop）包 StepDispatcher，run 注册表 + job 式异步 + HITL 同进程 resume（见 [[docs/design/mcp-server]]；standalone 整体约束与审查见 [[docs/design/standalone-mode]]） | MCP SDK / stdio |
+| MCP server（hopjit-mcp） | standalone 对外协议壳——六工具（start/status/resume/list/stop/run_approved_command）包 StepDispatcher，run 注册表 + job 式异步 + HITL 同进程 resume（见 [[docs/design/mcp-server]]；standalone 整体约束与审查见 [[docs/design/standalone-mode]]） | MCP SDK / stdio |
 | DefaultToolProvider | Read/Write 工具实现、沙箱拦截 | 文件系统 |
 | SandboxConfig | 四维度安全边界（filesystem/network/runtime/database） | OS 级资源 |
 | ModelEngine | 多模型配置、客户端池 | LLM 服务商 API |
@@ -93,6 +93,8 @@ interface PersistenceProvider {
   saveSnapshot(snapshot: EngineSnapshot): void;    // 状态+变量原子保存
   loadSnapshot(): EngineSnapshot;                  // 恢复（resume 用）
   exists(): boolean;                               // 是否有可恢复状态
+  getWorkZone(): string;                           // 实例 work_zone 绝对路径（File=<instanceDir>/work_zone;Memory 首调惰性建 tmpdir）
+  getWorkZoneRoots?(): string[];                   // 可选:本实例+祖先实例的 work_zone 清单（engine 据此登记给文件工具提供者）
 }
 
 interface EngineSnapshot {
@@ -255,8 +257,9 @@ HostConfig（实例化时注入，贯穿执行生命周期）
   └─ resource_limits?: ResourceLimits        # 执行预算
 
 ToolProvider 接口:
-  async execute(tool_name, tool_args) → Promise<ToolResult>
+  async execute(tool_name, tool_args, write_scope?) → Promise<ToolResult>   # write_scope=调用方步骤语境的写域（act/check→work_zone,commit→workspace）
   list() → ToolDef[]    # ToolDef.requires_commit 声明副作用级别
+  registerWorkZoneRoot?(root)   # 可选:收本 run 实例树的 work_zone 根,供文件工具豁免判定（不实现者被 engine 跳过）
 
 KnowledgeProvider 接口:
   async retrieve(query, max_results) → Promise<KnowledgeFragment[]>

@@ -1,0 +1,70 @@
+```python
+import sys
+import ast
+import re
+
+if len(sys.argv) < 2:
+    sys.exit(1)
+
+filename = sys.argv[1]
+try:
+    with open(filename, 'r', encoding='utf-8') as f:
+        content = f.read()
+except Exception:
+    sys.exit(1)
+
+try:
+    tree = ast.parse(content, filename=filename)
+except SyntaxError:
+    sys.exit(1)
+
+violations = []
+
+def check_node(node, is_in_function):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if is_in_function:
+            return
+        if node.name.startswith('_'):
+            return
+        docstring = ast.get_docstring(node)
+        if docstring is None:
+            violations.append((node.lineno, "missing docstring"))
+        elif docstring == '':
+            violations.append((node.lineno, "empty docstring"))
+        else:
+            params = []
+            args = node.args
+            for arg in args.posonlyargs:
+                if arg.arg != 'self' and arg.arg != 'cls':
+                    params.append(arg.arg)
+            for arg in args.args:
+                if arg.arg != 'self' and arg.arg != 'cls':
+                    params.append(arg.arg)
+            if args.vararg:
+                if args.vararg.arg != 'self' and args.vararg.arg != 'cls':
+                    params.append(args.vararg.arg)
+            for arg in args.kwonlyargs:
+                if arg.arg != 'self' and arg.arg != 'cls':
+                    params.append(arg.arg)
+            if args.kwarg:
+                if args.kwarg.arg != 'self' and args.kwarg.arg != 'cls':
+                    params.append(args.kwarg.arg)
+            for param in params:
+                pattern = r'\b' + re.escape(param) + r'\b'
+                if not re.search(pattern, docstring):
+                    violations.append((node.lineno, f"parameter '{param}' not mentioned in docstring"))
+    for child in ast.iter_child_nodes(node):
+        child_in_function = is_in_function
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            child_in_function = True
+        check_node(child, child_in_function)
+
+check_node(tree, False)
+
+if violations:
+    for line, reason in violations:
+        print("Line %d: %s" % (line, reason))
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

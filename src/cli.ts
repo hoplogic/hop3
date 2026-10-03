@@ -11,7 +11,7 @@ import { resolve, join, isAbsolute, dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { ExecutionEngine, type EngineOptions } from './engine.js';
-import { parseSpec, parseFragment , flattenFragmentNumbering , convertSpecKeywords } from './parser.js';
+import { parseSpec, parseFragment , flattenFragmentNumbering , convertSpecKeywords , convertSchemaSeparators } from './parser.js';
 import { validateSpec } from './validator.js';
 import { readVars, readState, readSpec, stateExists, flattenVars } from './persistence.js';
 import { hasChildren, getChildren, isParallelContainer, getForEach } from './ast-helpers.js';
@@ -19,7 +19,7 @@ import type { StepNode } from './ast-types.js';
 import type { CommandResponse, ListResponse, NextResponse } from './cli-types.js';
 import type { SpecError, ValidationError } from './errors.js';
 import type { HostConfig } from './provider-types.js';
-import { credentialLikeHopEnvKey, hopEnvCredentialError, ENGINE_DEFAULT_MODEL } from './provider-types.js';
+import { credentialLikeHopEnvKey, hopEnvCredentialError, ENGINE_DEFAULT_MODEL, RUN_APPROVED_COMMAND_TOOL } from './provider-types.js';
 import { CompositeToolProvider, makeEngineToolProviderFactory } from './tools-composite.js';
 
 import { parseToolServers, enrichParamsComments, loadProjectToolRegistry } from './tools-registry.js';
@@ -272,6 +272,16 @@ ExecutionEngine.setEngineToolProviderFactory(
   makeEngineToolProviderFactory(() => loadProjectToolRegistry(process.cwd())),   // cwd 读在组合根（run 隔离不变量）
 );
 
+// --max-runs 文法核:非正整数响亮拒,不静默当缺省（与 log_level 同姿势）。见 ^anc-obs-log-retention // @a: anc-obs-log-retention
+function parseMaxRuns(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) {
+    process.stderr.write(`--max-runs 须为正整数（实际: ${String(raw)}）\n`);
+    process.exit(2);
+  }
+  return n;
+}
+
 /** 构造 CLI 默认 HostConfig（workspace=cwd+默认沙箱+项目级 commands/language 键读取）——复用模式
  * 组合根,独立模式命令实例化 Engine/Dispatcher 同用;tool_registry 不在此装配,归工厂内现读〔0076〕。
  * 见 [[hop-cli#^anc-struct-hop-cli]]。（出口注释沿革:2026-09-04 review 抓缺补;2026-09-06 review 抓
@@ -405,6 +415,66 @@ program.command('lang <spec>')
     }
   });
 
+// schema-sep：HopSchema 名/类型分隔符 `:` → ` % ` 原地迁移（todo/0109 第 2 步;形态仿 lang——先备份、
+// 行级手术、转换引病拒写回）。写回前三道核对:①错误数不增 ②剥 source_location/colon_separators 后
+// AST 相等 ③无定位失败行且转换后零冒号分隔符。见 design/hop-cli.md ^anc-cli-schema-sep。// @a: anc-cli-schema-sep
+program.command('schema-sep <spec>')
+  .description("Migrate HopSchema name/type separators from ':' to ' % ' in place (backup first; separators only, other bytes untouched)")
+  .action((specPath: string) => {
+    try {
+      const abs = resolve(specPath);
+      const original = readFileSync(abs, 'utf-8');
+      const errCount = (r: ReturnType<typeof parseSpec>) =>
+        r.errors.length > 0 ? r.errors.length : validateSpec(r.ast).filter(e => e.severity === 'error').length;
+      const before = parseSpec(original);
+      const beforeErrs = errCount(before);
+      const { text: converted, changed_lines, unmatched_lines } = convertSchemaSeparators(original);
+      const after = parseSpec(converted);
+      const afterErrs = errCount(after);
+      const refuseTail = '(原件未动,无备份产生)——请把这份 spec 附到 hopissues 报告';
+      // 核对①：转换前已有的错误不算转换的锅,只拦增量（同 lang 的基线对照）
+      if (afterErrs > beforeErrs) {
+        errorExit(`转换引病拒写回（核对①错误数增加）: 转换前 ${beforeErrs} error → 转换后 ${afterErrs} error${refuseTail}`);
+      }
+      // 核对②：只换了分隔符,语义一点不许变。②a 剥掉行号、分隔符记录、内容章节后两份 AST 逐字段相等
+      // （narrative_sections 是非关键字 ## 节的原文字节收集——声明区写在这类节下时节原文含声明行,
+      // 随分隔符改动而变是预期内的）;②b 字节层兜底:有差异的行必须恰好是转换前 parser 记录的
+      // 冒号分隔符行,行数也不许变——不信转换函数自报的改动清单,用 parser 记录独立核对。
+      const strip = (ast: unknown) => JSON.stringify(ast, (k, v) =>
+        (k === 'source_location' || k === 'colon_separators' || k === 'narrative_sections') ? undefined : v);
+      if (strip(before.ast) !== strip(after.ast)) {
+        errorExit(`转换引病拒写回（核对②转换前后 AST 不等,改写越出了分隔符）${refuseTail}`);
+      }
+      const origLines = original.split('\n');
+      const convLines = converted.split('\n');
+      const expectedLines = new Set((before.ast.header.colon_separators ?? []).map(x => x.line));
+      const strayLines = convLines.length !== origLines.length ? ['行数变了']
+        : origLines.flatMap((l, i) => (l !== convLines[i] && !expectedLines.has(i + 1)) ? [String(i + 1)] : []);
+      if (strayLines.length > 0) {
+        errorExit(`转换引病拒写回（核对②改动越出了冒号分隔符行: ${strayLines.slice(0, 10).join(', ')}）${refuseTail}`);
+      }
+      // 核对③：该改没改成的行=转换不完整
+      const leftover = after.ast.header.colon_separators ?? [];
+      if (unmatched_lines.length > 0 || leftover.length > 0) {
+        const ls = [...new Set([...unmatched_lines, ...leftover.map(x => x.line)])].sort((a, b) => a - b).join(', ');
+        errorExit(`转换不完整拒写回（核对③仍有冒号分隔符未改成,第 ${ls} 行）${refuseTail}`);
+      }
+      if (converted === original) {
+        output({ status: 'ok', changed_lines: 0, backup: null, note: '没有用冒号的分隔符,零改动零备份' });
+        return;
+      }
+      // 备份（时间戳=UTC 年月日时分秒 14 位;已存在加序号不覆盖）,后写回
+      const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+      let bak = `${abs}.bak.${stamp}`;
+      for (let i = 2; existsSync(bak); i++) bak = `${abs}.bak.${stamp}.${i}`;
+      writeFileSync(bak, original, 'utf-8');
+      writeFileSync(abs, converted, 'utf-8');
+      output({ status: 'ok', changed_lines: changed_lines.length, backup: bak });
+    } catch (err: unknown) {
+      errorExit(err instanceof Error ? err.message : String(err));
+    }
+  });
+
 // list <dir>：扫目录列可执行 spec（无状态纯函数）。判定规则见 design/hop-cli.md ^anc-cli-list // @a: anc-cli-list
 program.command('list <dir>')
   .description('List executable HopSpec files in a directory (no state, no instance)')
@@ -445,7 +515,8 @@ program.command('init <spec>')
   .option('--upstream-feedback <text>', 'Parent-layer revision feedback for call child, text or @file (D41 reuse-mode leg — engine renders it as L5 upstream entry)')
   .option('--state-dir <dir>', 'State directory', '.hopstate')
   .option('--log-dir <dir>', 'Log directory for .hoplog output')
-  .option('--log-level <level>', 'Log level: debug | info | warn', 'debug')
+  .option('--log-level <level>', 'Log level: debug | info | warn (default info)')
+  .option('--max-runs <n>', 'Keep at most N run dirs under the log dir, oldest pruned before this run (default 3)')
   .action((specPath: string, opts) => {
     try {
       const content = readFileSync(resolve(specPath), 'utf-8');
@@ -500,6 +571,7 @@ program.command('init <spec>')
         ...(params ? { params } : {}),
         ...(opts.logDir ? { logDir: opts.logDir } : {}),
         ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
+        ...(opts.maxRuns !== undefined ? { maxRuns: parseMaxRuns(opts.maxRuns) } : {}),   // @a: anc-obs-log-retention
         ...((callMode || isParallelChild) ? { parentInstanceId: childParent, callStepId: childStep } : {}),
         ...(isParallelChild ? { canFanout: false, subtreeRoot: opts.parallelChild } : {}),
         ...(opts.trace ? { traceId: opts.trace } : {}),
@@ -527,7 +599,8 @@ program.command('run <spec>')
   .option('--call-step <id>', 'Call child instance ID（<step>.<iter>,目录 calls/<ci>/）')
   .option('--state-dir <dir>', 'State directory', '.hopstate')
   .option('--log-dir <dir>', 'Log directory for .hoplog output')
-  .option('--log-level <level>', 'Log level: debug | info | warn', 'debug')
+  .option('--log-level <level>', 'Log level: debug | info | warn (default info)')
+  .option('--max-runs <n>', 'Keep at most N run dirs under the log dir, oldest pruned before this run (default 3)')
   .option('--context-mode <mode>', 'Context verbosity: full (default) | minimal (see ^anc-exec-context-mode)')
   .option('--notify <channel>', 'Notify channel at terminal/paused states (currently: dingtalk; persisted into instance state; ^anc-cli-notify-reuse)')
   .action(async (specPath: string, opts) => {
@@ -590,6 +663,7 @@ program.command('run <spec>')
         // subagent 漏抄模板参数即无轨迹假红）。--log-dir 仍可显式改址。// @a: anc-obs-hoplog-always-on
         logDir: resolve(opts.logDir ?? join(opts.stateDir, '..', '.hoplog')),
         ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
+        ...(opts.maxRuns !== undefined ? { maxRuns: parseMaxRuns(opts.maxRuns) } : {}),   // @a: anc-obs-log-retention
         contextMode: resolveContextMode(opts.contextMode),  // env > flag > full。 // @a: anc-exec-context-mode
         driverChannel: 'cli',   // 双执行硬闸落账 // @a: anc-exec-driver-channel
       };
@@ -1109,6 +1183,37 @@ export function readStandaloneCredentialNames(): string[] | null {
   } catch { return null; }
 }
 
+/** CC 载体放行 run_approved_command（^anc-cli-install-skill-permission,2026-10-01 作者定）：Claude Code 对每个 MCP 工具
+ * 调用缺省弹窗且只认工具名看不见命令——放行这一个工具名=撤掉空闸,命令能不能跑全交 hopjit 的任务卡闸。
+ * 落点 <cwd>/.claude/settings.local.json 的 permissions.allow;幂等（已含不动）;保留其他键与条目;坏 JSON 不写只报 note;
+ * 只加这一个精确工具名,不加 Bash 规则不动 deny。返回写入路径或 null + note。 */
+// @a: anc-cli-install-skill-permission
+export function ensureCcPermission(cwd: string): { written: string | null; note?: string } {
+  const entry = `mcp__hopjit__${RUN_APPROVED_COMMAND_TOOL}`;
+  const p = resolve(cwd, '.claude', 'settings.local.json');
+  let cfg: Record<string, unknown> = {};
+  if (existsSync(p)) {
+    try { cfg = JSON.parse(readFileSync(p, 'utf-8')) as Record<string, unknown>; }
+    catch { return { written: null, note: `${p} 不是合法 JSON——未写放行（不覆盖用户配置,请修复后重跑 install-skill,或手动在 permissions.allow 加 "${entry}"）` }; }
+    if (typeof cfg !== 'object' || cfg === null || Array.isArray(cfg)) return { written: null, note: `${p} 顶层不是对象——未写放行` };
+  }
+  // ⑥⑦：permissions / allow 在场但形态非法——不覆盖用户原值,只 note（首版静默替换成 {}/[] 后写盘,review 实抓）
+  if (cfg['permissions'] !== undefined && (typeof cfg['permissions'] !== 'object' || cfg['permissions'] === null || Array.isArray(cfg['permissions']))) return { written: null, note: `${p} 的 permissions 不是对象——未写放行（不覆盖用户配置,请手动在 permissions.allow 加 "${entry}"）` };
+  const perms = (cfg['permissions'] as Record<string, unknown> | undefined) ?? {};
+  if (perms['allow'] !== undefined && !Array.isArray(perms['allow'])) return { written: null, note: `${p} 的 permissions.allow 不是数组——未写放行（不覆盖用户配置,请手动改成数组并加 "${entry}"）` };
+  const allow = (perms['allow'] as unknown[] | undefined) ?? [];
+  if (allow.includes(entry)) return { written: null, note: `已放行 ${entry}（${p}）,未改动` };
+  perms['allow'] = [...allow, entry];
+  cfg['permissions'] = perms;
+  try {   // 环境性失败（目录不可写等）降 note,不让 skill 安装跟着失败——与注册面同律（review 测试'注册面环境性失败'实抓:注册 catch 住了,放行这里又炸整条安装）
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, JSON.stringify(cfg, null, 2) + '\n');
+  } catch (e) {
+    return { written: null, note: `放行写入失败（${e instanceof Error ? e.message : String(e)}）——请手动在 ${p} 的 permissions.allow 加 "${entry}"` };
+  }
+  return { written: p };
+}
+
 // CC 跨 scope 已注册感知：user 级（<CC home>/.claude.json 顶层 mcpServers）与 local 级（projects["<cwd>"]
 // .mcpServers）任一有 hopjit 即返回所在 scope 描述,均无返回 null。<CC home>/.claude.json 缺席/解析失败
 // 一律 null（best-effort——CC 内部格式演进不拦装）。.claude.json 位置按 ^anc-cli-carrier-home-resolution
@@ -1141,7 +1246,7 @@ program.command('install-skill')
   .option('--carrier <carrier>', 'Driver carrier: cc | codex | cfuse-cc | cfuse-codex | opencode', 'cc')
   .option('--demo', 'Also install the coffee-week demo skill for the selected carrier')
   .option('--plus', 'Also install the hop-fact-check and hop-deep-research research skills, and merge their tool_servers config into ~/.hopjit/config.yaml')
-  .option('--mcp', 'Bootstrap standalone config and register the hopjit MCP server (CC: .mcp.json; Codex: <Codex home>/config.toml per ^anc-cli-carrier-home-resolution). Both shells (hopspec + hopspec-mcp) are always installed')   // 双名双壳,--mcp 只管注册 // @a: anc-cli-install-skill
+  .option('--mcp', 'Compatibility alias — MCP server registration and standalone config bootstrap now happen by default (2026-10-01); passing this flag changes nothing')   // 缺省即注册（作者定"缺省安装 mcp"）,flag 留作兼容别名 // @a: anc-cli-install-skill
   .option('--force', 'Overwrite existing files')
   .action((opts) => {
     try {
@@ -1273,6 +1378,7 @@ program.command('install-skill')
         if (copyFile(join(driverDir, 'opencode', 'hop-skill.md'), join(target, 'hop', 'SKILL.md'))) {
           installed.push(join(target, 'hop/SKILL.md'));
         }
+        if (copyFile(join(driverDir, 'opencode', 'hop-references', 'hop-ops.md'), join(target, 'hop', 'references', 'hop-ops.md'))) installed.push(join(target, 'hop/references/hop-ops.md'));   // 运维规则按需读件（^anc-cli-hop-dispatch） // @a: anc-cli-hop-dispatch
       } else if (carrierFamily(carrier) === 'codex') {
         // Codex 载体（codex | cfuse-codex,共用 codex driver 源）：main / segment driver 按 agent 主体拆分。
         // 只复用真正载体中立的 cli-discovery，其余 references 使用 Codex 自包含版本。
@@ -1291,7 +1397,7 @@ program.command('install-skill')
           }
         }
         // 双名双壳（2026-08-27 四改）：恒装两壳——$hopspec（复用）与 $hopspec-mcp（MCP 薄壳）
-        // 不同名并存,名字即模式;--mcp 只管"配置自举+注册 server"。// @a: anc-cli-install-skill
+        // 不同名并存,名字即模式;配置自举+注册 server 缺省即做（2026-10-01）。// @a: anc-cli-install-skill
         if (copyFile(join(driverDir, 'codex', 'SKILL.md'), join(skillDir, 'SKILL.md'))) installed.push(join(skillDir, 'SKILL.md'));
         if (copyFile(join(driverDir, 'codex', 'SKILL-mcp.md'), join(target, 'hopspec-mcp', 'SKILL.md'))) installed.push(join(target, 'hopspec-mcp/SKILL.md'));
         if (copyFile(join(driverDir, 'codex', 'references', 'discovery.md'), join(target, 'hopspec-mcp', 'references', 'discovery.md'))) installed.push(join(target, 'hopspec-mcp/references/discovery.md'));
@@ -1323,6 +1429,7 @@ program.command('install-skill')
         if (copyFile(join(driverDir, 'codex', 'hop-skill.md'), join(target, 'hop', 'SKILL.md'))) {
           installed.push(join(target, 'hop/SKILL.md'));
         }
+        if (copyFile(join(driverDir, 'codex', 'hop-references', 'hop-ops.md'), join(target, 'hop', 'references', 'hop-ops.md'))) installed.push(join(target, 'hop/references/hop-ops.md'));   // @a: anc-cli-hop-dispatch
         // 构建工具两件（hopissues/0052——载体中立件,修前 codex 分支漏拷致两载体清单不对等,
         // Codex 用户装完无 /hopbuild;与 CC 分支同源同戳:copyDir 拷入+SKILL.md 走 stampSkill）。
         // @a: anc-cli-install-skill
@@ -1349,7 +1456,7 @@ program.command('install-skill')
       } else {
         // CC 载体（默认）：hopspec-skill.md → hopspec/SKILL.md + references + skills/hopbuild/
         // 双名双壳（2026-08-27 四改）：恒装两壳——/hopspec（复用）与 /hopspec-mcp（MCP 薄壳）
-        // 不同名并存,名字即模式;--mcp 只管"配置自举+注册 server"。// @a: anc-cli-install-skill
+        // 不同名并存,名字即模式;配置自举+注册 server 缺省即做（2026-10-01）。// @a: anc-cli-install-skill
         if (copyFile(join(driverDir, 'hopspec-skill.md'), join(target, 'hopspec', 'SKILL.md'))) installed.push(join(target, 'hopspec/SKILL.md'));
         if (copyFile(join(driverDir, 'hopspec-skill-mcp.md'), join(target, 'hopspec-mcp', 'SKILL.md'))) installed.push(join(target, 'hopspec-mcp/SKILL.md'));
         // MCP 壳只需 discovery 一件（spec 定位;执行协议件是复用壳专属,整目录拷贝会喂废协议）
@@ -1375,6 +1482,7 @@ program.command('install-skill')
           installed.push(join(target, 'hop/SKILL.md'));
           // 版本戳 copyFile 已注入——此前手工再戳一次造成双重戳（装出的 SKILL.md 两行 driver 注释,实证已修）
         }
+        if (copyFile(join(driverDir, 'hop-references', 'hop-ops.md'), join(target, 'hop', 'references', 'hop-ops.md'))) installed.push(join(target, 'hop/references/hop-ops.md'));   // @a: anc-cli-hop-dispatch
         // hopfix 定向修正器（todo/0093 件二——同 codex 分支,两载体清单对等）。// @a: anc-cli-install-skill
         if (copyDir(join(driverDir, '..', 'skills', 'hopfix'), join(target, 'hopfix'))) {
           installed.push(join(target, 'hopfix/'));
@@ -1478,22 +1586,27 @@ program.command('install-skill')
       // 只写凭证名不写值（standalone 不变量第 1 条）。自举先于注册——Codex 注册的 env_vars
       // 要取到本次刚写的凭证名。见 [[hop-cli#^anc-cli-install-skill]] --mcp 配置自举子条。
       // @a: anc-cli-install-skill
+      // 2026-10-01 作者定"缺省安装 mcp"：注册与自举不再要 --mcp——装完就能用（run_approved_command 可达的前提是 server 起得来,server 起得来的前提是 providers 配置在场）;自举失败只留 note 不阻断。// @a: anc-cli-install-skill
       let mcpConfigBootstrapped: string | null = null;
       let mcpConfigNote: string | undefined;
-      if (opts.mcp === true) {
+      try {
         const r = bootstrapStandaloneConfig(carrier);
         mcpConfigBootstrapped = r.written;
         mcpConfigNote = r.note;
+        // 自举没成且系统级配置本来也不在——server 起不来,run_approved_command 不可达,把后果说出来（设计缺省注册条）
+        if (!r.written && !existsSync(join(homedir(), '.hopjit', 'config.yaml')) && r.note) mcpConfigNote = `${r.note}。注意：没有 providers 配置时 hopjit MCP server 起不来,任务卡已批准命令零弹窗（run_approved_command）要等配置就位才可用`;
+      } catch (e) {
+        mcpConfigNote = `standalone 配置自举失败（${e instanceof Error ? e.message : String(e)}）——请自建 ~/.hopjit/config.yaml`;
       }
 
-      // --mcp 同步注册 MCP server（2026-08-16 作者定——装壳+注册一个动作;显式 flag 即授权）。
+      // 注册 MCP server——缺省即做（2026-08-16 作者定装壳+注册一个动作,当时为 --mcp 显式 flag;2026-10-01 作者定缺省安装）。
       // 已有 hopjit 条目一律跳过（注册配置是用户资产,--force 不覆盖注册面——force 只管壳文件）。
       // CC 合并写 <cwd>/.mcp.json（保留其他 server）;Codex 追加 ~/.codex/config.toml [mcp_servers.hopjit]
       //（env_vars 凭证名透传——Codex 干净环境启动 stdio server 实撞防线,值不落盘只写名）。
       // 见 [[hop-cli#^anc-cli-install-skill]] --mcp 条。// @a: anc-cli-install-skill
       let mcpRegistered: string | null = null;
       let mcpNote: string | undefined;
-      if (opts.mcp === true) {
+      try {   // 缺省即注册后,注册面任何失败（家目录不可写/路径受限）只留 note,不让 skill 安装跟着失败（^anc-cli-install-skill 缺省注册条）
         if (carrier === 'opencode') {
           // opencode 注册:跟随 opencode 配置管理——写 candidates [opencode.jsonc, opencode.json, config.json] 第一个存在
           // （对齐 opencode globalConfigFile 三候选;都不存在用 opencode.jsonc）的 mcp.hopjit。
@@ -1518,7 +1631,7 @@ program.command('install-skill')
             const errs: ParseError[] = [];
             parseJsonc(text, errs);
             if (errs.length > 0) {   // jsonc-parser parse 不抛错,坏 JSON 填 errs
-              mcpNote = `${configPath} 不是合法 JSON——未注册 MCP（不覆盖用户配置,请修复后重试 --mcp）`;
+              mcpNote = `${configPath} 不是合法 JSON——未注册 MCP（不覆盖用户配置,请修复后重跑 install-skill）`;
             } else {
               // 默认 enabled:false——避免 LLM 在有 hopjit_start_run MCP 工具可用时自决调它、劫持 // @a: anc-cli-install-skill
               // hopspec 复用模式（名字即模式:hopspec=复用 CLI / hopspec-mcp=standalone MCP）。
@@ -1572,6 +1685,10 @@ program.command('install-skill')
             }
           }
         }
+      } catch (e) {
+        // 用户配置损坏（INSTALL_SKILL_ERROR 前缀）仍响亮失败——不静默覆盖用户文件是既有契约;只有环境性失败（家目录不可写/受限）才降为 note
+        if (e instanceof Error && e.message.startsWith('INSTALL_SKILL_ERROR:')) throw e;
+        mcpNote = `MCP server 注册失败（${e instanceof Error ? e.message : String(e)}）——skill 已装好,但 hopjit MCP 工具不可达;修复后重跑 install-skill 即补注册`;
       }
 
       const skipped = installed.length === 0;
@@ -1600,6 +1717,7 @@ program.command('install-skill')
             const noFingerprint = existsSync(specPath) && !readFileSync(specPath, 'utf-8').includes('engine_min_version');
             const older = m[1] !== driverVersion;
             if (!older && !noFingerprint) continue;
+            // 六件清单=本器安装集（用户可见只 hop 一个,其余五件 user_invocable:false 由 /hop 分派——^anc-cli-install-skill-single-entry;单入口的代码面是各 skill 源的 frontmatter,这里是安装集的唯一枚举点） // @a: anc-cli-install-skill-single-entry
             const isBundled = ['hopspec', 'hopspec-mcp', 'hop', 'hopbuild', 'hopbuild2', 'hopfix'].includes(name) || name.startsWith('demo-') || name.startsWith('hop-');
             staleNotes.push(isBundled
               ? `⚠️ 旧位置发现陈旧副本 ${join(root, name)}（装于 v${m[1]},当前 v${driverVersion}）——该位置已不受本次安装管辖,可能被载体优先加载盖住新版。升级:现行位置已随本次安装刷新;旧位置文件请自行处置（确认无自改内容后可删,路径如上）`
@@ -1607,6 +1725,17 @@ program.command('install-skill')
           }
         }
       }
+      // CC 放行 run_approved_command;其他载体指路不猜格式。判据显式枚举——carrierFamily 把 opencode 也归 'cc'（包装模板选型语义）,借它会把 CC 文件写进 opencode 项目（review 实抓） // @a: anc-cli-install-skill-permission
+      let permissionWritten: string | null = null;
+      let permissionNote: string | undefined;
+      if (carrier === 'cc' || carrier === 'cfuse-cc') {
+        const r = ensureCcPermission(process.cwd());
+        permissionWritten = r.written;
+        permissionNote = r.note;
+      } else {
+        permissionNote = `请在 ${carrier} 载体里放行 hopjit 的 ${RUN_APPROVED_COMMAND_TOOL} 工具（按 <server>_<tool> 粒度的放行配置）${carrier === 'opencode' ? ',并把 opencode 配置里 mcp.hopjit.enabled 改为 true（安装缺省 false,server 不启动则工具不存在;缺省值待定 todo/0134）' : ''}——任务卡里批准的命令才能不再逐条弹窗`;
+      }
+
       output({
         status: 'ok',
         carrier: carrier,
@@ -1618,10 +1747,12 @@ program.command('install-skill')
         ...(demoNote ? { demo_note: demoNote } : {}),
         ...(plusNote ? { plus_note: plusNote, plus_tools_merged: plusToolsMerged } : {}),
         ...(codexLegacyNote ? { legacy_note: codexLegacyNote } : {}),
-        ...(opts.mcp === true ? { mcp_registered: mcpRegistered } : {}),
+        mcp_registered: mcpRegistered,
         ...(mcpNote ? { mcp_note: mcpNote } : {}),
-        ...(opts.mcp === true ? { mcp_config_bootstrapped: mcpConfigBootstrapped } : {}),
+        mcp_config_bootstrapped: mcpConfigBootstrapped,
         ...(mcpConfigNote ? { mcp_config_note: mcpConfigNote } : {}),
+        permission_written: permissionWritten,   // CC 放行 run_approved_command 的落点（^anc-cli-install-skill-permission） // @a: anc-cli-install-skill-permission
+        ...(permissionNote ? { permission_note: permissionNote } : {}),
         ...(staleNotes.length ? { stale_notes: staleNotes } : {}),   // @a: anc-cli-stale-skill-scan
         ...(skipped ? { note: '无文件写入（目标已存在，用 --force 覆盖）' } : {}),
       });

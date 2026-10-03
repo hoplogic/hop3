@@ -53,10 +53,10 @@
 Id: restore_run
 Goal: server 重启后,把 .hopstate/<runId>/ 快照重建为注册表内可 resume 的 run
 Inputs:
-- run_id: line           # 待恢复实例 id
-- state_dir: line        # 快照目录（缺省 .hopstate）
+- run_id % line           # 待恢复实例 id
+- state_dir % line        # 快照目录（缺省 .hopstate）
 Outputs:
-- entry: yaml            # 重建的 RunEntry（state=paused）,或结构化错误
+- entry % yaml            # 重建的 RunEntry（state=paused）,或结构化错误
 Constraints:
 - 快照不存在 → RUN_NOT_FOUND（真不存在,不误恢复）
 - 快照损坏/凭证缺失 → RESTORE_FAILED（结构化返回,不炸 server;快照未动,修好可重试）

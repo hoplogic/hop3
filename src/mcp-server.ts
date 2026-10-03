@@ -3,7 +3,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 // @module: mcp-server ^anc-struct-mcp-server
-// standalone 执行的 MCP server 协议壳：五工具（start_run/run_status/resume_run/list_runs/stop_run）
+// standalone 执行的 MCP server 协议壳：六工具（start_run/run_status/resume_run/list_runs/stop_run/run_approved_command）
 // 薄壳包 StepDispatcher 进程内 API。常驻进程——run 状态活在注册表内存，HITL resume 同进程注入。
 // 见 design/mcp-server.md ^anc-struct-mcp-server。
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -32,8 +32,13 @@ import { ACT_BUILTIN_NAMES } from './act-builtins.js';
 import { hasChildren, getChildren } from './ast-helpers.js';
 import type { StepNode, ActBody, ActExpr, ActStatement } from './ast-types.js';
 import type { HostConfig, RoutingCategory } from './provider-types.js';
-import { credentialLikeHopEnvKey, hopEnvCredentialError, ROUTING_CATEGORIES } from './provider-types.js';
+import { credentialLikeHopEnvKey, hopEnvCredentialError, ROUTING_CATEGORIES, RUN_APPROVED_COMMAND_TOOL } from './provider-types.js';
 import { sendDingtalk, composeRunCard } from './tools-notify.js';
+import { readSpec, readState, stateExists } from './persistence.js';   // 0093 快照兜底读 spec——唯一合法读口（内容寻址引用形态,^anc-provider-spec-content-addressed）;run_approved_command 纯读盘取清单（^anc-mcp-run-command）
+import { runWhitelistedCommand } from './command-exec.js';
+import { HopLog } from './hoplog.js';
+import { resolveRealDeep, isWithinDir } from './tools.js';
+import { appendFileSync } from 'node:fs';
 import type { ExecutionPaused } from './cli-types.js';
 
 // ── StandaloneConfig 加载（schema 权威：shared-providers ^anc-config-standalone-schema）──
@@ -54,6 +59,11 @@ export interface ProviderEntry {
   // 压回第 5 级步骤类型缺省的 reason 恒开;设计 [[shared-providers#^anc-config-standalone-schema]]
   // thinking 行）。env 键 {SERVICE_ID}_THINKING 与 _AUTH 同披。// @a: anc-exec-thinking-provider-default
   thinking?: 'enabled' | 'disabled';
+  // 声明"这个端点的思考关不掉"（todo/0118——glm-5.3-flash 收到 thinking disabled 报 400）。
+  // true 时五级链算出"关"的请求改发 output_config {effort: low}、不带 thinking 键;只认布尔,
+  // 只对 anthropic 协议有意义。env 键 {SERVICE_ID}_THINKING_DISABLE_UNSUPPORTED=true 只在 true 时披。
+  // 设计 [[shared-providers#^anc-config-standalone-schema]] 同名行。// @a: anc-exec-thinking-disable-unsupported
+  thinking_disable_unsupported?: boolean;
 }
 
 /** StandaloneConfig：standalone 执行的完整配置。见 [[shared-providers#^anc-config-standalone-schema]] */
@@ -88,11 +98,13 @@ export interface StandaloneConfig {
   // 约定环境变量不进配置;发不发以 per-run 参数 hop_notify 为主,三与门见 applyResult 挂点）
   // @a: anc-mcp-notify-hook
   notify?: { channel: 'dingtalk' };
-  // HopLog 记录级别（2026-08-22 作者定方案③——standalone 缺省 debug:执行日志是唯一核验通道,
-  // info 不记 prompt 正文即黑箱〔实撞:L2c 反馈在不在外部无从核验,走查误判"重试无记忆"〕;
-  // 嫌大经此口降级）。合并项目级赢;非法值加载期拒。见 design mcp-server HopLog 恒开条。
+  // HopLog 记录级别（缺省 info——2026-09-30 todo/0127 作者定,对外分发防塞爆硬盘;2026-08-22 曾定 debug。
+  // 排障经此口升 debug）。合并项目级赢;非法值加载期拒。见 design mcp-server HopLog 恒开条。
   // @a: anc-config-standalone-schema
   log_level?: 'debug' | 'info' | 'warn';
+  // 日志保留上限（todo/0127 作者定——对外分发防塞爆硬盘,只此一个旋钮,缺省 max_runs=3）。合并项目级赢;非正整数加载期拒。
+  // 见 [[spec-observability#^anc-obs-log-retention]] // @a: anc-obs-log-retention
+  log_retention?: { max_runs: number };
 }
 
 function resolveStandaloneDefaultModel(config: StandaloneConfig): { service_id: string; model: string } { // @a: anc-mcp-config
@@ -149,6 +161,7 @@ export function buildEnvSnapshot(config: StandaloneConfig, providerKeys: Map<Pro
     snap[`${p.service_id.toUpperCase()}_PROTOCOL`] = p.protocol;   // getClientForService 按此选适配器
     if (p.auth === 'bearer') snap[`${p.service_id.toUpperCase()}_AUTH`] = 'bearer';   // 鉴权头档（^anc-config-standalone-schema auth 字段——只认 Bearer 的网关实测百炼 claude-code-proxy）
     if (p.thinking !== undefined) snap[`${p.service_id.toUpperCase()}_THINKING`] = p.thinking;   // provider 级思考缺省（五级链第 4 级,^anc-exec-thinking-provider-default——dispatcher envOf 消费）
+    if (p.thinking_disable_unsupported === true) snap[`${p.service_id.toUpperCase()}_THINKING_DISABLE_UNSUPPORTED`] = 'true';   // 端点思考关不掉的声明（只在 true 时披——dispatcher 五级链结果为关时改发 effort low）// @a: anc-exec-thinking-disable-unsupported
     if (p.max_output_tokens !== undefined) snap[`${p.service_id.toUpperCase()}_MAX_OUTPUT_TOKENS`] = String(p.max_output_tokens);   // 输出预算解析链第3级 // @a: anc-exec-output-budget
   }
   for (const k of SNAPSHOT_PASSTHROUGH_KEYS) {
@@ -224,6 +237,7 @@ export function mergeConfigs(sys: StandaloneConfig, proj: StandaloneConfig): Sta
     ...(byKey(sys.tool_servers, proj.tool_servers, t => (t as { name: string }).name)?.length ? { tool_servers: byKey(sys.tool_servers, proj.tool_servers, t => (t as { name: string }).name) } : {}),
     ...((sys.resource_limits || proj.resource_limits) ? { resource_limits: { ...(sys.resource_limits ?? {}), ...(proj.resource_limits ?? {}) } } : {}),   // 逐键合并项目级赢（env 节同法）
     ...((proj.log_level ?? sys.log_level) ? { log_level: proj.log_level ?? sys.log_level } : {}),   // 项目级赢 // @a: anc-config-standalone-schema
+    ...((proj.log_retention ?? sys.log_retention) ? { log_retention: proj.log_retention ?? sys.log_retention } : {}),   // 项目级赢 // @a: anc-obs-log-retention
     ...((proj.language ?? sys.language) ? { language: proj.language ?? sys.language } : {}),   // 项目级赢（todo/0084 M2——本键曾漏合并:项目级 zh 在 MCP 侧静默蒸发落 en 与 CLI 劈叉,恰是上一行 commands 前车注警告的同型复发;新顶层键必须同步本函数+补合并测试钉） // @a: anc-i18n-serialize-lang
     ...((proj.revision_prompt ?? sys.revision_prompt) ? { revision_prompt: proj.revision_prompt ?? sys.revision_prompt } : {}),   // 项目级赢（^anc-exec-revision-short-weak;新顶层键必须同步本函数——0084 M2 前车） // @a: anc-exec-revision-short-weak
   };
@@ -327,6 +341,14 @@ function parseConfigFile(path: string, required: boolean): StandaloneConfig {
   if (ll !== undefined && ll !== 'debug' && ll !== 'info' && ll !== 'warn') {
     throw new Error(`STANDALONE_CONFIG_INVALID: log_level 须为 debug|info|warn（实际: ${JSON.stringify(ll)}）`);
   }
+  // log_retention 文法核（同姿势——max_runs 非正整数静默当缺省=用户以为限了实际没限）。// @a: anc-obs-log-retention
+  const lr = raw['log_retention'];
+  if (lr !== undefined) {
+    const mr = (lr as { max_runs?: unknown } | null)?.max_runs;
+    if (typeof lr !== 'object' || lr === null || !Number.isInteger(mr) || (mr as number) < 1) {
+      throw new Error(`STANDALONE_CONFIG_INVALID: log_retention.max_runs 须为正整数（实际: ${JSON.stringify(lr)}）`);
+    }
+  }
   // 至少 1 条的校验在两级合并后统一做（项目级文件可只有 tool_servers 节）——见 loadStandaloneConfig 尾部
   for (const [i, p] of ((providers ?? []) as Record<string, unknown>[]).entries()) {
     if (p === null || typeof p !== 'object' || Array.isArray(p)) {
@@ -355,6 +377,16 @@ function parseConfigFile(path: string, required: boolean): StandaloneConfig {
     // 响亮拒,静默失效是 0008③ 同病）// @a: anc-exec-thinking-provider-default
     if (p['thinking'] !== undefined && p['thinking'] !== 'enabled' && p['thinking'] !== 'disabled') {
       throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}].thinking '${String(p['thinking'])}' 非法（enabled | disabled;缺省落引擎内建步骤类型缺省——五级链第 5 级）`);
+    }
+    // thinking_disable_unsupported 文法核（todo/0118）:只认 YAML 布尔——字符串 "true"/数字 1 静默当真或当假
+    // 都是配置悄悄错档;非 anthropic 协议写 true 拒——openai-responses 适配器本就把 disabled 映成
+    // reasoning.effort low,openai-chat 不透传思考参数,写了等于静默失效。// @a: anc-exec-thinking-disable-unsupported
+    const tdu = p['thinking_disable_unsupported'];
+    if (tdu !== undefined && typeof tdu !== 'boolean') {
+      throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}].thinking_disable_unsupported 须为布尔 true 或 false（实际: ${JSON.stringify(tdu)}）——声明该端点思考关不掉,写 true 后引擎要关思考时改发 output_config effort low`);
+    }
+    if (tdu === true && p['protocol'] !== 'anthropic') {
+      throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}].thinking_disable_unsupported 只对 protocol: anthropic 有效（实际 protocol: ${String(p['protocol'])}）——openai-responses 已把关思考映成 reasoning.effort low,openai-chat 不发思考参数,写了不会产生任何效果`);
     }
     if (p['auth'] !== undefined && p['auth'] !== 'api-key' && p['auth'] !== 'bearer') {
       throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}].auth '${String(p['auth'])}' 不支持（api-key | bearer;缺省 api-key 发 x-api-key 头）`);
@@ -537,6 +569,11 @@ interface RunEntry {
 }
 
 const DEFAULT_MAX_CONCURRENT_RUNS = 4;   // 并发 run 上限缺省——防失控烧费的保守默认;resource_limits.max_concurrent_runs 可调（todo/0084 M1 配置化:原裸常量任何途径改不了,批量验证第 5 run 被拒实撞;server 级判定读启动期合并后配置,与 providers 快照同理由不入每 run 重读面） // @a: anc-mcp-config
+
+/** run_approved_command 超时缺省秒数（^anc-mcp-run-command 步 6;inputSchema describe 与设计同源——review 抓五处字面量）。 */
+export const RUN_COMMAND_TIMEOUT_DEFAULT_SEC = 300;
+/** run_approved_command 超时上限秒数——spawnSync 阻塞 server 事件循环,上限失守=一条命令锁死 server（^anc-mcp-run-command）。 */
+export const RUN_COMMAND_TIMEOUT_MAX_SEC = 3600;
 
 /** run 注册表 + 工具 handler 核心。与 transport 分离（HTTP 演进出口留在 serve() 层）。
  * // @a: anc-struct-mcp-server */
@@ -764,9 +801,10 @@ export class HopjitMcpCore {
     const init = engine.initExecution(raw, hostConfig, {
       stateDir: resolvedStateDir,
       logDir: join(resolvedStateDir, '..', '.hoplog'),
-      // standalone 缺省 debug（2026-08-22 作者定方案③）：日志是唯一核验通道,info 不记 prompt
-      // 正文即黑箱;log_level 配置口可降级。见 design mcp-server HopLog 恒开条。// @a: anc-config-standalone-schema
-      logLevel: effectiveConfig.log_level ?? 'debug',
+      // 缺省 info（todo/0127 作者定——对外分发防塞爆硬盘;2026-08-22 曾定 debug）。排障经 log_level: debug 升级。
+      // 见 design mcp-server HopLog 恒开条。// @a: anc-config-standalone-schema
+      logLevel: effectiveConfig.log_level ?? 'info',   // 缺省 info（todo/0127）
+      ...(effectiveConfig.log_retention ? { maxRuns: effectiveConfig.log_retention.max_runs } : {}),   // @a: anc-obs-log-retention
       ...(params ? { params } : {}),
       specPath,
       driverChannel: 'mcp',   // 双执行硬闸落账 // @a: anc-exec-driver-channel
@@ -845,7 +883,7 @@ export class HopjitMcpCore {
               // ^anc-exec-completed-consistency）。// @a: anc-exec-completed-consistency
               let inconsistency: string | undefined;
               try {
-                const specData = JSON.parse(readFileSync(join(instDir, 'spec.json'), 'utf-8')) as { header?: { outputs?: Array<{ name: string }> }; steps?: Array<{ step_id: string }> };
+                const specData = readSpec(instDir) as { header?: { outputs?: Array<{ name: string }> }; steps?: Array<{ step_id: string }> };   // 经 readSpec——spec.json 可能是内容寻址引用形态（^anc-provider-spec-content-addressed）// @a: anc-provider-spec-content-addressed
                 const varsData = JSON.parse(readFileSync(join(instDir, 'vars.json'), 'utf-8')) as { scopes?: Record<string, { variables?: Record<string, unknown> }>; variables?: Record<string, unknown> };
                 const rootVars = varsData.scopes?.['root']?.variables ?? varsData.variables ?? {};   // v2 scopes=对象键即 scope id;v1 扁平 variables
                 outputs = {};
@@ -1094,6 +1132,20 @@ export class HopjitMcpCore {
     return entry;
   }
 
+  // 过时账预检（^anc-exec-state-seq-guard MCP 侧接线）:本进程注册项的引擎账已被另一个进程写得更新 →
+  // 返回 STATE_STALE 结构化错误、不改任何状态。非 running 的注册项移出注册表——同一进程下一次
+  // resume_run 走 restoreRun 从盘上重新加载（兑现报文指路）;running 的不移出,在飞 dispatcher
+  // 下次写盘自己撞 STATE_STALE 转 failed。// @a: anc-exec-state-seq-guard
+  private rejectIfStale(runId: string, entry: RunEntry): Record<string, unknown> | null {
+    try { entry.dispatcher?.getEngine?.()?.assertStateFresh?.(); return null; }
+    catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!message.startsWith('STATE_STALE:')) throw err;
+      if (entry.state !== 'running') this.runs.delete(runId);
+      return { error: { code: 'STATE_STALE', message } };
+    }
+  }
+
   resumeRun(runId: string, stepId: string, answer: Record<string, unknown>, stateDir?: string, childInstance?: string): Record<string, unknown> {
     let entry = this.runs.get(runId);
     if (!entry) {
@@ -1101,6 +1153,9 @@ export class HopjitMcpCore {
       if ('error' in restored) return restored as Record<string, unknown>;
       entry = restored as RunEntry;
     }
+    // 同通道两进程的过时账预检（todo/0114）:在通道核对（会认领）与一切状态翻转之前。// @a: anc-exec-state-seq-guard
+    const staleOnResume = this.rejectIfStale(runId, entry);
+    if (staleOnResume) return staleOnResume;
     // 双执行硬闸:跨通道推进拒（restore 的 cli 建 run 在此被拦;旧 run 缺席即认领）
     // @a: anc-exec-driver-channel
     try { entry.dispatcher?.getEngine?.()?.claimDriverChannel?.('mcp'); }
@@ -1217,6 +1272,72 @@ export class HopjitMcpCore {
     return { run_id: runId, status: 'running' };
   }
 
+  // 在某个 run 的上下文里执行一条**任务卡已批准**的命令（todo/0132 承接 hopissues/0114——/hop 复用模式下
+  // driver 每条命令过载体权限闸,同类动作反复弹窗;作者定"根据任务来批准,而不是放开一个大口子"）。
+  // 不认 hopjit.yaml commands:（那是引擎自己执行 body 时的项目级白名单,本入口是外部 agent 发起的,粒度
+  // 必须到任务）;不重建 engine/hostConfig/注册表——纯 readState + readSpec + spawnSync + append（作者定
+  // "就是执行一步而已"）。人工闸不放宽:只替代"载体逐条弹窗"这一层。八步契约见 [[mcp-server#^anc-mcp-run-command]]。
+  // @a: anc-mcp-run-command
+  runCommand(args: { state_dir?: string; instance_id: string; argv: string[]; cwd?: string; timeout_sec?: number; caller_step?: string }): Record<string, unknown> {
+    const instDir = resolve(args.state_dir ?? '.hopstate', args.instance_id);
+    if (!stateExists(instDir)) return { error: { code: 'INSTANCE_NOT_FOUND', message: `实例 '${args.instance_id}' 在 ${instDir} 下没有快照——state_dir 要传该 run 起跑时用的目录（start_run 返回值里有绝对路径）` } };
+    let approved: string[][];
+    let state: ReturnType<typeof readState>;
+    try {
+      const spec = readSpec(instDir) as { header?: { approved_commands?: string[][] } };
+      approved = spec.header?.approved_commands ?? [];
+      state = readState(instDir);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { error: { code: 'CORRUPT_STATE_FILE', message: msg } };   // readSpec/readState 对不可读/非 JSON/非对象一律抛 CORRUPT_STATE_FILE 前缀（persistence parseChecked）——review 面三补钉时发现原 STATE_READ_FAILED 分支是死代码,删
+    }
+    const argv = args.argv;
+    if (!Array.isArray(argv) || argv.length === 0) return { error: { code: 'APPROVAL_REQUIRED', message: 'argv 为空——命令写成 argv 列表（不拼 shell 字符串）,首项是命令名' } };
+    if (argv[0] === 'hopjit' || argv[0].split('/').pop() === 'hopjit') {   // 恒拒先于匹配——否则拒绝报文会教人把 hopjit 写进卡（parser 又会拒）
+      return { error: { code: 'COMMAND_FAILED', message: `${RUN_APPROVED_COMMAND_TOOL} 不得执行 hopjit——步骤内容不驱动引擎（自嵌套执行会破坏状态账）;写进《已批准命令》也无效（解析期即拒）。跑别的 spec 用 [call <Id>] 步骤` } };
+    }
+    const hit = approved.some(p => p.length > 0 && p.length <= argv.length && p.every((t, i) => t === argv[i]));
+    if (!hit) {
+      const shown = argv.slice(0, 3).join(' ') + (argv.length > 3 ? ' …' : '');
+      const listed = approved.length ? approved.map(p => '  - ' + p.join(' ')).join('\n') : '  （本任务卡没有《已批准命令》节或节为空）';
+      return { error: { code: 'APPROVAL_REQUIRED', message: `命令 "${shown}" 不在本任务卡《已批准命令》里。卡上现有前缀:\n${listed}\n这是任务授权范围要不要扩的问题,请停下问用户：批则在任务卡的 \`## 已批准命令\` 节加一行 \`- ${argv.slice(0, Math.min(argv.length, 2)).join(' ')}\`（一行一个 argv 前缀,逐项相等地以它开头的命令放行）后重起 run;不批则这一条走载体自己的审批。不要自己把命令加进卡,不要换通道绕过` } };   // 报文与 description、/hop skill 同口径（review 面二抓首版并列'改走 Bash'无'归人决定'）
+    }
+    const ws = (state as { host_context?: { workspace_dir?: string } }).host_context?.workspace_dir;
+    const cwdEff = args.cwd ? (isAbsolute(args.cwd) ? args.cwd : resolve(ws ?? process.cwd(), args.cwd)) : (ws ?? process.cwd());
+    if (ws) {
+      let real: string;
+      try { real = resolveRealDeep(cwdEff); } catch (e) { return { error: { code: 'CWD_OUTSIDE_WORKSPACE', message: `cwd 解析失败: ${e instanceof Error ? e.message : String(e)}` } }; }
+      if (!isWithinDir(real, resolveRealDeep(ws))) return { error: { code: 'CWD_OUTSIDE_WORKSPACE', message: `cwd '${args.cwd}' 落在本 run 的 workspace（${ws}）之外——run_approved_command 只在该 run 的作业根内执行` } };
+    }
+    const timeoutSec = Math.min(Math.max(1, Math.floor(args.timeout_sec ?? RUN_COMMAND_TIMEOUT_DEFAULT_SEC)), RUN_COMMAND_TIMEOUT_MAX_SEC);
+    const t0 = Date.now();
+    let r: { stdout: string; stderr: string; returncode: number };
+    try {
+      r = runWhitelistedCommand(argv, { whitelist: [argv[0]], cwd: cwdEff, timeoutSec, maxBuffer: 4 * 1024 * 1024, label: RUN_APPROVED_COMMAND_TOOL });
+    } catch (e) {
+      return { error: { code: 'COMMAND_FAILED', message: e instanceof Error ? e.message : String(e) } };
+    }
+    const duration_ms = Date.now() - t0;
+    const LIMIT = 64 * 1024;
+    const stdoutBytes = Buffer.byteLength(r.stdout, 'utf-8');
+    const stderrBytes = Buffer.byteLength(r.stderr, 'utf-8');
+    const cut = (s: string, bytes: number) => bytes > LIMIT ? Buffer.from(s, 'utf-8').subarray(0, LIMIT).toString('utf-8') + `\n…[已截断:原 ${bytes} 字节,回给调用方上限 ${LIMIT} 字节;账里记原字节数]` : s;
+    const truncated = { stdout: stdoutBytes > LIMIT, stderr: stderrBytes > LIMIT };
+    const rec = { argv, cwd: cwdEff, returncode: r.returncode, duration_ms, stdout_bytes: stdoutBytes, stderr_bytes: stderrBytes, truncated, ...(args.caller_step ? { caller_step: args.caller_step } : {}) };
+    const hoplogDir = (state as { hoplog_run_dir?: string }).hoplog_run_dir;
+    let account_error: string | undefined;
+    try {
+      if (hoplogDir && existsSync(hoplogDir)) {
+        HopLog.resume(hoplogDir).recordCommand(rec);   // 跨进程续写,先冲 resume marker 再落顶层 command: 块（^anc-obs-command-block）
+      } else {
+        appendFileSync(join(instDir, 'commands.log'), JSON.stringify({ at: new Date().toISOString(), ...rec }) + '\n');   // hoplog 关着或目录已被轮转删掉时的兜底账
+      }
+    } catch (e) {
+      account_error = `记账失败（命令已执行,结果如下;账未落盘）: ${e instanceof Error ? e.message : String(e)}`;   // 不抛——调用方必须拿到已执行命令的结果
+    }
+    return { returncode: r.returncode, stdout: cut(r.stdout, stdoutBytes), stderr: cut(r.stderr, stderrBytes), duration_ms, truncated, ...(account_error ? { account_error } : {}) };
+  }
+
   listRuns(): Record<string, unknown> {
     return {
       runs: [...this.runs.values()].map(e => ({
@@ -1235,6 +1356,9 @@ export class HopjitMcpCore {
     if (entry.state === 'completed' || entry.state === 'failed' || entry.state === 'aborted') {
       return { run_id: entry.runId, status: entry.state };   // 终态幂等
     }
+    // 同通道两进程的过时账预检（todo/0114）:在通道核对与 requestAbortCascade/aborted.json 之前。// @a: anc-exec-state-seq-guard
+    const staleOnStop = this.rejectIfStale(runId, entry);
+    if (staleOnStop) return staleOnStop;
     // 双执行硬闸:跨通道中止拒（cli 建的 run 该经 hopjit abort）// @a: anc-exec-driver-channel
     try { entry.dispatcher?.getEngine?.()?.claimDriverChannel?.('mcp'); }
     catch (err) { return { error: { code: 'DRIVER_CHANNEL_MISMATCH', message: err instanceof Error ? err.message : String(err) } }; }
@@ -1284,10 +1408,10 @@ function jsonContent(data: Record<string, unknown>): { content: { type: 'text'; 
   return { content: [{ type: 'text', text: JSON.stringify(data) }], ...(data['error'] ? { isError: true } : {}) };
 }
 
-/** server 装配：五工具注册。core 与 transport 分离（决策注记：HTTP transport 演进出口）。
+/** server 装配：六工具注册。core 与 transport 分离（决策注记：HTTP transport 演进出口）。
  * // @a: anc-mcp-tools */
 // standalone 的全部对外形态在此装配（design/standalone-mode.md ^anc-struct-standalone-endpoint）：
-// 一份 config + 一次注册 + 五个 MCP 工具。// @a: anc-struct-standalone-endpoint
+// 一份 config + 一次注册 + 六个 MCP 工具。// @a: anc-struct-standalone-endpoint
 export function buildServer(core: HopjitMcpCore): McpServer {
   const server = new McpServer({ name: 'hopjit', version: '0.1.0' });
 
@@ -1336,6 +1460,21 @@ export function buildServer(core: HopjitMcpCore): McpServer {
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
     inputSchema: { run_id: z.string().describe('要中止的 run') },
   }, async ({ run_id }) => jsonContent(core.stopRun(run_id)));
+
+  // 已批准命令在 run 上下文里执行（^anc-mcp-run-command,todo/0132）——授权来源是任务卡《已批准命令》节,
+  // 不是 hopjit.yaml;openWorldHint 如实为 true（命令可联网,server 进程不在载体 Bash 沙箱里）。// @a: anc-mcp-run-command
+  server.registerTool(RUN_APPROVED_COMMAND_TOOL, {
+    description: '在某个 run 的上下文里执行一条任务卡已批准的命令。授权三要素：①什么任务——授权绑定 run,从 instance_id 的快照里读该任务卡《已批准命令》节,别的活拿不到;②什么核验——命令级:argv 逐项相等地以卡上某行前缀开头才放行,hopjit 恒拒,cwd 必须在该 run 的工作区内,不经 shell;任务级:同一条命令在 act 步骤里是探索（可重跑）,在 commit 步骤里由引擎按 body 执行且前面已过 check final 或 confirm——两态由步骤类型定,不由本工具定;③才可以执行——两层都过才跑,每次执行的 argv/cwd/returncode/耗时进该 run 的 hoplog command: 块,事后可查。不认 hopjit.yaml commands:（那是项目级白名单,本工具的授权单位是任务）。被拒时怎么办：APPROVAL_REQUIRED 表示命令不在卡上——这是任务授权范围要不要扩的问题,归人决定;调用方停下来问用户（说清命令干什么、可逆否、为什么需要）,批则在卡上加一行后重起 run,不批则这一条走载体自己的审批;调用方不得自己把命令加进卡、不得改走别的通道绕过。COMMAND_FAILED 按报文修命令或超时再调,不换通道;CWD_OUTSIDE_WORKSPACE 改 cwd。人工闸（confirm/ask/commit 前置检查）不受本工具影响。',
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: false },
+    inputSchema: {
+      state_dir: z.string().optional().describe('该 run 的快照目录（缺省 .hopstate;相对路径按 server cwd 解析——start_run 返回值里的绝对路径最稳）'),
+      instance_id: z.string().describe('run 的实例 id（快照目录名）——清单从它的 spec 快照里读'),
+      argv: z.array(z.string()).min(1).describe('命令的 argv 列表,首项是命令名;不拼 shell 字符串、不支持管道与重定向'),
+      cwd: z.string().optional().describe('工作目录,缺省该 run 的 workspace_dir;相对路径按 workspace_dir 解析;必须落在 workspace_dir 内'),
+      timeout_sec: z.number().optional().describe(`超时秒数,缺省 ${RUN_COMMAND_TIMEOUT_DEFAULT_SEC},上限 ${RUN_COMMAND_TIMEOUT_MAX_SEC},下限 1`),
+      caller_step: z.string().optional().describe('调用方自报的所属步骤号,只写进账供人对账'),
+    },
+  }, async (args) => jsonContent(core.runCommand(args)));
 
   return server;
 }

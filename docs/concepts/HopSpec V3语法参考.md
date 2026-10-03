@@ -3,7 +3,7 @@
 	source: [[HopSpec V3核心规范]]
 	source_id: hopspec-v3-core
 	type: compact
-	last_sync: 2026-09-20T09:56+0800
+	last_sync: 2026-10-01T10:44+0800
 	note: HopSpec v3 完整语法参考手册。§0 立设计理念（人机协同生成、关键逻辑可控可靠、探索逻辑可成长、语言层封装降复杂度、自洽上下文防望文生义），贯穿全篇；主体以标准语法写全部构造，末节单列变种语法（大纲语法）。语义权威以源文档为准，本文只做重组不新增语义
 %%
 
@@ -36,7 +36,7 @@ HopSpec 不是又一门编程语言，也不是提示模板——它是**人与 
 
 **1. 两类逻辑，两种诉求。** HopSpec 里的逻辑分两类，语法机制各有侧重：
 
-- **关键逻辑 → 可控可靠**：业务不可违反的目标、约束、验收、不可逆操作。靠契约（`Goal`/`Constraints`/`Outputs`）+ 核验（`check final`）+ 探索提交分离（`act`/`commit`）**锁死**——引擎强制、不靠自觉。
+- **关键逻辑 → 可控可靠**：业务不可违反的目标、约束、验收、不可逆操作。靠契约（`Goal`/`Constraints`/`Outputs`）+ 探索-核验-提交范式（`act`/`check final`/`commit`）**锁死**——引擎强制、不靠自觉。
 - **探索逻辑 → 可成长**：达成目标的具体路径。靠"锁目标、放路径"+ 分层自适应修复 + 渐进固化，让成功路径沉淀复用、系统越用越聪明。
 
 写每个 spec 时先分清：这一步是**必须锁住的关键逻辑**，还是**可以放开探索的路径**——语法（`check final` vs 普通 `check`、`commit` vs `act`、契约 vs Steps）就是给你表达这个区分的。
@@ -75,18 +75,20 @@ Constraints:                            # 可选多项，任务约束
 - @knowledge <关键词>                   # 可选，声明需预检索的领域知识
 Types:                                  # 可选多项，复用类型定义
 - <TypeName>:  # 说明
-  - <field>: <type>  # 说明
+  - <field> % <type>  # 说明
 Inputs:                                 # 可选多项，Spec 级输入声明
-- <var>: <type>  # 说明
+- <var> % <type>  # 说明
 Outputs:                                # 可选多项，Spec 级输出声明
-- <var>: <type>  # 说明
+- <var> % <type>  # 说明
 Config:                                 # 可选，Spec 级运行时配置
   model: <service/model>                # Spec 默认模型（覆盖全局配置）
   models:                               # 按步骤类别分档路由（reason/act/check/commit 各可指一档;比 model 更细,两者可并存——类别命中优先）
     reason: <service/model>
-  expansion_max: 20                     # subtask free 展开总数上限（缺省 20;耗尽不硬断,拒收报文携问人续批协议）
-  engine_min_version: 0.15.1                    # 本 spec 需要的引擎最低版本（pack 打包时自动注入;引擎版本不足则启动即拒,报文带升级/删键两出路;键缺席零比对）
-  requires_commands: [git, jq]          # body 经 subprocess.run 依赖的本地命令（启动时与宿主命令白名单对账,缺即拦在进任何步骤之前并指路 hopjit.yaml commands;键缺席零比对,未声明的仍靠运行期白名单拒兜底）
+  expansion_max: 20                     # subtask free 一次运行里最多展开几次（不写就是 20）。用完不会硬停：引擎拒收下一次展开，报文里说明怎么请人追加额度
+  engine_min_version: 0.15.1            # 本 spec 需要的引擎最低版本（pack 打包时自动写入）。引擎版本不够就不启动，报文告诉你两条路：升级引擎，或删掉这个键。不写这个键就不比对
+  requires_commands: [git, jq]          # body 里 subprocess.run 要用到的本地命令。启动时逐个检查：命令名在项目 hopjit.yaml 的 commands 白名单里，或者在本 spec 下面《已批准命令》段某一行的第一个词里，二者有一即可；都没有就在进入任何步骤之前停下，报文说明去哪一处加。不写这个键就不检查；没声明的命令运行到那一步时仍会被白名单拦住
+## 已批准命令                           # 可选。本 spec 自己批准的命令清单（英文段头 Approved Commands 同义），一行一条命令前缀
+- python3 scripts/ssh_exec.py --config configs/x.json   # 运行时的命令按词逐个与这一行比对，前面几个词全部相同就放行（python3 scripts/ssh_exec.py --config configs/x.json exec … 可以，python3 evil.py 不行）。第一个词不能是 hopjit
 ## Steps                                # 有 Steps → 具体实现；无 Steps → HopTrait（Hop契约）
 N. [type] <一句话任务描述>
 ```
@@ -102,6 +104,7 @@ N. [type] <一句话任务描述>
 | `Inputs:` | 否 | Spec 级输入变量声明，供 `[call]` 传参映射 |
 | `Outputs:` | 否 | Spec 级输出变量声明（交付物=完备性契约）。初始 `None`，执行中赋值；结束仍 `None`=完备性违约，run 判 failed（缺哪个输出入 failure_reason） |
 | `Config:` | 否 | Spec 级运行时配置。五个引擎消费键：`model`（默认模型）/`models`（按步骤类别分档路由）/`expansion_max`（subtask free 展开总数上限,缺省 20）/`engine_min_version`（引擎最低版本,不足启动即拒）/`requires_commands`（body 依赖的本地命令,启动时与宿主白名单对账缺即拦） | ^anc-spec-config-keys
+| `## 已批准命令` | 否 | 任务级命令授权（`## Approved Commands` 同义,2026-09-30）：一行一个命令前缀,按空白切成 argv 项（含空白的项用单/双引号包）；运行期要执行的命令 argv 与某一行逐项相等地以它开头即放行,首项为 `hopjit` 的行是解析错误。批准的单位是**这个任务**,不是命令名——它是人写在卡上的授权,不是项目级白名单的替代；消费口：复用模式 hopjit-mcp `run_approved_command`（外部 agent 在本 run 上下文里执行,按前缀判）与 body 内 `subprocess.run`（并入命令名级白名单,见 §5） | ^anc-rule-approved-commands-section
 | `## Steps` | 条件 | 有 Steps：具体实现，至少一个步骤。无 Steps：**HopTrait（Hop契约）**——仅由 Goal/Constraints/Inputs/Outputs 定义接口契约 |
 
 **Spec 的两种形态**：
@@ -139,8 +142,8 @@ N. [type] <一句话任务描述>
 1. [reason] 解读质量画像，制定修复策略
   - ← profile
   + → fix_plan:  # 修复方案
-    - strategy: text  # 整体修复策略
-    - missing_handling: [line]  # 各列缺失值处理方式
+    - strategy % text  # 整体修复策略
+    - missing_handling % [line]  # 各列缺失值处理方式
   > 权衡数据保留率与质量，选择合适的处理方案
 ```
 
@@ -161,7 +164,7 @@ N. [type] <一句话任务描述>
 ```
 2. [reason] 分析舆情风险
   - ← social_data, news_data
-  + → risk_level: enum(low, medium, high)  # 风险等级
+  + → risk_level % enum(low, medium, high)  # 风险等级
   > @model deepseek/deepseek-v4-pro
   > @knowledge 舆情风险评级标准
   > 综合各渠道数据，评估当前舆情风险等级和趋势
@@ -197,8 +200,8 @@ N. [type] <一句话任务描述>
 ```
 2. [reason] 综合分析舆情态势，评估风险等级
   - ← social_data, news_data
-  + → analysis: text  # 舆情分析
-  + → risk_level: enum(low, medium, high)  # 风险等级
+  + → analysis % text  # 舆情分析
+  + → risk_level % enum(low, medium, high)  # 风险等级
   > 关注负面情绪占比、传播速度、意见领袖参与度
 ```
 
@@ -215,8 +218,8 @@ N. [type] <一句话任务描述>
 1. [act] 统计数据质量指标
   - ← raw_data
   + → profile:  # 数据质量画像
-    - missing_rates: [float]  # 各列缺失率
-    - anomaly_count: int  # 异常记录数
+    - missing_rates % [float]  # 各列缺失率
+    - anomaly_count % int  # 异常记录数
 ```
 
 #### `commit` — 有不可逆副作用的计算与工具调用
@@ -231,7 +234,7 @@ N. [type] <一句话任务描述>
 4. [confirm] 审批重命名方案
 5. [commit] 执行批量重命名（不可逆）
   - ← rename_plan
-  + → done: bool  # 执行完成标志
+  + → done % bool  # 执行完成标志
 ```
 
 #### `check` — 验证已有产出
@@ -247,8 +250,8 @@ N. [type] <一句话任务描述>
 ```
 3.2. [check final] 验证修复后质量 ≥ threshold 且行数保留率 ≥ 90%
   - ← clean_data, quality_threshold
-  + → quality_ok: bool   # 判定槽：是否达标
-  + → quality_note: text # 说明槽：未达标时缺口（通过时不被查看）
+  + → quality_ok % bool   # 判定槽：是否达标
+  + → quality_note % text # 说明槽：未达标时缺口（通过时不被查看）
 ```
 
 **`finally` 修饰符**：`[check final]` 是 `Constraints:` 的可执行化身——subtask/case 的任何成功路径必须经过此检查，**adaptive 不可改写或跳过**（类似 `try/finally`：策略步骤是可重写的 try body，finally check 是不可绕过的验收门）。
@@ -270,7 +273,7 @@ N. [type] <一句话任务描述>
 ```
 3. [confirm require_human] 用户确认重命名方案
   - ← rename_plan
-  + → approved: bool  # 审批结果
+  + → approved % bool  # 审批结果
 ```
 
 #### `ask` — CITL 数据收集
@@ -286,7 +289,7 @@ N. [type] <一句话任务描述>
 ```
 2. [ask] 请用户确认目标领域
   - ← inferred_domain, candidate_domains
-  + → target_domain: line  # 用户确认的目标领域
+  + → target_domain % line  # 用户确认的目标领域
   > present_inputs: inferred_domain
 ```
 
@@ -306,12 +309,12 @@ N. [type] <一句话任务描述>
 
 ```
 # callee（data_cleaning.md）声明自己要什么:
-#   Inputs:  source_data: text
-#   Outputs: cleaned: text
+#   Inputs:  source_data % text
+#   Outputs: cleaned % text
 
 # caller 里（caller 自己的变量叫 order_text）:
 1. [act] 读取订单文本
-  + → order_text: text         # caller 变量：前序步骤产出
+  + → order_text % text         # caller 变量：前序步骤产出
 2. [call data_cleaning(source_data: order_text)] 调用数据清洗子流程
   + → clean_result: cleaned    # caller 的 clean_result ← callee 的 Output cleaned
 ```
@@ -326,14 +329,14 @@ N. [type] <一句话任务描述>
 
 ```
 3. [subtask retry=3 adaptive] 执行修复并验证质量达标
-  + → clean_data: [DataRecord]  # 修复后数据
+  + → clean_data % [DataRecord]  # 修复后数据
   3.1. [act] 按策略修复数据
     - ← raw_data, fix_strategy
     + → clean_data
   3.2. [check final] 验证修复后质量达标
     - ← clean_data, quality_threshold
-    + → quality_ok: bool  # 判定槽
-    + → quality_note: text # 说明槽
+    + → quality_ok % bool  # 判定槽
+    + → quality_note % text # 说明槽
 ```
 
 **`[subtask free]` 到步展开档**（`[子任务 开放]` ≡ `[subtask free]`——权威 [[HopSpec V3核心规范#^anc-step-subtask-free]]）：children 可空——写卡时只声明契约（输入/交付/描述），执行到步时引擎停下索计划（请求携执行时上下文：输入实际值+描述+全局目标），规划方出 children 提交后接续执行。展开物必须含 check、禁 commit（不可逆动作写在 subtask free 之外消费其交付物）。
@@ -341,7 +344,7 @@ N. [type] <一句话任务描述>
 ```
 4. [subtask free] 按分析结果处置异常项（到步展开——处置方式取决于步骤 2 的分析结论）
   - ← analysis
-  + → 处置记录: text  # 每项异常的处置结果
+  + → 处置记录 % text  # 每项异常的处置结果
 ```
 
 #### `parallel` 属性 与 `loop for-each` — 并发与遍历
@@ -356,8 +359,8 @@ N. [type] <一句话任务描述>
 
 ```
 2.1. [subtask] 采集各渠道数据          # 容器边界=收齐点
-  + → social_data: yaml  # 社交媒体数据
-  + → news_data: yaml  # 新闻媒体数据
+  + → social_data % yaml  # 社交媒体数据
+  + → news_data % yaml  # 新闻媒体数据
   2.1.1. [subtask parallel] 采集社交媒体舆情   # 派出去跑
     + → social_data
     2.1.1.1. [act] 调社交渠道接口
@@ -374,9 +377,9 @@ N. [type] <一句话任务描述>
 
 ```
 2. [loop for-each file in file_list, collect issue into issues] 并行审查每个文件
-  + → issues: [yaml]  # 收集列表（失败的活不贡献元素）
+  + → issues % [yaml]  # 收集列表（失败的活不贡献元素）
   2.1. [subtask parallel] 审查单个文件   # 每迭代派出一个，边遍历边并发
-    + → issue: yaml   # collect 单项端
+    + → issue % yaml   # collect 单项端
     2.1.1. [reason] 审查
       - ← file
       + → issue
@@ -386,12 +389,12 @@ N. [type] <一句话任务描述>
 
 ```
 3. [loop for-each ch in chapters, collect built into results] 逐章构建
-  + → results: [text]
+  + → results % [text]
   3.1. [act] OCR/钉版/确认            # 主线串行，有序依赖
     - ← ch
-    + → confirmed: text
+    + → confirmed % text
   3.2. [call construct(src: confirmed) parallel] 派发构建   # 下一章生产与本章构建重叠
-    + → built: text   # collect 单项端
+    + → built % text   # collect 单项端
 ```
 
 顺序遍历（体内不标注即得——累加器可用，中途 break 收集已完成部分）；单项需事务重试时 children 内嵌 `[subtask retry=N]`（retry 仅属 subtask，loop 无 retry——失败单元是单次迭代）。并发是步骤的性质不是容器的形态：循环头不可标 parallel。
@@ -418,17 +421,17 @@ children 必须全部是 `case`。同层级互斥步骤必须放在同一 branch
 ```
 3. [branch] 按风险等级决定响应策略
   - ← risk_level
-  + → alert_report: markdown  # 预警报告（聚合输出：统一接口名）
-  + → actions: [line]  # 应对行动项
+  + → alert_report % markdown  # 预警报告（聚合输出：统一接口名）
+  + → actions % [line]  # 应对行动项
   3.1. [case(risk_level == high)] 高风险
-    + → alert_report: markdown  # 同名填充（同一个东西）
-    + → actions: [line]
+    + → alert_report % markdown  # 同名填充（同一个东西）
+    + → actions % [line]
     3.1.1. [reason] 生成详细预警与应急方案
       - ← risk_level, trend
       + → alert_report, actions
   3.2. [case] 低/中风险
-    + → alert_report: markdown  # 同名填充
-    + → actions: [line]
+    + → alert_report % markdown  # 同名填充
+    + → actions % [line]
     3.2.1. [reason] 生成常规监控小结
       - ← risk_level, trend
       + → alert_report, actions
@@ -442,9 +445,9 @@ children 必须全部是 `case`。同层级互斥步骤必须放在同一 branch
 
 ```
 2. [loop max=20] 逐条审查
-  + → findings: yaml = []   # 累加器：容器 init 一次为空列表，跨迭代累积
+  + → findings % yaml = []   # 累加器：容器 init 一次为空列表，跨迭代累积
   2.1. [reason] 取下一片段判严重度
-    + → severity: line      # 每轮被本步重新产出，自然覆盖上轮值
+    + → severity % line      # 每轮被本步重新产出，自然覆盖上轮值
   2.2. [act] 追加本轮发现
     - ← findings, severity
     + → findings            # 更新累加器（更新模式，非重名）
@@ -516,11 +519,11 @@ children 必须全部是 `case`。同层级互斥步骤必须放在同一 branch
 
 ```
 + → report:  # 精算分析报告
-  - summary: text  # 执行摘要
+  - summary % text  # 执行摘要
   - metrics:  # 模型评估指标
-    - gini: float  # 基尼系数
-    - auc: float  # ROC 曲线下面积
-  - recommendations: [line]  # 业务建议列表
+    - gini % float  # 基尼系数
+    - auc % float  # ROC 曲线下面积
+  - recommendations % [line]  # 业务建议列表
 ```
 
 **复用类型**（跨步骤复用）：在文档级 `Types:` 定义，PascalCase 首字母大写，步骤中直接引用：
@@ -528,12 +531,12 @@ children 必须全部是 `case`。同层级互斥步骤必须放在同一 branch
 ```
 Types:
 - ChatMessage:  # 对话消息
-  - role: line  # 角色标识（system/user/assistant）
-  - content: text  # 消息正文
+  - role % line  # 角色标识（system/user/assistant）
+  - content % text  # 消息正文
 
 ## Steps
 1. [act] 收集对话历史
-  + → messages: [ChatMessage]  # 对话历史
+  + → messages % [ChatMessage]  # 对话历史
 ```
 
 **命名约束**（承本节开头的"命名禁止望词生义"纲领，落到具体规则）：
@@ -566,8 +569,8 @@ Types:
 ```
 N. [act] 执行数据修复
   - ← raw_data, fix_strategy
-  + → clean_data: [DataRecord]  # 修复后数据
-  + → repair_summary: [line]  # 修复操作摘要
+  + → clean_data % [DataRecord]  # 修复后数据
+  + → repair_summary % [line]  # 修复操作摘要
   > ```hop_python
     filled = fill_missing(data: raw_data, strategy: fix_strategy)
     if fix_strategy.clip_enabled:
@@ -581,7 +584,7 @@ N. [act] 执行数据修复
 
 ### subprocess.run：白名单命令行调用 ^anc-step-subprocess-run
 
-body 里可以执行外部命令行程序，写法**完全对齐 Python 的 `subprocess.run`**（2026-08-29 作者定——"写是按 python 写"，名字是写法的一部分；这是 hop_python 唯一的 `x.y(...)` 形态，引擎认此字面为内置，不开模块系统）。前提：命令名必须在宿主 sandbox 配置的命令白名单里（`runtime.available`）——**名单空 = 此能力关死**，引擎不内置任何命令。依赖的命令名同时写进 Config 段的 `requires_commands:` 键（spec 自声明命令依赖）——引擎启动时拿声明与宿主白名单对账，缺配置在进任何步骤之前就拦下并指明加进 hopjit.yaml 的 commands: 列表；键缺席零比对（存量 spec 零破坏），未声明的命令仍由运行期白名单核兜底拒。
+body 里可以执行外部命令行程序，写法**完全对齐 Python 的 `subprocess.run`**（2026-08-29 作者定——"写是按 python 写"，名字是写法的一部分；这是 hop_python 唯一的 `x.y(...)` 形态，引擎认此字面为内置，不开模块系统）。前提：命令名必须在宿主 sandbox 配置的命令白名单里（`runtime.available`）**或是本 spec《已批准命令》节里某一行的首项**（2026-09-30——同一张卡不写两遍;并的是命令名,不是前缀,body 是作者写死经 validate 的确定性代码）——**两处都空 = 此能力关死**，引擎不内置任何命令。依赖的命令名同时写进 Config 段的 `requires_commands:` 键（spec 自声明命令依赖）——引擎启动时拿声明与宿主白名单对账，缺配置在进任何步骤之前就拦下并指明加进 hopjit.yaml 的 commands: 列表；键缺席零比对（存量 spec 零破坏），未声明的命令仍由运行期白名单核兜底拒。
 
 ```python
 # ✅ 正确:命令与参数在一个列表里,命令是第一个元素,一个参数一个元素
@@ -756,12 +759,12 @@ HopJIT 为 `reason`/`check` 步骤组装 prompt 时按 6 层构建：
 Goal: 评估输入数据集的质量问题，自动修复并生成质量报告
 
 Inputs:
-- raw_data: [DataRecord]  # 原始数据集
-- quality_threshold: float  # 质量达标阈值
+- raw_data % [DataRecord]  # 原始数据集
+- quality_threshold % float  # 质量达标阈值
 
 Outputs:
-- clean_data: [DataRecord]  # 修复后数据
-- quality_report: markdown  # 质量报告
+- clean_data % [DataRecord]  # 修复后数据
+- quality_report % markdown  # 质量报告
 
 Constraints:
 - 修复后数据行数保留率 ≥ 90%
@@ -769,20 +772,20 @@ Constraints:
 
 Types:
 - DataRecord:  # 数据记录
-  - id: line  # 记录标识
-  - fields: yaml  # 业务字段
-  - source: line  # 数据来源
+  - id % line  # 记录标识
+  - fields % yaml  # 业务字段
+  - source % line  # 数据来源
 
 ## Steps
 1. [act] 统计数据质量指标（缺失率、异常分布、跨字段一致性）
   - ← raw_data
   + → profile:  # 数据质量画像
-    - missing_rates: [float]  # 各列缺失率
-    - anomaly_count: int  # 异常记录数
-    - issues: [line]  # 质量问题列表
+    - missing_rates % [float]  # 各列缺失率
+    - anomaly_count % int  # 异常记录数
+    - issues % [line]  # 质量问题列表
 2. [reason] 解读质量画像，制定修复策略
   - ← profile
-  + → fix_strategy: text  # 修复策略
+  + → fix_strategy % text  # 修复策略
   > 权衡数据保留率与质量，选择合适的缺失值处理和异常值处理方案
 3. [subtask retry=3 adaptive] 执行修复并验证质量达标
   + → clean_data
@@ -791,8 +794,8 @@ Types:
     + → clean_data
   3.2. [check final] 验证修复后质量 ≥ threshold 且行数保留率 ≥ 90%
     - ← clean_data, quality_threshold
-    + → quality_ok: bool  # 判定槽：是否达标
-    + → quality_note: text # 说明槽：未达标时缺口（通过时不被查看）
+    + → quality_ok % bool  # 判定槽：是否达标
+    + → quality_note % text # 说明槽：未达标时缺口（通过时不被查看）
 4. [act] 生成质量报告（含修复前后对比）
   - ← profile, clean_data, raw_data
   + → quality_report
@@ -836,7 +839,7 @@ Types:
 ```
 2. [reason] 分析舆情风险
   - ← social_data, news_data
-  + → risk_level: enum(low, medium, high)  # 风险等级
+  + → risk_level % enum(low, medium, high)  # 风险等级
   > 综合各渠道数据，评估当前舆情风险等级和趋势
 ```
 
@@ -845,7 +848,7 @@ Types:
 ```
 ### 2. [reason] 分析舆情风险
 - ← social_data, news_data
-+ → risk_level: enum(low, medium, high)  # 风险等级
++ → risk_level % enum(low, medium, high)  # 风险等级
 
 综合各渠道数据，评估当前舆情风险等级和趋势
 ```
@@ -863,12 +866,12 @@ Id: data-quality
 Goal: 评估输入数据集的质量问题，自动修复并生成质量报告
 
 Inputs:
-- raw_data: [DataRecord]  # 原始数据集
-- quality_threshold: float  # 质量达标阈值
+- raw_data % [DataRecord]  # 原始数据集
+- quality_threshold % float  # 质量达标阈值
 
 Outputs:
-- clean_data: [DataRecord]  # 修复后数据
-- quality_report: markdown  # 质量报告
+- clean_data % [DataRecord]  # 修复后数据
+- quality_report % markdown  # 质量报告
 
 Constraints:
 - 修复后数据行数保留率 ≥ 90%
@@ -876,22 +879,22 @@ Constraints:
 
 Types:
 - DataRecord:  # 数据记录
-  - id: line  # 记录标识
-  - fields: yaml  # 业务字段
-  - source: line  # 数据来源
+  - id % line  # 记录标识
+  - fields % yaml  # 业务字段
+  - source % line  # 数据来源
 
 ## Steps
 
 ### 1. [act] 统计数据质量指标（缺失率、异常分布、跨字段一致性）
 - ← raw_data
 + → profile:  # 数据质量画像
-  - missing_rates: [float]  # 各列缺失率
-  - anomaly_count: int  # 异常记录数
-  - issues: [line]  # 质量问题列表
+  - missing_rates % [float]  # 各列缺失率
+  - anomaly_count % int  # 异常记录数
+  - issues % [line]  # 质量问题列表
 
 ### 2. [reason] 解读质量画像，制定修复策略
 - ← profile
-+ → fix_strategy: text  # 修复策略
++ → fix_strategy % text  # 修复策略
 
 权衡数据保留率与质量，选择合适的缺失值处理和异常值处理方案。
 优先保留业务关键字段，缺失值处理不得改变字段语义。
@@ -912,8 +915,8 @@ clean_data = repair(data: raw_data, strategy: fix_strategy)
 
 #### 3.2. [check final] 验证修复后质量 ≥ threshold 且行数保留率 ≥ 90%
 - ← clean_data, quality_threshold
-+ → quality_ok: bool  # 判定槽：是否达标
-+ → quality_note: text # 说明槽：未达标时缺口（通过时不被查看）
++ → quality_ok % bool  # 判定槽：是否达标
++ → quality_note % text # 说明槽：未达标时缺口（通过时不被查看）
 
 ### 4. [act] 生成质量报告（含修复前后对比）
 - ← profile, clean_data, raw_data
@@ -936,7 +939,7 @@ clean_data = repair(data: raw_data, strategy: fix_strategy)
 | `Id:` | `标识:` | `Outputs` | `输出` |
 | `Goal` | `目标` | `Config` | `配置` |
 | `Constraints` | `约束` | `Steps` | `步骤` |
-| `Types` | `类型` | | |
+| `Types` | `类型` | `Approved Commands` | `已批准命令` |
 | `Inputs` | `输入` | | |
 
 **步骤类型**（`[循环]` ≡ `[loop]`）：
@@ -976,15 +979,15 @@ clean_data = repair(data: raw_data, strategy: fix_strategy)
 ## 目标
 逐个检查客户并收集预警
 ## 输入
-- 客户列表: [line]  # 全部客户
+- 客户列表 % [line]  # 全部客户
 ## 输出
-- 预警名单: [line]  # 收集结果
+- 预警名单 % [line]  # 收集结果
 ## 步骤
 1. [循环 遍历 客户 于 客户列表, 收集 预警 入 预警名单] 逐个检查
-  + → 预警名单: [line]  # 收集端
+  + → 预警名单 % [line]  # 收集端
   1.1. [推理] 判断该客户是否需预警
     - ← 客户
-    + → 预警: line  # 单项判定
+    + → 预警 % line  # 单项判定
 2. [结束] 交付
 ```
 

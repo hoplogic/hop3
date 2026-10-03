@@ -1,0 +1,84 @@
+```python
+import ast
+import re
+import sys
+
+
+def check_function(func_node):
+    # 检查单个函数节点,返回它产生的违规条数(0 或 1)
+    func_name = func_node.name
+    if func_name.startswith("_"):
+        return 0
+    docstring = ast.get_docstring(func_node)
+    line_no = func_node.lineno
+    if docstring is None:
+        print("第 " + str(line_no) + " 行: 函数 " + func_name + " 缺少文档字符串")
+        return 1
+    args_obj = func_node.args
+    param_names = []
+    for arg_node in args_obj.posonlyargs:
+        param_names.append(arg_node.arg)
+    for arg_node in args_obj.args:
+        param_names.append(arg_node.arg)
+    if args_obj.vararg is not None:
+        param_names.append(args_obj.vararg.arg)
+    for arg_node in args_obj.kwonlyargs:
+        param_names.append(arg_node.arg)
+    if args_obj.kwarg is not None:
+        param_names.append(args_obj.kwarg.arg)
+    missing = []
+    for pname in param_names:
+        if pname == "self" or pname == "cls":
+            continue
+        pattern = r"\b" + re.escape(pname) + r"\b"
+        if re.search(pattern, docstring) is None:
+            missing.append(pname)
+    if len(missing) > 0:
+        print("第 " + str(line_no) + " 行: 函数 " + func_name + " 的文档字符串未提到参数: " + ", ".join(missing))
+        return 1
+    return 0
+
+
+if len(sys.argv) < 2:
+    print("用法: 请把待检查的 Python 文件路径作为第一个命令行参数传入", file=sys.stderr)
+    sys.exit(1)
+
+path = sys.argv[1]
+
+try:
+    fileobj = open(path, "r", encoding="utf-8")
+    source = fileobj.read()
+    fileobj.close()
+except OSError:
+    print("错误: 无法读取文件 " + path, file=sys.stderr)
+    sys.exit(1)
+except ValueError:
+    print("错误: 文件不是有效的 UTF-8 文本: " + path, file=sys.stderr)
+    sys.exit(1)
+
+# 去掉可能存在的 UTF-8 BOM,避免解析失败
+if source.startswith("\ufeff"):
+    source = source.replace("\ufeff", "", 1)
+
+try:
+    tree = ast.parse(source)
+except (SyntaxError, ValueError):
+    print("错误: 文件无法解析(语法错误): " + path, file=sys.stderr)
+    sys.exit(1)
+
+# 遍历语法树:函数节点只检查、不再深入(因此函数体内部的嵌套函数与局部类不会被检查);
+# 其余节点(包括类节点)继续展开,因此类体以及类里嵌套的类的方法都会被检查
+violation_count = 0
+pending = [tree]
+while len(pending) > 0:
+    node = pending.pop()
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        violation_count = violation_count + check_function(node)
+    else:
+        children = list(ast.iter_child_nodes(node))
+        pending.extend(reversed(children))
+
+if violation_count > 0:
+    sys.exit(1)
+sys.exit(0)
+```

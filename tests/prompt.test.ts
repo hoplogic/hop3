@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { PromptAssembler, formatPromptText, actRoleKind, roleGuideText , stripAssemblyNotes, buildToolManifest, renderPromptParts, stepDeliversReadTool, detectTextToolCall, buildTextToolCallHint, TEXT_TOOLCALL_HINT_MARKER } from '../src/prompt.js';
+import { PromptAssembler, formatPromptText, actRoleKind, roleGuideText , stripAssemblyNotes, buildToolManifest, renderPromptParts, stepDeliversReadTool, detectTextToolCall, buildTextToolCallHint, TEXT_TOOLCALL_HINT_MARKER, SCHEMA_KICK_MARKER, EMPTY_RETRY_NOTE, stepDescriptionIsChinese } from '../src/prompt.js';
 import { ExecutionEngine } from '../src/engine.js';
 import type { HostConfig } from '../src/provider-types.js';
 import type { AssembledContext } from '../src/runtime-types.js';
@@ -530,7 +530,7 @@ Test sliding window
       const ctx = assembler.reassembleAggressive(step1);
       expect(ctx.task_context).toContain('- Must be idempotent');   // 分条渲染（2026-08-30 L1 三件实装,分号挤行退役）   // 安全约束不丢
       expect(ctx.task_context).toContain('DataRecord={text:text, score:int}');               // Types 字段级同源
-      expect(ctx.task_context).toContain('你的输出声明在 L4）: result: text');
+      expect(ctx.task_context).toContain('你的输出声明在 L4）: result % text');
     });
 
     it('aggressively truncates inputs', () => {
@@ -816,6 +816,42 @@ Test adaptive replan
         const out = formatPromptText(shortCtx, 'reason');
         expect(out).not.toContain('ledger: |');
         expect(out).toContain('ledger:\n  （修订后的完整值——结构化数据');
+      });
+    });
+
+    // @v: anc-exec-format-example-structural —— 半角冒号提示只给中文描述的步骤（2026-09-28 作者拍
+    // "A，只在中文描述中加这个提示词":glm-flash 收尾写 `slide_ok： true`,英文描述的步骤加这句是噪声）
+    describe('半角冒号提示按描述语言条件出现', () => {
+      const NOTE = '键名后的冒号用半角 `:`';
+      const mk = (instruction: string, summary = 'Check slide'): AssembledContext => ({
+        ...FULL_CTX, instruction,
+        node_decl: { step_id: '6.1', step_type: 'check', summary, input_names: [] },
+        output_schema: [{ name: 'slide_ok', type: 'bool', description: '' }, { name: 'slide_issue', type: 'text', description: '' }],
+      });
+
+      it('正例：执行说明是中文 → 交付格式里有半角冒号提示', () => {
+        expect(formatPromptText(mk('逐条核对本页四项判据,给出判定'), 'check')).toContain(NOTE);
+      });
+
+      it('正例：只有步骤标题是中文也算中文描述', () => {
+        expect(formatPromptText(mk('Verify the four criteria.', '核对本页'), 'check')).toContain(NOTE);
+      });
+
+      it('反例：英文描述 → 不出现提示', () => {
+        expect(formatPromptText(mk('Verify the four criteria and give a verdict.'), 'check')).not.toContain(NOTE);
+      });
+
+      it('反例：英文描述到了重试轮,instruction 后面拼了引擎的中文 schema 反馈 / 空响应提醒 → 仍不出现', () => {
+        const kicked = `Verify the four criteria.\n\n${SCHEMA_KICK_MARKER}\n声明的输出未产出`;
+        expect(formatPromptText(mk(kicked), 'check')).not.toContain(NOTE);
+        expect(formatPromptText(mk(`Verify the four criteria.\n\n${EMPTY_RETRY_NOTE}`), 'check')).not.toContain(NOTE);
+        expect(stepDescriptionIsChinese('Check slide', kicked)).toBe(false);
+      });
+
+      it('正例：修订短 prompt 同一判据——中文描述出现、英文描述不出现', () => {
+        const short = (ins: string) => ({ ...mk(ins), revision_short: true } as AssembledContext);
+        expect(formatPromptText(short('逐条核对本页四项判据'), 'check')).toContain(NOTE);
+        expect(formatPromptText(short('Verify the four criteria.'), 'check')).not.toContain(NOTE);
       });
     });
 
@@ -1493,6 +1529,16 @@ describe('L0 世界观与区块地图', () => {
     expect(out).toContain('`=|` 的值恒在下方缩进行里');
     expect(out).toContain('`名 % 类型 =| 值` 把值写在同一行是语法错误');
     expect(out).not.toContain('你的真实值就丢了');   // 后果解释不进教学位,拦阻归引擎侧值位判错
+  });
+
+  // @v: ^anc-exec-l0-worldview-impl ③声明形态与赋值形态同符 %（todo/0109 第 4 步）
+  it('正例：声明形态例用 % 分隔，与赋值形态同符；反例：L0 与 L1 不再出现 `名: 类型` 声明写法', () => {
+    const out = formatPromptText(BASE_CTX, 'reason');
+    expect(out).toContain('- 结论 % text  # 一句话判断');
+    expect(out).toContain('  - 项目名 % line  # 单行文本');
+    expect(out).toContain('  - 金额列表 % [int]');
+    expect(out).not.toContain('- 结论: text');
+    expect(out).not.toContain('项目名: line');
   });
 
   it('正例：树词表列全 15 种步骤类型（2026-08-31 作者抓漏容器类别后补全——含 call/on fail/exit/break/continue）', () => {
@@ -2769,6 +2815,10 @@ describe('工具清单前导句重试轮分道', () => {
     expect(withRetry).toContain('但本轮带着修复反馈');
     expect(firstRound).not.toContain('但本轮带着修复反馈');
     expect(firstRound).toContain('严格禁止调用');   // 首轮原句不动
+    // todo/0111:重试轮同句教 no_change 旁路出口（产出照声明交,另起一行写）;首轮没有这道闸不教
+    expect(withRetry).toContain('产出照本步输出声明完整交，另起一行顶格写 `no_change: 原因`');
+    expect(withRetry).toContain('也不能代替产出');
+    expect(firstRound).not.toContain('no_change');
   });
 });
 

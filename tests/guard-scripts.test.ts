@@ -7,7 +7,7 @@
 // 此前三守卫只有准入时的一次性负向验证（TRACEABILITY 卡记录）——一次性证明 ≠ 常驻保护。
 import { describe, it, expect } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, mkdirSync, existsSync, readFileSync, cpSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, existsSync, readFileSync, cpSync, rmSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -1045,6 +1045,178 @@ describe('发布防线四断言（maintainers/ 不出公开面）', () => {
     expect(files.length).toBeGreaterThan(0);
     expect(files.some(f => f.includes('maintainers'))).toBe(false);
     expect(files.some(f => f.includes('RELEASING'))).toBe(false);
+  });
+});
+
+// ── npm 包文档自足（design [[release-engineering#^anc-release-tarball-self-contained]],2026-10-02）──
+// @v: anc-release-tarball-self-contained
+describe('npm 包文档自足：用户面文档经打包期清洗后随包分发,不靠 GitHub 兜底,不带工程链内部信息', () => {
+  const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf-8'));
+  const files: string[] = pkg.files ?? [];
+  const manifest = JSON.parse(readFileSync(join(REPO, 'scripts', 'pkgdocs-manifest.json'), 'utf-8')) as { files: string[]; excluded_prefixes: string[] };
+  const SCRIPT = join(REPO, 'scripts', 'build-pkgdocs.mjs');
+  const violations = async (text: string): Promise<string[]> => (await import(SCRIPT)).purityViolations(text);
+  // 测试自己的散文剥离——按 CommonMark 逐行走围栏状态（行首 3+ 反引号开栏,同种且不少于开栏数的整行关栏;行内 ``` 是普通文本）,再剥行内代码。
+  // 故意不复用脚本的 stripCode：净度验收的"独立核"若与脚本同一把尺,脚本的尺错了测试也跟着瞎（review 面三实锤旧正则 685 行盲区时测试 ③ 同盲）。
+  const proseOf = (text: string): string => {
+    const out: string[] = [];
+    let fence: { ch: string; n: number } | null = null;
+    for (const line of text.split('\n')) {
+      const m = /^(\s*(?:>\s*)*)(`{3,}|~{3,})/.exec(line);
+      if (fence) { if (m && m[2][0] === fence.ch && m[2].length >= fence.n && /^\s*(?:>\s*)*[`~]+\s*$/.test(line)) fence = null; continue; }
+      if (m) { fence = { ch: m[2][0], n: m[2].length }; continue; }
+      out.push(line.replace(/(`+)(?!`)([^`]|[^`][\s\S]*?[^`])\1(?!`)/g, ''));
+    }
+    return out.join('\n');
+  };
+  const PURITY_WORDS = readFileSync(join(REPO, 'scripts', 'github-purity-words.txt'), 'utf-8').split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#')).map(w => new RegExp(w));
+  const HOP_SKILLS = ['driver/hop-skill.md', 'driver/codex/hop-skill.md', 'driver/opencode/hop-skill.md'];
+
+  it('① 清单每一项在仓库存在;files 中清单项与 manifest 等长（不是 ≥ 下限）;driver 三载体 hop-skill 指路的包内路径在清单内', () => {
+    for (const f of manifest.files) expect(existsSync(join(REPO, f)), `清单项不存在: ${f}`).toBe(true);
+    expect(files.filter(f => manifest.files.includes(f)).length).toBe(manifest.files.length);
+    expect(manifest.files.length).toBe(35);
+    for (const sk of HOP_SKILLS) {
+      const t = readFileSync(join(REPO, sk), 'utf-8');
+      const refs = [...t.matchAll(/@hoplogic\/hopjit\/((?:docs|examples)\/[^`）)\n]+?\.md)/g)].map(m => m[1]);   // 路径含空格（HopSpec V3语法参考.md）,不能用 \s 断
+      expect(refs.length, `${sk} 没有指路任何包内文档路径`).toBeGreaterThan(0);
+      for (const r of refs) expect(manifest.files, `${sk} 指路 ${r} 不在清单内`).toContain(r);
+    }
+  });
+
+  it('② files 白名单含清单每一项,且不含任何排除前缀（整目录 docs/concepts/ docs/tutorials/、D 系列、工程实现链、ARCHITECTURE、设计层、追溯表、Doctree、i18n）', () => {
+    for (const f of manifest.files) expect(files, `files 缺 ${f}`).toContain(f);
+    for (const no of [...manifest.excluded_prefixes, 'docs/concepts/', 'docs/tutorials/', 'docs/reference/']) {
+      expect(files.some(f => f === no || (no.endsWith('/') && f === no)), `files 不该含整目录/排除项 ${no}`).toBe(false);
+      expect(files.some(f => f.startsWith(no) && !manifest.files.includes(f)), `files 含排除前缀 ${no} 下的非清单项`).toBe(false);
+    }
+  });
+
+  it('③ 正例：实跑 --out,输出与清单一一对应,净度零命中;独立实现再核散文无 @trace/双链/锚点/卡号/NUL/词表;README 与导读专项段真删了;源未变', async () => {
+    const out = mkdtempSync(join(tmpdir(), 'pkgdocs-'));
+    const srcBefore = new Map(manifest.files.map(f => [f, readFileSync(join(REPO, f))]));
+    const r = spawnSync('node', [SCRIPT, '--out', out], { encoding: 'utf-8' });
+    expect(r.status, r.stderr).toBe(0);
+    for (const f of manifest.files) {
+      const p = join(out, f);
+      expect(existsSync(p), `发布件缺 ${f}`).toBe(true);
+      const t = readFileSync(p, 'utf-8');
+      expect(await violations(t), `${f} 净度`).toEqual([]);
+      expect(t.includes('\u0000'), `${f} 含 NUL`).toBe(false);
+      expect(t.startsWith('%%'), `${f} 仍以 @trace 块开头`).toBe(false);
+      const prose = proseOf(t);
+      expect(/\[\[[^\]]/.test(prose), `${f} 散文残留双链`).toBe(false);
+      expect(/\^anc-[a-z0-9]+-/.test(prose), `${f} 散文残留锚点`).toBe(false);
+      expect(/(todo|hopissues)\/(?:[\w-]+\/)?\d{4}/.test(prose), `${f} 散文残留卡号`).toBe(false);
+      for (const w of PURITY_WORDS) expect(w.test(t), `${f} 命中净度词表 ${w.source}`).toBe(false);
+      expect(Buffer.compare(readFileSync(join(REPO, f)), srcBefore.get(f)!), `--out 碰了源 ${f}`).toBe(0);
+    }
+    const readme = readFileSync(join(out, 'README.md'), 'utf-8');
+    for (const gone of ['仓库形态', '开发与发版（维护者）', 'maintainers/', 'RELEASING']) expect(readme, `README 发布件残留 ${gone}`).not.toContain(gone);
+    const guide = readFileSync(join(out, 'docs', 'tutorials', '00-新人导读.md'), 'utf-8');
+    expect(guide).toContain('随源码仓分发,不在本包内');
+    expect(guide).not.toContain('D1-用AI做工程');
+  });
+
+  it('④ 反例：注入七样与四种实撞形态的临时源经同一清洗函数——七样清掉、示例保留、行内 ``` 不翻转围栏、行内代码括号原样、不留括注残句与旁注残行、反引号清单外双链退反引号纯名', async () => {
+    const mod = await import(SCRIPT);
+    const src = [
+      '%% @trace', '\tid: x', '\tsource: [[y]]', '%%', '',
+      '# 标题 ^anc-top',
+      '权威见核心规范 `^anc-step-call` 插值条款。',
+      '详见 [[02-读懂一份spec]] 与 [[Doctree]] 与 [[HopSpec V3核心规范#^anc-x|核心规范]]。',
+      '- 开发者向：载体机制见 `docs/design/codex-driver-carrier.md`。',
+      '实撞见 todo/0108（值位毒成字符串）,另见（hopissues/0050 引擎判定）。',
+      '| todo/〔内部开发面，快照暂不含〕 | 事项卡 |',
+      '引擎只解析 `[[]]`,`^anc-*` 锚点渲染时剥掉;写法 `[[文档路径#章节名]]`;真引用 `[[HopSpec V3语法参考#^anc-x]]` 转链接。',
+      '围栏写法示例是 ` ```hop_python `（行内三反引号,不是开栏）;这句之后的 todo/0070 必须仍被清掉。',
+      '工具调用写 `execute_tool()` 与 `get_credential()`,括号是代码的一部分。',
+      '模块名 `[[step-dispatcher]]` 与 `[[hopfix]]` 不在清单内。',
+    ].join('\n');
+    const out: string = mod.cleanDoc(src, 'docs/tutorials/x.md', manifest);
+    expect(await violations(out), out).toEqual([]);
+    for (const gone of ['todo/0108', 'hopissues/0050', 'todo/0070', '^anc-step-call', '^anc-top', 'codex-driver-carrier', '[[step-dispatcher]]', '[[hopfix]]']) expect(out, `残留 ${gone}`).not.toContain(gone);
+    expect(out).toContain('[02-读懂一份spec](./02-读懂一份spec.md)');
+    expect(out).toContain('[核心规范](../concepts/HopSpec%20V3核心规范.md)');
+    expect(out).toContain('Doctree');
+    expect(out).toContain('`[[]]`');
+    expect(out).toContain('`^anc-*`');
+    expect(out).toContain('`[[文档路径#章节名]]`');
+    expect(out).toContain('[HopSpec V3语法参考](../concepts/HopSpec%20V3语法参考.md)');
+    expect(out).toContain('` ```hop_python `');
+    expect(out).toContain('`execute_tool()`');
+    expect(out).toContain('`get_credential()`');
+    expect(out).toContain('`step-dispatcher`');
+    expect(out).toContain('`hopfix`');
+    expect(out).not.toContain('内部事项卡）');          // 括注整删,不是裸替换留残句
+    expect(out).not.toContain('（开发者向）');
+    expect(out).not.toMatch(/^- 开发者向/m);           // 旁注行整删
+    expect(out.startsWith('# 标题')).toBe(true);
+  });
+
+  it('⑤ 真仓库：备份目录已存在时 --in-place 拒绝（退出非零、指路 --restore、源不变）;正常 --in-place 替换后 --restore 字节级还原,备份目录不留', () => {
+    const target = join(REPO, 'docs', 'concepts', 'HopSpec V3语法参考.md');
+    const backup = join(REPO, '.pkgdocs-backup');
+    const before = readFileSync(target);
+    expect(existsSync(backup), '测试前置：备份目录不应存在（残留即上次打包中断,先跑 --restore）').toBe(false);
+    mkdirSync(backup);
+    try {
+      const r0 = spawnSync('node', [SCRIPT, '--in-place'], { encoding: 'utf-8', cwd: REPO });
+      expect(r0.status).not.toBe(0);
+      expect(r0.stderr).toContain('--restore');
+      expect(Buffer.compare(readFileSync(target), before)).toBe(0);
+    } finally {
+      rmSync(backup, { recursive: true, force: true });
+    }
+    const r1 = spawnSync('node', [SCRIPT, '--in-place'], { encoding: 'utf-8', cwd: REPO });
+    expect(r1.status, r1.stderr).toBe(0);
+    try {
+      const mid = readFileSync(target, 'utf-8');
+      expect(/@trace/.test(mid)).toBe(false);
+      expect(mid).not.toEqual(before.toString('utf-8'));
+    } finally {
+      const r2 = spawnSync('node', [SCRIPT, '--restore'], { encoding: 'utf-8', cwd: REPO });
+      expect(r2.status, r2.stderr).toBe(0);
+    }
+    expect(Buffer.compare(readFileSync(target), before)).toBe(0);
+    expect(existsSync(backup)).toBe(false);
+  });
+
+  it('⑥ release.sh ④b MUST 三条;prepack 以 npm run -s build 开头（执行位——eb81fa6b）再串 --in-place;postpack 恒等于 --restore 命令', () => {
+    const sh = readFileSync(join(REPO, 'scripts', 'release.sh'), 'utf-8');
+    for (const m of ['"docs/concepts/HopSpec V3语法参考.md"', '"docs/tutorials/00-新人导读.md"', '"docs/concepts/HopSop标准作业流程.md"']) expect(sh).toContain(m);
+    expect(pkg.scripts.prepack).toMatch(/^npm run -s build && node scripts\/build-pkgdocs\.mjs --in-place$/);
+    expect(pkg.scripts.prepublishOnly).toBe('npm run -s build');
+    expect(pkg.scripts.postpack).toBe('node scripts/build-pkgdocs.mjs --restore');
+  });
+
+  it('⑦ 反例：净度不过时 --out 退出非零且目录空;--in-place 退出非零且源字节不变、无备份目录;purityViolations 对含 NUL 的文本返回非空', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'pkgdocs-dirty-'));
+    mkdirSync(join(repo, 'docs', 'tutorials'), { recursive: true });
+    const dirty = join(repo, 'docs', 'tutorials', '02-读懂一份spec.md');
+    // 清洗清不掉的脏：正文中间一个孤立的 @trace 字样——步 1 只删文件首个 %% 块,这个留下来,净度第一样必须抓到（临时仓没有词表文件,词表核不在本例覆盖面——词表核在 ③ 由独立实现核真发布件）
+    const dirtyBody = '# 二\n\n这里写着 @trace 三个字。\n';
+    writeFileSync(dirty, dirtyBody);
+    writeFileSync(join(repo, 'README.md'), '# r\n');
+    const mf = join(repo, 'm.json');
+    writeFileSync(mf, JSON.stringify({ files: ['README.md', 'docs/tutorials/02-读懂一份spec.md'], excluded_prefixes: [] }));
+    const env = { ...process.env, PKGDOCS_REPO: repo, PKGDOCS_MANIFEST: mf };
+    const out = mkdtempSync(join(tmpdir(), 'pkgdocs-dirty-out-'));
+    const r1 = spawnSync('node', [SCRIPT, '--out', out], { encoding: 'utf-8', env });
+    expect(r1.status).not.toBe(0);
+    expect(r1.stderr).toContain('净度');
+    expect(readdirSync(out)).toEqual([]);
+    const r2 = spawnSync('node', [SCRIPT, '--in-place'], { encoding: 'utf-8', env, cwd: repo });
+    expect(r2.status).not.toBe(0);
+    expect(readFileSync(dirty, 'utf-8')).toBe(dirtyBody);
+    expect(existsSync(join(repo, '.pkgdocs-backup'))).toBe(false);
+    const mod = await import(SCRIPT);
+    // 验收尺与清洗尺同一把：行内 ``` 之后的泄露必须被抓到（旧正则把行内 ``` 当开栏,其后半篇散文全成盲区——review 面三实测三份概念文档 685 行从未被检）
+    // 形态要带后面一个真围栏：旧正则把行内 ``` 与下一个真围栏的开栏配成一对,中间散文全吞——这正是核心规范 L247 的实况
+    expect(mod.purityViolations('围栏写法示例是 ` ```hop_python `。\n\n实撞见 todo/9999。\n\n```\nx = 1\n```\n\n后文。\n')).toContain('todo/NNNN');
+    // 占位符还原自检：源里本来就带 NUL+数字 的文本会与占位符撞形,还原后仍有 NUL 必须响亮抛错,不许静默写盘
+    expect(() => mod.cleanDoc('# t\n\n正文 \u00007\u0000 残留\n', 'docs/tutorials/x.md', manifest)).toThrow(/NUL/);
+    expect(mod.purityViolations('干净正文 带\u0000NUL')).toContain('NUL');
   });
 });
 

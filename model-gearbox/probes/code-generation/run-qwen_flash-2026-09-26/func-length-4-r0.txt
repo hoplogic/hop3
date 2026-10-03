@@ -1,0 +1,63 @@
+```python
+import ast
+import re
+import json
+import sys
+
+def check_function_length(filename):
+    with open(filename, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    try:
+        tree = ast.parse(content)
+    except SyntaxError as e:
+        sys.stderr.write(f"SyntaxError in {filename}: {e}\n")
+        sys.exit(1)
+
+    violations = []
+
+    def visit_node(node, parent_lineno=None):
+        if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+            # Calculate function length: from def line to last body line (inclusive)
+            # Decorator lines are not counted, so we only count the actual function body
+            start_line = node.lineno
+            end_line = node.end_lineno
+
+            # For nested functions, the length includes all inner function bodies
+            # But each function must be checked individually
+            func_lines = end_line - start_line + 1
+            if func_lines > 40:
+                violations.append(f"Line {start_line}: Function '{node.name}' has {func_lines} lines, exceeds 40-line limit.")
+
+            # Recursively check nested functions inside this function
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    visit_node(child, node.lineno)
+
+        elif isinstance(node, ast.ClassDef):
+            # Check methods inside class
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    visit_node(child, node.lineno)
+
+        # Continue traversing other nodes
+        for child in ast.iter_child_nodes(node):
+            visit_node(child, parent_lineno)
+
+    visit_node(tree)
+
+    if violations:
+        for violation in violations:
+            sys.stderr.write(violation + "\n")
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.stderr.write("Usage: python script.py <file_path>\n")
+        sys.exit(1)
+    
+    filename = sys.argv[1]
+    check_function_length(filename)
+```

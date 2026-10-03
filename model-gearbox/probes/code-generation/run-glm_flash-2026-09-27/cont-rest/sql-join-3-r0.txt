@@ -1,0 +1,13 @@
+思路：以 `customers` 为左表 LEFT JOIN `orders`,保证没有订单(或没有已支付订单)的地区也能输出；用条件聚合统计已支付订单，孤立订单(找不到客户的)自然不会参与;`SUM(CASE ... ELSE 0 END)` 保证无已支付订单时输出 0 而不是 NULL,`COALESCE(o.amount, 0)` 让 NULL 金额按 0 计入金额但单数照常统计;`COUNT(DISTINCT c.id)` 防止一个客户多笔订单导致客户数重复计数。
+
+```sql
+SELECT
+  c.region AS region,
+  COUNT(DISTINCT c.id) AS customer_count,
+  SUM(CASE WHEN o.status = 'paid' THEN 1 ELSE 0 END) AS paid_order_count,
+  COALESCE(SUM(CASE WHEN o.status = 'paid' THEN COALESCE(o.amount, 0) ELSE 0 END), 0) AS paid_amount
+FROM customers AS c
+LEFT JOIN orders AS o ON o.customer_id = c.id
+GROUP BY c.region
+ORDER BY paid_amount DESC, region ASC;
+```

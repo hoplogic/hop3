@@ -3,7 +3,7 @@
 	source: [[../tools]]
 	source_id: hopjit-tools
 	type: extract
-	last_sync: 2026-08-31T00:10+0800
+	last_sync: 2026-09-27T20:38+0800
 	note: spec 内容工具族模块设计（读/写/验三面+族总览）——2026-08-31 自 tools.md 拆出（作者定"文件工具、spectree工具，都应该成为模块"）。
 		四锚原名随迁不改（^anc-exec-spec-tools-family / ^anc-exec-builtin-edit-tree-tool / ^anc-exec-builtin-read-tree-tool / ^anc-exec-builtin-validate-tool）。
 		AST 核心 spec-tree-edit.ts 归 spec-ast 模块（2026-08-30 cd8c4d1 定——纯 AST 操作与 ast-helpers 同性质,出口登记在 spec-ast.md）,此处是工具壳契约。
@@ -116,10 +116,10 @@ tools 模块的 spec 内容工具组（装配层本体见 [[../tools]]——本�
 struct: TreeEditSurgeryLedger        # 实现载体 src/tools.ts TreeEditParsed(在 AST 定位三元组之外扩的四个手术字段)
   Id: tree-edit-surgery-ledger
   Fields:
-    - lines: [line]           # spec_text 原文行数组——手术的字节权威,一切产出行从这里切
-    - src_lines_of: yaml      # 节点→其源行数组的映射(主文节点→lines;片段节点→各自片段的行数组)——搬移时每个节点从自己的源取字节
-    - prefix_end: int         # 0-based 排他:首步行之前的原文行全属前缀,原样进出
-    - suffix_start: int       # 0-based:末步范围(尾部叙事节钳位后)之后的原文行全属后缀,原样进出——钳位语义的直接承载者
+    - lines % [line]           # spec_text 原文行数组——手术的字节权威,一切产出行从这里切
+    - src_lines_of % yaml      # 节点→其源行数组的映射(主文节点→lines;片段节点→各自片段的行数组)——搬移时每个节点从自己的源取字节
+    - prefix_end % int         # 0-based 排他:首步行之前的原文行全属前缀,原样进出
+    - suffix_start % int       # 0-based:末步范围(尾部叙事节钳位后)之后的原文行全属后缀,原样进出——钳位语义的直接承载者
 ```
 
 **契约四条**：
@@ -148,17 +148,17 @@ struct: TreeEditSurgeryLedger        # 实现载体 src/tools.ts TreeEditParsed(
 struct: TreeEditCommonArgs        # 四工具共有参数
   Id: tree-edit-common-args
   Fields:
-    - spec_text: text         # 待编辑 spec 全文（或 spec_is_fragment=true 时为裸步骤片段——内容直传,工具不读文件）
-    - spec_is_fragment: bool  # 可选,缺省 false——true 时进出同为裸片段（parseFragment 解析,serializeFragment 直出;hopbuild2 拼装步的骨架片段形态）
-    - work_items: [line]      # 可选,待同步的队列（三段式首段是节点路径的行,随重编号改写后返回;非字符串数组的畸形值静默忽略不拒;命中改写的行分隔符统一重排为 ' | ',未命中的行原样保留）
+    - spec_text % text         # 待编辑 spec 全文（或 spec_is_fragment=true 时为裸步骤片段——内容直传,工具不读文件）
+    - spec_is_fragment % bool  # 可选,缺省 false——true 时进出同为裸片段（parseFragment 解析,serializeFragment 直出;hopbuild2 拼装步的骨架片段形态）
+    - work_items % [line]      # 可选,待同步的队列（三段式首段是节点路径的行,随重编号改写后返回;非字符串数组的畸形值静默忽略不拒;命中改写的行分隔符统一重排为 ' | ',未命中的行原样保留）
 
 struct: TreeEditResult            # 四工具统一返回
   Id: tree-edit-result
   Fields:
-    - status: line            # ok | error
-    - spec_text: text         # 编辑并全局重编号后的全文（或裸片段）
-    - work_items: [line]      # 条件字段——调用传了 work_items 才出现,值为随编号改写后的清单;没传则返回里无此键
-    - renumber_map: yaml      # 旧号→新号全映射（供调用方核账）
+    - status % line            # ok | error
+    - spec_text % text         # 编辑并全局重编号后的全文（或裸片段）
+    - work_items % [line]      # 条件字段——调用传了 work_items 才出现,值为随编号改写后的清单;没传则返回里无此键
+    - renumber_map % yaml      # 旧号→新号全映射（供调用方核账）
 
 # 各工具专有参数:insert_node/replace_children 加 node_path: line 与 fragment: text（片段编号相对从 1 起）;
 # replace_node 加单项形态的 node_path: line 与 fragment: text（可省略——批量 replacements: [yaml]
@@ -188,17 +188,17 @@ struct: TreeEditResult            # 四工具统一返回
 struct: ReadSpecTreeArgs
   Id: read-spec-tree-args
   Fields:
-    - spec_text: text          # 全文或裸片段
-    - mode: line               # 枚举 skeleton | node
-    - node_path: line          # mode=node 必填——目标步骤号（如 "2.1"）
-    - spec_is_fragment: bool   # 缺省 false;true 时 spec_text 经 parseFragment 解析
+    - spec_text % text          # 全文或裸片段
+    - mode % line               # 枚举 skeleton | node
+    - node_path % line          # mode=node 必填——目标步骤号（如 "2.1"）
+    - spec_is_fragment % bool   # 缺省 false;true 时 spec_text 经 parseFragment 解析
 
 struct: ReadSpecTreeResult
   Id: read-spec-tree-result
   Fields:
-    - status: line   # ok | error
-    - text: text     # skeleton=结构树文本;node=子树全文（serializeFragment 形态）
-    - errors: yaml   # status=error 时的结构化错误（parse error 原样/NODE_NOT_FOUND）
+    - status % line   # ok | error
+    - text % text     # skeleton=结构树文本;node=子树全文（serializeFragment 形态）
+    - errors % yaml   # status=error 时的结构化错误（parse error 原样/NODE_NOT_FOUND）
 ```
 
 ## 内置 spec 验证工具【契约】 ^anc-exec-builtin-validate-tool
@@ -225,9 +225,9 @@ trait: BuiltinValidateSpec
 struct: ValidateSpecArgs
   Id: validate-spec-args
   Fields:
-    - text: text              # 待验 spec 或片段全文（内容直传——不是路径,工具不读文件）
-    - fragment: bool          # 可选,缺省 false。true=片段模式（parseFragment,豁免面见 [[../spec-parser#^anc-rule-fragment-mode]]）
-    - known_vars: [line]      # 可选,片段模式的上层已知变量名（入 V1 来源）
+    - text % text              # 待验 spec 或片段全文（内容直传——不是路径,工具不读文件）
+    - fragment % bool          # 可选,缺省 false。true=片段模式（parseFragment,豁免面见 [[../spec-parser#^anc-rule-fragment-mode]]）
+    - known_vars % [line]      # 可选,片段模式的上层已知变量名（入 V1 来源）
 ```
 
 返回 `content_type: 'json'`，result 为 `{status: ok|error, errors: [...], warnings: [...]}`——与 CLI ValidateResponse（[[../hop-cli#^anc-cli-validate-response]]）同形，字段逐一对应。

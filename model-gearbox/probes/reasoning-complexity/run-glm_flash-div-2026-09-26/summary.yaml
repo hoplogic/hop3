@@ -1,0 +1,86 @@
+service: glm_flash
+model_from_response:
+  - glm-5.3-flash
+date: '2026-09-26'
+seed: 20260918
+task: div
+维度: G1 推理复杂度——2N÷N 位除法阶梯,商 2N+1 位有效数字(迭代推理:每位商依赖上一步余数;禁工具纯推理;爬梯每档 n=5,候选最大档 confirm=20 发,正确率>=90% 定档)
+curve:
+  N2:
+    climb: 5/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+  N3:
+    climb: 5/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+  N4:
+    climb: 4/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: false
+        got: ''
+        truth: '16499.5488'
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+    confirm: 20/20
+    confirm_rate: 1
+  N5:
+    climb: 4/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: false
+        got: '64429.434747'
+        truth: '64420.754041'
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+    confirm: 19/20
+    confirm_rate: 0.95
+  N6:
+    climb: 4/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: false
+        got: '265841.4741937'
+        truth: '265841.4742647'
+    confirm: 13/20
+    confirm_rate: 0.65
+最大N: 5

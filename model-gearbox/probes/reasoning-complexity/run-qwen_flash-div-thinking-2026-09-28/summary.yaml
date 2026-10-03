@@ -1,0 +1,58 @@
+service: qwen_flash
+model_from_response:
+  - qwen-flash
+date: '2026-09-28'
+seed: 20260918
+task: div
+thinking: 'on'
+max_tokens: 32768
+维度: G1 推理复杂度——2N÷N 位除法阶梯,商 2N+1 位有效数字(迭代推理:每位商依赖上一步余数;禁工具纯推理;爬梯每档 n=5,候选最大档 confirm=20 发,正确率>=90% 定档)
+curve:
+  N2:
+    climb: 5/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+  N3:
+    climb: 4/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: false
+        got: '816.3132'
+        truth: '816.3130'
+      - i: 5
+        correct: true
+    confirm: 19/20
+    confirm_rate: 0.95
+  N4:
+    climb: 4/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: false
+        got: '1897.70716'
+        truth: '1897.70715'
+    confirm: 15/20
+    confirm_rate: 0.75
+最大N: 3

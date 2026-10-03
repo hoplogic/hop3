@@ -1,0 +1,66 @@
+```python
+import ast
+import re
+import sys
+
+if len(sys.argv) < 2:
+    print("Usage: script.py <file>", file=sys.stderr)
+    sys.exit(1)
+
+filename = sys.argv[1]
+try:
+    with open(filename, 'rt', encoding='utf-8') as f:
+        content = f.read()
+except Exception:
+    sys.exit(1)
+
+if content == '':
+    sys.exit(0)
+
+try:
+    tree = ast.parse(content)
+except SyntaxError:
+    sys.exit(1)
+
+stack = [tree.body]
+candidates = []
+
+while stack:
+    nodes = stack.pop()
+    for node in nodes:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if not node.name.startswith('_'):
+                candidates.append(node)
+        elif isinstance(node, ast.ClassDef):
+            stack.append(node.body)
+
+exit_code = 0
+for node in candidates:
+    doc = ast.get_docstring(node)
+    if doc is None:
+        print("line " + str(node.lineno) + ": missing docstring", file=sys.stderr)
+        exit_code = 1
+    else:
+        params = []
+        for arg in node.args.args:
+            if arg.arg != 'self' and arg.arg != 'cls':
+                params.append(arg.arg)
+        for arg in node.args.kwonlyargs:
+            if arg.arg != 'self' and arg.arg != 'cls':
+                params.append(arg.arg)
+        if node.args.vararg:
+            vararg_name = node.args.vararg.arg
+            if vararg_name != 'self' and vararg_name != 'cls':
+                params.append(vararg_name)
+        if node.args.kwarg:
+            kwarg_name = node.args.kwarg.arg
+            if kwarg_name != 'self' and kwarg_name != 'cls':
+                params.append(kwarg_name)
+        
+        for param in params:
+            if not re.search(r'\b' + re.escape(param) + r'\b', doc):
+                print("line " + str(node.lineno) + ": docstring missing parameter '" + param + "'", file=sys.stderr)
+                exit_code = 1
+
+sys.exit(exit_code)
+```

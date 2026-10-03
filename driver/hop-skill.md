@@ -1,7 +1,7 @@
 ---
 name: hop
-description: 日常用 HopSpec——把对话里的 todo plan 升格为受引擎管护的执行：计划可控、执行可靠——进展有账、把关不跳、中断可续、边跑边改计划。用户说"继续上次的活/接着干/上次那个活到哪了"这类接续话语时也用本 skill（不必敲 /hop——接上手头活的账）。
-user_invocable: true
+description: HopSpec 是把一件活写成带目标、步骤、核验点的结构化规约,交给 hopjit 引擎按步执行：进度有账、把关由引擎强制、中断可续。/hop 是它的唯一入口,管四件事：①复杂的、需要可控可靠保障的任务（多步、要留进度、要核验、中断后要接得上）——升格为 HopSpec 交引擎管;一句话能答完的对话照常直接答,不进 hop。②跑一份现成的 HopSpec 文件。③构建、翻译、修订 HopSpec（把自然语言 skill 翻成 spec、改一份已有 spec 的几处）。④用户说"继续上次的活/接着干"这类接续话语时接上手头活的账。用户明说"走 MCP / standalone"时按独立模式跑（spec 在 hopjit server 进程里由它自己的 LLM 执行,本对话只做启动与介入）。
+user-invocable: true
 ---
 
 %% @trace
@@ -9,7 +9,7 @@ user_invocable: true
 	source: [[hopspec-skill]]
 	source_id: hopspec-driver-skill
 	type: extend
-	last_sync: 2026-09-04T10:29+0800
+	last_sync: 2026-10-02T23:09+0800
 	note: /hop 的 CC 载体 driver。定位与协议归 description+正文（单一事实源,本行不复述——三处抄同一段=三处漂移面,'随手/日常'分叉实撞）。引擎面配套锚点:主动 replan ^anc-exec-replan-proactive / abort ^anc-exec-abort / 镜像写回 ^anc-exec-specfile-writeback / 阅卷分权 ^anc-exec-reuse-verdict-outsource。逐稿演进史归 git log。
 %%
 
@@ -17,7 +17,7 @@ user_invocable: true
 
 把你正要干的活（或对话里已经列出的 plan）升格为一份 HopSpec 跑起来。**你自己驱动、自己干活**——引擎只管三件事：**顺序不乱、把关不跳、进展有账**（对话断了活不死，回来接着跑）。
 
-与 `/hopspec` 的分工：跑**成品 spec**（别人写的、参数要确认的）用 `/hopspec`；**现场的日常活**用 `/hop`——核心是**计划可控、执行可靠**（进 /hop 的活恒享建卡+进展账+把关全套）。本 skill 恒复用模式——不探测 MCP、不做参数仪式；执行缺省在主对话（活是主对话的活，上下文就在这里），例外规则见下"步骤的注意力管理"。
+/hop 是用户唯一看得见的入口——跑成品 spec、构建/翻译/修订 spec、走 MCP 独立模式,都从这里分派出去（见下「0. 分派」）；本篇正文讲的是主路：**现场的日常活**升格为任务卡——核心是**计划可控、执行可靠**（进 /hop 的活恒享建卡+进展账+把关全套）。主路恒复用模式——不探测 MCP、不做参数仪式；执行缺省在主对话（活是主对话的活，上下文就在这里），例外规则见下"步骤的注意力管理"。
 
 ## 用法（七动作：开 / 列 / 切 / 改 / 归档 / 提纯 / 决策）
 
@@ -35,6 +35,20 @@ user_invocable: true
 
 ## 执行流程
 
+### 0. 分派：用户给的是什么，走哪条路
+
+/hop 是唯一入口，进来先判用户给的是什么，五条路：
+
+- **一句话能答完、不需要留痕的**（算个数、翻译一段）→ 直接答，不进 hop。hop 不劫持对话。
+- **复杂的、需要可控可靠保障的活**（多步骤、要进度记录、要独立核验、中断后要能接着干）→ 下面第 1 节起的升格流程：建任务卡、引擎管进度与把关。这是 hop 的主路。
+- **一份现成的 HopSpec 文件**（用户给了路径，或指名跑某个提纯件 / 示例）→ 不升格，直接按 `hopspec` skill 的协议跑（同目录下的 `hopspec/SKILL.md`，模型可调、用户菜单不显示）：参数确认、介入点问人、终态按契约呈现。`/hop list` 不列它——它不是"手头的活"。
+- **构建 / 翻译 / 修订 HopSpec**：把自然语言 skill 翻成 spec → 按 `hopbuild` skill；改一份已有 spec 的几处 → 按 `hopfix` skill。`hopbuild2` 是实验件，只在用户点名"hopbuild2"时用，不自动选。
+- **用户明说"走 MCP / standalone"** → 按 `hopspec-mcp` skill 的协议跑：spec 在 hopjit server 进程里由它自己的 LLM 执行，本对话只做启动、介入点应答和结果呈现。
+
+拿不准用户要的是哪条，问一句，不猜。
+
+**运维场景的特殊规则按需读**：活涉及 ssh / 远端机器 / 多台环境，或项目 `hopjit.yaml` 里有 `environments:` 段，先读本目录 `references/hop-ops.md`（机器分级、按机器写已批准命令前缀、测试机整机放行）。其他活不用读它。
+
 ### 1. 升格：todo plan → spec（一个样例，不是一套规范）
 
 **先分流，再消歧，先查有没有现成流程可复用，然后才从头升格**（todo/0007 狗粮实撞后立，作者定；查现成流程 2026-08-28 作者定）：
@@ -49,7 +63,7 @@ user_invocable: true
 ```markdown
 2. [subtask free] 后面的活（到步展开）
   - ← 前面的产出
-  + → 交付物: text  # 说明
+  + → 交付物 % text  # 说明
 ```
 
 底下**一个子步都不用写**。执行到这里引擎自己停下来向你要计划——响应是 `adaptive_needed` 且带 `reason: "initial_plan"`（**这不是失败**，别做失败归因），`expansion_context` 里是 ← 输入的**实际值**（拿真产出定计划，不是盲规划；null 值项见 `missing_inputs`——计划里安排取数或按缺失处理）；你出子步骤提交（`--replan`，协议同"边跑边改计划"节），引擎接续执行;展开次数超上限时引擎拒收并在报文里给续批协议——**把情况原文呈给用户问"继续还是收手"，用户批了才照报文指引重交，你无权替答**（预算是人给的,追加也须人批）——**展开计划本身不过阅卷**（出计划、提交的都是你,引擎两闸是把关方;恒外移的只有 check final 的判定,别把"阅卷外移"误解成一切计划都要外移）。两条展开纪律引擎强制：**展开物必须含 check**（运行时出的计划无人预审，check 是唯一把关）；**展开物禁 commit**（不可逆动作必须写卡时显式声明——要 commit 写在 subtask free 外面消费其交付物）。中文写法 `[子任务 开放]`。样例：
@@ -60,26 +74,26 @@ Id: hop-20260826-1
 Goal: 查清 X 的现状,交叉核对后成文发出
 
 ## Outputs
-- report: markdown  # 调研报告
+- report % markdown  # 调研报告
 
 ## Steps
 1. [act free] 查 X 的三个独立来源
-  + → sources: yaml  # 来源与要点
+  + → sources % yaml  # 来源与要点
 
 2. [reason] 交叉核对,整理要点
   - ← sources
-  + → digest: text  # 核对后的要点
+  + → digest % text  # 核对后的要点
 
 3. [subtask] 成文并把关
   - ← digest
-  + → report: markdown  # 调研报告
+  + → report % markdown  # 调研报告
   3.1. [act free] 写初稿
     - ← digest
-    + → report: markdown
+    + → report % markdown
   3.2. [check final] 核对:来源全覆盖、结论与要点一致
     - ← report
-    + → ok: bool  # 判定
-    + → note: text  # 缺口
+    + → ok % bool  # 判定
+    + → note % text  # 缺口
 
 4. [commit] 发出去
   - ← report
@@ -101,9 +115,10 @@ Goal: 查清 X 的现状,交叉核对后成文发出
 - Goal 一句话 + Outputs 一个交付物（引擎兜底"做完=什么"的验收面）；
 - **带 body 的步骤，说明与 body 功能保持一致**（作者定 2026-08-30——说人话说完整）：`>` 说明如实说清 body 在干什么，不许说明写"核对清单"而 body 里藏着别的动作。判据：只读说明的人对这步的预期与实际零偏差；
 - **对话结晶必须落卡（作者定 2026-08-27"充分供给,不能吝啬token"——从可选好习惯升格为必做）**：对话里已拍的板、定过的口径、排除项、材料指针，**全文写进任务卡的背景/参考节**（要点进步骤 `>` 说明或 Constraints）。判据：新会话或 subagent **读卡即接手，零追问**。为什么升格：语境不落卡，跨会话续跑只剩引擎的结构账；且阅卷 subagent（见下"阅卷外移"）的供给全靠卡——语境缺席它就只能盲判，或者找你要（要来的就是执行叙事，独立性没了）；
+- **写卡时列出 `## 已批准命令`**——这是任务卡的一个段，授权只对这张卡起的 run 有效；普通对话里跑命令与它无关，照旧走载体。把这个活要跑的命令前缀一行一条写进去（放 Config 之后、Steps 之前），之后这些命令经 hopjit 按卡放行，不再逐条过载体的权限弹窗。**清单管的是"这个任务允许跑什么"，不管在哪一步跑**——同一条命令在 act 步骤里跑是探索（可重跑），在 `[commit]` 步骤里跑是提交（前面必须过 check final 或 confirm，才执行一次），探索态还是提交态由步骤类型定，引擎按态把关，不靠清单区分。commit 步骤要跑的命令也从这张清单来——写卡时把它写进 `[commit]` 的 hop_python body（`subprocess.run([...], cwd: ...)`），引擎执行到那一步时直接跑 body，不再临场调工具；body 里的命令不在清单上同样被拒。所以写卡时要同时想好两件事：清单列全，不可逆的那条放进 commit 的 body。前缀写到能区分意图的那一层：`- python3 scripts/ssh_exec.py --config configs/x.json` 放行所有以它开头的调用，`python3 evil.py` 不行；`- git status` 放行 `git status --short`，不放行 `git push`——要 push 就单独列 `- git push`，并把它放进 commit 步骤。首项不能是 hopjit。不必问用户要不要列——这是升格的一部分，用户在任务卡里能看到；
 - **批量同构活交引擎派发,不手工循环**（2026-09-01 作者点破"为啥不用hopspec for-each parallel来发"——实撞:40 份 spec 逐份体检,agent 手工逐个起跑+自任调度器补位,而引擎的 `[loop for-each x in 列表, collect r into rs]` + 循环体 `[call 子spec(参数: x) parallel]` 一条命令就把派发/收割/并发窗口全管了）：同一件事对 N 个对象重复做 → 写个十行外壳 spec 交引擎,别自己当调度器；
 - **关键词语言随项目走**（2026-09-03 language 特性落地）：写卡前看项目 `hopjit.yaml` 有没有 `language: zh`——有就用中文关键词写任务卡（`[探索 开放]`/`[检查 终检]`/`## 目标`,对照表在语法参考 §12）,没有或写 en 就用英文。两种语言引擎恒等价,写"错"不报错,跟着项目缺省走是为了产物风格统一。**存量 spec 转语言用 `<CLI> lang <spec文件> --to zh|en`**——先自动备份（同目录 `.bak.时间戳` 文件）再原地改写,只动关键词不动变量名/说明/body,转换引病会拒绝写回。用户说"把这份 spec 转成中文关键词/转回英文"就是要这个命令。**用户要改项目语言缺省**（"以后生成的都用中文关键词"）→ 改 `hopjit.yaml` 的 `language:` 键值——这是给用户干活的正当配置修改,改完口头确认一句"项目语言缺省已改为中文,之后 hopbuild 生成物与树读回都是中文关键词";改之前该文件里没有 language 键就加一行,有就改值,别的键一个不碰；
-- 上面几条覆盖狗粮实撞的高频坑；更复杂的形态（loop/case/for-each/类型面/中文关键词）**用时读引擎包内语法参考全量**（`npm root -g` 下 `@hoplogic/hopjit/docs/` 内的语法参考文档;引擎源码库内为 `docs/concepts/HopSpec V3语法参考.md`）——别凭印象写复杂结构，validate 报错拿着代号对文档改。
+- 上面几条覆盖狗粮实撞的高频坑；更复杂的形态（loop/case/for-each/类型面/中文关键词）**用时读引擎包内语法参考全量**（`<npm root -g 输出>/@hoplogic/hopjit/docs/concepts/HopSpec V3语法参考.md`——随包分发,源码库内同路径）——别凭印象写复杂结构，validate 报错拿着代号对文档改。
 
 任务卡落 **`hop_tasks/<任务名>/<任务名>.md`**（一任务一目录,作者定 2026-08-26——任务的材料/草稿/证据全住自己目录里,归档挪一个目录全走,不纠结多文件同步;卡文件与目录**同名**而非固定名 `spec.md`——Obsidian 双链按文件名解析,同名制下 `[[<任务名>]]` 照常可链不撞车）。**起名自动**：从任务话语提炼语义名,语言与用户话语一致（中文任务中文名——HopSpec 的中文标识符是一等公民;不转写不翻译）,撞名加日期后缀;`# Spec:` 标题即清单显示名。
 
@@ -124,6 +139,30 @@ Goal: 查清 X 的现状,交叉核对后成文发出
 
 **⚠️ 执行恒在主对话——禁止调 `mcp__hopjit__start_run`，检测到 MCP 注册也不用，不管任务多大**（hopissues/0071 实撞立规 2026-09-04：driver 觉得"34 条引文核实任务量大，交引擎自跑更高效"调了 start_run——引擎独立模式用裸 API 模型自跑，读两批原文即撞 1M 上下文墙，烧 6.2M tokens 后 retry 耗尽失败，最后还是回主对话分批干完。教训：/hop 的活是主对话的活，上下文在这里，效率判断不覆盖协议——`start_run` 是 /hopspec-mcp 的入口，永远不是 /hop 的）。觉得任务太大想交引擎自跑？两条正路：在主对话分批做（大面积翻查外包 subagent，见 §2b）；或向用户明说建议改走 /hopspec-mcp，用户点头才换轨。本节只用 `run`/`submit_and_fetch_next` 两条 CLI：
 
+**卡上已批准的命令有两种执行方式，核的是同一张清单。** act 步骤里，agent 临场拼参数、调 `mcp__hopjit__run_approved_command` 执行——这是探索态，随时可重跑。`[commit]` 步骤里，命令写在 body 里（写卡时定死），引擎到这一步直接执行，agent 不调工具——这是提交态，引擎保证 check final 或 confirm 已经过了，执行一次。两态的区别在步骤类型，不在清单。本段讲前者的调用方式。它与上一条"禁 start_run"并列：走 MCP 的只是命令执行这一口，run 的驱动和推理仍在本对话。
+
+调用形态（参数值的来源写死，不要猜）：
+
+```
+mcp__hopjit__run_approved_command(
+  state_dir   = run 响应里 work_zone 路径的上两级（即 .hopstate 的绝对路径）,
+  instance_id = 本 run 的 instance_id,
+  argv        = ["python3", "scripts/ssh_exec.py", "--config", "configs/x.json", "exec", "node1", "nvidia-smi"],
+  cwd         = 可省（缺省工作区根）,
+  caller_step = 当前步号,如 "3.2"
+)
+```
+
+argv 是列表，一项一个词，不拼 shell 字符串，没有管道和重定向。返回 `{returncode, stdout, stderr, duration_ms, truncated}`——非零 returncode 是正常返回，按业务判；stdout/stderr 各 64KB 截断并注明，要全文就让命令自己写文件再 read。每次执行的 argv/cwd/returncode/耗时都进该 run 的 hoplog，人不再逐条点批准，改为事后可查。
+
+三种拒绝各怎么办：
+
+- `APPROVAL_REQUIRED`（命令不在卡上）：**这不是让你换个办法跑，是任务的授权范围要不要扩，归人决定。** 停下来问用户一句，说清三件事：这条命令是干什么的、是可逆探索还是会留下不可逆后果、为什么这个活需要它。用户说批 → 把前缀加进任务卡 `## 已批准命令` 节，`abort` 当前 run，用改好的卡重新 `run`（授权清单在 run 起跑时拍快照，跑着改不生效；已完成的步骤都是可逆探索，重跑无害）。用户说不批 → 这一条走载体的 Bash，照常弹窗批一次。**不许自己把命令加进卡、不许被拒后改走 Bash 绕过。**
+- `COMMAND_FAILED`（命令本身跑挂：超时、找不到可执行文件、输出撞上限）：按报文修命令或 timeout 再调，不换通道。
+- `CWD_OUTSIDE_WORKSPACE`：cwd 必须在这个 run 的工作区内，改 cwd。
+
+边界不变：`[commit]` 前置 check final/confirm、`confirm`/`ask` 停下问真人，一律照旧——run_approved_command 替代的只是载体逐条弹窗那一层，不替代卡上的闸；`hopjit` 自身恒拒。载体侧对 `mcp__hopjit__run_approved_command` 这一个工具的放行由 `hopjit install-skill` 装的时候写进 Claude Code 项目设置，不用手配。
+
 ```bash
 <CLI> --json run hop_tasks/<任务名>/<任务名>.md --state-dir .hopstate
 → step_ready: 步骤1
@@ -132,7 +171,7 @@ Goal: 查清 X 的现状,交叉核对后成文发出
 → step_ready: 步骤2 …循环到终态
 ```
 
-- CLI 纪律与 /hopspec 相同（每条命令带 `--json`、不链式不管道）。**`--output` 的真实协议**（实撞：Codex 首提原始 YAML 被 JSON parser 拒）：小产出传**与输出槽同名的 JSON 对象**——步骤声明 `+ → weather_data: yaml` 就传 `--output '{"weather_data": <值>}'`，不是把值本身裸贴；大产出写到响应给的 `output_path`（work_zone 内）再 `--output @<该路径>`（`@` 只贴参数最前面，路径须在 work_zone 内且用相对路径）；
+- CLI 纪律与 /hopspec 相同（每条命令带 `--json`、不链式不管道）。**`--output` 的真实协议**（实撞：Codex 首提原始 YAML 被 JSON parser 拒）：小产出传**与输出槽同名的 JSON 对象**——步骤声明 `+ → weather_data % yaml` 就传 `--output '{"weather_data": <值>}'`，不是把值本身裸贴；大产出写到响应给的 `output_path`（work_zone 内）再 `--output @<该路径>`（`@` 只贴参数最前面，路径须在 work_zone 内且用相对路径）；
 - 过程 `[check]` 步（非 final）如实判——**这正是引擎存在的意义**：判 false 会带你的失败说明重跑，不许"觉得差不多就 true"；
 - **`[check final]` 阅卷外移**（作者定 2026-08-27——三权分拆：出题、答题在你，**阅卷不在你**）：走到 check final 时，只要会话有派 subagent 的能力，就**恒外移**给一个全新 subagent 判定，无自由裁量。为什么：/hop 自驱把"写计划的、干活的、判合格的"压进同一个你——自己出题自己答题自己阅卷，判据再严也总有能绕的缝（实撞：review 任务判据里留了"或标注未核"后门，执行时用"同构采信"走了它）。派法三条：
   1. 阅卷 subagent 拿三样：**待判产出物全文 + check final 的判据原文 + 任务卡的背景/参考节**（口径与语境）——**不给执行过程叙事**：阅卷人不该被"我为什么这么做"说服，只对着产出与判据判；

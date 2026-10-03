@@ -1,0 +1,30 @@
+- round: 0
+  outcome: ran
+  public_pass: false
+  hidden_pass: false
+  hidden_failed:
+    - duplicates.yaml(执行报错)
+    - month-year.yaml(执行报错)
+    - shuffled-short.yaml(执行报错)
+    - ties.yaml(执行报错)
+  crashed_files: 4
+- round: 1
+  outcome: ran
+  public_pass: false
+  hidden_pass: false
+  hidden_failed:
+    - duplicates.yaml(执行报错)
+    - month-year.yaml(执行报错)
+    - shuffled-short.yaml(执行报错)
+    - ties.yaml(执行报错)
+  crashed_files: 4
+- round: 2
+  outcome: ran
+  public_pass: false
+  hidden_pass: false
+  hidden_failed:
+    - duplicates.yaml(执行报错)
+    - month-year.yaml(执行报错)
+    - shuffled-short.yaml(执行报错)
+    - ties.yaml(执行报错)
+  crashed_files: 4

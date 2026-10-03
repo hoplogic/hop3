@@ -1,0 +1,50 @@
+```python
+import ast
+import sys
+
+limit = 40
+
+if len(sys.argv) < 2:
+    print("missing file path")
+    sys.exit(1)
+
+file_path = sys.argv[1]
+
+try:
+    source_file = open(file_path, "r", encoding="utf-8")
+    source_text = source_file.read()
+    source_file.close()
+except OSError:
+    print("cannot read file")
+    sys.exit(1)
+except ValueError:
+    print("cannot read file as UTF-8")
+    sys.exit(1)
+
+if source_text.startswith("\ufeff"):
+    source_text = source_text.replace("\ufeff", "", 1)
+
+try:
+    syntax_tree = ast.parse(source_text)
+except (SyntaxError, ValueError):
+    print("syntax error: cannot parse file")
+    sys.exit(1)
+
+violations = []
+
+for node in ast.walk(syntax_tree):
+    if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+        length = node.end_lineno - node.lineno + 1
+        if length > limit:
+            violations.append((node.lineno, "function " + repr(node.name) + " has " + str(length) + " lines, limit is " + str(limit)))
+
+violations.sort()
+
+for item in violations:
+    print("line " + str(item[0]) + ": " + item[1])
+
+if len(violations) > 0:
+    sys.exit(1)
+
+sys.exit(0)
+```

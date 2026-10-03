@@ -1,0 +1,94 @@
+service: qwen27_apps
+model_from_response:
+  - qwen3.8-27b
+n_per_cell: 6
+date: '2026-09-28'
+thinking: 'off'
+max_tokens: 32768
+维度: G2 任务复杂度(一次做正确的能力)——单发裸能力,无重试无引擎兜底
+tiers:
+  xl:
+    pass: 2/6
+    runs:
+      - i: 1
+        pass: false
+        covered: 39/40
+        prose_prefix: false
+        miss:
+          - pt18(词中但 type 错)
+      - i: 2
+        pass: false
+        covered: 38/40
+        prose_prefix: true
+        miss:
+          - pt1(未命中)
+          - pt40(未命中)
+      - i: 3
+        pass: false
+        covered: 39/40
+        prose_prefix: false
+        miss:
+          - pt40(未命中)
+      - i: 4
+        pass: true
+        covered: 40/40
+        prose_prefix: false
+        miss: []
+      - i: 5
+        pass: false
+        covered: 39/40
+        prose_prefix: false
+        miss:
+          - pt1(未命中)
+      - i: 6
+        pass: true
+        covered: 40/40
+        prose_prefix: false
+        miss: []
+  xxl:
+    pass: 2/6
+    runs:
+      - i: 1
+        pass: false
+        covered: 79/80
+        prose_prefix: false
+        miss:
+          - pt1(未命中)
+      - i: 2
+        pass: true
+        covered: 80/80
+        prose_prefix: false
+        miss: []
+      - i: 3
+        pass: true
+        covered: 80/80
+        prose_prefix: false
+        miss: []
+      - i: 4
+        pass: false
+        covered: 71/80
+        prose_prefix: false
+        miss:
+          - pt1(未命中)
+          - pt10(未命中)
+          - pt30(未命中)
+          - pt49(未命中)
+          - pt50(未命中)
+          - pt59(未命中)
+          - pt60(未命中)
+          - pt68(未命中)
+          - pt78(未命中)
+      - i: 5
+        pass: false
+        covered: 79/80
+        prose_prefix: false
+        miss:
+          - pt70(未命中)
+      - i: 6
+        pass: false
+        covered: 78/80
+        prose_prefix: false
+        miss:
+          - pt1(未命中)
+          - pt19(词中但 type 错)
+坍塌点: xl

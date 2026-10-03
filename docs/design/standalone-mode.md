@@ -34,7 +34,7 @@ HopJIT 有两种用法（概念上游 [[../docs/concepts/HopSpec V3配套HopJIT�
 - **复用模式**：CC/Codex 这类 agent 自己当执行者，逐步调 `hopjit` CLI 驱动 spec——LLM 能力"复用"宿主 agent 的，HopJIT 不直接调模型，也就不需要自己的配置文件（参数和凭证都来自 caller 进程环境）；
 - **standalone（独立模式）**：HopJIT **自己调 LLM 执行整个 spec**。宿主（CC/Codex/任何支持 MCP 的工具）只负责发起和接收结果，执行过程中的模型调用、凭证、路由全由 HopJIT 自己解决。
 
-对用户来说 standalone 就是三步：装 `hopjit-mcp`、写一份 `~/.hopjit/config.yaml`（声明用哪家模型服务、key 在哪个环境变量）、在宿主里注册这个 MCP server。之后宿主里的 agent 通过五个 MCP 工具（start_run / run_status / resume_run / list_runs / stop_run）发起、跟进和中止执行。
+对用户来说 standalone 就是三步：装 `hopjit-mcp`、写一份 `~/.hopjit/config.yaml`（声明用哪家模型服务、key 在哪个环境变量）、在宿主里注册这个 MCP server。之后宿主里的 agent 通过六个 MCP 工具（start_run / run_status / resume_run / list_runs / stop_run / run_approved_command）发起、跟进、中止,以及在某个 run 的上下文里执行任务卡已批准的命令执行。
 
 **这一整套——一份配置文件、一次注册动作、四个工具、一条凭证链——用户视角是一个东西**。所以它需要一份统一的设计：任何一块单独改动都可能破坏整体的约束（比如凭证只要在某一个环节泄漏一次，整体的"key 不落盘"就破了）。这正是本文存在的原因。
 

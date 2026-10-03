@@ -1,0 +1,247 @@
+service: qwen_flash
+model_from_response:
+  - qwen-flash
+n_per_cell: 6
+date: '2026-09-28'
+thinking: 'on'
+max_tokens: 32768
+维度: G2 任务复杂度(一次做正确的能力)——单发裸能力,无重试无引擎兜底
+tiers:
+  xs:
+    pass: 6/6
+    runs:
+      - i: 1
+        pass: true
+        covered: 2/2
+        prose_prefix: false
+        miss: []
+      - i: 2
+        pass: true
+        covered: 2/2
+        prose_prefix: false
+        miss: []
+      - i: 3
+        pass: true
+        covered: 2/2
+        prose_prefix: false
+        miss: []
+      - i: 4
+        pass: true
+        covered: 2/2
+        prose_prefix: false
+        miss: []
+      - i: 5
+        pass: true
+        covered: 2/2
+        prose_prefix: false
+        miss: []
+      - i: 6
+        pass: true
+        covered: 2/2
+        prose_prefix: false
+        miss: []
+  s:
+    pass: 6/6
+    runs:
+      - i: 1
+        pass: true
+        covered: 4/4
+        prose_prefix: false
+        miss: []
+      - i: 2
+        pass: true
+        covered: 4/4
+        prose_prefix: false
+        miss: []
+      - i: 3
+        pass: true
+        covered: 4/4
+        prose_prefix: false
+        miss: []
+      - i: 4
+        pass: true
+        covered: 4/4
+        prose_prefix: false
+        miss: []
+      - i: 5
+        pass: true
+        covered: 4/4
+        prose_prefix: false
+        miss: []
+      - i: 6
+        pass: true
+        covered: 4/4
+        prose_prefix: false
+        miss: []
+  m:
+    pass: 0/6
+    runs:
+      - i: 1
+        pass: false
+        covered: 8/9
+        prose_prefix: false
+        miss:
+          - 特殊人群放心(未命中)
+      - i: 2
+        pass: false
+        covered: 8/9
+        prose_prefix: false
+        miss:
+          - 特殊人群放心(未命中)
+      - i: 3
+        pass: false
+        covered: 8/9
+        prose_prefix: false
+        miss:
+          - 特殊人群放心(未命中)
+      - i: 4
+        pass: false
+        covered: 8/9
+        prose_prefix: false
+        miss:
+          - 特殊人群放心(未命中)
+      - i: 5
+        pass: false
+        covered: 8/9
+        prose_prefix: false
+        miss:
+          - 特殊人群放心(未命中)
+      - i: 6
+        pass: false
+        covered: 8/9
+        prose_prefix: false
+        miss:
+          - 特殊人群放心(未命中)
+  l:
+    pass: 0/6
+    runs:
+      - i: 1
+        pass: false
+        covered: 16/18
+        prose_prefix: false
+        miss:
+          - 特殊人群放心(未命中)
+          - 脱因残留(未命中)
+      - i: 2
+        pass: false
+        covered: 15/18
+        prose_prefix: false
+        miss:
+          - 特殊人群放心(未命中)
+          - 绿茶含量(未命中)
+          - 绿茶心血管(未命中)
+      - i: 3
+        pass: false
+        covered: 15/18
+        prose_prefix: false
+        miss:
+          - 特殊人群放心(未命中)
+          - 绿茶含量(未命中)
+          - 绿茶心血管(未命中)
+      - i: 4
+        pass: false
+        covered: 16/18
+        prose_prefix: false
+        miss:
+          - 特殊人群放心(未命中)
+          - 担忧缺据(未命中)
+      - i: 5
+        pass: false
+        covered: 15/18
+        prose_prefix: false
+        miss:
+          - 特殊人群放心(未命中)
+          - 绿茶含量(未命中)
+          - 绿茶心血管(未命中)
+      - i: 6
+        pass: false
+        covered: 15/18
+        prose_prefix: false
+        miss:
+          - 特殊人群放心(未命中)
+          - 绿茶含量(未命中)
+          - 绿茶心血管(未命中)
+  xl:
+    pass: 0/6
+    runs:
+      - i: 1
+        pass: false
+        covered: 39/40
+        prose_prefix: false
+        miss:
+          - pt2(未命中)
+      - i: 2
+        pass: false
+        covered: 39/40
+        prose_prefix: false
+        miss:
+          - pt5(未命中)
+      - i: 3
+        pass: false
+        covered: 39/40
+        prose_prefix: false
+        miss:
+          - pt5(未命中)
+      - i: 4
+        pass: false
+        covered: 38/40
+        prose_prefix: false
+        miss:
+          - pt5(未命中)
+          - pt8(未命中)
+      - i: 5
+        pass: false
+        covered: 39/40
+        prose_prefix: false
+        miss:
+          - pt2(未命中)
+      - i: 6
+        pass: false
+        covered: 39/40
+        prose_prefix: false
+        miss:
+          - pt5(未命中)
+  xxl:
+    pass: 3/6
+    runs:
+      - i: 1
+        pass: false
+        covered: 78/80
+        prose_prefix: false
+        miss:
+          - pt1(未命中)
+          - pt80(未命中)
+      - i: 2
+        pass: false
+        covered: 76/80
+        prose_prefix: false
+        miss:
+          - pt1(未命中)
+          - pt4(未命中)
+          - pt47(未命中)
+          - pt67(未命中)
+      - i: 3
+        pass: true
+        covered: 80/80
+        prose_prefix: false
+        miss: []
+      - i: 4
+        pass: false
+        covered: 76/80
+        prose_prefix: false
+        miss:
+          - pt1(未命中)
+          - pt4(未命中)
+          - pt47(未命中)
+          - pt67(未命中)
+      - i: 5
+        pass: true
+        covered: 80/80
+        prose_prefix: false
+        miss: []
+      - i: 6
+        pass: true
+        covered: 80/80
+        prose_prefix: false
+        miss: []
+坍塌点: m

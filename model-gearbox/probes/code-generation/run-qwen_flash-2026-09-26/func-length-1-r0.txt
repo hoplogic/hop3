@@ -1,0 +1,76 @@
+```python
+import ast
+import re
+import json
+import sys
+
+def check_function_length(filename):
+    try:
+        with open(filename, 'r', encoding='utf-8') as file:
+            content = file.read()
+    except OSError as e:
+        sys.stderr.write(f"无法读取文件: {filename}\n")
+        sys.exit(1)
+
+    try:
+        tree = ast.parse(content)
+    except SyntaxError as e:
+        sys.stderr.write(f"语法错误: {e}\n")
+        sys.exit(1)
+
+    violations = []
+
+    def walk_node(node, line_offset=0):
+        # 计算当前节点的起始行号（相对于源文件）
+        start_line = getattr(node, 'lineno', 0) + line_offset
+        end_line = getattr(node, 'end_lineno', start_line)
+
+        # 如果是函数定义，检查其长度
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # 函数体中的行数 = 从函数定义行到函数体最后一行的行数（含首尾）
+            body_lines = len(node.body)
+            # 实际行数：函数定义行 + 函数体行数
+            function_length = 1 + body_lines
+            # 注意：装饰器行不计入，但函数定义本身算在内
+
+            # 检查是否超过40行
+            if function_length > 40:
+                violations.append(f"函数 '{node.name}' 从第 {start_line} 行开始，共 {function_length} 行，超出 40 行限制")
+
+            # 遍历函数体内部，处理嵌套函数
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    # 递归进入子节点，传递当前偏移量
+                    walk_node(child, line_offset)
+
+        # 处理类定义中的方法
+        elif isinstance(node, ast.ClassDef):
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    # 类中方法同样要单独检查
+                    walk_node(child, line_offset)
+
+        # 递归处理其他节点
+        for child in ast.iter_child_nodes(node):
+            walk_node(child, line_offset)
+
+    # 开始遍历语法树
+    walk_node(tree)
+
+    # 输出违规信息并退出
+    if violations:
+        for violation in violations:
+            sys.stderr.write(violation + "\n")
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+# 主逻辑直接写在顶层
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.stderr.write("缺少文件路径参数\n")
+        sys.exit(1)
+    
+    filename = sys.argv[1]
+    check_function_length(filename)
+```

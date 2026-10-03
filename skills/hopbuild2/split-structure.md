@@ -12,41 +12,41 @@ Constraints:
 - 全局知识（spec 级 doc-ref,对所有步骤注入）：[[split-patterns#HOP 全局认知（目标语言与产物是什么）]] 与 [[split-patterns#节点两型与判定序（你在做什么）]]
 
 Inputs:
-- split_kind: enum(seq, branch, loop)  # 命中的分拆种类
-- split_plan: text  # 判定步给出的分拆方案（子节点清单:任务描述|原文行号段|当场可定型的写类型,拆不完的标 NL——任务描述是一句概括,行号段形如 L120-L185）
-- node_task: text  # 本节点任务描述（一句明确范围的概括）
-- node_source: text  # 本节点原文范围全文,每行行首带全局行号 `L<数字>: `（忠实性对照基准;行号是原文全程唯一基准,不逐层重编——切子节点切片、算覆盖对账都按行首号机械做）
-- parent_context: text  # 父层骨架+可用变量清单
-- parent_vars: [line]  # 父层可用变量名清单（与 parent_context 第二段同名同源——片段机械验证的 known_vars 供给）
-- depth: int  # 本节点绝对层深（根节点=1;值=本节点片段顶层步骤在最终产物里的嵌套层数,按步骤号段数计——'3'=1层/'3.2'=2层/'3.2.1'=3层,容器与叶子同算）
-- max_depth: int  # 产物嵌套深度上限（缺省 3;1.3 深度闸按它机械拦超深行）
-- target_profile: line  # 目标执行档（空串=通用形态;非空=产物给该档模型跑——骨架成文与递归透传按它走,规则见 split-node「目标执行档规则」节）
-- iteration: int  # 分拆迭代序数（本节点是第几迭代拆的;3.2 产 sub_iteration=iteration+1 随递归 call 传——迭代闸在 split-node 判定侧拦,本 spec 只管透传递增）
-- header_final: yaml  # 头部契约
-- judgement_log: line  # 研判点台账路径（workspace 相对路径,或引擎涂鸦区绝对路径〔work_zone 豁免〕;其余绝对路径工具面拒;全树共写）
+- split_kind % enum(seq, branch, loop)  # 命中的分拆种类
+- split_plan % text  # 判定步给出的分拆方案（子节点清单:任务描述|原文行号段|当场可定型的写类型,拆不完的标 NL——任务描述是一句概括,行号段形如 L120-L185）
+- node_task % text  # 本节点任务描述（一句明确范围的概括）
+- node_source % text  # 本节点原文范围全文,每行行首带全局行号 `L<数字>: `（忠实性对照基准;行号是原文全程唯一基准,不逐层重编——切子节点切片、算覆盖对账都按行首号机械做）
+- parent_context % text  # 父层骨架+可用变量清单
+- parent_vars % [line]  # 父层可用变量名清单（与 parent_context 第二段同名同源——片段机械验证的 known_vars 供给）
+- depth % int  # 本节点绝对层深（根节点=1;值=本节点片段顶层步骤在最终产物里的嵌套层数,按步骤号段数计——'3'=1层/'3.2'=2层/'3.2.1'=3层,容器与叶子同算）
+- max_depth % int  # 产物嵌套深度上限（缺省 3;1.3 深度闸按它机械拦超深行）
+- target_profile % line  # 目标执行档（空串=通用形态;非空=产物给该档模型跑——骨架成文与递归透传按它走,规则见 split-node「目标执行档规则」节）
+- iteration % int  # 分拆迭代序数（本节点是第几迭代拆的;3.2 产 sub_iteration=iteration+1 随递归 call 传——迭代闸在 split-node 判定侧拦,本 spec 只管透传递增）
+- header_final % yaml  # 头部契约
 
 Outputs:
-- fragment_path: line  # 本节点子树完整片段的文件路径（work_zone 涂鸦区文件,内容=占位已被递归结果替换、编号已重刷的片段——值是路径不是内容,父层拼装按路径机械读,片段全文不过变量通道）
-- tier: enum(hop, mixed)  # 子树档位
+- fragment_path % line  # 本节点子树完整片段的文件路径（work_zone 涂鸦区文件,内容=占位已被递归结果替换、编号已重刷的片段——值是路径不是内容,父层拼装按路径机械读,片段全文不过变量通道）
+- tier % enum(hop, mixed)  # 子树档位
+- log_path % line  # 本实例研判点台账的文件路径（自己 work_zone 里的 judgement-log.md;含本层条目与各子实例台账逐层合并的内容——值是路径,父层按它读盘合并,不经变量通道传台账正文）
 
 ## Steps
 
 ### 1. [subtask retry=2] 生成骨架并三检
 - ← split_kind, split_plan, node_task, node_source, parent_context, parent_vars, depth, max_depth, header_final
-+ → skeleton: text  # 骨架片段（拆不完的子节点为占位叶子,编号相对从 1 起）
-+ → sub_nodes: [line]  # 仍是 NL 的子节点清单,每项"占位步骤号 | 任务描述 | 原文行号段"（由 1.2 从骨架占位行机械提取——单一权威源;全部当场定型则空 []）
-+ → log_notes: [line]  # 本轮研判点条目（**YAML 数组形态**——每条一行行首 `- `,无条目交空数组 `log_notes: []`;交成整段文字会被 SCHEMA 拒收白烧一轮。补 check/case(else)/暂定判据各一行;由后续步骤统一落台账,reason/check 无工具面不自己写盘）
++ → skeleton % text  # 骨架片段（拆不完的子节点为占位叶子,编号相对从 1 起）
++ → sub_nodes % [line]  # 仍是 NL 的子节点清单,每项"占位步骤号 | 任务描述 | 原文行号段"（由 1.2 从骨架占位行机械提取——单一权威源;全部当场定型则空 []）
++ → log_notes % [line]  # 本轮研判点条目（**YAML 数组形态**——每条一行行首 `- `,无条目交空数组 `log_notes: []`;交成整段文字会被 SCHEMA 拒收白烧一轮。补 check/case(else)/暂定判据各一行;由后续步骤统一落台账,reason/check 无工具面不自己写盘）
 
 #### 1.1. [reason] 按 split_plan 写出骨架
-- ← split_kind, split_plan, node_task, parent_context, target_profile, header_final
-+ → skeleton: text  # 裸步骤序列直出（首字符即 `1`,不加围栏不加键前缀不写前言后语）;**内容=node_task 业务流程的步骤**（照 split_plan 各行成文——不是抄本规约自己的步骤）;上游变量从 parent_context 清单选真名;占位行自带 ⟦范围:⟧ 标记（占位清单由 1.2 机械提取,你不写清单）
-+ → log_notes: [line]  # 研判点条目（每行"<处置>:<一句说明>";无则空 []）
+- ← split_kind, split_plan, node_task, node_source, parent_context, target_profile, header_final
++ → skeleton % text  # 裸步骤序列直出（首字符即 `1`,不加围栏不加键前缀不写前言后语）;**内容=node_task 业务流程的步骤**（照 split_plan 各行成文——不是抄本规约自己的步骤）;上游变量从 parent_context 清单选真名;占位行自带 ⟦范围:⟧ 标记（占位清单由 1.2 机械提取,你不写清单）
++ → log_notes % [line]  # 研判点条目（每行"<处置>——<一句说明>",处置与说明之间用破折号不用冒号——条目会进 YAML 数组,冒号加空格会被解析成键值对;无则空 []）
 
 照 split_plan 逐行成文。骨架形态按 split_kind 选：
 
 - **seq**：平铺子步骤;
 - **branch**：branch+case——条件写 hop_python 纯表达式;条件不穷尽时补 `[case(else)]` 兜底并记 log_notes;各分支公共的前置取数上提到 branch 之前;下游要用分支产出时,各 case 给同一个变量名赋值;
-- **loop**：按 split_plan 首行标的形态成文。**for-each**（逐条处理）：`[loop for-each item in list_var, collect unit into results]`——遍历列表须是 `[T]` 类型;collect 子句用两个变量名（单项一个、汇总列表一个）;循环体只写单项的事。**repeat**（重复推进）：`[loop max=N] 描述`——体内干活步骤 + `[check]` 判继续/停止条件 + 条件满足支路 `[break]`;跨轮累积用容器头累加器 `+ → acc: 类型 = 初值`。
+- **loop**：按 split_plan 首行标的形态成文。**for-each**（逐条处理）：`[loop for-each item in list_var, collect unit into results]`——遍历列表须是 `[T]` 类型;collect 子句用两个变量名（单项一个、汇总列表一个）;循环体只写单项的事。**repeat**（重复推进）：`[loop max=N] 描述`——体内干活步骤 + `[check]` 判继续/停止条件 + 条件满足支路 `[break]`;跨轮累积用容器头累加器 `+ → acc % 类型 = 初值`。
 
 成文规矩逐条：
 
@@ -78,9 +78,9 @@ Outputs:
 
 #### 1.2. [act] 语法机械核+占位清单机械提取
 - ← skeleton, header_final, parent_vars
-+ → skeleton: text  # 剥壳后骨架（机械剥围栏,幂等）
-+ → syntax_result: text  # validate JSON 输出
-+ → sub_nodes: [line]  # 占位清单——从骨架"待展开"行机械提取,每行"步骤号 | 任务描述 | 原文行号段"（单一权威源=骨架占位行,LLM 不维护第二份,漏登记/错步骤号/杂项混入整族缺陷从结构上消灭）
++ → skeleton % text  # 剥壳后骨架（机械剥围栏,幂等）
++ → syntax_result % text  # validate JSON 输出
++ → sub_nodes % [line]  # 占位清单——从骨架"待展开"行机械提取,每行"步骤号 | 任务描述 | 原文行号段"（单一权威源=骨架占位行,LLM 不维护第二份,漏登记/错步骤号/杂项混入整族缺陷从结构上消灭）
 
 纯机械,body 由引擎直接执行、不经 LLM。known_vars 必须并入 parent_vars——骨架里引用父层产出的变量是正常形态,漏了它们,校验会把合法引用误报成"未定义变量"。占位清单三段全部从占位行机械切出（行形态 `N. [reason] 待展开——<描述> ⟦范围: <范围>⟧`）：
 > ```hop_python
@@ -97,8 +97,8 @@ Outputs:
 
 #### 1.3. [check] 语法关
 - ← syntax_result, skeleton, node_source, depth, max_depth
-+ → syntax_ok: bool  # 判定槽
-+ → syntax_note: text  # 说明槽（error 清单回填,重跑轮定向修正）
++ → syntax_ok % bool  # 判定槽
++ → syntax_note % text  # 说明槽（error 清单回填,重跑轮定向修正）
 
 纯机械判定,body 由引擎直接执行、不经 LLM。核七面（占位登记对账已废——sub_nodes 由 1.2 从骨架机械提取,单一权威源,漏登记/错步骤号从结构上不可能;换核**范围标记完整**）：**语法**——validate 无 error;**范围标记完整**——每个"待展开"占位行必须带 `⟦范围:` 标记（范围是占位行唯一不可机械推导的信息,漏写=下游备料无从切原文切片,子层拿不到对的原文）;**自我抄写拦截**——骨架里出现本规约自己的步骤名,说明执行者把正在执行的规约误当成了产物内容;**小节点禁再拆**——原文少于 800 字还留 NL 占位=切香肠（真机实撞:一条 4 行原文被逐层各切两半,5 层只消化一句话撞递归深度上限,16 实例全灭——小节点必须当场写完,定型不了的直接落自然语言步骤）;**占位数上限**——一次拆分超过 5 个 NL 占位=切得太碎,合并成更大的块或当场定型一部分;**载体语汇拦截（同构双防线的分拆通道半边——载体能力边界教条〔split-node 步骤 7〕是教学供给,35KB 语料两轮实测里分拆 LLM 被原文强势发射教学带走教条零生效,毒素从原文正文直接流进骨架步骤;词表与对齐门 4.3 carrier_cons 九子串同源,全 lower 比对——两处 body 各自内联,同源纪律由 check-spec-syntax 回归锁双盯）**——骨架行含宿主载体机制语汇即判不过,反馈指路按教条转译成 call parallel 形态;**深度上限**——对骨架每个步骤行（占位行与已定型子步骤行同查）机械提取行首步骤号,算绝对深度=depth+步骤号段数-1（子片段原位拼接:骨架顶层行就落在本节点 depth 层,行每多一段号即深一层）,超 max_depth（缺省 3）即判不过,反馈指路"该占位合并进父步骤当场定型,或落自然语言步骤（不再递归）"——与占位上限面同款打回形态：
 > ```hop_python
@@ -132,8 +132,8 @@ Outputs:
 
 #### 1.4. [check final] 语义与知识关
 - ← skeleton, sub_nodes, log_notes, node_task, node_source, header_final, split_plan
-+ → semantic_ok: bool  # 判定槽
-+ → semantic_note: text  # 说明槽（问题清单回填）
++ → semantic_ok % bool  # 判定槽
++ → semantic_note % text  # 说明槽（问题清单回填）
 
 只核五条,五条之外不在本关。**打回前先做缺口定位（诊断分型,决定反馈打给谁）**：发现缺失项（丢动作/丢闸门/丢交付物）时,先对照 split_plan——缺失项若**不在任何一条计划的范围内**,这是**计划缺口不是骨架缺陷**：骨架被"照 split_plan 成文"铁律捆着,无权自补计划外的动作,把"请补入"反馈发给它只会让它在"听反馈"与"照计划"之间摇摆到烧尽（实撞:README 写入不在三条计划任何一条里,三轮反馈都喊"补入 README",执行者三轮都无法合法落笔,烧尽降档）。**写[计划缺口]之前先做机械自查**:把缺失项的名词关键词(如"分配角色")在 split_plan 全文里搜一遍——搜得到就不许写[计划缺口],那是骨架缺陷照常反馈"请补入"(实撞:判官引文自己含"分配角色"却判"分配角色不在计划内"——幻觉缺口把打回错发给无辜层)。搜不到的,计划缺口照样判 false 打回,但 semantic_note 开头必须写明"**[计划缺口] X 不在 split_plan 任何条目内——骨架层无权自补,须上层重产计划**"——这行是给容器重试和上浮路径的诊断书,让有权修计划的层知道该修什么;缺失项在计划范围内而骨架没写,才是骨架缺陷,照常反馈"请补入"。**多余项同理分型**：骨架里点名清单外工具/落了被裁能力的步骤,若正是 split_plan 某条计划要求的（计划本身就规划了做不到的事）,semantic_note 开头写"**[计划越界] split_plan 第 X 条要求使用 header 之外的能力——骨架层照计划成文无权自裁,须上层重产计划剔除该条**"。**越界判据是封闭的,只有一种形态命中**：计划条目**点名了具体外部工具名**（Puppeteer/PagerDuty/监控连接这类专有能力名）且该名不在 tools_available 清单内,**且该条不是裁剪条目**——`已裁剪 | L<起>-L<止> | …` 开头的计划条目是被裁能力的合法归属形态（行号有归属但不产步骤）,骨架层见它整条跳过,恒不判越界也恒不判缺口;它覆盖的行号段在忠实关的"并集覆盖"账里照算已覆盖（被裁内容的"落点"就是裁剪记录本身,不需要步骤承接）。**业务动作恒不越界**——评估/分配/记录/起草/询问这类动作用引擎内置能力（写盘/问人/推理）就能落,不需要任何外部工具;"我觉得这个动作需要工具而清单里没有"不是判据（实撞:计划条目"分配角色(IC/通信员/响应者)"被判越界,判词称"tools_available 为空无法实现真正的角色分配"——错:角色分配=记录谁任什么角色+必要时问人,ask/act free 即可落,零外部工具;且 header constraints 明载"必须分配角色",作者确认过的判据,判它越界=推翻作者拍板。header 权威双向:constraints 载明的动作恒合法,不许用工具面为空否决它）——把反馈发给骨架只会让它在"删掉这步"与"照计划"之间烧尽;骨架自己加戏点名了计划没写的工具,才照常反馈"请删除或改写"。**修法建议要守机械关的边界**：给"留 NL 占位"这个修法选项前,先看 node_source 体量——不足约 800 字的节点,1.3 语法关的切香肠判据会机械拒占位,这条路根本走不通,只能给"当场定型（或落自然语言步骤）"单选（实撞:333 字节点被给了"定型或占位"二选一,执行者选占位,下一轮被 1.3 拒——两道闸判据不一致,把执行者夹在中间烧两轮）。
 
@@ -148,37 +148,39 @@ Outputs:
 [[split-patterns#HopSpec 片段语法速查（骨架成文必读）]]
 
 ### 2. [act] 研判点落台账
-- ← log_notes, node_task, judgement_log
-+ → log_flushed: bool  # 固定为 true（表示条目已写入台账文件;log_notes 为空时不写、直接过,重复执行安全）
+- ← log_notes, node_task
++ → log_flushed % bool  # 固定为 true（表示条目已写入台账文件;log_notes 为空时不写、直接过,重复执行安全）
 
-纯机械,body 由引擎直接执行、不经 LLM（reason/check 步骤没有文件工具,写盘统一归本步）：
+纯机械,body 由引擎直接执行、不经 LLM（reason/check 步骤没有文件工具,写盘统一归本步;台账写自己 work_zone 的 judgement-log.md——各实例各写各的,父层收割时读子台账合并,work_zone 写权只归本实例〔todo/0126〕）：
 > ```hop_python
 > if log_notes:
->     append(path: judgement_log, content: node_task + ":" + join(log_notes, "\n" + node_task + ":") + "\n")
+>     append(path: work_zone_path("judgement-log.md"), content: node_task + ":" + join(log_notes, "\n" + node_task + ":") + "\n")
 > log_flushed = True
 > ```
 
-### 3. [loop for-each sub in sub_nodes, collect child_frag_path into child_frag_paths, collect child_tier into child_tiers] 递归分拆各 NL 子节点
+### 3. [loop for-each sub in sub_nodes, collect child_frag_path into child_frag_paths, collect child_tier into child_tiers, collect child_log_path into child_log_paths] 递归分拆各 NL 子节点
 - ← sub_nodes
-+ → child_frag_paths: [line]  # 各子树片段的文件路径（与 sub_nodes 同序;值是路径不是内容——片段全文不过变量通道;空清单零迭代直接过——全部当场定型的天然退化）
-+ → child_tiers: [line]  # 各子树档位
++ → child_frag_paths % [line]  # 各子树片段的文件路径（与 sub_nodes 同序;值是路径不是内容——片段全文不过变量通道;空清单零迭代直接过——全部当场定型的天然退化）
++ → child_tiers % [line]  # 各子树档位
++ → child_log_paths % [line]  # 各子实例台账文件路径（与 sub_nodes 同序;兜底路径无子实例则为空串——步 5 合并时跳过空串;值是路径不是内容）
 
 #### 3.1. [reason] 备子任务描述（只产判断件——切片与上下文组装归 3.2 机械 body）
 - ← sub, skeleton, header_final
-+ → sub_task: text  # 子任务描述——**一句明确范围的概括**（sub 第二段照抄或润成一句;**不逐条抄原文动作清单**——动作细节的权威在行号段所指的原文切片里,子层按行号拿到的是逐字保真切片,你抄一遍是冗余且会把描述膨胀成小型全文——覆盖性由计划层行号对账与子层切片自查接管,不靠你补列）。**占位行带 `+ →` 声明的,原样附上并注明"必须以这些名字交付"**——占位输出是子节点对父层的接线契约,子片段换名=下游引用断链
++ → sub_task % text  # 子任务描述——**一句明确范围的概括**（sub 第二段照抄或润成一句;**不逐条抄原文动作清单**——动作细节的权威在行号段所指的原文切片里,子层按行号拿到的是逐字保真切片,你抄一遍是冗余且会把描述膨胀成小型全文——覆盖性由计划层行号对账与子层切片自查接管,不靠你补列）。**占位行带 `+ →` 声明的,原样附上并注明"必须以这些名字交付"**——占位输出是子节点对父层的接线契约,子片段换名=下游引用断链
 
 #### 3.2. [act] 机械备料：切片、上下文、变量清单、层深（切片与组装全机械化）
 - ← skeleton, node_source, header_final, parent_vars, sub, depth, iteration
-+ → sub_source: text  # 子节点原文切片（按 sub 第三段行号段从 node_source 机械提取——零 LLM 转写零抄错,行首号保留:全局行号不逐层重编,子层的范围标记继续指向同一基准）
-+ → sub_context: text  # 传给子调用的 parent_context：本层 skeleton 全文 + 可用变量清单（按行"名字: 类型  # 说明"——机械拼接,skeleton 本就在变量空间,不劳 LLM 抄写;双侧同一格式,子调用才解读得动）
-+ → sub_vars: [line]  # 祖先链变量 + header inputs + 本层骨架各步 + → 名字（子调用的 parent_vars——机械可导,不劳 LLM）
-+ → sub_depth: int  # 子节点绝对层深（=depth+占位行步骤号段数-1——子片段原位替换占位行,顶层步骤落在占位行所在层;深度闸的递归传递值）
-+ → sub_iteration: int  # 子节点迭代序数（=iteration+1——迭代闸的递归传递值,split-node 判定侧按它拦第 3 迭代）
++ → sub_source % text  # 子节点原文切片（按 sub 第三段行号段从 node_source 机械提取——零 LLM 转写零抄错,行首号保留:全局行号不逐层重编,子层的范围标记继续指向同一基准）
++ → sub_context % text  # 传给子调用的 parent_context：本层 skeleton 全文 + 可用变量清单（按行"名字 % 类型  # 说明"——机械拼接,skeleton 本就在变量空间,不劳 LLM 抄写;双侧同一格式,子调用才解读得动）
++ → sub_vars % [line]  # 祖先链变量 + header inputs + 本层骨架各步 + → 名字（子调用的 parent_vars——机械可导,不劳 LLM）
++ → sub_depth % int  # 子节点绝对层深（=depth+占位行步骤号段数-1——子片段原位替换占位行,顶层步骤落在占位行所在层;深度闸的递归传递值）
++ → sub_iteration % int  # 子节点迭代序数（=iteration+1——迭代闸的递归传递值,split-node 判定侧按它拦第 3 迭代）
 
-纯机械,body 由引擎直接执行、不经 LLM。切片按 sub 第三段行号段（`L<起>-L<止>`,多段以 ` + ` 连接）从 node_source 逐段取行拼接——1.3 已核过每个占位行必带合法行号段,此处直取。变量清单三条实测教训不变：**必须并入本层收到的 parent_vars**（只取本层骨架的变量,祖父层的变量传到第三层递归就丢了,深层片段引用祖先变量会被校验误报"未定义"）;**只认 `+ →` 声明行,不能凡是带 `→` 的行都抓**（正文说明里的"P0→P1→P2"这类箭头会被误抓成假变量名——假名混进 known_vars 白名单让"未定义变量"核查变松。清单允许重复,消费方只做成员判定,重复无害）;**必须并入 loop 头部的单项变量**（`for-each X in …` 的 X 声明在 loop 步骤行里、不在任何 `+ →` 行——只抓 `+ →` 就漏它;loop 体内留占位递归时,子节点的任务天然要引用"当前项"变量,漏了它子层写对也被 V1 拒,写对必拒+不写违反语义=死锁,真机实撞:原子成文 12 轮同败烧死实例）：
+纯机械,body 由引擎直接执行、不经 LLM。切片按 sub 第三段行号段（`L<起>-L<止>`,多段以 ` + ` 连接）从 node_source 逐段取行拼接——1.3 已核过每个占位行必带合法行号段,此处直取;分段口径与 1.3 相同:逗号、顿号先归一成 `+`,单行号 `L69` 按 `L69-L69` 切（1.3 放行的写法这里必须切得动,否则骨架过了关却在切片处崩溃）。变量清单三条实测教训不变：**必须并入本层收到的 parent_vars**（只取本层骨架的变量,祖父层的变量传到第三层递归就丢了,深层片段引用祖先变量会被校验误报"未定义"）;**只认 `+ →` 声明行,不能凡是带 `→` 的行都抓**（正文说明里的"P0→P1→P2"这类箭头会被误抓成假变量名——假名混进 known_vars 白名单让"未定义变量"核查变松。清单允许重复,消费方只做成员判定,重复无害）;**必须并入 loop 头部的单项变量**（`for-each X in …` 的 X 声明在 loop 步骤行里、不在任何 `+ →` 行——只抓 `+ →` 就漏它;loop 体内留占位递归时,子节点的任务天然要引用"当前项"变量,漏了它子层写对也被 V1 拒,写对必拒+不写违反语义=死锁,真机实撞:原子成文 12 轮同败烧死实例）：
 > ```hop_python
 > rng = strip(split(sub, "|")[2])
-> seg_list = [strip(s) for s in split(rng, "+")]
+> seg_raw = [strip(s) for s in split(replace(replace(replace(rng, ",", "+"), "，", "+"), "、", "+"), "+") if strip(s)]
+> seg_list = [s if "-" in s else s + "-" + s for s in seg_raw]
 > starts = [int(split(split(s, "-")[0], "L")[1]) for s in seg_list]
 > ends = [int(split(split(s, "-")[1], "L")[1]) for s in seg_list]
 > src_lines = split(node_source, "\n")
@@ -186,11 +188,11 @@ Outputs:
 > picked = [src_lines[j] for j in range(len(src_lines)) if line_nums[j] >= 0 and any([(starts[i] <= line_nums[j]) and (line_nums[j] <= ends[i]) for i in range(len(seg_list))])]
 > sub_source = join(picked, "\n")
 > decl_lines = [l for l in split(skeleton, "\n") if "+ →" in l]
-> skel_names = [strip(split(split(split(l, "+ →")[1], ":")[0], "#")[0]) for l in decl_lines]
+> skel_names = [strip(split(split(split(split(l, "+ →")[1], "%")[0], ":")[0], "#")[0]) for l in decl_lines]
 > loop_lines = [l for l in split(skeleton, "\n") if "for-each " in l]
 > loop_vars = [strip(split(split(l, "for-each ")[1], " in ")[0]) for l in loop_lines]
 > sub_vars = parent_vars + [i.name for i in header_final.inputs] + skel_names + loop_vars
-> hdr_lines = [i.name + ": " + str(i.type) + "  # " + str(i.说明) for i in header_final.inputs]
+> hdr_lines = [i.name + " % " + str(i.type) + "  # " + str(i.说明) for i in header_final.inputs]
 > ctx_lines = [strip(split(l, "+ →")[1]) for l in decl_lines]
 > sub_context = skeleton + "\n\n可用变量清单:\n" + join(hdr_lines + ctx_lines, "\n")
 > sub_num = strip(split(sub, "|")[0])
@@ -199,13 +201,15 @@ Outputs:
 > sub_iteration = iteration + 1
 > ```
 
-#### 3.3. [subtask retry=0 parallel] 递归分拆子节点（失败降档兜底——子拆不动不炸层;并行派发单元=整个壳:并行标注若放在 call 上,收齐点落壳,壳等自己孩子收割才完结,loop 无法轮进,并行度锁死 1〔实测 96 分钟在飞恒为 1〕;标注挪到壳上后派发即壳标 done,loop 立刻轮进派下一壳,收齐点自然落 loop——渐进派发原生形态,壳内 call 与兜底随壳进 worker 内部串行,事务语义完整。共享台账 judgement_log 并发 append 行序交错属知情接受,行自带 node_task 前缀可归组）
-+ → child_frag_path: line  # 子树片段的文件路径（递归成功=子调用产物路径;子层烧尽=兜底片段落盘后的路径）
-+ → child_tier: line  # 子树档位（兜底路径固定 mixed）
+#### 3.3. [subtask retry=0 parallel] 递归分拆子节点（失败降档兜底——子拆不动不炸层;并行派发单元=整个壳:并行标注若放在 call 上,收齐点落壳,壳等自己孩子收割才完结,loop 无法轮进,并行度锁死 1〔实测 96 分钟在飞恒为 1〕;标注挪到壳上后派发即壳标 done,loop 立刻轮进派下一壳,收齐点自然落 loop——渐进派发原生形态,壳内 call 与兜底随壳进 worker 内部串行,事务语义完整。共享台账 各子实例台账各写各的、父按 sub_nodes 序读回合并,行序即叙事序〔todo/0126〕）
++ → child_frag_path % line  # 子树片段的文件路径（递归成功=子调用产物路径;子层烧尽=兜底片段落盘后的路径）
++ → child_tier % line  # 子树档位（兜底路径固定 mixed）
++ → child_log_path % line  # 子实例台账路径（递归成功=子调用返回的 log_path;兜底路径=空串）
 
-##### 3.3.1. [call split-node(node_task: sub_task, node_source: sub_source, parent_context: sub_context, parent_vars: sub_vars, depth: sub_depth, max_depth, iteration: sub_iteration, target_profile, header_final, judgement_log)] 递归分拆（壳内串行——并行度由外层壳承载,一层并行原则）
+##### 3.3.1. [call split-node(node_task: sub_task, node_source: sub_source, parent_context: sub_context, parent_vars: sub_vars, depth: sub_depth, max_depth, iteration: sub_iteration, target_profile, header_final)] 递归分拆（壳内串行——并行度由外层壳承载,一层并行原则）
 + → child_frag_path: fragment_path  # 收取子调用的 fragment_path（值是路径）
 + → child_tier: tier  # 收取子调用的 tier
++ → child_log_path: log_path  # 收取子实例台账路径（父层步 5 读它合并）
 
 ##### 3.3.2. [on fail] 子层烧尽 → 分型降档落定（保住兄弟成果,不炸本层）
 
@@ -213,13 +217,13 @@ Outputs:
 
 ###### 3.3.2.1. [subtask retry=2] 兜底成文并机械核（兜底产物与正路产物同闸同权）
 - ← sub_task, sub_source, sub_context, sub_vars, header_final
-+ → child_fragment: text  # 未尽原子片段（已剥壳、已过 validate）
++ → child_fragment % text  # 未尽原子片段（已剥壳、已过 validate）
 
 （为什么兜底也要过核：主流程所有 LLM 产出片段都过机械核,原先唯独兜底片段写完直接流进拼装口——而兜底执行者处境最差〔拿着刚失败的任务写补救产物〕,最需要核。真机实撞:兜底重试轮产出整个包在 ```yaml 围栏里,直接喂拼装工具 parse 拒,四轮同败烧死实例。兜底内三攻仍不过=本块失败=3.3 上浮,比放行垃圾片段炸拼装口正确。）
 
 ####### 3.3.2.1.1. [reason] 按内容分型写未尽原子片段
 - ← sub_task, sub_source, sub_context, header_final, sub
-+ → fallback_draft: text  # 未尽原子片段草稿（裸片段直出,首字符即 `1`）
++ → fallback_draft % text  # 未尽原子片段草稿（裸片段直出,首字符即 `1`）
 
 落成什么类型看子任务内容,不是一律一种（落错型会吞掉工具面或蒸发闸门语义）。自上而下第一个命中即形态——①**含不可逆动作或交付写盘**（header 约束/原文点名不可撤销、发送/支付/写生产/删除;或原文承诺交付物保存为文件——交付落盘是提交语义,不得落 [act free]）：探索范式三件套,commit 从描述剥出单列（`1. [subtask retry=2]`( `1.1 [act free]` 探索准备 + `1.2 [check final]` 验收 + `1.3 [commit]` 不可逆那一句)——[act free] 不得承载提交语义;**commit 命令生成期定不死时**〔哪台机器/跑什么要看现场〕改备料/提交分离形态：1.1 备料产精确执行清单文件交付路径变量,1.2 换机械读步+[confirm]（读清单入文本变量作 confirm 输入——confirm 呈人的是它声明的输入值,present_inputs 属 ask 专属）,1.3 commit body 静态定死为读清单逐条执行——形态样板见 split-patterns「备料/提交分离」节,不许因定不死把提交语义留在 free 描述里）;②**含交互闸门**（AskUserQuestion/人工确认/问人要值）：ask/confirm 步剥出保留,其余工作落 [act free]（闸门落成别的类型=把"问人"偷换成"机器替人答"——不因兜底豁免）;**范围含门禁句**（「必须 X 才能 Y」）时加写证据契约:原子交付结构化门禁证据+骨架补 [check] 步消费判定（样板见 split-patterns「门禁证据分离」节）;③**其余探索+核验成对**（叶子恒三件套——无不可逆无闸门的叶子也不落裸单步）：`1. [subtask retry=2]`（`1.1 [act free]` 探索与产出〔纯推理才落 [reason]〕+ `1.2 [check final]` 验收交付物达标判据）——探索半边首轮不写 hop_python body,body 写作归定向优化轮（commit 必带 body 的红线只管档①）。各步 IO 从 sub_context 变量清单选真名;占位行带 `+ →` 声明的,交付变量名照占位契约不换名。**顶层容器步（第 1 步）说明尾部写 ⟦源:<行号段>⟧ 注记**——行号段照抄 sub 第三字段原文（兜底片段是未尽原子,二轮 expand 步骤 2 按说明尾注记机械对位,漏写则那一档只能靠 LLM 对位兜底）。引擎已自动注入（doc-ref）：
 [[split-patterns#subtask 探索范式（步骤定型与事务形态）]]
@@ -228,8 +232,8 @@ Outputs:
 
 ####### 3.3.2.1.2. [act] 剥壳并 validate
 - ← fallback_draft, sub_vars
-+ → child_fragment: text  # 剥壳后片段
-+ → fallback_syntax: text  # validate JSON 输出
++ → child_fragment % text  # 剥壳后片段
++ → fallback_syntax % text  # validate JSON 输出
 
 纯机械,body 由引擎直接执行、不经 LLM（与 1.2 骨架核同族——known_vars 用 sub_vars:本子节点视角的完整白名单,含祖先链变量与 loop 单项变量）：
 > ```hop_python
@@ -239,8 +243,8 @@ Outputs:
 
 ####### 3.3.2.1.3. [check final] 语法关
 - ← fallback_syntax
-+ → fallback_ok: bool  # 判定槽
-+ → fallback_note: text  # 说明槽（error 清单回填,重试反馈定向修正）
++ → fallback_ok % bool  # 判定槽
++ → fallback_note % text  # 说明槽（error 清单回填,重试反馈定向修正）
 
 纯机械判定,body 引擎直执零 LLM：
 > ```hop_python
@@ -249,9 +253,10 @@ Outputs:
 > ```
 
 ###### 3.3.2.2. [act] 兜底片段落盘、记台账并定档
-- ← child_fragment, sub, sub_task, judgement_log
-+ → child_frag_path: line  # 兜底片段的文件路径（本层 work_zone 涂鸦区,文件名带占位步骤号防同层多占位互覆——值是路径）
-+ → child_tier: line  # 固定 mixed
+- ← child_fragment, sub, sub_task
++ → child_frag_path % line  # 兜底片段的文件路径（本层 work_zone 涂鸦区,文件名带占位步骤号防同层多占位互覆——值是路径）
++ → child_tier % line  # 固定 mixed
++ → child_log_path % line  # 兜底路径无子实例台账,固定空串（步 5 合并时跳过）
 
 纯机械,body 由引擎直接执行、不经 LLM（台账行带行号段——此行没有行号段则该原子二轮 expand 只能靠 LLM 对位兜底;行号段=sub 第三字段,机械在手零新计算。兜底片段尾同补 ⟦源⟧ 注记——expand 步骤 2 的机械读档依赖说明尾注记）：
 > ```hop_python
@@ -259,37 +264,42 @@ Outputs:
 > sub_rng = strip(split(sub, "|")[2])
 > child_frag_path = work_zone_path("fallback-frag-" + replace(sub_num, ".", "_") + ".md")
 > write(path: child_frag_path, content: child_fragment)
-> append(path: judgement_log, content: "子层降档(递归烧尽,未尽原子落定):" + sub_task + "|" + sub_rng + "\n")
+> append(path: work_zone_path("judgement-log.md"), content: "子层降档(递归烧尽,未尽原子落定):" + sub_task + "|" + sub_rng + "\n")
 > child_tier = "mixed"
+> child_log_path = ""
 > ```
 
 ### 4. [subtask retry=2] 拼装与就地修错（子树成果只拼不重拆——拼装口出错就修拼装口）
 - ← skeleton, sub_nodes, child_frag_paths
-+ → fragment_path: line  # 拼装成品的文件路径（占位已替换、编号已重刷的完整片段——值是路径,内容只在机械 body 手里流转）
++ → fragment_path % line  # 拼装成品的文件路径（占位已替换、编号已重刷的完整片段——值是路径,内容只在机械 body 手里流转）
 
 （**为什么包事务**：走到本步,loop 已把全部子树拆完——child_frag_paths 指向的文件是数小时递归的成果,产在本事务**外**,本 subtask 重试只重跑拼装段,**子树绝不重拆**。实撞:原拼装是裸平铺步,一处机械失败实例直接终态——手里 5 棵已完成子树全部陪葬,死链再上传炸掉整棵大树,"子节点都到手了、父层拼装没过、动不动全树烧"是历轮最大浪费源。拼装口的错多是局部小问题〔个别片段形态畸形/壳没剥净/步骤号错位〕,局部修复即可;两轮修不动才实例失败上传。）
 
 #### 4.1. [act] 子片段落工作台（每轮重写原始件,幂等）
 - ← skeleton, sub_nodes, child_frag_paths
-+ → frag_sep: line  # 片段分隔符（读回时按它切割）
++ → frag_sep % line  # 片段分隔符（读回时按它切割）
++ → skel_path % line  # 骨架工作台文件路径（work_zone 内——值是路径,4.2 按它定位修错）
++ → frags_path % line  # 子片段工作台文件路径（work_zone 内——值是路径,片段间以 frag_sep 行分隔）
 
 纯机械,body 引擎直执零 LLM。骨架与全部子片段落成两个工作台文件——修错步对着文件干活（文件操作"不动"是天然形态,变量通道则要 LLM 复述大文本,又慢又易抄坏）。子片段按 child_frag_paths 逐个从子实例文件机械读入（跨实例路径来自 call 返回值——文件通道,全文零 LLM 过手）。每轮重试都从原始件重写:上一轮的修补被清掉,修错步按累计反馈史从原始件重修——修的基准永远干净：
 > ```hop_python
 > frag_sep = "<<<HB2-FRAG-BOUNDARY>>>"
+> skel_path = work_zone_path("assembly-skeleton.md")
+> frags_path = work_zone_path("assembly-frags.md")
 > child_frags = [read(path: p) for p in child_frag_paths]
-> write(path: work_zone_path("assembly-skeleton.md"), content: skeleton)
-> write(path: work_zone_path("assembly-frags.md"), content: join(child_frags, "\n" + frag_sep + "\n"))
+> write(path: skel_path, content: skeleton)
+> write(path: frags_path, content: join(child_frags, "\n" + frag_sep + "\n"))
 > ```
 
 #### 4.2. [act free] 定向修错（无错不动）
-- ← sub_nodes, frag_sep
-+ → fix_note: line  # 一句话修错记录（"无错未动"或"修了:…"）
+- ← sub_nodes, frag_sep, skel_path, frags_path
++ → fix_note % line  # 一句话修错记录（"无错未动"或"修了:…"）
 
-重试反馈非空时=上一轮拼装失败的错误原文（replace_node 的拒收明细,含哪个片段/哪一行的问题）——按它定位工作台文件（`assembly-skeleton.md` 骨架 / `assembly-frags.md` 全部子片段,片段间以 frag_sep 行分隔、顺序与 sub_nodes 一致）,**只修反馈所指的那一处**：剥掉没剥净的壳、修坏掉的步骤行形态、把畸形片段修成合法步骤序列——改完写回原文件。不重写其他片段、不顺手润色、不增删片段数量（分隔符行数不得变——数量变了拼装按位对应即错）。反馈为空（首轮）一字不动,fix_note="无错未动"。
+重试反馈非空时=上一轮拼装失败的错误原文（replace_node 的拒收明细,含哪个片段/哪一行的问题）——按它定位工作台文件（skel_path 指向的骨架文件 / frags_path 指向的全部子片段文件,片段间以 frag_sep 行分隔、顺序与 sub_nodes 一致）,**只修反馈所指的那一处**：剥掉没剥净的壳、修坏掉的步骤行形态、把畸形片段修成合法步骤序列——改完写回原文件。不重写其他片段、不顺手润色、不增删片段数量（分隔符行数不得变——数量变了拼装按位对应即错）。反馈为空（首轮）一字不动,fix_note="无错未动"。**按反馈定位读,不整读两个工作台文件**：frags_path 装的是全部子树片段的合集,深树可达上万行,整读一遍就把工具循环的上下文撑满。反馈指到哪个片段、哪一行,先用 search_file(path: frags_path 或 skel_path, pattern: 反馈里引用的原句或步骤行关键词) 取命中行号,再 read(path: 同一文件, start_line: 命中行前后几行, end_line: …) 只读那一段核上下文,然后用 edit_file 定向改（old_text 带足上下文保证唯一,new_text 只写改后形态）——每处问题≈一次搜索+一次段读+一次编辑。反馈没给出可搜索的原句时,才按分隔符行数定位到第几个片段再段读。
 
 #### 4.3. [act] 读回并机械拼装
 - ← sub_nodes, frag_sep
-+ → fragment_path: line  # 拼装成品的文件路径（占位节点被子树片段原位替换后的完整片段落盘于此——值是路径）
++ → fragment_path % line  # 拼装成品的文件路径（占位节点被子树片段原位替换后的完整片段落盘于此——值是路径）
 
 纯机械,body 由引擎直接执行、不经 LLM（replace_node 操作=占位行本体消失、子树片段接进原位置;批量 replacements 里各目标都按替换前的步骤号定位,工具在全部替换完成后统一重编号;拼装成品直接落盘,全文不出 body）。每份子片段先机械剥壳再喂工具——子片段来自 LLM,可能带围栏包裹,带壳直接喂 replace_node 会 parse 拒"片段内无可解析步骤行"（真机实撞:降档兜底片段包了 ```yaml 围栏,拼装四轮全灭烧死子实例——形态纪律不能只赌上游守约,机械口自己剥,幂等裸值原样过）：
 > ```hop_python
@@ -307,11 +317,11 @@ Outputs:
 > ```
 
 ### 5. [act] 剥壳终核定档
-- ← fragment_path, child_tiers, header_final, parent_vars, node_task, judgement_log
-+ → fragment_path: line  # 成品片段的文件路径（剥壳后回写同一文件——值是路径,本 spec 的最终交付）
-+ → tier: enum(hop, mixed)  # 含未替换占位/任何子树 mixed/拼装后整验不过 → mixed;否则 hop
+- ← fragment_path, child_tiers, child_log_paths, header_final, parent_vars, node_task
++ → tier % enum(hop, mixed)  # 含未替换占位/任何子树 mixed/拼装后整验不过 → mixed;否则 hop
++ → log_path % line  # 本实例台账路径（已把各子实例台账内容按 sub_nodes 序追加进来——逐层向上合并,根实例台账即全树）
 
-纯机械,body 由引擎直接执行、不经 LLM（按路径读盘核验,全文只在 body 手里流转）。拼装后对整个片段再做一次完整校验——各子片段单独校验通过,不代表拼起来也通过（比如 A 子树引用了 B 子树改了名的变量,只有整体校验能发现）;不通过就降档为 mixed 并记台账,如实交付,不掩盖问题：
+纯机械,body 由引擎直接执行、不经 LLM（按路径读盘核验,全文只在 body 手里流转;末尾把各子实例的台账读回追加进本实例台账——子实例只能写自己的涂鸦区,父读子合并是台账逐层上交的通道）。拼装后对整个片段再做一次完整校验——各子片段单独校验通过,不代表拼起来也通过（比如 A 子树引用了 B 子树改了名的变量,只有整体校验能发现）;不通过就降档为 mixed 并记台账,如实交付,不掩盖问题：
 > ```hop_python
 > fragment = strip_fence(read(path: fragment_path), "fragment")
 > write(path: fragment_path, content: fragment)
@@ -319,8 +329,14 @@ Outputs:
 > whole_check = validate_spec(text: fragment, fragment: true, known_vars: known_names)
 > whole_ok = '"errors":[]' in whole_check
 > if not whole_ok:
->     append(path: judgement_log, content: "拼装整验不过(降档mixed):" + node_task + "|" + whole_check + "\n")
+>     append(path: work_zone_path("judgement-log.md"), content: "拼装整验不过(降档mixed):" + node_task + "|" + whole_check + "\n")
 > tier = "mixed" if ("待展开——" in fragment or "mixed" in child_tiers or not whole_ok) else "hop"
+> # 父读子台账合并（读对实例树开放、写只归本实例——todo/0126）:各子实例台账按 sub_nodes 序读回拼接后一次追加进自己的台账;
+> # 空串=兜底路径无子实例,过滤掉;文件不在=子实例零研判点从未落盘（log_notes 空、子节点全当场定型、整验通过三者同时成立的合法退化）,先探测再读——read 不在场的文件是工具失败,会炸掉本步;逐件读用列表推导（体内可调工具——循环语句不合法）
+> child_logs = [read(path: cl) for cl in child_log_paths if cl and parse_json(exists(path: cl)).exists]
+> if child_logs:
+>     append(path: work_zone_path("judgement-log.md"), content: join(child_logs, ""))
+> log_path = work_zone_path("judgement-log.md")
 > ```
 
 ### 6. [exit] 返回片段路径与档位

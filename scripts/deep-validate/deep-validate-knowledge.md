@@ -19,8 +19,14 @@
 
 - **五个判据面逐面过账**：每面写"查了，结论无风险"或"查出风险 N 条：…"——静默跳过任何一面=检查不完整，不许交卷；
 - **风险条目四件套**：坑位（步骤号+引文）/病理（为什么会死，指向哪条环境事实）/修法建议（可执行的具体改法，不是"注意一下"）/严重度（**高**=真机必死或产出必坏；**中**=特定条件下死（如特定执行模式/特定输入规模）；**低**=能跑但低效或有隐患）；
+- **严重度按执行路径定，不按问题听起来多严重定**：标"高"之前写得出"不管什么输入、每次跑到这一步都会死或出错产出"的那条执行路径；只有在某种输入、某种环境配置、某个分支上才出事的，是"中"；validate warning 采纳成风险时同样按这把尺子定级，不因为它是 warning 就一律标高。反例：环境没注册 web_search 标"高"——注册了就能跑，是环境配置面的"中"；
 - **只报有据的**：每条风险必须能指出"说明文字的哪句话 × 环境事实的哪一条"矛盾。推测性的"可能有问题"不报——误报驱动作者改写合法 spec，比漏报更伤；
 - **机械体检单的 warning 逐条表态**：warning 是 validate 白送的缺陷线索（如 B7"act 无 free 无 body"），每条写"采纳为风险"或"不构成风险因为 X"——不许两头都不管；
+- **warning 逐条怎么判、采纳后怎么定级**：validate 把真会拦住执行的问题报成 error，报成 warning 的本来就是"某些情况下才出事"的问题，所以采纳后的风险**缺省定"中"或"低"**，只有写得出"每次都会走到、走到必死"的执行路径才升"高"。判"不构成风险"同样要拿原文作证据——warning 是 validate 按结构查出来的，推翻它要有比它更硬的依据，不能凭印象说"没这回事"。常见几条逐条写清：
+  - **V11"说明提到的变量没在 `←` 里声明"**。先判要不要采纳：到 spec 里找出该步说明中提到这个变量名的那句原话，照抄出来。这一步要产出或呈交的东西（报告、摘要、给人看的简报）里列着这个变量，产出时就得填它的值——这是"要用"，采纳；只在解释背景时提到这个词（"direction 在步 1 已定"），这一步不产出它，是顺带提到，不构成风险。怎么找原话：warning 里的 `line` 是那一步标题行在 spec_text 里的行号；步骤的"说明"不只是标题行，而是标题行下面 `>` 开头的全部行（`- ←`、`+ →` 行之后那几行长文字），要从标题往下一直读到下一个步骤标题为止。只看了标题就下结论是最常见的漏看（实跑记录：dpa-review 步 6 标题是"signing gate:non-lawyer stop + brief"，模型只读标题就判"说明未提及 direction"，而下面 `>` 行里明写"1-page brief:counterparty/direction/deviating terms…"）。找不到原话就说明你看的不是那一步或只看了标题，回去重读，不许写"说明里没提到"——validate 就是在说明里匹配到了才报的。再定级：**采纳了也定"中"**——缺声明不会让步骤报错或失败，引擎照样执行这一步，只是执行它的 LLM 看不到这个变量的值，产出里这一项会空着或靠猜。例：确认步说明"呈交律师一页简报（对方/direction/偏离条款…）"而 `←` 里没有 direction——采纳，定"中"，病理写"简报里的 direction 一项拿不到值，只能空着或靠猜"；写成"变量缺失导致步骤执行失败、定高"是错的。只有缺的这个值恰好是本步唯一的判定依据（比如 check 步要判的就是它）才考虑升高，并写明为什么；
+  - **P10"某个 Output 只在部分完成路径产出"**。逐条列出能走到终态的路径，看每条上这个 Output 有没有被赋值。branch 的分流条件来自 ask 的回答时，要想到回答是人填的自由文本——填了菜单外的值（比如填"人工确认"而不是 manual_confirm），所有 case 都不命中，这就是一条没赋值的路径。branch 没有兜底的 case 时采纳，只有走到那条没赋值的路径才在终态闸失败，是条件性失败 → 定"中"；
+  - **V15"check 步的输入里有它自己的输出变量"**：判官可能照抄上一轮判词，是判官独立性打折扣 → 采纳，定"中"；
+  - **P8"带 retry 的 subtask 里有 call"**：只在重试时才可能重复副作用 → 定"低"或"中"，看重复的是什么；
 - **执行模式二分**：exec_mode=standalone 时按 standalone 能力面判（环境事实教材节的工具清单与写域规则是硬事实）；exec_mode=driver（复用模式）时 caller 能力面宽且无机器可读登记（见教材节末段），能力面矛盾类判据从宽，但体量/环境依赖/写域判据照常。
 
 ---
@@ -31,7 +37,7 @@
 
 **怎么判**：逐步骤读说明文字（`>` 指令区与摘要行），提取其中教的**动作**（"用 X 命令判""读某文件""删旧产物""调某工具"），对照环境事实教材节里该步骤类型在目标执行模式下的工具面清单。动作需要的能力不在清单里 → 风险。重点盯三类步骤：
 
-- **check 步（判官）**：standalone check 判官**零工具面**（纯判定，见教材节）——说明教它"检查文件存在""读盘核对"而输入变量里没有备好的料 → 判官只能如实拒判，重试烧尽。正形：确定性检查改 check body（引擎直执零 LLM），或前置 act 步备料经 `←` 喂给判官；
+- **check 步（判官）**：standalone check 判官**零工具面**（纯判定，见教材节）——说明教它"检查文件存在""读盘核对"而输入变量里没有备好的料 → 判官只能如实拒判，重试烧尽。正形：确定性检查改 check body（引擎直执零 LLM），或前置 act 步备料经 `←` 喂给判官。**判这条之前先读该 check 步的 `- ←` 行**：说明要核的对象（报告文本、数字、清单）都是 `←` 里列出的变量 → 料已备齐，无风险；check 没有 body 本身不是风险，只有"说明要核的东西不在 `←` 里、又得读盘或调工具才拿得到"才是。反例：`- ← weekly_report, total` 的 check 步说明"核对周报里的营业额与 total 一致"——两样料都在 `←` 里，判"没备料"是误报；
 - **无 body 的 act/act free 与 reason**：工具面=十一件文件工具+spec 内容族（basic 档恒在）+按 `- 工具:` 声明的 special 件——说明教"跑命令/起进程/开浏览器"而 body 里没有 subprocess.run、声明里没有对应工具 → 无从执行；
 - **复用模式写法残留**："driver 用 test -s 判""让 CC 去 grep"这类句式是复用模式（CC 当执行者）的写法，standalone 执行者没有 shell——目标模式是 standalone 时这类说明整句失效。
 
@@ -90,15 +96,15 @@
 
 **判什么**：说明文字或 body 教的写盘/路径习惯与引擎写域规则、沙箱路径规则矛盾。
 
-**怎么判**：对照环境事实教材节的写域规则三条硬事实（act/check 限 work_zone；commit 限 workspace；路径一律 workspace 相对、禁绝对路径、work_zone 绝对路径唯一豁免），扫两处：
+**怎么判**：对照环境事实教材节的写域规则三条硬事实（act/check 限 work_zone；commit 限 workspace；路径写 workspace 相对或落在 workspace 内的绝对路径、workspace 外的绝对路径拒——work_zone 绝对路径是唯一豁免），扫两处：
 
 1. **说明文字教的写动作**：散文教执行者"删旧产物""清空目录""把结果写到 X"而步骤是 act/check（非 commit）且 X 不在 work_zone → 运行期 WORK_ZONE_ONLY 拒。注意散文形态静态拦不到（B9/B10 只拦 body 里的字面路径），散文半边归本面；
-2. **路径习惯**：说明或 body 里的绝对路径习惯（"读 /Users/.../xxx""写 /tmp/xxx"）——沙箱禁绝对路径（work_zone 产物除外），字面形态 validate 的 B9（写侧）/B10（读侧）已静态拦，**变量拼出来的路径和散文里教的路径静态拦不到**，归本面推理判。
+2. **路径习惯**：说明或 body 里教的路径落在 workspace 外（"读 /Users/别处/xxx""写 /tmp/xxx"而 workspace 不在那里）——沙箱拒 workspace 外的绝对路径（work_zone 产物除外）。**落在 workspace 内的绝对路径合法**（与相对写法落同一处——用户给的 workspace 内绝对路径、由它拼出的交付路径都能用,不要报成风险）;判风险的关键是"这个路径在运行时会落在 workspace 外吗"。字面形态 validate 的 B9（写侧）/B10（读侧）已静态拦（理由是字面绝对路径不可移植），**变量拼出来的路径和散文里教的路径静态拦不到**，归本面推理判。
 
 **实撞例两件**：
 
 - （第八跑，九坑之坑 8）步 1 说明教 LLM "清理 .anchor-audit/ 旧产物"——act 步写域闸拒（WORK_ZONE_ONLY，该目录不在 work_zone）。修法：清理动作脚本化（prep_env.py 经 subprocess.run，脚本进程不受工具面写域闸约束，写的是它自己的业务目录）；
-- （第六跑，九坑之坑 6）body 文件工具用字面绝对路径撞沙箱禁令（0042 卡记同款实撞十一次）。修法：改 workspace 相对路径。此形态现已由 B10 静态拦（字面半边），deep-validate 管剩下的变量/散文半边。
+- （第六跑，九坑之坑 6）body 文件工具用字面绝对路径指向 workspace 外，撞沙箱拒（0042 卡记同款实撞十一次）。修法：改 workspace 相对路径。此形态现已由 B10 静态拦（字面半边），deep-validate 管剩下的变量/散文半边。
 
 **修法方向**：持久写盘归 commit 步承载；中间产物用 `work_zone_path()` 取路径；文件工具路径一律 workspace 相对；引擎工具面管不到的目录操作（清第三方产物目录）走白名单脚本。
 
@@ -120,7 +126,7 @@
 | `write` | `path, content` | 写入确认 | 新建或覆盖 |
 | `create` | `path, content` | 创建确认 | 排他新建——已存在即失败 |
 | `append` | `path, content` | 追加确认 | 文件不存在则创建 |
-| `edit_file` | `path, old_text, new_text` | 替换确认（含字节偏移） | 局部精确替换——old_text 恰匹配一处才替换；零匹配/多匹配报错带计数（宁拒不猜，按报错补上下文重试）；目标文件不存在报错 |
+| `edit_file` | `path, old_text, new_text` | 替换确认（含字符偏移,如 `at char 1234`） | 局部精确替换——old_text 恰匹配一处才替换；多匹配报错带计数；零匹配报错回显 old_text 头 80 字符,并附文件里最多 3 条最接近的行（行号+原文）供照抄重试——仍然拒绝,不替调用方改写（宁拒不猜）；目标文件不存在报错 |
 | `makedirs` | `path` | 创建确认 | 含中间层；已存在即成功（幂等） |
 | `move` | `from, to` | 移动确认 | 源与目标都限 workspace 内 |
 | `remove` | `path` | 删除确认 | 仅文件（目录不删）；不存在即失败 |
@@ -139,12 +145,19 @@
 （权威 docs/design/tools/file-tools.md ^anc-exec-write-scope，逐条照抄）
 
 - 写侧（write/create/append/makedirs/move/remove）按步骤权限分域：**act/check 限 work_zone**（探索段写的都是中间产物，越界即拒 WORK_ZONE_ONLY，free 与否无关——free 不放大权限）；**commit 限 workspace**（持久写盘=交付动作）+ 禁 .hopstate/（引擎状态区，work_zone 是该禁令唯一豁免）；
-- 路径一律 workspace 相对（禁绝对路径、禁 `..`）——**唯一豁免：work_zone 绝对路径放行**（`work_zone_path()` 产物就是绝对形态）；
+- 路径形态三种合法：workspace 相对路径；**落在 workspace 内的绝对路径**（与相对写法落同一处）；work_zone 绝对路径（`work_zone_path()` 产物,work_zone 可在 workspace 外）。workspace 外的其余绝对路径拒，含 `..` 一律拒；
 - 读侧（read/listdir/exists）走三级读权限链（denied → confirm_required → workspace/allowed），路径规则同上。
 
 ### 命令白名单机制
 
 （权威 docs/design/act-body.md ^anc-exec-subprocess-run）body 里 `subprocess.run` 的命令名须 ∈ 项目 `hopjit.yaml` 的 `commands` 键白名单；白名单缺席（无此文件或无此键）= 一切 subprocess.run 响亮拒。引擎 spawnSync **不吃 shell alias**——判命令可用性按系统裸命令，不按用户终端体感。
+
+### 外部工具注册机制（special 档工具从哪来）
+
+（权威 docs/design/tool-interface.md ^anc-config-tool-registry）web_search、browser_* 这类不在上面文件工具表里的工具，靠配置文件的 `tool_servers` 节注册：系统级 `~/.hopjit/config.yaml` 与项目级 `hopjit.yaml` 两处都可以写，两级合并。注册了，步骤里的 `- 工具: 名` 声明才会真的下发；没注册，声明的工具悄然缺席。
+
+- **`commands` 与 `tool_servers` 是两回事**：`commands` 白名单只管 body 里 `subprocess.run` 能起哪些命令；工具名写进 `commands` 不会注册任何工具。所以"spec 声明了 web_search、项目 hopjit.yaml 里没看到注册"这条风险，修法是"在 `tool_servers` 节注册 web_search（样例 examples/hoptools-websearch.yaml），或确认系统级 ~/.hopjit/config.yaml 已注册"——写成"加进 commands 白名单"是错的修法，照做不生效；
+- **备料步只读得到项目级 hopjit.yaml**，系统级配置不在料里——项目级没看到注册不等于没注册，这类风险定"中"（环境配置面的跑前准备项），病理写"项目级未见注册，需确认系统级配置"。
 
 ### 复用模式（driver）的 caller 能力面
 

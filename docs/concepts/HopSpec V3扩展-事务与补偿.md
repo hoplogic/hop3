@@ -3,7 +3,7 @@
 	source: [[HopSpec V3核心规范]]
 	source_id: hopspec-v3-core
 	type: extend
-	last_sync: 2026-05-23T09:42+08:00
+	last_sync: 2026-09-27T20:38+0800
 	note: 扩展 commit 步骤的事务与补偿机制
 %%
 > HopSpec V3扩展：事务与补偿
@@ -32,7 +32,7 @@ commit 节点体新增 `* rollback:` 前缀，声明该 commit 的补偿动作�
 ```
 5. [commit] 发送审批通知邮件
   - ← approval_result
-  + → notification_id: line  # 通知ID
+  + → notification_id % line  # 通知ID
   * rollback: 按 notification_id 撤回通知邮件
 ```
 
@@ -57,8 +57,8 @@ commit 节点体新增 `* rollback:` 前缀，声明该 commit 的补偿动作�
 
 ```
 3. [subtask retry=2] 创建订单并通知
-  + → order_id: line  # 订单号
-  + → notification_id: line  # 通知ID
+  + → order_id % line  # 订单号
+  + → notification_id % line  # 通知ID
   3.1. [commit] 写入订单到数据库
     - ← order_data
     + → order_id
@@ -69,7 +69,7 @@ commit 节点体新增 `* rollback:` 前缀，声明该 commit 的补偿动作�
     * rollback: 按 notification_id 撤回邮件
   3.3. [check] 验证订单状态一致性
     - ← order_id, notification_id
-    + → order_ok: bool  # 是否一致
+    + → order_ok % bool  # 是否一致
 ```
 
 check 失败时：先补偿 3.2（撤回邮件），再补偿 3.1（删除订单），然后触发 subtask retry。
@@ -84,14 +84,14 @@ subtask 新增 `tx` 属性，声明内部 commit 的原子性要求：
 
 ```
 4. [subtask tx] 转账事务
-  + → transfer_id: line  # 转账记录ID
+  + → transfer_id % line  # 转账记录ID
   4.1. [commit] 扣减源账户余额
     - ← source_account, amount
-    + → debit_id: line  # 扣款记录ID
+    + → debit_id % line  # 扣款记录ID
     * rollback: 按 debit_id 恢复源账户余额
   4.2. [commit] 增加目标账户余额
     - ← target_account, amount
-    + → credit_id: line  # 入账记录ID
+    + → credit_id % line  # 入账记录ID
     * rollback: 按 credit_id 恢复目标账户余额
   4.3. [act] 生成转账记录
     - ← debit_id, credit_id

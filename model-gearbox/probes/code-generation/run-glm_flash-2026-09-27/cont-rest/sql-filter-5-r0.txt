@@ -1,0 +1,19 @@
+查询思路:
+
+- **status 精确匹配**:`status = 'paid' COLLATE BINARY` 强制按二进制(字节)比较,确保大小写、首尾空格都必须完全一致('PAID'、'paid ' 都不匹配)。
+- **大额**:`amount >= 100`;NULL 参与比较结果为 NULL(视为不满足),再加 `amount IS NOT NULL` 明确排除。
+- **时间范围**:由于 created_at 是定长、补零的 'YYYY-MM-DD HH:MM:SS' 文本,字典序即时间序,直接用字符串比较即可,两端都用闭区间,3 月 31 日 23:59:59 也包含在内。
+- **排序**:`ORDER BY amount DESC, id DESC`;没有匹配行时自然返回空结果集。
+
+样例数据验证:只有 id 为 1、5、6 的行满足条件,按 amount 降序、同 amount 按 id 降序,输出 `[6,14,500] [5,13,150] [1,10,150]`,与预期一致。
+
+```sql
+SELECT id, customer_id, amount
+FROM orders
+WHERE status = 'paid' COLLATE BINARY
+  AND amount IS NOT NULL
+  AND amount >= 100
+  AND created_at >= '2026-03-01 00:00:00'
+  AND created_at <= '2026-03-31 23:59:59'
+ORDER BY amount DESC, id DESC;
+```

@@ -1,0 +1,58 @@
+```sql
+WITH distinct_dates AS (
+    SELECT DISTINCT
+        user_id,
+        date(login_date) AS d
+    FROM logins
+),
+prev_dates AS (
+    SELECT
+        user_id,
+        d,
+        LAG(d) OVER (PARTITION BY user_id ORDER BY d) AS prev_d
+    FROM distinct_dates
+),
+streak_groups AS (
+    SELECT
+        user_id,
+        d,
+        SUM(
+            CASE
+                WHEN prev_d IS NULL OR d <> date(prev_d, '+1 day') THEN 1
+                ELSE 0
+            END
+        ) OVER (
+            PARTITION BY user_id
+            ORDER BY d
+            ROWS UNBOUNDED PRECEDING
+        ) AS grp
+    FROM prev_dates
+),
+streaks AS (
+    SELECT
+        user_id,
+        MIN(d) AS streak_start,
+        COUNT(*) AS streak_len
+    FROM streak_groups
+    GROUP BY user_id, grp
+),
+ranked AS (
+    SELECT
+        user_id,
+        streak_len AS longest_streak,
+        streak_start,
+        ROW_NUMBER() OVER (
+            PARTITION BY user_id
+            ORDER BY streak_len DESC, streak_start ASC
+        ) AS rn
+    FROM streaks
+)
+SELECT
+    user_id,
+    longest_streak,
+    streak_start
+FROM ranked
+WHERE rn = 1
+  AND longest_streak >= 3
+ORDER BY longest_streak DESC, user_id ASC;
+```

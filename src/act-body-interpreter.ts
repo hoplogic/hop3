@@ -236,16 +236,13 @@ export class BodyInterpreter {
         return -toNumber(v);   // '-'
       }
       case 'index': {
+        // 单下标:列表与字符串同一段序列逻辑（负数下标 Python 语义 items[-1]=末元素）,对象键查找,
+        // 其余计算异常（^anc-step-act-body-str-index） // @a: anc-step-act-body-str-index
         const obj = await this.evalExpr(expr.object, scope);
         const idx = await this.evalExpr(expr.index, scope);
-        if (Array.isArray(obj)) {
-          const n = typeof idx === 'number' ? idx : Number(idx);
-          if (!Number.isInteger(n)) { this.ctx.warnLog?.push(`计算异常: 下标 ${JSON.stringify(idx)} 非整数 → None`); return null; }
-          return obj[n < 0 ? obj.length + n : n];   // 负数下标 Python 语义（items[-1]=末元素）
-        }
-        if (obj !== null && typeof obj === 'object') return (obj as Record<string, unknown>)[String(idx)];
-        this.ctx.warnLog?.push('计算异常: 在非数组/对象上取下标 → None');
-        return null;
+        const r = indexValue(obj, idx);
+        if (r.err) { this.ctx.warnLog?.push(r.err); return null; }
+        return r.value;
       }
       case 'slice': {
         // 序列切片 seq[start:stop]——钳位宽容（越界得空序列非报错,与单下标 None 传播分野;
@@ -593,15 +590,14 @@ export function evalExprSync(expr: ActExpr, readVar: (name: string) => unknown, 
       }
     }
     case 'index': {
+      // 单下标同步档——与异步路径共用 indexValue;None 上取下标静默 undefined（与同步取字段约定一致,
+      // case 条件里未赋值变量取下标按不命中,不改成分支失败）（^anc-step-act-body-str-index） // @a: anc-step-act-body-str-index
       const obj = evalExprSync(expr.object, readVar, onWarn);
       const idx = evalExprSync(expr.index, readVar, onWarn);
-      if (Array.isArray(obj)) {
-        const n = typeof idx === 'number' ? idx : Number(idx);
-        if (!Number.isInteger(n)) { onWarn?.(`计算异常: 下标 ${JSON.stringify(idx)} 非整数 → None`); return undefined; }
-        return obj[n < 0 ? obj.length + n : n];   // 负数下标 Python 语义
-      }
-      if (obj !== null && typeof obj === 'object') return (obj as Record<string, unknown>)[String(idx)];
-      return undefined;
+      if (obj === null || obj === undefined) return undefined;
+      const r = indexValue(obj, idx);
+      if (r.err) { onWarn?.(r.err); return undefined; }
+      return r.value;
     }
     case 'slice': {
       // 序列切片同步档（条件表达式里切片可用——^anc-step-act-body-slice） // @a: anc-step-act-body-slice
@@ -696,6 +692,20 @@ function isoNow(): string {
   const sign = tz >= 0 ? '+' : '-';
   const abs = Math.abs(tz);
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+}
+
+// @a: anc-step-act-body-str-index
+/** 单下标求值共用件（双求值器共用）：列表与字符串走同一段序列下标（整数核→负数 len+n 换算→越界得 undefined）,
+ * 非 null 对象按 String(idx) 键查找,其余类型=计算异常文案返回。^anc-step-act-body-str-index */
+function indexValue(obj: unknown, idx: unknown): { value?: unknown; err?: string } {
+  if (Array.isArray(obj) || typeof obj === 'string') {
+    const n = typeof idx === 'number' ? idx : Number(idx);
+    if (!Number.isInteger(n)) return { err: `计算异常: 下标 ${JSON.stringify(idx)} 非整数 → None` };
+    const k = n < 0 ? obj.length + n : n;   // 负数下标 Python 语义
+    return { value: k >= 0 && k < obj.length ? obj[k] : undefined };
+  }
+  if (obj !== null && typeof obj === 'object') return { value: (obj as Record<string, unknown>)[String(idx)] };
+  return { err: '计算异常: 在非列表/字符串/对象上取下标 → None' };
 }
 
 // @a: anc-step-act-body-slice

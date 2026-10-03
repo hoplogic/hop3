@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parseSpec, parseFragment, serializeSpec } from '../src/parser.js';
-import { validateSpec, repairQuotedPrefixScalars, recoverOutputValues, coerceOutputValues, normalizeOutputsToFixpoint } from '../src/validator.js';
+import { validateSpec, repairQuotedPrefixScalars, repairInlineColonScalars, validateOutputValues, recoverOutputValues, coerceOutputValues, normalizeOutputsToFixpoint } from '../src/validator.js';
 import { isTruthy } from '../src/ast-runtime.js';   // 下游真值语义用引擎本体,不在测试里重实现
 import type { SpecAST, StepNode, SubtaskStep, ParallelStep, LoopStep, BranchStep, CaseStep, CallStep, CommitStep, ExitStep, ConfirmStep } from '../src/ast-types.js';
 
@@ -5863,6 +5863,200 @@ describe('repairQuotedPrefixScalars（值内前置引号片段修复）', () => 
       { data: raw },
     );
     expect(out.data).toBe(raw);   // 原样保留(恢复放弃),不造假结构
+  });
+});
+
+// @v: anc-exec-output-inline-colon-repair — hb2 qwen-flash 变体头部契约门实撞（2026-09-29）:
+// 不加引号的值里含英文冒号加空格（`说明: 模式（new: 新事故, update: …）`）炸整份 YAML,
+// 校验层旧口径把解析失败一律报"散文文本",模型对着误诊改形态,subtask 三次重试同因死。
+// 修:按解析器报错行逐行把裸值整值加引号;解析失败的反馈点名出错行。
+describe('repairInlineColonScalars（值里裸冒号修复）+ yaml 解析失败反馈', () => {
+  const HB2_HEADER = [
+    'title: 事故响应',
+    'spec_id: incident-response',
+    'inputs:',
+    '  - name: incident_description',
+    '    type: text',
+    '    说明: 事故描述或告警原文（告警常是多行，不能用line）',
+    '  - name: mode',
+    '    type: "enum(new,update,postmortem)"',
+    '    说明: 模式（new: 新事故, update: 状态更新, postmortem: 事后分析）',
+    'outputs:',
+    '  - name: deliverable',
+    '    type: markdown',
+    '    说明: 根据模式：new=定级, update=状态通报',
+    'tools_available: []',
+  ].join('\n');
+
+  it('正例：hb2 实撞形态——列表项里说明值含裸冒号 → 修复后解出完整对象,值原文不丢', () => {
+    const { load } = require('js-yaml');
+    expect(() => load(HB2_HEADER)).toThrow();
+    const repaired = repairInlineColonScalars(HB2_HEADER);
+    const doc = load(repaired) as { inputs: Array<Record<string, string>>; tools_available: unknown[] };
+    expect(doc.inputs).toHaveLength(2);
+    expect(doc.inputs[1]['说明']).toBe('模式（new: 新事故, update: 状态更新, postmortem: 事后分析）');
+    expect(doc.tools_available).toEqual([]);
+    expect(repaired.split('\n')).toHaveLength(HB2_HEADER.split('\n').length);   // 不增删行
+  });
+
+  it('正例：两行同病 → 逐行都修（报错换行接着修）', () => {
+    const { load } = require('js-yaml');
+    const text = 'a: p: q\nb: 1\nc: 前缀 r: s';
+    const doc = load(repairInlineColonScalars(text)) as Record<string, unknown>;
+    expect(doc).toEqual({ a: 'p: q', b: 1, c: '前缀 r: s' });
+  });
+
+  it('正例：yaml 型声明端到端——含裸冒号的字符串值过校验并归一成结构', () => {
+    const decls = [{ name: 'header_final', type: 'yaml', description: '' }];
+    expect(validateOutputValues(decls, { header_final: HB2_HEADER })).toHaveLength(0);
+    const out = coerceOutputValues(decls, { header_final: HB2_HEADER });
+    expect((out.header_final as { spec_id: string }).spec_id).toBe('incident-response');
+  });
+
+  it('反例：块式标量里含冒号加空格的行原样不动（只修报错行,不做全文扫描）', () => {
+    const { load } = require('js-yaml');
+    const text = [
+      'tools:',
+      '  - name: chat',
+      '    rendered: |',
+      '      - chat(channel) -> id % line  # 用途: 发送',
+      '    说明: 发送 k: v',
+    ].join('\n');
+    const doc = load(repairInlineColonScalars(text)) as { tools: Array<Record<string, string>> };
+    expect(doc.tools[0].rendered).toBe('- chat(channel) -> id % line  # 用途: 发送\n');
+    expect(doc.tools[0]['说明']).toBe('发送 k: v');
+  });
+
+  it('反例：值以引号开头的行不归本修复（原样返回,交引号前缀修复或原失败路径）', () => {
+    const text = 'a: 1\nb: "x" y: z\nc: 2';
+    expect(repairInlineColonScalars(text)).toBe(text);
+  });
+
+  it('反例：合法 YAML 原样返回引用;报错行不是键值形态时原样返回', () => {
+    const ok = 'a: "p: q"\nb: 1';
+    expect(repairInlineColonScalars(ok)).toBe(ok);
+    const bad = 'a: 1\n\t- : : 完全非法 [未闭合';
+    expect(repairInlineColonScalars(bad)).toBe(bad);
+  });
+
+  it('正例：修不好的解析失败 → 反馈点名第 N 行与该行原文,不再报"散文文本"', () => {
+    const raw = 'title: x\ninputs:\n  - name: a\n   bad_indent: [未闭合';
+    const mm = validateOutputValues([{ name: 'h', type: 'yaml', description: '' }], { h: raw });
+    expect(mm).toHaveLength(1);
+    expect(mm[0].reason).toMatch(/第 \d+ 行 YAML 解析失败/);
+    expect(mm[0].reason).not.toContain('散文文本');
+  });
+
+  it('反例：真散文（解析出标量文字）仍报"散文文本"', () => {
+    const mm = validateOutputValues([{ name: 'h', type: 'yaml', description: '' }], { h: '这是一段说明文字,没有任何结构。' });
+    expect(mm).toHaveLength(1);
+    expect(mm[0].reason).toContain('散文文本');
+    expect(mm[0].reason).not.toContain('解析失败');
+  });
+
+  // 第二种命中形态:值以反引号/@/% 开头（YAML 保留字符与指令起始符）——ppt qwen-flash 步 4.1 实撞
+  it('正例：ppt 实撞形态——列表项值以反引号开头且无冒号加空格 → 修复后解出完整列表,值原文不丢', () => {
+    const { load } = require('js-yaml');
+    const text = [
+      'pages:',
+      '  - page: 1',
+      '    content_points: 封面',
+      '  - page: 2',
+      '    content_points: `工程实现链规范`。**先于其余一切文档**——四层链',
+      '  - page: 3',
+      '    content_points: `Doctree`:地图',
+    ].join('\n');
+    expect(() => load(text)).toThrow();
+    const repaired = repairInlineColonScalars(text);
+    const doc = load(repaired) as { pages: Array<Record<string, unknown>> };
+    expect(doc.pages).toHaveLength(3);
+    expect(doc.pages[1].content_points).toBe('`工程实现链规范`。**先于其余一切文档**——四层链');
+    expect(doc.pages[2].content_points).toBe('`Doctree`:地图');
+    expect(repaired.split('\n')).toHaveLength(text.split('\n').length);
+  });
+
+  it('正例：@ 与 % 开头同治', () => {
+    const { load } = require('js-yaml');
+    const doc = load(repairInlineColonScalars('a: @张三 负责\nb: %d 占位\nc: 1')) as Record<string, unknown>;
+    expect(doc).toEqual({ a: '@张三 负责', b: '%d 占位', c: 1 });
+  });
+
+  it('反例：反引号在值中间的合法行、& 锚点与 * 别名开头的合法行原样不动', () => {
+    const ok = 'a: 见 `x` 条\nbase: &b 1\nref: *b';
+    expect(repairInlineColonScalars(ok)).toBe(ok);
+    const text = 'base: &b 1\nref: *b\nc: `x` 条';   // 只有第 3 行报错被修,锚点/别名行不动
+    const repaired = repairInlineColonScalars(text);
+    expect(repaired.split('\n').slice(0, 2)).toEqual(['base: &b 1', 'ref: *b']);
+    expect(repaired.split('\n')[2]).toBe('c: "`x` 条"');
+  });
+
+  // 续行并入——ppt qwen-flash 第四跑步 4.1 修订轮实撞:裸冒号值跨两行,续行以反引号开头
+  it('正例：裸冒号值带续行（续行以反引号开头）→ 续行并入同一值,解出完整列表,行数不变', () => {
+    const { load } = require('js-yaml');
+    const text = [
+      'pages:',
+      '  - page_number: 5',
+      '    content_points: 第3站: `架构语言 HopType`。三件套',
+      '      第4站: `架构`。三层结构',
+      '    skeleton_points: 详情展开页',
+      '  - page_number: 6',
+      '    content_points: 结束',
+    ].join('\n');
+    expect(() => load(text)).toThrow();
+    const repaired = repairInlineColonScalars(text);
+    const doc = load(repaired) as { pages: Array<Record<string, unknown>> };
+    expect(doc.pages).toHaveLength(2);
+    expect(doc.pages[0].content_points).toBe('第3站: `架构语言 HopType`。三件套 第4站: `架构`。三层结构');
+    expect(doc.pages[0].skeleton_points).toBe('详情展开页');
+    expect(repaired.split('\n')).toHaveLength(text.split('\n').length);
+  });
+
+  it('反例：紧跟的同级键（缩进不深于键）不被并入,照常作为下一个键解析', () => {
+    const { load } = require('js-yaml');
+    const text = '  - a: 说明: x\n    b: 2\n  - a: 3';
+    const doc = load(repairInlineColonScalars(text)) as Array<Record<string, unknown>>;
+    expect(doc).toEqual([{ a: '说明: x', b: 2 }, { a: 3 }]);
+  });
+
+  // 第一种命中形态的"值里含冒号加空格"是必要条件——报错行是键值形态、值不以排除字符开头,
+  // 但值里没有冒号加空格时,不能当裸冒号病加引号（加了也修不好,只会改坏原文）
+  it('反例：报错行是键值形态但值里没有冒号加空格 → 原样返回,解析照旧失败', () => {
+    const { load } = require('js-yaml');
+    for (const text of ['items: - a\n  - b', 'a: 1\nb: 说明 甲 乙\n  c: 2']) {
+      expect(repairInlineColonScalars(text)).toBe(text);
+      expect(() => load(repairInlineColonScalars(text))).toThrow();
+    }
+  });
+
+  it('正例：解析失败反馈的行号与该行原文逐字准确,常见原因含保留字符开头一条', () => {
+    const raw = 'title: x\ninputs:\n  - name: a\n   bad_indent: [未闭合';
+    const mm = validateOutputValues([{ name: 'h', type: 'yaml', description: '' }], { h: raw });
+    expect(mm[0].reason).toContain('第 4 行 YAML 解析失败（该行:   bad_indent: [未闭合）');
+    expect(mm[0].reason).toContain('不加引号的值以反引号、@ 或 % 开头（整值加双引号）');
+  });
+
+  it('反例：出错行超过 120 字符 → 反馈只带前 120 字符加省略号,不整行灌回', () => {
+    const raw = 'a: 1\nb: [' + '长'.repeat(200);
+    const mm = validateOutputValues([{ name: 'h', type: 'yaml', description: '' }], { h: raw });
+    expect(mm[0].reason).toContain('第 2 行 YAML 解析失败（该行:b: [' + '长'.repeat(116) + '…）');
+    expect(mm[0].reason).not.toContain('长'.repeat(117));
+  });
+
+  // 恢复阶梯第②级也走同一串联修复（六处解析点之一）——列表型声明收到含裸冒号/保留字符开头的字符串
+  it('正例：恢复阶梯端到端——[yaml] 声明收到值里含裸冒号的字符串 → 修复后解出列表,值原文不丢', () => {
+    const out = recoverOutputValues(
+      [{ name: 'pages', type: '[yaml]', description: '' }],
+      { pages: '- page: 1\n  note: 模式（new: 新事故）\n- page: 2\n  note: ok' },
+    );
+    expect(out.pages).toEqual([{ page: 1, note: '模式（new: 新事故）' }, { page: 2, note: 'ok' }]);
+  });
+
+  it('正例：恢复阶梯端到端——[yaml] 声明收到值以反引号开头的字符串 → 修复后解出列表', () => {
+    const out = recoverOutputValues(
+      [{ name: 'pages', type: '[yaml]', description: '' }],
+      { pages: '- page: 1\n  note: `专名` 说明\n- page: 2\n  note: ok' },
+    );
+    expect(out.pages).toEqual([{ page: 1, note: '`专名` 说明' }, { page: 2, note: 'ok' }]);
   });
 });
 

@@ -1,0 +1,46 @@
+```sql
+WITH daily_logins AS (
+  SELECT user_id, login_date
+  FROM logins
+  GROUP BY user_id, login_date
+),
+ranked_logins AS (
+  SELECT 
+    user_id,
+    login_date,
+    ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY login_date) AS rn
+  FROM daily_logins
+),
+streak_groups AS (
+  SELECT 
+    user_id,
+    login_date,
+    -- 计算每条记录的分组键：日期减去行号，相同值表示属于同一连续段
+    DATE(login_date, '-' || (julianday(login_date) - rn) || ' days') AS group_key
+  FROM ranked_logins
+),
+streak_stats AS (
+  SELECT 
+    user_id,
+    group_key,
+    MIN(login_date) AS streak_start,
+    COUNT(*) AS streak_length
+  FROM streak_groups
+  GROUP BY user_id, group_key
+),
+max_streaks AS (
+  SELECT 
+    user_id,
+    MAX(streak_length) AS longest_streak,
+    MIN(streak_start) AS streak_start
+  FROM streak_stats
+  GROUP BY user_id
+)
+SELECT 
+  user_id,
+  longest_streak,
+  streak_start
+FROM max_streaks
+WHERE longest_streak >= 3
+ORDER BY longest_streak DESC, user_id ASC;
+```

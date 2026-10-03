@@ -1,0 +1,107 @@
+```python
+import ast
+import re
+import json
+import sys
+
+def get_function_params(func_node):
+    params = []
+    for arg in func_node.args.args:
+        if arg.arg not in ('self', 'cls'):
+            params.append(arg.arg)
+    if func_node.args.vararg:
+        params.append(func_node.args.vararg.arg)
+    for arg in func_node.args.kwonlyargs:
+        if arg.arg not in ('self', 'cls'):
+            params.append(arg.arg)
+    if func_node.args.kwarg:
+        params.append(func_node.args.kwarg.arg)
+    return params
+
+def extract_docstring(node):
+    if node.body and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Str):
+        return node.body[0].value.s
+    return None
+
+def find_param_mentions(docstring, params):
+    mentions = set()
+    for param in params:
+        # 模式：完整词，前后为非字母数字字符或边界
+        pattern = r'(?<![a-zA-Z0-9])' + re.escape(param) + r'(?![a-zA-Z0-9])'
+        matches = re.findall(pattern, docstring)
+        for match in matches:
+            mentions.add(param)
+    return mentions
+
+def check_file(filepath):
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            source = f.read()
+    except Exception as e:
+        print(f"Error reading file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not source.strip():
+        sys.exit(0)
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as e:
+        print(f"Syntax error at line {e.lineno}: {e.msg}", file=sys.stderr)
+        sys.exit(1)
+
+    violations = []
+
+    def visit_node(node, parent=None):
+        if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+            if node.name.startswith('_'):
+                return
+            docstring = extract_docstring(node)
+            if docstring is None:
+                violations.append(f"Line {node.lineno}: Function '{node.name}' has no docstring.")
+                return
+
+            params = get_function_params(node)
+            if not params:
+                return  # 无参数可检查
+
+            mentioned = find_param_mentions(docstring, params)
+            missing = [p for p in params if p not in mentioned]
+            if missing:
+                for param in missing:
+                    violations.append(f"Line {node.lineno}: Docstring for '{node.name}' does not mention parameter '{param}'.")
+
+        elif isinstance(node, ast.ClassDef):
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and not child.name.startswith('_'):
+                    docstring = extract_docstring(child)
+                    if docstring is None:
+                        violations.append(f"Line {child.lineno}: Method '{child.name}' in class '{node.name}' has no docstring.")
+                        continue
+
+                    params = get_function_params(child)
+                    if not params:
+                        continue
+
+                    mentioned = find_param_mentions(docstring, params)
+                    missing = [p for p in params if p not in mentioned]
+                    if missing:
+                        for param in missing:
+                            violations.append(f"Line {child.lineno}: Docstring for method '{child.name}' in class '{node.name}' does not mention parameter '{param}'.")
+
+        for child in ast.iter_child_nodes(node):
+            visit_node(child, node)
+
+    visit_node(tree)
+
+    if violations:
+        for violation in violations:
+            print(violation, file=sys.stderr)
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+# 主逻辑直接写在顶层，不使用 if __name__ == "__main__":
+filepath = sys.argv[1]
+check_file(filepath)
+```

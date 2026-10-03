@@ -377,14 +377,14 @@ for (const file of targets) {
 
 // ③f-6 人裁接受现状分支给 sensible_note 赋值（D101,todo/0104——本路径上合理关每轮判 false,
 // 引擎不写它的说明槽;accept 分支不赋值则 5.1.4 审阅文件修检遗留节渲染出字面 undefined,
-// 终审人拿不到剩余缺陷清单）。母本与 qwen3.8-27b 变体都查:变体手工同步,漏同步即回退。
+// 终审人拿不到剩余缺陷清单）。母本与 qwen3.8-27b、qwen-flash 两份变体都查:变体手工同步,漏同步即回退。
 // 提取不到 accept 分支=响亮红。 // @a: anc-build-main-flow
 {
   const hb2Dir = join(ROOT, 'skills', 'hopbuild2');
   if (process.env['HOPJIT_CHECK_ROOT'] && !existsSync(join(hb2Dir, 'spec.md'))) {
     // fixture 替身仓库无 hopbuild2——豁免跳过(真库缺席走 readFileSync 响亮炸)
   } else {
-    for (const name of ['spec.md', 'spec.qwen3.8-27b.md']) {
+    for (const name of ['spec.md', 'spec.qwen3.8-27b.md', 'spec.qwen-flash.md']) {
       const lines = readFileSync(join(hb2Dir, name), 'utf-8').split('\n');
       const start = lines.findIndex(l => /^#+ /.test(l) && l.includes('[case(exhaust_decision == "accept")]'));
       const rel = start < 0 ? -1 : lines.slice(start + 1).findIndex(l => /^#+ /.test(l) && l.includes('[case('));
@@ -403,6 +403,87 @@ for (const file of targets) {
       if (!assign || !assign.includes('exhaust_brief') || !assign.includes('exhaust_path')) miss.push('body 须给 sensible_note 赋值且同时含 exhaust_brief 与 exhaust_path');
       if (miss.length) {
         console.error(`❌ hopbuild2 专项: ${name} accept 分支形态漂移（${miss.join(';')}）——不赋值则审阅文件修检遗留节渲染出字面 undefined（todo/0104 实撞）,先改设计 D101 再同步`);
+        failed++;
+      }
+    }
+  }
+}
+
+// ③f-7 定向修错步工具面不给删改名与整篇重建（D102,todo/0103——27b 七跑修检第 8 轮修错步调 remove
+// 删掉整份草稿,后两轮 read 连续失败空转到额度耗尽;作者拍在步骤工具面上直接不给）。禁工具行从本步
+// 清单里整体剔除工具,删掉一行就等于把工具还给修错步,validate 不管这件事。母本与 qwen3.8-27b、qwen-flash 两份变体
+// 都查:5.1.3.1.2 标题行到下一个步骤标题行之间,禁工具行须覆盖五件,工具授权行不许出现五件任一。
+// 提取不到该步=响亮红。 // @a: anc-build-main-flow
+{
+  const hb2Dir = join(ROOT, 'skills', 'hopbuild2');
+  if (process.env['HOPJIT_CHECK_ROOT'] && !existsSync(join(hb2Dir, 'spec.md'))) {
+    // fixture 替身仓库无 hopbuild2——豁免跳过(真库缺席走 readFileSync 响亮炸)
+  } else {
+    const MUST_DENY = ['write', 'append', 'create', 'move', 'remove'];
+    for (const name of ['spec.md', 'spec.qwen3.8-27b.md', 'spec.qwen-flash.md']) {
+      const lines = readFileSync(join(hb2Dir, name), 'utf-8').split('\n');
+      const start = lines.findIndex(l => /^#+ 5\.1\.3\.1\.2\. \[act free\]/.test(l));
+      if (start < 0) {
+        console.error(`❌ hopbuild2 专项: ${name} 找不到定向修错步（5.1.3.1.2. [act free] 标题行）——步骤被移除、改号或改形态,须先改设计 D102 再同步本断言`);
+        failed++;
+        continue;
+      }
+      const rel = lines.slice(start + 1).findIndex(l => /^#+ /.test(l));
+      const block = lines.slice(start + 1, rel < 0 ? undefined : start + 1 + rel);
+      const denied = new Set(block
+        .map(l => /^- 禁工具:\s*([^\s#]+)/.exec(l))
+        .filter(Boolean)
+        .map(m => m[1]));
+      const grantNames = block
+        .filter(l => /^- 工具:/.test(l))
+        .flatMap(l => l.replace(/^- 工具:/, '').split('#')[0].split(/[,，\s]+/).filter(Boolean));
+      const missing = MUST_DENY.filter(t => !denied.has(t));
+      const granted = MUST_DENY.filter(t => grantNames.includes(t));
+      if (missing.length || granted.length) {
+        const why = [];
+        if (missing.length) why.push(`缺禁工具行: ${missing.join('/')}`);
+        if (granted.length) why.push(`工具授权行里出现: ${granted.join('/')}`);
+        console.error(`❌ hopbuild2 专项: ${name} 定向修错步工具面漂移（${why.join(';')}）——修错只许原地定向编辑,删改名与整篇重建的工具不许下发（todo/0103 实撞:remove 删掉整份草稿）,先改设计 D102 再同步`);
+        failed++;
+      }
+    }
+  }
+}
+
+// ③f-8 构建基准拼接排除输入文件自身（D103,hopissues 0110——2.2 把本体误登记成流程性附属时,
+// 2.4 只按定性筛,本体被并入两遍,source.md 行号基准膨胀一倍）。母本与两份变体都查:2.4 body 里
+// aux_entries 行必须带补前缀后 != skill_path 的排除,raw_flow/flow_kinds/raw_ref 三行必须从
+// aux_entries 取——改回从 aux_ledger 取或删掉排除,本体重复并入复发。提取不到=响亮红。 // @a: anc-build-main-flow
+{
+  const hb2Dir = join(ROOT, 'skills', 'hopbuild2');
+  if (process.env['HOPJIT_CHECK_ROOT'] && !existsSync(join(hb2Dir, 'spec.md'))) {
+    // fixture 替身仓库无 hopbuild2——豁免跳过(真库缺席走 readFileSync 响亮炸)
+  } else {
+    for (const name of ['spec.md', 'spec.qwen3.8-27b.md', 'spec.qwen-flash.md']) {
+      const lines = readFileSync(join(hb2Dir, name), 'utf-8').split('\n');
+      const start = lines.findIndex(l => /^#+ 2\.4\. \[act\]/.test(l));
+      if (start < 0) {
+        console.error(`❌ hopbuild2 专项: ${name} 找不到构建基准拼接步（2.4. [act] 标题行）——步骤被移除、改号或改形态,须先改设计 D103 再同步本断言`);
+        failed++;
+        continue;
+      }
+      const rel = lines.slice(start + 1).findIndex(l => /^#+ /.test(l));
+      const block = lines.slice(start + 1, rel < 0 ? undefined : start + 1 + rel);
+      // 每个赋值只许一行——只核第一条匹配会被"正确行之后追加一行覆盖赋值"绕过（独立阅卷变异实证）
+      const why = [];
+      const find = key => {
+        const hits = block.filter(l => l.includes(key));
+        if (hits.length > 1) why.push(`${key.replace(' = [', '')} 赋值出现 ${hits.length} 行（只许一行,多出的可能是覆盖赋值）`);
+        return hits[0];
+      };
+      const ae = find('aux_entries = [');
+      if (!ae || !ae.includes('dir_prefix + str(e.path)) != skill_path') || !ae.includes('for e in aux_ledger')) why.push('aux_entries 行缺失或不再按补前缀后的完整路径排除 skill_path');
+      for (const key of ['raw_flow = [', 'flow_kinds = [', 'raw_ref = [']) {
+        const l = find(key);
+        if (!l || !l.includes('for e in aux_entries')) why.push(`${key.replace(' = [', '')} 行缺失或不再从 aux_entries 取`);
+      }
+      if (why.length) {
+        console.error(`❌ hopbuild2 专项: ${name} 2.4 输入文件自身排除漂移（${why.join(';')}）——本体被误登记成附属时会被并入构建基准两遍（hopissues 0110 实撞）,先改设计 D103 再同步`);
         failed++;
       }
     }

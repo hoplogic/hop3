@@ -1,0 +1,104 @@
+思路简述:用 `ast.parse` 解析后,从模块根开始做先序遍历收集所有"不在任何函数体内部"的 `FunctionDef`/`AsyncFunctionDef`(类嵌套任意层都继续深入,函数体不进入,因此嵌套函数和局部类自然被排除);用 `ast.get_docstring(node, False)` 判断首条语句是否为字符串字面量;参数名用 `re.search(r"\b名字\b")` 做大小写敏感的全词匹配,`self`/`cls` 与下划线开头的函数名跳过;有违规则逐行打印行号与原因并以 1 退出,否则以 0 退出。
+
+```python
+import ast
+import re
+import sys
+
+violation_messages = []
+
+
+def collect_param_names(func_node):
+    # 参数包括:仅位置参数(/ 之前的)、普通参数、*args、* 之后的仅关键字参数、**kwargs
+    args_data = func_node.args
+    param_names = []
+    for one_arg in args_data.posonlyargs:
+        param_names.append(one_arg.arg)
+    for one_arg in args_data.args:
+        param_names.append(one_arg.arg)
+    if args_data.vararg is not None:
+        param_names.append(args_data.vararg.arg)
+    for one_arg in args_data.kwonlyargs:
+        param_names.append(one_arg.arg)
+    if args_data.kwarg is not None:
+        param_names.append(args_data.kwarg.arg)
+    return param_names
+
+
+def check_function(func_node):
+    func_name = func_node.name
+    if func_name.startswith("_"):
+        # 名字以下划线开头的函数(含双下划线特殊方法)不检查
+        return
+    needed_params = []
+    for param_name in collect_param_names(func_node):
+        if param_name != "self" and param_name != "cls":
+            needed_params.append(param_name)
+    doc_text = ast.get_docstring(func_node, False)
+    line_label = "第 " + str(func_node.lineno) + " 行"
+    if doc_text is None:
+        violation_messages.append(line_label + ": 函数 " + func_name + " 缺少文档字符串")
+        return
+    missing_params = []
+    for param_name in needed_params:
+        pattern = r"\b" + re.escape(param_name) + r"\b"
+        if re.search(pattern, doc_text) is None:
+            missing_params.append(param_name)
+    if len(missing_params) > 0:
+        violation_messages.append(
+            line_label
+            + ": 函数 " + func_name + " 的文档字符串未提到参数: "
+            + ", ".join(missing_params)
+        )
+
+
+def collect_functions(root_node):
+    # 先序收集所有不在任何函数体内部的函数定义:模块顶层的函数与类的方法
+    # (类里嵌套的类不限层数);一旦是函数定义就不再向下走,
+    # 所以嵌套函数、局部类及其方法不会被收集到。
+    found = []
+    pending = [root_node]
+    while len(pending) > 0:
+        current = pending.pop()
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            found.append(current)
+        else:
+            for child in reversed(list(ast.iter_child_nodes(current))):
+                pending.append(child)
+    return found
+
+
+if len(sys.argv) < 2:
+    print("缺少待检查文件的路径参数", file=sys.stderr)
+    sys.exit(1)
+
+file_path = sys.argv[1]
+
+try:
+    input_file = open(file_path, "r", encoding="utf-8")
+    source_text = input_file.read()
+    input_file.close()
+except (OSError, ValueError):
+    print("无法以 UTF-8 编码读取文件: " + file_path, file=sys.stderr)
+    sys.exit(1)
+
+try:
+    tree = ast.parse(source_text)
+except (SyntaxError, ValueError):
+    print("文件不是有效的 Python 源代码,无法解析: " + file_path, file=sys.stderr)
+    sys.exit(1)
+
+try:
+    for func_node in collect_functions(tree):
+        check_function(func_node)
+except Exception:
+    print("检查过程中出现内部错误: " + file_path, file=sys.stderr)
+    sys.exit(1)
+
+if len(violation_messages) > 0:
+    for message in violation_messages:
+        print(message)
+    sys.exit(1)
+
+sys.exit(0)
+```

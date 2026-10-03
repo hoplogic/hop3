@@ -1,0 +1,64 @@
+```python
+"""行长度规范校验脚本。
+
+检查文本文件中每一行的长度是否超过 100 个字符:
+- 长度按字符数统计(文件以 UTF-8 解码),一个汉字算 1 个字符,不按字节数算;
+- 行尾换行符不计入长度,Windows 换行(回车符加换行符)里的回车符也不计入;
+- 最后一行没有换行符结尾时同样要检查;恰好 100 个字符合规,101 个字符才违规,空文件合规。
+
+用法: python check_line_length.py <文件路径>
+文件符合条款: 退出码 0;文件违反条款: 逐条打印违规行号与原因,退出码 1。
+"""
+
+import sys
+
+LIMIT = 100
+
+if len(sys.argv) < 2:
+    print(
+        "usage: python check_line_length.py <file> | 用法: python check_line_length.py <文件路径>",
+        file=sys.stderr
+    )
+    sys.exit(2)
+
+path = sys.argv[1]
+
+try:
+    handle = open(path, "r", encoding="utf-8")
+except OSError:
+    print("error: cannot open file: " + path + " | 错误: 无法打开文件: " + path, file=sys.stderr)
+    sys.exit(2)
+
+try:
+    content = handle.read()
+except ValueError:
+    handle.close()
+    print("error: not valid UTF-8 text: " + path + " | 错误: 文件不是有效的 UTF-8 文本: " + path, file=sys.stderr)
+    sys.exit(2)
+
+handle.close()
+
+# 换行归一: 先把 Windows 换行(回车+换行)统一成单个换行符, 再按换行符切分;
+# 文本模式读取通常已完成该转译, 这里再处理一次, 确保回车符不计入行长度。
+# 文件末尾没有换行符时, 最后一段仍作为一行参与检查;
+# 文件以换行符结尾时切分出的末尾空串长度为 0, 不会造成误报。
+normalized = content.replace("\r\n", "\n")
+lines = normalized.split("\n")
+
+violation_count = 0
+for lineno, line in enumerate(lines, 1):
+    if len(line) > LIMIT:
+        print(
+            "line " + str(lineno)
+            + ": length " + str(len(line))
+            + " > limit " + str(LIMIT)
+            + " | 第 " + str(lineno)
+            + " 行:长度 " + str(len(line))
+            + " 个字符,超过上限 " + str(LIMIT)
+            + " 个字符"
+        )
+        violation_count = violation_count + 1
+
+if violation_count > 0:
+    sys.exit(1)
+```

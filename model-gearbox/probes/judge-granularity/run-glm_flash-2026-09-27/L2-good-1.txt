@@ -1,0 +1,8 @@
+Q1: yes（P1 的 line_ref=L1 且 quote 为 L1 原句，覆盖该行断言）
+Q2: yes（P2 覆盖半衰期断言、P3 覆盖影响睡眠断言，两点 line_ref 均为 L2 且 quote 摘自 L2）
+Q3: yes（P4 的 line_ref=L3 且 quote 为 L3 原句）
+Q4: yes（P5 的 line_ref=L4 且 quote 为 L4 原句）
+Q5: yes（P3 前提写明“① 咖啡因的半衰期约为 5 小时”，P5 前提写明两条实质内容，均非空且含内容，非仅编号）
+Q6: yes（P1–P5 的 quote 与 L1–L4 对应行逐字一致，均能在原文找到）
+extract_ok: true
+extract_gap: |

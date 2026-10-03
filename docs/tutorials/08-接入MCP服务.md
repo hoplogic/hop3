@@ -3,14 +3,14 @@
 	source: [[../design/tool-interface]]
 	source_id: hopjit-tool-interface
 	type: compact
-	last_sync: 2026-09-01T20:26+0800
+	last_sync: 2026-10-01T16:02+0800
 	note: 用户教程 08——把 MCP 服务接成 spec 可调用的工具：配置文件 tool_servers 节注册（云端/本地两形态）→ body 里按名调用 → 安全与故障语义。对外文法权威在 reference/配置参考 ^anc-ref-tool-servers
 %%
 
 # 教程 8 · 接入 MCP 服务：让 spec 调外面的工具
 
 **目标**：把一个 MCP 服务（云端 API 或本地 server）注册成你的 spec 里可以按名调用的工具——搜索、知识库、任何生态里现成的 MCP 能力。
-**前提**：完成 [[D10-hop_python计算体]]（body 里调工具的语法在那篇）；使用独立模式（standalone——入口是 `/hopspec-mcp` 命令，配置见 `USAGE.md` §6；外部工具注册当前走 standalone 配置面）。
+**前提**：完成 [[D10-hop_python计算体]]（body 里调工具的语法在那篇）；使用独立模式（standalone——对 `/hop` 明说"走 MCP 跑 <spec>"即进入，配置见 `USAGE.md` §6；外部工具注册当前走 standalone 配置面）。
 
 ## 一分钟看懂机制
 
@@ -19,7 +19,7 @@ spec 的 body 里只写**工具名**：
 ```markdown
 1. [act] 检索资料
   - ← topic
-  + → pages: [yaml]
+  + → pages % [yaml]
   > ```hop_python
   > pages = web_search(query: topic)
   > ```
@@ -31,8 +31,8 @@ spec 侧可以（不强制）在文件头加一个 **`Tools:` 段**声明"本 sp
 
 ```markdown
 Tools:
-- web_search(query) -> pages: [yaml]  # 检索外部资料
-  - query: text  # 检索词——完整问题句,不是关键词堆砌
+- web_search(query) -> pages % [yaml]  # 检索外部资料
+  - query % text  # 检索词——完整问题句,不是关键词堆砌
 ```
 
 写了它的好处：spec 自包含（拿到一份 spec 读文件头就知道它依赖什么）、**起跑前对账**（引擎 init 时把 Tools 段与环境注册面比对——环境缺这个工具、或参数名对不上，当场报错不起跑，不是跑到一半才炸）、执行 LLM 拿到逐参数语义不望词生义。在 act/reason 步不写也完全合法——引擎跳过对账，跑到调用时才发现缺工具。（commit 步例外：不可逆步骤 body 里调外部工具必须先在 Tools 段声明，否则写时就被拒——引擎不让"做了收不回"的动作带着没名分的工具名溜到运行期。）
@@ -44,7 +44,7 @@ Tools:
 ```markdown
 2. [act free] 搜集外部依据
   - ← claim
-  + → evidence: [yaml]  # 依据清单
+  + → evidence % [yaml]  # 依据清单
   - 工具: web_search  # 就 claim 检索外部依据
   > 用 web_search 检索至少 2 组关键词……
 ```

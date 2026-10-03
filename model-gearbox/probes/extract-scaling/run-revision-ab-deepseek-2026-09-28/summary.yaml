@@ -1,0 +1,168 @@
+probe: run-revision-ab
+service: deepseek
+model_from_response:
+  - deepseek-flash
+date: '2026-09-28'
+thinking: default
+max_tokens: 65536
+'n': 6
+说明: 同一份上一版 points + 同一份两条打回意见,两臂只差引擎修订档(standard=标准态全量修订 prompt,short=修订短 prompt)。四关:形态/意见一(补每杯毫克数与四杯总量)/意见二(行号改成 L2/L2/L3/L4)/基准保留;pass=四关全过。prose_before_key 只记不扣(引擎允许键行前写思考)
+arms:
+  standard:
+    revision_short: false
+    prompt_chars: 14645
+    pass: 2/6
+    form: 6/6
+    comment1_value_added: 6/6
+    comment2_line_refs_fixed: 6/6
+    baseline_kept: 2/6
+    prose_before_key: 2/6
+    shots:
+      - shot: 1
+        pass: true
+        form: true
+        comment1: true
+        comment2: true
+        baseline: true
+        prose_before_key: false
+        notes: []
+        stop_reason: end_turn
+        seconds: 7
+        quotes_kept: true
+      - shot: 2
+        pass: true
+        form: true
+        comment1: true
+        comment2: true
+        baseline: true
+        prose_before_key: false
+        notes: []
+        stop_reason: end_turn
+        seconds: 6
+        quotes_kept: true
+      - shot: 3
+        pass: false
+        form: true
+        comment1: true
+        comment2: true
+        baseline: false
+        prose_before_key: false
+        notes:
+          - '未点名处被改动: P2.claim,P4.claim,P5.claim'
+        stop_reason: end_turn
+        seconds: 6
+        quotes_kept: true
+      - shot: 4
+        pass: false
+        form: true
+        comment1: true
+        comment2: true
+        baseline: false
+        prose_before_key: false
+        notes:
+          - '未点名处被改动: P2.claim,P4.claim,P5.claim'
+        stop_reason: end_turn
+        seconds: 6
+        quotes_kept: true
+      - shot: 5
+        pass: false
+        form: true
+        comment1: true
+        comment2: true
+        baseline: false
+        prose_before_key: true
+        notes:
+          - '未点名处被改动: P2.claim,P3.quote,P4.claim,P5.claim'
+        stop_reason: end_turn
+        seconds: 5
+        quotes_kept: false
+      - shot: 6
+        pass: false
+        form: true
+        comment1: true
+        comment2: true
+        baseline: false
+        prose_before_key: true
+        notes:
+          - '未点名处被改动: P2.claim,P3.claim,P4.claim,P5.claim'
+        stop_reason: end_turn
+        seconds: 10
+        quotes_kept: true
+    quotes_type_kept: 5/6
+  short:
+    revision_short: true
+    prompt_chars: 3469
+    pass: 6/6
+    form: 6/6
+    comment1_value_added: 6/6
+    comment2_line_refs_fixed: 6/6
+    baseline_kept: 6/6
+    prose_before_key: 1/6
+    shots:
+      - shot: 1
+        pass: true
+        form: true
+        comment1: true
+        comment2: true
+        baseline: true
+        prose_before_key: false
+        notes: []
+        stop_reason: end_turn
+        seconds: 3
+        quotes_kept: true
+      - shot: 2
+        pass: true
+        form: true
+        comment1: true
+        comment2: true
+        baseline: true
+        prose_before_key: false
+        notes: []
+        stop_reason: end_turn
+        seconds: 4
+        quotes_kept: true
+      - shot: 3
+        pass: true
+        form: true
+        comment1: true
+        comment2: true
+        baseline: true
+        prose_before_key: true
+        notes: []
+        stop_reason: end_turn
+        seconds: 44
+        quotes_kept: true
+      - shot: 4
+        pass: true
+        form: true
+        comment1: true
+        comment2: true
+        baseline: true
+        prose_before_key: false
+        notes: []
+        stop_reason: end_turn
+        seconds: 3
+        quotes_kept: true
+      - shot: 5
+        pass: true
+        form: true
+        comment1: true
+        comment2: true
+        baseline: true
+        prose_before_key: false
+        notes: []
+        stop_reason: end_turn
+        seconds: 4
+        quotes_kept: true
+      - shot: 6
+        pass: true
+        form: true
+        comment1: true
+        comment2: true
+        baseline: true
+        prose_before_key: false
+        notes: []
+        stop_reason: end_turn
+        seconds: 4
+        quotes_kept: true
+    quotes_type_kept: 6/6

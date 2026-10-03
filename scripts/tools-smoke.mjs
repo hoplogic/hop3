@@ -28,11 +28,14 @@ const HOST = {
 // ── 通道①：内置组（构造器硬装配,零配置恒在）──
 {
   const c = new CompositeToolProvider(HOST);
-  const w = await c.execute('write', { path: 'probe.txt', content: 'hello' });
+  // 写到 workspace 根属交付写盘，须显式按 commit 语境传 'workspace'——不传即缺省 act/check 窄域，
+  // 被写域闸按设计拒（WORK_ZONE_ONLY，design tools.md ^anc-exec-write-scope）
+  const w = await c.execute('write', { path: 'probe.txt', content: 'hello' }, 'workspace');
   const r = await c.execute('read', { path: 'probe.txt' });
   check('内置组: write→read 回读一致', w.success && r.success && r.result === 'hello', JSON.stringify({ w: w.result, r: r.result }).slice(0, 120));
-  const denied = await c.execute('write', { path: '../escape.txt', content: 'x' });
-  check('内置组: 越界写被沙箱拒', !denied.success);
+  // 同样以最宽的 commit 语境写 workspace 外——缺省窄域会先被 WORK_ZONE_ONLY 拒，测不到 workspace 边界本身
+  const denied = await c.execute('write', { path: '../escape.txt', content: 'x' }, 'workspace');
+  check('内置组: 越界写被沙箱拒', !denied.success && !/WORK_ZONE_ONLY/.test(String(denied.error ?? denied.result)), JSON.stringify(denied).slice(0, 160));
 }
 
 // ── 通道②：in-process 扩展模块（真隔离模块 word-stats 装载全链）──

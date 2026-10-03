@@ -2,7 +2,7 @@
 // @v: anc-provider-tool
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { NotifyToolProvider, composeRunCard } from '../src/tools-notify.js';
-import { DefaultToolProvider , executeValidateSpec, executeReadSpecTree, isWorkZonePath , registerWorkZoneRoot, executeInsertNode, executeReplaceNode, executeReplaceChildren, executeRenumberSteps } from '../src/tools.js';
+import { DefaultToolProvider , executeValidateSpec, executeReadSpecTree, executeInsertNode, executeReplaceNode, executeReplaceChildren, executeRenumberSteps } from '../src/tools.js';
 import { deleteNodeAt, replaceNodeAt as coreReplaceNodeAt, renumberSteps as coreRenumberSteps } from '../src/spec-tree-edit.js';
 import type { StepNode } from '../src/ast-types.js';
 import { parseFragment as parseFragForCore } from '../src/parser.js';
@@ -13,6 +13,12 @@ import { readFileSync, mkdtempSync, writeFileSync, mkdirSync, symlinkSync, exist
 import { execFileSync } from 'node:child_process';   // run_script 组:解释器真身探测（不静默假绿）
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
+
+// 模拟 engine.getWorkZone() 对"当前实例=该 work_zone"的推法：登记进读集合 + 设为写根（todo/0126 读写分权）
+function ownWz(p: DefaultToolProvider, wz: string, tree?: string): void {
+  p.registerWorkZoneRoot(wz);
+  p.setWorkZoneScope({ own: wz, ...(tree ? { tree } : {}) });
+}
 
 function makeProvider(workDir?: string): DefaultToolProvider {
   const dir = workDir ?? mkdtempSync(join(tmpdir(), 'hoptools-'));
@@ -443,11 +449,11 @@ describe('DefaultToolProvider', () => {
       expect(String(r.result)).toContain('无效区间');
     });
 
-    it('rejects absolute paths', async () => {
+    it('rejects absolute paths outside workspace', async () => {
       const provider = makeProvider();
       const result = await provider.execute('read', { path: '/etc/passwd' });
       expect(result.success).toBe(false);
-      expect(String(result.result)).toContain('Absolute paths');
+      expect(String(result.result)).toContain('Absolute path outside workspace');
     });
 
     it('rejects path traversal', async () => {
@@ -824,6 +830,71 @@ describe('内置文件/目录工具组', () => {
       expect(String(r.result)).toContain('未找到匹配');
       expect(String(r.result)).toContain('ghost text');
     });
+    it('正例：零匹配附最接近行——凭记忆多写 ### 且步骤类型记错,报错给出带缩进的原文行号与原文,文件不改（hb2 qwen-flash 实撞）', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'hoptools-'));
+      const p = makeProvider(dir);
+      const draft = '2. [branch] Route\n    2.1.3. [reason] Document mitigation steps\n      - ← deliverable\n    2.1.4. [reason] Generate postmortem';
+      await p.execute('write', { path: 'doc.md', content: draft }, 'workspace');
+      const r = await p.execute('edit_file', { path: 'doc.md', old_text: '### 2.1.3. [act] Document mitigation steps\n  - ← deliverable', new_text: '' }, 'workspace');
+      expect(r.success).toBe(false);
+      expect(String(r.result)).toContain('未找到匹配');
+      expect(String(r.result)).toContain('第 2 行 "    2.1.3. [reason] Document mitigation steps"');
+      expect(String(r.result)).not.toContain('第 1 行');
+      expect((await p.execute('read', { path: 'doc.md' })).result).toBe(draft);
+    });
+    it('反例：零匹配且文件里没有够得上相似门槛的行——不附最接近行提示', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'hoptools-'));
+      const p = makeProvider(dir);
+      await p.execute('write', { path: 'doc.md', content: 'alpha beta\ngamma delta' }, 'workspace');
+      const r = await p.execute('edit_file', { path: 'doc.md', old_text: '完全无关的一句中文', new_text: 'x' }, 'workspace');
+      expect(r.success).toBe(false);
+      expect(String(r.result)).not.toContain('最接近的行');
+    });
+    // 最接近行算法四处边界（file-tools.md HopSop 5.1.1–5.1.5）:Dice 门槛、至多 3 条、排序、只比首行
+    const nearHint = async (content: string, oldText: string) => {
+      const dir = mkdtempSync(join(tmpdir(), 'hoptools-'));
+      const p = makeProvider(dir);
+      await p.execute('write', { path: 'doc.md', content }, 'workspace');
+      const r = await p.execute('edit_file', { path: 'doc.md', old_text: oldText, new_text: 'x' }, 'workspace');
+      expect(r.success).toBe(false);
+      return String(r.result);
+    };
+    it('正例：规范化后不相等、但 Dice 过 0.5 门槛的行照样附上;门槛以下的行不附', async () => {
+      // 与 "deploy the service" 的 Dice:deploy a server≈0.65（过门槛）,deploy it≈0.48（不过）
+      const msg = await nearHint('deploy a server\ndeploy it', 'deploy the service');
+      expect(msg).toContain('第 1 行 "deploy a server"');
+      expect(msg).not.toContain('deploy it');
+    });
+    it('反例：过门槛的行超过 3 条 → 只附分数最高的 3 条', async () => {
+      // 分数:deploy the servic≈0.97 / redeploy…≈0.70 / employ services≈0.71 / deploy a server≈0.65
+      const msg = await nearHint('deploy a server\nredeploy the servers now\nemploy services\ndeploy the servic', 'deploy the service');
+      expect(msg).toContain('第 4 行');
+      expect(msg).toContain('第 3 行');
+      expect(msg).toContain('第 2 行');
+      expect(msg).not.toContain('第 1 行');
+    });
+    it('正例：排序——规范化后相等的行排最前,同分按行号从小到大', async () => {
+      const msg = await nearHint('deploy the services\n## deploy [act] the service\ndeploy the servicee\n  deploy the service', '### deploy the service');
+      const order = [...msg.matchAll(/第 (\d+) 行/g)].map(m => Number(m[1]));
+      expect(order).toEqual([2, 4, 1]);   // 2 与 4 规范化相等同为 2 分按行号;1 与 3 Dice 同分（均≈0.97）取行号小的,3 被 3 条上限挤掉
+    });
+    it('反例：只比 old_text 首个非空行——后续行在文件里有原文也不参与比对', async () => {
+      const msg = await nearHint('完全无关的第一行内容\nsecond line exact', '\nzzz qqq\nsecond line exact extra');
+      expect(msg).not.toContain('最接近的行');
+    });
+    it('正例：替换成功回执带字符偏移（UTF-16 码元,中文不按字节算）', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'hoptools-'));
+      const p = makeProvider(dir);
+      await p.execute('write', { path: 'doc.md', content: '中文前缀TARGET' }, 'workspace');
+      const r = await p.execute('edit_file', { path: 'doc.md', old_text: 'TARGET', new_text: 'x' }, 'workspace');
+      expect(String(r.result)).toContain('Replaced 1 occurrence at char 4 in');
+    });
+    it('反例：工具清单里给模型看的返回说明写字符偏移,不写字节', () => {
+      const def = makeProvider().list().find(t => t.name === 'edit_file')!;
+      expect(def.returns).toContain('at char');
+      expect(def.returns).toContain('字符偏移');
+      expect(def.returns).not.toMatch(/byte|字节/);
+    });
     it('反例：多匹配报错带计数（"2 处"——宁拒不猜,补上下文重试）', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'hoptools-'));
       const p = makeProvider(dir);
@@ -930,14 +1001,201 @@ describe('内置文件/目录工具组', () => {
   });
 });
 
+// 路径解析与目录边界判定（hopissues/0112,契约 [[tools/file-tools#^anc-exec-tool-path-resolve]]）：
+// 判据只问落点在不在 workspace 内,不问写法;同批修两处既有逃逸（兄弟前缀目录/新建文件经软链父目录）。
+// @v: anc-exec-tool-path-resolve
+describe('路径解析：workspace 内绝对路径与目录边界', () => {
+  it('正例：commit 语境写 workspace 内绝对路径,落点与相对写法相同;读侧同认', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hoptools-abs-'));
+    mkdirSync(join(dir, 'skill'));
+    const p = makeProvider(dir);
+    const w = await p.execute('write', { path: join(dir, 'skill', 'spec.md'), content: 'abs' }, 'workspace');
+    expect(w.success, String(w.result)).toBe(true);
+    expect(readFileSync(join(dir, 'skill', 'spec.md'), 'utf-8')).toBe('abs');
+    expect((await p.execute('read', { path: 'skill/spec.md' })).result).toBe('abs');       // 相对读到同一文件
+    writeFileSync(join(dir, 'README.md'), 'hi');
+    expect((await p.execute('read', { path: join(dir, 'README.md') })).result).toBe('hi'); // 0112 probe 读侧
+  });
+
+  it('正例：字面路径经软链（如 macOS /tmp→/private/tmp）而根已取真实路径时,真实路径判仍认', async () => {
+    const real = mkdtempSync(join(tmpdir(), 'hoptools-real-'));
+    const alias = join(mkdtempSync(join(tmpdir(), 'hoptools-alias-')), 'ws');
+    symlinkSync(real, alias);   // alias 是 workspace 的另一个字面名
+    const p = makeProvider(alias);   // 构造器把根取成真实路径
+    const r = await p.execute('write', { path: join(alias, 'x.txt'), content: 'v' }, 'workspace');
+    expect(r.success, String(r.result)).toBe(true);
+    expect(readFileSync(join(real, 'x.txt'), 'utf-8')).toBe('v');
+  });
+
+  it('反例：workspace 外绝对路径拒,报文点名在 workspace 外并带出 workspace 根', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hoptools-abs-'));
+    const outside = mkdtempSync(join(tmpdir(), 'hoptools-out-'));
+    const p = makeProvider(dir);
+    const r = await p.execute('write', { path: join(outside, 'x.txt'), content: 'v' }, 'workspace');
+    expect(r.success).toBe(false);
+    expect(String(r.result)).toContain('Absolute path outside workspace');
+    expect(String(r.result)).toContain('workspace 根');
+    expect(existsSync(join(outside, 'x.txt'))).toBe(false);
+  });
+
+  it('反例：绝对形态含 .. 一律拒（即便化简后落在 workspace 内）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hoptools-abs-'));
+    mkdirSync(join(dir, 'a'));
+    const p = makeProvider(dir);
+    const r = await p.execute('write', { path: join(dir, 'a') + '/../b.txt', content: 'v' }, 'workspace');
+    expect(r.success).toBe(false);
+    expect(String(r.result)).toContain('Path traversal');
+  });
+
+  it('反例：兄弟前缀目录（/x/proj 与 /x/proj2）经软链不再被当成 workspace 内——写读都拒', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'hoptools-sib-'));
+    const ws = join(parent, 'proj'); const sib = join(parent, 'proj2');
+    mkdirSync(ws); mkdirSync(sib);
+    writeFileSync(join(sib, 'victim.txt'), 'orig');
+    symlinkSync(sib, join(ws, 'lsib'));
+    const p = new DefaultToolProvider({
+      workspace_dir: ws,
+      sandbox: {
+        filesystem: { workspace_dir: ws, read_access: { allowed: [], denied: [], confirm_required: [] } },
+        network: { trusted_hosts: [] }, runtime: { available: [] },
+      },
+      api_key: 'test',
+    });
+    expect((await p.execute('write', { path: 'lsib/victim.txt', content: 'X' }, 'workspace')).success).toBe(false);
+    expect(readFileSync(join(sib, 'victim.txt'), 'utf-8')).toBe('orig');
+    expect((await p.execute('read', { path: 'lsib/victim.txt' })).success).toBe(false);
+    // 绝对写法指向兄弟目录同拒（字面判与真实路径判都不中）——拒因必须是路径解析层的契约报文,
+    // 不能退化成写域闸兜底的 "Write outside workspace sandbox"（裸前缀比较会把 /x/proj2 当成 /x/proj 内）
+    const abs = await p.execute('write', { path: join(sib, 'victim.txt'), content: 'X' }, 'workspace');
+    expect(abs.success).toBe(false);
+    expect(String(abs.result)).toContain('Absolute path outside workspace');
+    expect(String(abs.result)).toContain('workspace 根');
+    const absNew = await p.execute('write', { path: join(sib, 'x.txt'), content: 'X' }, 'workspace');
+    expect(absNew.success).toBe(false);
+    expect(String(absNew.result)).toContain('Absolute path outside workspace');
+    expect(existsSync(join(sib, 'x.txt'))).toBe(false);
+    expect(readFileSync(join(sib, 'victim.txt'), 'utf-8')).toBe('orig');
+  });
+
+  it('反例：经软链父目录新建文件（目标不存在）不再逃出 workspace;悬空软链写入同拒', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'hoptools-ws-'));
+    const far = mkdtempSync(join(tmpdir(), 'hoptools-far-'));
+    symlinkSync(far, join(ws, 'lfar'));
+    symlinkSync(join(far, 'dangling.txt'), join(ws, 'ldang'));
+    const p = makeProvider(ws);
+    const r = await p.execute('write', { path: 'lfar/new.txt', content: 'X' }, 'workspace');
+    expect(r.success).toBe(false);
+    expect(String(r.result)).toContain('Write outside workspace');
+    expect(existsSync(join(far, 'new.txt'))).toBe(false);
+    expect((await p.execute('write', { path: 'ldang', content: 'X' }, 'workspace')).success).toBe(false);
+    expect(existsSync(join(far, 'dangling.txt'))).toBe(false);
+  });
+
+  it('反例：读侧经软链父目录探测 workspace 外不存在的文件拒（旧形态 exists 返回 false 成功,可探测外部文件存否）', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'hoptools-ws-'));
+    const far = mkdtempSync(join(tmpdir(), 'hoptools-far-'));
+    symlinkSync(far, join(ws, 'lout'));
+    const p = makeProvider(ws);
+    const e = await p.execute('exists', { path: 'lout/absent.txt' });
+    expect(e.success).toBe(false);
+    expect(String(e.result)).toContain('Read outside allowed paths');
+    const r = await p.execute('read', { path: 'lout/absent.txt' });
+    expect(r.success).toBe(false);
+    expect(String(r.result)).toContain('Read outside allowed paths');   // 校验拒,不是读盘 ENOENT
+  });
+
+  it('正例：读侧经指向 workspace 内目录的软链探测不存在的文件照常放行（exists 返回 false）', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'hoptools-ws-'));
+    mkdirSync(join(ws, 'inner'));
+    symlinkSync(join(ws, 'inner'), join(ws, 'lin'));
+    const p = makeProvider(ws);
+    const e = await p.execute('exists', { path: 'lin/absent.txt' });
+    expect(e.success, String(e.result)).toBe(true);
+    expect(String(e.result)).toContain('"exists":false');
+  });
+
+  it('正例：workspace 内尚不存在的多级新路径照常可写（祖先解析不误伤正常新建）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hoptools-abs-'));
+    mkdirSync(join(dir, 'a'));
+    const p = makeProvider(dir);
+    expect((await p.execute('write', { path: 'a/new.txt', content: 'v' }, 'workspace')).success).toBe(true);
+    expect((await p.execute('makedirs', { path: join(dir, 'b', 'c') }, 'workspace')).success).toBe(true);
+    expect(existsSync(join(dir, 'b', 'c'))).toBe(true);
+  });
+
+  it('正例：超过 40 层的新嵌套路径照常可写（上溯祖先不计软链跳数）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hoptools-deep-'));
+    const p = makeProvider(dir);
+    const deep = Array.from({ length: 45 }, (_, i) => 'd' + i).join('/');
+    const r = await p.execute('makedirs', { path: deep }, 'workspace');
+    expect(r.success, String(r.result)).toBe(true);
+    expect(existsSync(join(dir, deep))).toBe(true);
+  });
+
+  it('反例：经软链父目录新建超过 40 层的新目录不再逃出（旧形态上溯也计数,耗尽后放行未解析路径）', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'hoptools-ws-'));
+    const far = mkdtempSync(join(tmpdir(), 'hoptools-far-'));
+    symlinkSync(far, join(ws, 'lfar'));
+    const p = makeProvider(ws);
+    const deep = 'lfar/' + Array.from({ length: 41 }, (_, i) => 'x' + i).join('/');
+    const r = await p.execute('makedirs', { path: deep }, 'workspace');
+    expect(r.success).toBe(false);
+    expect(existsSync(join(far, 'x0'))).toBe(false);
+  });
+
+  it('反例：经别名目录访问相对形态的悬空软链不再逃出（链接目标以软链所在目录的真实路径为基准）', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'hoptools-alias-'));
+    const ws = join(parent, 'ws'); mkdirSync(join(ws, 'deep', 'er'), { recursive: true });
+    symlinkSync('../escaped.txt', join(ws, 'd'));          // 按 d 所在目录解析 = parent/escaped.txt,workspace 外
+    symlinkSync(ws, join(ws, 'deep', 'er', 'a'));          // 别名:deep/er/a 指回 workspace 根
+    const p = makeProvider(ws);
+    expect((await p.execute('write', { path: 'd', content: 'X' }, 'workspace')).success).toBe(false);
+    const r = await p.execute('write', { path: 'deep/er/a/d', content: 'X' }, 'workspace');
+    expect(r.success).toBe(false);
+    expect(existsSync(join(parent, 'escaped.txt'))).toBe(false);
+  });
+
+  it('反例：软链成环由校验拒（失败即拒,报文点名层数超限或成环）,不靠 OS 报错兜底', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'hoptools-loop-'));
+    symlinkSync('loopB', join(ws, 'loopA'));
+    symlinkSync('loopA', join(ws, 'loopB'));
+    const p = makeProvider(ws);
+    const r = await p.execute('write', { path: 'loopA', content: 'X' }, 'workspace');
+    expect(r.success).toBe(false);
+    expect(String(r.result)).toContain('Symlink chain too deep or cyclic');
+  });
+
+  it('read allowed 清单同带分隔符边界:allowed=/x/kb 时经软链读 /x/kb2 拒,读 /x/kb 放行', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'hoptools-allow-'));
+    const ws = join(parent, 'ws'); const kb = join(parent, 'kb'); const kb2 = join(parent, 'kb2');
+    for (const d of [ws, kb, kb2]) mkdirSync(d);
+    writeFileSync(join(kb, 'f.md'), 'ok'); writeFileSync(join(kb2, 'f.md'), 'secret');
+    symlinkSync(kb, join(ws, 'lkb')); symlinkSync(kb2, join(ws, 'lkb2'));
+    const p = new DefaultToolProvider({
+      workspace_dir: ws,
+      sandbox: {
+        filesystem: { workspace_dir: ws, read_access: { allowed: [kb], denied: [], confirm_required: [] } },
+        network: { trusted_hosts: [] }, runtime: { available: [] },
+      },
+      api_key: 'test',
+    });
+    expect((await p.execute('read', { path: 'lkb/f.md' })).result).toBe('ok');
+    const r = await p.execute('read', { path: 'lkb2/f.md' });
+    expect(r.success).toBe(false);
+    expect(String(r.result)).toContain('Read outside allowed paths');
+  });
+});
+
 // work_zone 涂鸦区豁免（2026-08-10 作者定 work_zone_path）：.hopstate 禁令的唯一豁免。
-// @v: anc-exec-work-zone, anc-exec-work-zone-path
+// 豁免只对登记过的本 run 涂鸦区生效（todo/0124）——测试先 registerWorkZoneRoot 再走链。
+// @v: anc-exec-work-zone, anc-exec-work-zone-path, anc-exec-work-zone-registry
 describe('work_zone 涂鸦区豁免', () => {
-  it('正例：work_zone 绝对路径读写放行（.hopstate 内）', async () => {
+  it('正例：登记后 work_zone 绝对路径读写放行（.hopstate 内）', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'hoptools-'));
     const wz = join(dir, '.hopstate', 'inst-1', 'work_zone');
     mkdirSync(wz, { recursive: true });
     const p = makeProvider(dir);
+    ownWz(p, wz);
     const target = join(wz, 'draft.md');
     expect((await p.execute('write', { path: target, content: 'v' })).success).toBe(true);
     expect((await p.execute('read', { path: target })).result).toBe('v');
@@ -945,10 +1203,14 @@ describe('work_zone 涂鸦区豁免', () => {
   });
   it('反例：.hopstate 非 work_zone 区仍拒；work_zone 伪装带 .. 仍拒', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'hoptools-'));
-    mkdirSync(join(dir, '.hopstate', 'inst-1'), { recursive: true });
+    mkdirSync(join(dir, '.hopstate', 'inst-1', 'work_zone'), { recursive: true });
     const p = makeProvider(dir);
+    ownWz(p, join(dir, '.hopstate', 'inst-1', 'work_zone'));
     expect((await p.execute('write', { path: join(dir, '.hopstate', 'inst-1', 'state.json'), content: '{}' })).success).toBe(false);
-    expect((await p.execute('write', { path: join(dir, '.hopstate', 'inst-1', 'work_zone', '..', 'state.json'), content: '{}' })).success).toBe(false);
+    // 字符串拼接保留字面 ..（path.join 会把 .. 折叠掉,原写法与上一断言同路径——review 面三抓出的假反例）
+    const dotdot = await p.execute('write', { path: join(dir, '.hopstate', 'inst-1', 'work_zone') + '/../state.json', content: '{}' });
+    expect(dotdot.success).toBe(false);
+    expect(String(dotdot.result)).toContain('Path traversal');
   });
 });
 
@@ -956,13 +1218,14 @@ describe('work_zone 涂鸦区豁免', () => {
 // （write_scope='work_zone',亦是缺省——信号缺席按窄域拒）写域仅 work_zone;commit 语境
 // （'workspace'）才可写全域。触发实撞：fact-check 真机跑 act free 步把中间 yaml 写到
 // workspace 根——free 步能 read 工作区一切,散落物会被后续步/并行兄弟读到（自污染）。
-// @v: anc-exec-write-scope
+// @v: anc-exec-write-scope, anc-exec-work-zone-registry
 describe('写侧分域（act 限 work_zone / commit 限 workspace）', () => {
-  it('正例：act 语境（缺省窄域）写 work_zone 放行', async () => {
+  it('正例：act 语境（缺省窄域）写登记过的 work_zone 放行', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'hoptools-'));
     const wz = join(dir, '.hopstate', 'inst-1', 'work_zone');
     mkdirSync(wz, { recursive: true });
     const p = makeProvider(dir);
+    ownWz(p, wz);
     expect((await p.execute('write', { path: join(wz, 'mid.yaml'), content: 'k: v' })).success).toBe(true);
   });
   it('反例：act 语境写 workspace 根拒 WORK_ZONE_ONLY（write/append/create/makedirs/move/remove 全写侧）', async () => {
@@ -978,6 +1241,7 @@ describe('写侧分域（act 限 work_zone / commit 限 workspace）', () => {
     await p.execute('write', { path: 'src.txt', content: 'v' }, 'workspace');
     const wz = join(dir, '.hopstate', 'inst-1', 'work_zone');
     mkdirSync(wz, { recursive: true });
+    ownWz(p, wz);
     expect((await p.execute('move', { from: 'src.txt', to: join(wz, 'dst.txt') })).success).toBe(false);
     expect((await p.execute('remove', { path: 'src.txt' })).success).toBe(false);
   });
@@ -987,6 +1251,267 @@ describe('写侧分域（act 限 work_zone / commit 限 workspace）', () => {
     const p = makeProvider(dir);
     expect((await p.execute('write', { path: 'deliver.md', content: 'final' }, 'workspace')).success).toBe(true);
     expect((await p.execute('write', { path: '.hopstate/hack.json', content: '{}' }, 'workspace')).success).toBe(false);
+  });
+});
+
+// work_zone 豁免只认本 run 自己的涂鸦区集合（todo/0124,作者定"这个任务就应该直接把 work_zone 目录记下来"）：
+// 原字面正则让 workspace 外任何含 .hopstate/<x>/work_zone 字面的路径都能读写、原模块级注册表让同进程
+// 别的 run 互相可读写——两支退役,集合归提供者实例。变异回放:validateFileAccess 或 resolvePath 任一处换回
+// 字面正则,下方反例即红（两处都是生效点,只改一处另一处照样放行）。
+// @v: anc-exec-work-zone-registry
+describe('work_zone 豁免不认 workspace 外的惯例名', () => {
+  const outsideTree = () => {
+    const base = mkdtempSync(join(tmpdir(), 'hopwz0124-'));
+    const ws = join(base, 'ws'); mkdirSync(ws);
+    const outside = join(base, 'out'); mkdirSync(outside);
+    return { base, ws, outside };
+  };
+  it('反例：直接写 workspace 外含 .hopstate/a/work_zone 字面的绝对路径——act 与 commit 两种写域都拒,外部目录零新文件', async () => {
+    const { ws, outside } = outsideTree();
+    const p = makeProvider(ws);
+    const fake = join(outside, '.hopstate', 'a', 'work_zone');
+    // 拒因须是解析层契约报文（^anc-exec-tool-path-resolve:workspace 外绝对路径点名 workspace 根）,不是写域闸兜底——
+    // resolvePath 的捷径若换回字面正则,路径会漏到 validateFileAccess 才被拦,报文退化为 WORK_ZONE_ONLY/Write outside
+    const r1 = await p.execute('makedirs', { path: fake });
+    expect(r1.success).toBe(false);
+    expect(String(r1.result)).toContain('Absolute path outside workspace');
+    expect((await p.execute('makedirs', { path: fake }, 'workspace')).success).toBe(false);
+    mkdirSync(fake, { recursive: true });   // 就算目录已在,写也不许
+    const r2 = await p.execute('write', { path: join(fake, 'x.txt'), content: 'X' });
+    expect(r2.success).toBe(false);
+    expect(String(r2.result)).toContain('Absolute path outside workspace');
+    const r3 = await p.execute('write', { path: join(fake, 'x.txt'), content: 'X' }, 'workspace');
+    expect(r3.success).toBe(false);
+    expect(String(r3.result)).toContain('Absolute path outside workspace');
+    expect(existsSync(join(fake, 'x.txt'))).toBe(false);
+  });
+  it('反例：读别的项目的涂鸦区（.hopstate/run9/work_zone 字面在 workspace 外）——read 与 listdir 都拒', async () => {
+    const { ws, outside } = outsideTree();
+    const other = join(outside, 'otherproj', '.hopstate', 'run9', 'work_zone');
+    mkdirSync(other, { recursive: true });
+    writeFileSync(join(other, 'secret.txt'), 'S');
+    const p = makeProvider(ws);
+    const rr = await p.execute('read', { path: join(other, 'secret.txt') });
+    expect(rr.success).toBe(false);
+    expect(String(rr.result)).toContain('Absolute path outside workspace');
+    expect((await p.execute('listdir', { path: other })).success).toBe(false);
+  });
+  it('反例：经 workspace 内软链到外部、再拼出惯例名——真实路径不在集合里,拒', async () => {
+    const { ws, outside } = outsideTree();
+    symlinkSync(outside, join(ws, 'lout'));
+    const p = makeProvider(ws);
+    const viaLink = join(ws, 'lout', '.hopstate', 'a', 'work_zone');
+    expect((await p.execute('makedirs', { path: viaLink })).success).toBe(false);
+    mkdirSync(join(outside, '.hopstate', 'a', 'work_zone'), { recursive: true });
+    expect((await p.execute('write', { path: join(viaLink, 'x.txt'), content: 'X' })).success).toBe(false);
+    expect(existsSync(join(outside, '.hopstate', 'a', 'work_zone', 'x.txt'))).toBe(false);
+  });
+  it('反例：同进程另一个 run（另一个提供者）登记的 work_zone,本提供者不放行——集合按实例不按进程', async () => {
+    const { ws } = outsideTree();
+    const wsB = mkdtempSync(join(tmpdir(), 'hopwz0124-B-'));
+    const wzB = join(wsB, '.hopstate', 'run-b', 'work_zone');
+    mkdirSync(wzB, { recursive: true });
+    writeFileSync(join(wzB, 'b.txt'), 'B');
+    const pA = makeProvider(ws);
+    const pB = makeProvider(wsB);
+    ownWz(pB, wzB);
+    expect((await pB.execute('read', { path: join(wzB, 'b.txt') })).result).toBe('B');
+    expect((await pA.execute('read', { path: join(wzB, 'b.txt') })).success).toBe(false);
+    expect((await pA.execute('write', { path: join(wzB, 'a-wrote.txt'), content: 'A' })).success).toBe(false);
+    expect(existsSync(join(wzB, 'a-wrote.txt'))).toBe(false);
+  });
+  it('反例：登记根的前缀串不误中（/a/work_zone 登记后 /a/work_zonefake 不放行——带分隔符边界）', async () => {
+    const { ws } = outsideTree();
+    const wz = join(ws, '.hopstate', 'a', 'work_zone');
+    mkdirSync(wz, { recursive: true });
+    mkdirSync(join(ws, '.hopstate', 'a', 'work_zonefake'), { recursive: true });
+    const p = makeProvider(ws);
+    ownWz(p, wz);
+    expect((await p.execute('write', { path: join(ws, '.hopstate', 'a', 'work_zonefake', 'x'), content: 'X' })).success).toBe(false);
+  });
+  it('正例：登记后顶层 work_zone 与子实例三段路径（parallel/calls）读写放行', async () => {
+    const { ws } = outsideTree();
+    const roots = [
+      join(ws, '.hopstate', 'abc-123', 'work_zone'),
+      join(ws, '.hopstate', 'abc-123', 'parallel', '5.2.1.14', 'work_zone'),
+      join(ws, '.hopstate', 'abc-123', 'calls', '3.1', 'work_zone'),
+    ];
+    const p = makeProvider(ws);
+    const tree = join(ws, '.hopstate', 'abc-123');
+    for (const r of roots) { mkdirSync(r, { recursive: true }); ownWz(p, r, tree); expect((await p.execute('write', { path: join(r, 'out.json'), content: '{}' })).success).toBe(true); }
+    // 当前实例切到顶层后,子实例的产物仍可读（tree 内任意 work_zone）
+    ownWz(p, roots[0], tree);
+    for (const r of roots) expect((await p.execute('read', { path: join(r, 'out.json') })).result).toBe('{}');
+  });
+  it('反例转正例：子实例不能写父 work_zone（登记了父根、own=子根 → append 父路径拒）;但能读父 work_zone 的产物（todo/0126 读写分权）', async () => {
+    const { ws } = outsideTree();
+    const stateDir = join(ws, '.hopstate');
+    const parentWz = join(stateDir, 'top-1', 'work_zone');
+    const childWz = join(stateDir, 'top-1', 'calls', '5.1.1', 'work_zone');
+    mkdirSync(parentWz, { recursive: true }); mkdirSync(childWz, { recursive: true });
+    writeFileSync(join(stateDir, 'top-1', 'state.json'), '{}');
+    writeFileSync(join(parentWz, 'judgement-log.md'), '# 父台账\n');
+    const child = makeProvider(ws);
+    for (const r of [childWz, parentWz]) child.registerWorkZoneRoot(r);   // FilePersistence.getWorkZoneRoots 的产物形态
+    child.setWorkZoneScope({ own: childWz, tree: join(stateDir, 'top-1') });
+    const w = await child.execute('append', { path: join(parentWz, 'judgement-log.md'), content: '- 点\n' });
+    expect(w.success).toBe(false);
+    expect(String(w.result)).toContain('WORK_ZONE_ONLY');
+    expect(readFileSync(join(parentWz, 'judgement-log.md'), 'utf-8')).toBe('# 父台账\n');   // 父文件未被动
+    expect((await child.execute('read', { path: join(parentWz, 'judgement-log.md') })).result).toBe('# 父台账\n');   // 读父放行
+    expect((await child.execute('append', { path: join(childWz, 'judgement-log.md'), content: '- 点\n' })).success).toBe(true);   // 写自己放行
+  });
+  it('正例：MemoryPersistence 的 tmpdir 形态 hopjit-workzone-* 登记后放行（原始与真实路径两形态都吃——macOS /var→/private/var）', async () => {
+    const { ws } = outsideTree();
+    const wz = mkdtempSync(join(tmpdir(), 'hopjit-workzone-'));
+    const p = makeProvider(ws);
+    ownWz(p, wz);
+    expect((await p.execute('write', { path: join(wz, 'x.json'), content: '1' })).success).toBe(true);
+    const { realpathSync } = await import('node:fs');
+    expect((await p.execute('read', { path: join(realpathSync(wz), 'x.json') })).result).toBe('1');
+  });
+  it('正例：自定义 state-dir（runtime/hopstate,不含 .hopstate 字面——hopkb 实撞形态）登记后放行,未登记的兄弟 run 照拒', async () => {
+    const { ws } = outsideTree();
+    const wz = join(ws, 'runtime', 'hopstate', '9d203b30', 'work_zone');
+    const sibling = join(ws, 'runtime', 'hopstate', 'other-run', 'work_zone');
+    mkdirSync(wz, { recursive: true }); mkdirSync(sibling, { recursive: true });
+    const p = makeProvider(ws);
+    ownWz(p, wz);
+    expect((await p.execute('write', { path: join(wz, 'findings'), content: 'f' })).success).toBe(true);
+    expect((await p.execute('write', { path: join(sibling, 'y'), content: 'y' })).success).toBe(false);
+  });
+  it('正例：经 CompositeToolProvider 登记转发到内置文件成员;派生视图与父同一集合', async () => {
+    const { CompositeToolProvider } = await import('../src/tools-composite.js');
+    const { ws } = outsideTree();
+    const wz = join(ws, '.hopstate', 'c-1', 'work_zone');
+    mkdirSync(wz, { recursive: true });
+    const config: HostConfig = { workspace_dir: ws, sandbox: { filesystem: { workspace_dir: ws, read_access: { allowed: [ws], denied: [], confirm_required: [] } }, network: { trusted_hosts: [] }, runtime: { available: [] } }, api_key: 'test' };
+    const cp = new CompositeToolProvider(config);
+    expect((await cp.execute('write', { path: join(wz, 'a.txt'), content: 'a' })).success).toBe(false);
+    cp.registerWorkZoneRoot(wz); cp.setWorkZoneScope({ own: wz });
+    expect((await cp.execute('write', { path: join(wz, 'a.txt'), content: 'a' })).success).toBe(true);
+    const view = cp.forkForParallelChild();
+    expect((await view.execute('read', { path: join(wz, 'a.txt') })).result).toBe('a');
+  });
+  it('正例：Composite 转发给全部实现了 registerWorkZoneRoot 的成员——宿主注入的替身成员也收到（不是只转第一个）', async () => {
+    const { CompositeToolProvider } = await import('../src/tools-composite.js');
+    const { ws } = outsideTree();
+    const got: string[] = [];
+    const stub = { list: () => [{ name: 'stub_tool', description: 's', input_schema: { type: 'object' } }], execute: async () => ({ result: '', success: true }), registerWorkZoneRoot: (r: string) => { got.push(r); } };
+    const config: HostConfig = { workspace_dir: ws, sandbox: { filesystem: { workspace_dir: ws, read_access: { allowed: [ws], denied: [], confirm_required: [] } }, network: { trusted_hosts: [] }, runtime: { available: [] } }, api_key: 'test', tool_provider: stub };
+    const cp = new CompositeToolProvider(config);
+    cp.registerWorkZoneRoot('/x/.hopstate/r/work_zone');
+    expect(got).toEqual(['/x/.hopstate/r/work_zone']);   // 内置文件成员在前,替身在后——只转 members[0] 则此处为空
+  });
+  it('反例转正例：登记一条成环软链形态的根不抛错（真实形态解析失败只登记原始形态,fail-closed——todo/0125 条目 2）', async () => {
+    const { ws, outside } = outsideTree();
+    symlinkSync(join(outside, 'loopB'), join(outside, 'loopA'));
+    symlinkSync(join(outside, 'loopA'), join(outside, 'loopB'));
+    const p = makeProvider(ws);
+    const looped = join(outside, 'loopA', '.hopstate', 'x', 'work_zone');
+    expect(() => p.registerWorkZoneRoot(looped)).not.toThrow();
+    // 原始形态已登记:字面命中捷径;但目标不可达,写落到校验链真实路径解析处响亮失败而不是静默放行到别处
+    const r = await p.execute('write', { path: join(looped, 'a.txt'), content: 'x' });
+    expect(r.success).toBe(false);
+    // 正常根照常可用——一次病态登记不污染提供者
+    const wz = join(ws, '.hopstate', 'ok', 'work_zone'); mkdirSync(wz, { recursive: true });
+    ownWz(p, wz);
+    expect((await p.execute('write', { path: join(wz, 'b.txt'), content: 'y' })).success).toBe(true);
+  });
+  it('正例：两形态各自命中——workspace 外的 work_zone 经软链别名登记,原始（别名）写法与真实写法都放行（不依赖 macOS /var 差异;两形态只放一种时各有一半失守）', async () => {
+    const { ws, outside: outsideRaw } = outsideTree();
+    const { realpathSync } = await import('node:fs');
+    const outside = realpathSync(outsideRaw);   // 先剥掉 macOS /tmp→/private/tmp 这层与本用例无关的别名,只留自己建的那一层软链
+    // work_zone 在 workspace 外（自定义 state-dir 形态）,经一条别名软链访问——resolveWorkspacePath 兜不住,豁免只能靠集合
+    const realWz = join(outside, 'real', 'hopstate', 'r1', 'work_zone');
+    mkdirSync(realWz, { recursive: true });
+    symlinkSync(join(outside, 'real'), join(outside, 'alias'));
+    const viaAlias = join(outside, 'alias', 'hopstate', 'r1', 'work_zone');
+    const p = makeProvider(ws);
+    ownWz(p, viaAlias);   // 登记别名形态;真实形态由提供者自己解析进集合
+    expect((await p.execute('write', { path: join(viaAlias, 'a.txt'), content: 'A' })).success).toBe(true);   // resolvePath 捷径吃原始形态
+    expect((await p.execute('read', { path: join(realWz, 'a.txt') })).result).toBe('A');                      // 真实形态直接给也认
+    expect((await p.execute('append', { path: join(viaAlias, 'a.txt'), content: 'B' })).success).toBe(true);  // validateFileAccess 吃真实形态
+  });
+});
+
+// work_zone 写只归本实例、读对实例树开放（todo/0126,作者定"可以读,但不应该能写""祖先、兄弟这些都是避免文件的重复 copy"）。
+// 变异回放:validateFileAccess 写侧换回"命中读范围即放行"→下方反例红;读侧去掉 tree 分支→"只按目录布局判"那条正例红
+// （mkTree 把四根都登记进了兜底集合,父读子/兄弟互读经兜底也能过——所以专门加一条零登记只靠 tree 的用例锁 tree 分支）。
+// @v: anc-exec-work-zone-registry
+describe('work_zone 写只归本实例', () => {
+  // 一棵实例树:top / top>calls/c1 / top>calls/c2（兄弟）/ top>calls/c1>parallel/g1（孙）
+  const mkTree = () => {
+    const ws = mkdtempSync(join(tmpdir(), 'hopwz0126-'));
+    const top = join(ws, '.hopstate', 'top');
+    const c1 = join(top, 'calls', 'c1'); const c2 = join(top, 'calls', 'c2'); const g1 = join(c1, 'parallel', 'g1');
+    for (const d of [top, c1, c2, g1]) { mkdirSync(join(d, 'work_zone'), { recursive: true }); writeFileSync(join(d, 'state.json'), '{}'); }
+    const wz = (d: string) => join(d, 'work_zone');
+    const p = makeProvider(ws);
+    // standalone 共用一个提供者：各实例先后都登记过（模拟各自 getWorkZone 推法）
+    for (const d of [top, c1, c2, g1]) p.registerWorkZoneRoot(wz(d));
+    return { ws, top, c1, c2, g1, wz, p, as: (d: string) => p.setWorkZoneScope({ own: wz(d), tree: top }) };
+  };
+  it('反例：子写父拒（WORK_ZONE_ONLY）、父写子拒、兄弟互写拒、孙写祖父拒——写只认当前实例自己的 work_zone', async () => {
+    const t = mkTree();
+    const tryWrite = async (from: string, to: string) => { t.as(from); return t.p.execute('write', { path: join(t.wz(to), 'x.txt'), content: 'X' }); };
+    for (const [from, to] of [[t.c1, t.top], [t.top, t.c1], [t.c1, t.c2], [t.c2, t.c1], [t.g1, t.top], [t.g1, t.c2]] as const) {
+      const r = await tryWrite(from, to);
+      expect(r.success).toBe(false);
+      expect(String(r.result)).toContain('WORK_ZONE_ONLY');
+      expect(existsSync(join(t.wz(to), 'x.txt'))).toBe(false);
+    }
+    // commit 写域也不放行别人的涂鸦区（.hopstate 禁写兜住）
+    t.as(t.c1);
+    expect((await t.p.execute('write', { path: join(t.wz(t.top), 'x.txt'), content: 'X' }, 'workspace')).success).toBe(false);
+  });
+  it('正例：本实例写自己放行;子读父、父读子、兄弟互读、孙读祖父全部放行（tree 内任意 work_zone）', async () => {
+    const t = mkTree();
+    for (const d of [t.top, t.c1, t.c2, t.g1]) { t.as(d); expect((await t.p.execute('write', { path: join(t.wz(d), 'mine.txt'), content: d })).success).toBe(true); }
+    for (const [from, to] of [[t.c1, t.top], [t.top, t.c1], [t.c1, t.c2], [t.g1, t.top], [t.top, t.g1]] as const) {
+      t.as(from);
+      expect((await t.p.execute('read', { path: join(t.wz(to), 'mine.txt') })).result).toBe(to);
+      expect((await t.p.execute('listdir', { path: t.wz(to) })).success).toBe(true);
+    }
+  });
+  it('反例：tree 内但不在 work_zone 段下的文件（state.json/vars.json）读侧不豁免;别的 run 的 work_zone 读写都拒', async () => {
+    const t = mkTree();
+    t.as(t.c1);
+    // state.json 在 tree 内但不在任何 work_zone 段下——走常规读链（workspace 内所以能读,但不是靠豁免;这里验的是它不被当涂鸦区写）
+    expect((await t.p.execute('write', { path: join(t.top, 'state.json'), content: '{}' })).success).toBe(false);
+    const other = join(t.ws, '.hopstate', 'other-run', 'work_zone'); mkdirSync(other, { recursive: true }); writeFileSync(join(other, 's.txt'), 'S');
+    expect((await t.p.execute('write', { path: join(other, 'x.txt'), content: 'X' })).success).toBe(false);
+    // other-run 在 workspace 内、.hopstate 下——读侧不豁免时走常规读链:workspace 内可读。这条验的是"不是靠 tree 豁免",用 workspace 外的别 run 验拒
+    const outsideRun = join(mkdtempSync(join(tmpdir(), 'hopwz-other-')), '.hopstate', 'r', 'work_zone'); mkdirSync(outsideRun, { recursive: true }); writeFileSync(join(outsideRun, 's.txt'), 'S');
+    expect((await t.p.execute('read', { path: join(outsideRun, 's.txt') })).success).toBe(false);
+    expect((await t.p.execute('write', { path: join(outsideRun, 'x.txt'), content: 'X' })).success).toBe(false);
+  });
+  it('正例：只靠目录布局判——零登记任何兄弟/祖先/后代根,只 setWorkZoneScope({own, tree}),读祖先/兄弟/后代 work_zone 仍放行（复用模式子实例独立提供者的真实形态;删 tree 分支即红）', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'hopwz0126t-'));
+    // state-dir 放 workspace **外**（自定义 --state-dir 形态）：tree 内的 work_zone 不在 workspace 里,常规读链兜不住,
+    // 读放行只能来自 tree 分支——放 workspace 内的话 workspace 读链会把它放行,验不到 tree
+    const top = join(mkdtempSync(join(tmpdir(), 'hopwz0126-state-')), 'hopstate', 'top');
+    const c1 = join(top, 'calls', 'c1'); const c2 = join(top, 'calls', 'c2'); const g1 = join(c1, 'parallel', 'g1');
+    const wz = (d: string) => join(d, 'work_zone');
+    for (const d of [top, c1, c2, g1]) { mkdirSync(wz(d), { recursive: true }); writeFileSync(join(d, 'state.json'), '{}'); writeFileSync(join(wz(d), 'm.txt'), d); }
+    const p = makeProvider(ws);
+    p.setWorkZoneScope({ own: wz(c1), tree: top });   // 不 registerWorkZoneRoot 任何根
+    for (const d of [top, c2, g1]) expect((await p.execute('read', { path: join(wz(d), 'm.txt') })).result).toBe(d);
+    expect((await p.execute('write', { path: join(wz(c1), 'w.txt'), content: 'w' })).success).toBe(true);
+    expect((await p.execute('write', { path: join(wz(top), 'w.txt'), content: 'w' })).success).toBe(false);
+  });
+  it('正例：tree 缺席（MemoryPersistence 形态）时读只认登记过的根;own 切换后旧 own 变只读', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'hopwz0126m-'));
+    const a = mkdtempSync(join(tmpdir(), 'hopjit-workzone-')); const b = mkdtempSync(join(tmpdir(), 'hopjit-workzone-'));
+    const p = makeProvider(ws);
+    p.registerWorkZoneRoot(a); p.registerWorkZoneRoot(b);
+    p.setWorkZoneScope({ own: a });
+    expect((await p.execute('write', { path: join(a, 'a.txt'), content: 'A' })).success).toBe(true);
+    expect((await p.execute('write', { path: join(b, 'b.txt'), content: 'B' })).success).toBe(false);
+    p.setWorkZoneScope({ own: b });
+    expect((await p.execute('write', { path: join(b, 'b.txt'), content: 'B' })).success).toBe(true);
+    expect((await p.execute('write', { path: join(a, 'a2.txt'), content: 'A' })).success).toBe(false);   // 旧 own 只读
+    expect((await p.execute('read', { path: join(a, 'a.txt') })).result).toBe('A');   // 登记过的根可读
   });
 });
 
@@ -1077,7 +1602,7 @@ g
     const r = JSON.parse(executeReadSpecTree({ spec_text: S, mode: 'skeleton' }).result as string);
     expect(r.status).toBe('ok');
     expect(r.text).toContain('1.1. [act] 干活');
-    expect(r.text).toContain('+ → out: text');       // IO 声明在
+    expect(r.text).toContain('+ → out % text');       // IO 声明在
     expect(r.text).not.toContain('执行说明');          // > 行剔除
     expect(r.text).not.toContain('hop_python');       // body 剔除
   });
@@ -1653,42 +2178,6 @@ Id: fence
   });
 });
 
-// @v: anc-exec-work-zone —— work_zone 判定覆盖子实例三段路径（2026-08-30 审计实抓 [^/]+ 单段
-// 误拒 standalone 子实例写自身 work_zone;变异实证:改回单段正则下方三段正例必红）
-describe('isWorkZonePath 注册根前缀支(0066——自定义 state-dir 名)', () => {
-  // @v: anc-exec-work-zone
-  it('正:注册自定义根后,该根下路径判 true(state-dir 不含 .hopstate 字面——hopkb runtime/hopstate 实撞形态)', () => {
-    registerWorkZoneRoot('/Users/x/.hopkb/runtime/hopstate/9d203b30/work_zone');
-    expect(isWorkZonePath('/Users/x/.hopkb/runtime/hopstate/9d203b30/work_zone/findings')).toBe(true);
-    expect(isWorkZonePath('/Users/x/.hopkb/runtime/hopstate/9d203b30/work_zone')).toBe(true);
-  });
-  it('反:未注册的裸自定义路径照拒(注册面不放大到任意绝对路径)', () => {
-    expect(isWorkZonePath('/Users/x/.hopkb/runtime/hopstate/other-run/work_zone/y')).toBe(false);
-    expect(isWorkZonePath('/Users/x/somewhere/else.txt')).toBe(false);
-  });
-  it('反:注册根的前缀串不误中(root+"/"边界——/a/work_zone 注册后 /a/work_zonefake 不放行)', () => {
-    registerWorkZoneRoot('/tmp/t0066/a/work_zone');
-    expect(isWorkZonePath('/tmp/t0066/a/work_zonefake/x')).toBe(false);
-  });
-});
-
-describe('isWorkZonePath 子实例路径形态', () => {
-  it('正例：顶层/parallel 子实例/call 子实例三形态全放行', () => {
-    expect(isWorkZonePath('.hopstate/abc-123/work_zone/out.json')).toBe(true);
-    expect(isWorkZonePath('.hopstate/abc-123/parallel/5.2.1.14/work_zone/vars/batch.json')).toBe(true);
-    expect(isWorkZonePath('.hopstate/abc-123/calls/3.1/work_zone/x.txt')).toBe(true);
-  });
-  it('正例：MemoryPersistence tmpdir 形态 hopjit-workzone-* 放行（判定第二支——2026-08-30 review 抓设计判据漏此支后补钉）', () => {
-    expect(isWorkZonePath('/var/tmp/hopjit-workzone-ab12/x.json')).toBe(true);
-  });
-  it('反例：仓库正式区/伪装名/裸 .hopstate 状态区/伪装前缀目录仍拒', () => {
-    expect(isWorkZonePath('src/engine.ts')).toBe(false);
-    expect(isWorkZonePath('.hopstate/abc/work_zone_fake/x')).toBe(false);
-    expect(isWorkZonePath('.hopstate/abc/state.json')).toBe(false);
-    // 左端锚定（2026-08-30 review 抓旧病:不锚定时 myapp.hopstate 伪装前缀可豁免）
-    expect(isWorkZonePath('myapp.hopstate/abc/work_zone/x')).toBe(false);
-  });
-});
 
 
 // 钉钉通知工具模块（^anc-tool-dingtalk-notify——todo/0052 正式形态;真发送归真机 probe 不进 vitest,

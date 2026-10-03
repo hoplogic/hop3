@@ -1,0 +1,54 @@
+```python
+import ast
+import re
+import json
+import sys
+
+def check_function_length(filename):
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except (OSError, UnicodeDecodeError) as e:
+        sys.stderr.write(f"无法读取文件: {filename}\n")
+        sys.exit(1)
+
+    try:
+        tree = ast.parse(content)
+    except SyntaxError as e:
+        sys.stderr.write(f"语法错误: {filename}:{e.lineno}:{e.offset}: {e.msg}\n")
+        sys.exit(1)
+
+    violations = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # 计算函数体长度：从 def 行到最后一个 body 行，不包含装饰器
+            start_line = node.lineno
+            end_line = node.end_lineno
+            # 函数体行数 = 从 def 行开始到 body 最后一行（含）
+            length = end_line - start_line + 1
+            # 如果恰好40行，合法；超过40行，违规
+            if length > 40:
+                violations.append((start_line, length))
+
+        # 嵌套函数也单独检查
+        elif isinstance(node, ast.ClassDef):
+            # 类中方法是类节点的子节点，会由上面的 FunctionDef/AsyncFunctionDef 处理
+            pass
+
+    # 打印违规信息
+    for line_num, length in violations:
+        sys.stderr.write(f"函数从第 {line_num} 行开始，共 {length} 行，超过 40 行限制。\n")
+
+    if violations:
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.stderr.write("缺少文件路径参数。\n")
+        sys.exit(1)
+    
+    filename = sys.argv[1]
+    check_function_length(filename)
+```

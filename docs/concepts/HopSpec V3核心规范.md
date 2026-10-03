@@ -15,12 +15,12 @@ HopSpec 是双态通用编程语言：代码逻辑与 LLM 推理在同一套语�
 
 HopSpec 从三个维度解决这一问题：
 - **供人对齐——结构化逻辑、显性控制** ：HopSpec 用自然语言描述任务逻辑，不需要编程背景就能审查、确认和参与迭代。人机对齐的门槛从"能写代码"降到"能读懂意图"，显式控制点确保关键决策不失控
-- **供机执行——双态验证、探索提交分离、自适应修复** ： HopJIT 将代码骨干与智能节点双态融合执行，核验内置，确保 LLM 执行正确可靠。**探索提交分离**（act/commit）将不可逆副作用隔离到显式 commit 节点，act 步骤可安全重做——异常时自适应修复，无需人工重编程即可适应变化
-- **供业务演进——自主探索、放心尝试、渐进固化** ： 业务逻辑从硬编码走向结构化编排，从程序员独占走向业务方可参与。新场景下只需给出目标和约束，探索提交分离确保探索过程无不可逆后果——agent 自主规划探索路径，并在 HopSpec 框架下放心尝试、安全重试，成功经验**渐进固化**为可复用的最佳实践——系统越用越聪明
+- **供机执行——双态验证、探索-核验-提交、自适应修复** ： HopJIT 将代码骨干与智能节点双态融合执行，核验内置，确保 LLM 执行正确可靠。**探索-核验-提交范式**（act/check/commit）：act 步骤可安全重做，中间由 check 把关（关键步骤才用 confirm 问人），不可逆副作用隔离到显式 commit 节点——异常时自适应修复，无需人工重编程即可适应变化
+- **供业务演进——自主探索、放心尝试、渐进固化** ： 业务逻辑从硬编码走向结构化编排，从程序员独占走向业务方可参与。新场景下只需给出目标和约束，探索-核验-提交范式确保探索过程无不可逆后果——agent 自主规划探索路径，并在 HopSpec 框架下放心尝试、安全重试，成功经验**渐进固化**为可复用的最佳实践——系统越用越聪明
 
 **语言设计第一原则：普通人易于理解，不必要不增加复杂度**——HopSpec 的读者与作者是业务方而非程序员，每一个语法构造都要过这道门：它让普通人更容易表达和读懂意图吗？凡是程序员习惯里有、但普通人不需要的能力（语法糖、便利特性、第二种写法），一律不进语言——复杂度是持续成本，加上去就要被每个读 spec 的人付一遍。
 
-总体方向：**锁定目标，守住边界，放开路径**——WHAT（目标、约束、交付）不可变，HOW（步骤、策略）在契约边界内可自适应。边界由结构化逻辑控制、探索提交分离、双态验证等机制守住。
+总体方向：**锁定目标，守住边界，放开路径**——WHAT（目标、约束、交付）不可变，HOW（步骤、策略）在契约边界内可自适应。边界由结构化逻辑控制、探索-核验-提交范式、双态验证等机制守住。
 
 在具体应用时，HopSpec 往往由 LLM Agent 基于自然语言 Skill 转换而形成 HopSkill，由 HopJIT 引擎执行并管控执行状态（进度、产出、失败处理）。
 
@@ -54,25 +54,27 @@ Constraints:                            # 可选多项，任务约束
 - <约束>
 Types:                                  # 可选多项，复用类型定义
 - <TypeName>:  # 说明
-  - <field>: <type>  # 说明
+  - <field> % <type>  # 说明
 Inputs:                                 # 可选多项，Spec 级输入声明
-- <var>: <type>  # 说明
+- <var> % <type>  # 说明
 Outputs:                                # 可选多项，Spec 级输出声明
-- <var>: <type>  # 说明
+- <var> % <type>  # 说明
 Tools:                                  # 可选多项，工具需求声明（本 spec 假定的外部工具面——见「工具声明两面」）
-- <tool>(<param>, …) -> <out>: <type>  # 一句话用途（requires_commit 者注明）
-  - <param>: <type>  # 逐参数说明——写到杜绝望词生义（值语义/取值来源/错用后果）
+- <tool>(<param>, …) -> <out> % <type>  # 一句话用途（requires_commit 者注明）
+  - <param> % <type>  # 逐参数说明——写到杜绝望词生义（值语义/取值来源/错用后果）
   > 可选扩展：跨参数的复杂语义（幂等性/上限/调用纪律）
 Config:                                 # 可选，Spec 级运行时配置
   model: <service/model>                # Spec 默认模型（覆盖全局配置）
+## 已批准命令                           # 可选，任务级命令授权（Approved Commands 同义）：一行一个 argv 前缀,本任务放行
+- <命令名> <固定参数…>
 ## Steps                                # 有 Steps → 具体实现；无 Steps → HopTrait（Hop契约，见下方说明）
 N. [type] <一句话任务描述>
   - ← <var>                             # 可选多项，输入变量
-  + → <var>: <type>  # 说明             # 可选多项，输出变量
+  + → <var> % <type>  # 说明             # 可选多项，输出变量
   > <执行说明>                          # 可选多行，Step 展开说明
   N.N. [type] <子步骤描述>
     - ← <var>
-    + → <var>: <type>  # 说明
+    + → <var> % <type>  # 说明
     > <执行说明>
 ```
 
@@ -87,6 +89,7 @@ N. [type] <一句话任务描述>
 | `Inputs:`      | 否     | Spec 级输入变量声明，供 `[call]` 调用时传参映射                                                                                                                                                                                                                 |
 | `Outputs:`     | 否     | Spec 级输出变量声明，定义交付物=**完备性契约**。初始为 `None`，执行过程中应由步骤赋值；执行结束时仍为 `None` 的输出变量=完备性违约，run 判 **failed**（failure_reason 指明缺哪个输出——"completed 零产出"是假绿,下游信号链每层都被骗;2026-08-17 hopkb 实撞改判,原 warning 档废）。静态侧配对闸：声明输出在全 spec 无任何产出点（步骤 `+ →`/call 输出映射/exit 交付）时 validate 即 error（无 Steps 的能力声明 spec 天然豁免）                                                                                                                                                                |
 | `Tools:`       | 否     | 工具需求声明（本 spec 假定的外部工具面）——逐参数 HopSchema 条目+`>` 扩展；引擎 init 与环境注册面对账，缺工具/签名不兼容当场报错。两面关系见「工具声明两面」（^anc-tool-two-faces）                                                                                                                             |
+| `## 已批准命令` | 否 | 任务级命令授权（2026-09-30 作者定"根据任务来批准,而不是放开一个大口子"）：一行一个命令 argv 前缀,运行期命令逐项相等地以某行开头即放行,首项不得为 `hopjit`。授权绑定本 spec 的 run,别的活拿不到;它替代的只是载体逐条弹窗,不替代 `[confirm]`/`[ask]`/`[commit]` 前置检查这些人工闸。文法与消费口见 [[HopSpec V3语法参考#^anc-rule-approved-commands-section]] |
 | `Config:`      | 否     | Spec 级运行时配置。`model: service/model` 设置默认模型                                                                                                                                                                                                       |
 | `## Steps`     | 条件    | 有 Steps：具体实现，至少一个步骤。无 Steps：**HopTrait（Hop契约）**——仅由 Goal/Constraints/Inputs/Outputs 定义接口契约，由 HopJIT 有序思考生成执行路径或从 Spec 库匹配（见 [[HopType体系#^anc-hoptype-hoptrait]]）                                                                                                                                       |
 
@@ -180,9 +183,9 @@ N. [type] <一句话任务描述>
 	- 示例（完整节点）：
 ```
 2. [loop for-each reviewer in reviewers, collect note into reports] 并行评审
-  + → reports: [text]    # 全部评审报告（collect 子句的列表端）
+  + → reports % [text]    # 全部评审报告（collect 子句的列表端）
   2.1. [subtask parallel] 执行评审   # parallel=本子任务可被并行调用——每迭代异步派出一个
-    + → note: text       # 本轮报告（collect 子句的单项端）
+    + → note % text       # 本轮报告（collect 子句的单项端）
     2.1.1. [reason] 按该审查员视角评审
       - ← reviewer       # 元素绑定直接引用，无需声明行
       + → note
@@ -228,16 +231,16 @@ N. [type] <一句话任务描述>
 
 ```
 1. [loop for-each file in file_list, collect issue into issues] 并行审查
-  + → issues: [yaml]        # 收集列表：引擎把各活的 issue 收进来（失败的活不贡献元素）
+  + → issues % [yaml]        # 收集列表：引擎把各活的 issue 收进来（失败的活不贡献元素）
   1.1. [subtask parallel] 审查单个文件   # 标注 parallel：每迭代派出一个
-    + → issue: yaml         # 本文件的问题（collect 单项端）
+    + → issue % yaml         # 本文件的问题（collect 单项端）
     1.1.1. [reason] 审查
       - ← file
       + → issue
 2. [act] 汇总                # 收齐之后的归约步：整列表进、归约值出
   - ← issues
-  + → total_count: int      # 例：数一下
-  + → summary: text         # 例：拼一份
+  + → total_count % int      # 例：数一下
+  + → summary % text         # 例：拼一份
 ```
 
 归约步拿到的是收集列表（部分活失败时列表变短，可否接受由本步裁量），归约逻辑写在这一步里——确定性计算用 act（hop_python body），需要判断归纳用 reason。
@@ -249,7 +252,7 @@ N. [type] <一句话任务描述>
 `act`、`commit` 与纯机械判定的 `check`（见 [[#^anc-step-check-body]]）的执行体（body）用 **hop_python** 表达——HopSpec 的一种**受限编排语言**，写在步骤 `>` 指令区内的 ` ```hop_python ` 代码围栏里。它是「无推理编排」概念（见 [[#^anc-step-act]]）的语言载体。
 
 - **HopSpec 受限子集，非真 Python**：`hop_python` 名字里的 `python` 指**语法风格**（缩进块、`if cond:` / `elif` / `else:`、无花括号），不是真 Python 运行时。引擎把它解析为 **HopSpec 中立 AST**，由任意宿主语言引擎（TS/Python/Rust）解释执行——这是宪法级**环境无关原则**（见 [[#^anc-exec-mode-invariants]]）的直接落地：body 不绑定任何具体宿主语言。`hop_` 前缀即"HopSpec 方言、非宿主语言"的命名忠实标记；未来可对称扩 `hop_ts`（同一中立子集的 TS 风格皮肤）。
-- **能力边界 = 白名单**：body 只能做四类事——①基础运算（算术 `+ - * / % // **`、字符串拼接与重复、比较 `== != < >`、布尔 `and/or/not`、成员测试 `in`/`not in`、字段取 `obj.field`、下标含负数、切片 `seq[start:stop]`（端点可省可负，钳位宽容）、**字面量构造** `[1, x]`/`{"k": v}`（对象键=表达式,Python 同义——2026-08-20 作者定『与 python 一致』:`{"k": v}` 字面量键/`{key_var: v}` 变量键求值;裸名键即变量引用,未定义静态拦〔B4〕并指路两改法——原『键限字符串字面量』人为收紧废）、**f-string** `f"共{n}条"`）；②**白名单调用**（内置 pure 函数 ∪ 宿主 `ToolProvider` 注册的工具）；③赋值（局部变量与 `+→` 输出）；④无推理分支（`if`/`elif`/`else`）。调白名单外的任何东西 = 非法。白名单即能力边界，天然实现"无任意代码执行"。**白名单按步骤类型分级**：`ToolProvider` 工具可标 `requires_commit`（有不可逆副作用），此类工具 act body 调用即拒（COMMIT_REQUIRED）、仅 commit body 放行——act/commit 共用同一语言，探索提交分离由工具面分级落实。
+- **能力边界 = 白名单**：body 只能做四类事——①基础运算（算术 `+ - * / % // **`、字符串拼接与重复、比较 `== != < >`、布尔 `and/or/not`、成员测试 `in`/`not in`、字段取 `obj.field`、下标含负数、切片 `seq[start:stop]`（端点可省可负，钳位宽容）、**字面量构造** `[1, x]`/`{"k": v}`（对象键=表达式,Python 同义——2026-08-20 作者定『与 python 一致』:`{"k": v}` 字面量键/`{key_var: v}` 变量键求值;裸名键即变量引用,未定义静态拦〔B4〕并指路两改法——原『键限字符串字面量』人为收紧废）、**f-string** `f"共{n}条"`）；②**白名单调用**（内置 pure 函数 ∪ 宿主 `ToolProvider` 注册的工具）；③赋值（局部变量与 `+→` 输出）；④无推理分支（`if`/`elif`/`else`）。调白名单外的任何东西 = 非法。白名单即能力边界，天然实现"无任意代码执行"。**白名单按步骤类型分级**：`ToolProvider` 工具可标 `requires_commit`（有不可逆副作用），此类工具 act body 调用即拒（COMMIT_REQUIRED）、仅 commit body 放行——act/commit 共用同一语言，act 与 commit 的分界由工具面分级落实。
 - **内置 pure 函数全表**（零副作用纯计算，body 与 case 条件通用；**与 Python 同名同义**——代码面向 agent/程序员，Python 一致降心智负担，2026-08-10 作者定）：数值 `len` `min` `max` `round` `abs` `sum`｜文本 `lower` `upper` `strip` `split` `join` `replace` `startswith` `endswith`｜文本剥壳与解码 `strip_fence`（剥 LLM 产文本值外层的代码围栏壳与自标记键前缀，第二参 key 可选——给出时连剥 `key:` 首行前缀）`parse_json`（JSON 文本 → 结构值，解析失败按计算异常折本步失败，不静默；**入参已是结构值/数字/布尔/null 时原样返回**——幂等容错，2026-09-05 作者定"parse_json 应该需要有容错能力"：上游通道把文本提前解析成对象时 body 不因二次解析炸）｜序列 `sorted` `reversed` `range` `count`（**单参列表计数**——`count(xs)` 返回列表元素个数；字符串入参报"期望数组"，Python `str.count` 的双参子串计数形态引擎没有）｜聚合谓词 `any` `all`（接受列表；`any([])` 为 False、`all([])` 为 True——元素真值与引擎统一真值口径同源，空结构为假）｜结构 `keys` `values` `get`｜类型转换 `int` `float` `str` `bool`。**成员测试用 `in` / `not in` 运算符**（`x in items`，Python 惯用形——数组查元素/字符串查子串/对象查键）；**None 检测用 `x is None`（Python 惯用形）或 `x == None`**（同义——`is` 仅限 None 判定）；判空用裸真值或 `len(x) == 0`。可调用的名字分两类，按**有无副作用**划界：**pure 函数**（本表，零副作用）body 与 case 条件都可调；**工具**（文件读写、外部调用等，有副作用）只能在 act/commit body 里调——case 条件可能被反复求值，出现副作用就不安全，故条件里调工具是静态错误
 - **内置文件/目录工具组**（引擎默认提供，全部限沙箱 workspace 内、全部 `requires_commit=false`——**不可逆的分界是"是否出沙箱"，不是操作类型**：沙箱是探索区、整体可重建，箱内删写移都可重来；`requires_commit=true` 留给触及沙箱外生产资源的工具——宿主注册的，或引擎内置的不可逆工具通道〔第一例：钉钉通知 dingtalk_notify，2026-08-31〕）：读 `read`（全文,或带 `start_line`/`end_line` 取行号段——行号 1 起,end 越界截到文件尾;定向读盘取代整读,2026-09-05 作者定 todo/0070） `listdir` `exists` `search_file`（**单文件子串搜索**——`search_file(path, pattern)` 返回命中行清单带 1 起行号;纯子串不是正则,零命中返回空清单不报错;按关键词定位行号后配 read 行号段取段,2026-09-05 作者定同批）｜写 `write`（新建或覆盖）`create`（**排他新建**——目标已存在即失败，透传 OS 原子语义，多 worker 并发抢占/幂等哨兵文件用它）`append`（追加）`edit_file`（**局部精确替换**——`edit_file(path, old_text, new_text)`，old_text 在文件中恰匹配一处才替换；零匹配或多处匹配都响亮报错带计数，宁拒不猜。改大文件的几行用它，不整文件重写——2026-09-05 作者拍甲案：37KB 草稿改三处却 write 全文回写是实测最大输出浪费源）｜组织 `makedirs`（含中间层，幂等——即 Python `os.makedirs(exist_ok=True)` 语义）`move`（移动/改名，透传 rename 原子性）`remove`（删文件）。命名与 Python os/shutil 对齐（listdir/exists/makedirs/remove/move）。写侧按步骤权限分域（作者定 2026-08-28）：**act 与 check 的写域=work_zone 涂鸦区**——act 是探索段，它写的一切都是中间产物，中间产物归 work_zone（body 内 `work_zone_path(rel?)` 返回本实例独占工作区下的路径，无参返回根，禁 `..`；作者定 2026-08-10），越界写即拒（WORK_ZONE_ONLY），free 与否无关——free 只影响行为可预期性，不放大权限；**commit 的写域=整个 workspace**（`.hopstate/` 引擎状态区除外，work_zone 是该禁令的唯一豁免）——持久产物写盘是交付动作，归 commit 承载
 - **实例上下文内置**（非纯函数但非 IO——依赖实例环境、零副作用；条件里调用为静态错误）：`work_zone_path(rel?)`（见上）；**`now()`**（ISO 8601 当前时刻）与 **`today()`**（当前日期，YYYY-MM-DD）——时间戳供产物落款/日期计算（作者定 2026-08-12 纳入 hop_python，不走工具通道）。**重放确定性**：首次求值入本步 journal，重试/崩溃恢复重放取记录值不取新值——与工具结果重放同一通道同一哲学
@@ -329,17 +332,17 @@ repair_summary = fix_strategy.actions
 - **约束只管产出面,输入侧不拦**——Inputs 声明 `line(非空)` 合法但引擎不对传入参数做空判（输入是 caller 给的,把关归 caller 或用 ask 步向人要;约束的执行力落在"执行 LLM 的产出被打回重答"这一环,对已经给定的输入打回没有重答方）;
 - **列表元素形 `[line(非空)]`/`[line(nonempty)]` 同享约束**——元素逐个过非空核（双语同归一,与单值形一致）。
 
-**HopSchema**：HopSpec 的结构化声明语法——`字段名 → 值` 的条目式映射，凡"用一张结构声明数据形状或配置"处统一用它（使用处：Outputs 复合类型展开、HopType struct Fields、工具 output_schema、spec Config 段——Config 就是一个 HopSchema 字段，作者定 2026-08-13）。**逻辑形状=映射**（键唯一）；**表面体例随宿主**——spec 内条目用 `-` 分项（与 Inputs/Outputs 同款，全篇一种分项心智），配置文件内为纯 YAML 映射。**值位语义由使用处定**：类型声明三处（Outputs/Fields/output_schema）值位=本节类型词汇（原子 + `[原子]`，可收窄不可扩）；Config 处值位=配置值（模型引用等）。
+**HopSchema**：HopSpec 的结构化声明语法——`字段名 → 值` 的条目式映射，凡"用一张结构声明数据形状或配置"处统一用它（使用处：Outputs 复合类型展开、HopType struct Fields、工具 output_schema、spec Config 段——Config 是 HopSchema 的配置使用处，作者定 2026-08-13）。**逻辑形状=映射**（键唯一）；**表面体例随宿主**——spec 内条目用 `-` 分项（与 Inputs/Outputs 同款，全篇一种分项心智），配置文件内为纯 YAML 映射。**值位语义由使用处定**：类型声明三处（Outputs/Fields/output_schema）值位=本节类型词汇（原子 + `[原子]`，可收窄不可扩），名与类型之间写 `%`；Config 处值位=配置值（模型引用等），条目写 `键: 值`（见下段分隔符条款）。
 
-**名与值之间的分隔符：`%` 是正字，`:` 走向 deprecated**（作者定 2026-09-22）。原因是冒号与宿主 YAML 撞车：一条 `字段名: 类型` 同时是合法 YAML 的键值对和一条 HopSchema 条目，字符流里没有记号标明哪套文法在生效。这个二义性在"把 HopSchema 渲染给 LLM 看、再让 LLM 产出 YAML"的场景里会让模型把类型记号回抄进值位，而 YAML 解析器静默收下（实撞见 todo/0108：值位毒成字符串 `"bool = false"`，下游 Python 按非空字符串恒真计数，把合同评审结论整个翻转而没有任何机械信号报警）。落地分两批：**引擎的 prompt 渲染面已换 `%`**（`名 % 类型 = 值`，2026-09-22，见 [[HopSpec V3 Prompt组装参考#^anc-exec-inputs-render]]）；**spec 源文件面的类型声明此刻仍是 `:`**——那里冒号是解析器的切分字符，改动要文法双支持（`%` 为正字、`:` 仍收并告警）加存量迁移工具，另批排期。两面最终统一到 `%`。 ^anc-type-hopschema
+**名与值之间的分隔符：`%` 是正字，`:` 走向 deprecated**（作者定 2026-09-22）。原因是冒号与宿主 YAML 撞车：一条 `字段名: 类型` 同时是合法 YAML 的键值对和一条 HopSchema 条目，字符流里没有记号标明哪套文法在生效。这个二义性在"把 HopSchema 渲染给 LLM 看、再让 LLM 产出 YAML"的场景里会让模型把类型记号回抄进值位，而 YAML 解析器静默收下（实撞见 todo/0108：值位毒成字符串 `"bool = false"`，下游 Python 按非空字符串恒真计数，把合同评审结论整个翻转而没有任何机械信号报警）。两面都已换 `%`：**引擎的 prompt 渲染面**写 `名 % 类型 = 值`（2026-09-22，见 [[HopSpec V3 Prompt组装参考#^anc-exec-inputs-render]]）；**spec 源文件面**的类型声明（Inputs/Outputs、Types 的 Fields、Tools 签名的输出、步骤输出行）写 `名 % 类型`（2026-09-27）。`%` 两侧各一个半角空格是规范写法。**弃用时间表**（作者定 2026-09-27）：1.0 之前，源文件里的冒号写法照常加载，只出一条告警，告警给出改法和一键迁移命令 `hopjit schema-sep <spec 文件>`；从 1.0 起冒号写法报错、spec 拒绝加载。**分隔符只管"名字 分隔符 类型"这一种结构**：Config 条目是"配置键: 配置值"（值是配置值不是类型）、call 的参数映射是"形参: 实参"、Id 行与段头是标签——它们不是类型声明，照旧用冒号。 ^anc-type-hopschema
 
 **复合类型用 YAML 展开**（HopSchema 使用处之一）：结构在节点体中用 YAML 缩进 + `#` 注释展开：
 
 ```
   + → generation_ctx:  # LLM 生成所需的完整上下文
-    - task_desc: text  # 要实现什么：完整的任务目标
-    - constraints: [line]  # 不可违反的硬性约束
-    - io_schema: yaml  # 输入/输出数据结构
+    - task_desc % text  # 要实现什么：完整的任务目标
+    - constraints % [line]  # 不可违反的硬性约束
+    - io_schema % yaml  # 输入/输出数据结构
 ```
 
 **复用类型**：跨步骤复用的结构体在文档级 `Types:` 区域定义，首字母大写，步骤中直接引用：
@@ -347,12 +350,12 @@ repair_summary = fix_strategy.actions
 ```
 Types:
 - ChatMessage:  # 对话消息
-  - role: line  # 角色标识（system/user/assistant）
-  - content: text  # 消息正文
+  - role % line  # 角色标识（system/user/assistant）
+  - content % text  # 消息正文
 
 ## Steps
 1. [act] 收集对话历史
-  + → messages: [ChatMessage]  # 对话历史
+  + → messages % [ChatMessage]  # 对话历史
 ```
 
 仅单步骤使用的复合类型直接在节点体中 YAML 展开，不需要放入 `Types:`。
@@ -397,9 +400,9 @@ HopSpec 变量对标 **Python 函数级作用域**：**一份 spec 的一次执�
 
 ```
 2. [loop max=20] 逐条审查
-  + → findings: yaml = []   # 累加器：容器进入 init 一次为空列表，跨迭代累积
+  + → findings % yaml = []   # 累加器：容器进入 init 一次为空列表，跨迭代累积
   2.1. [reason] 取下一片段判严重度
-    + → severity: line      # 每轮被本步重新产出，自然覆盖上轮值（无需显式重置）
+    + → severity % line      # 每轮被本步重新产出，自然覆盖上轮值（无需显式重置）
   2.2. [act] 追加本轮发现
     - ← findings, severity  # 读累加器 findings + 本轮 severity
     + → findings            # 更新累加器（更新模式，非重名）
@@ -488,16 +491,16 @@ Constraints:
 - 每轮采集覆盖所有已注册渠道
 - @knowledge 舆情风险评级标准
 Inputs:
-- target_domain: line  # 目标领域
+- target_domain % line  # 目标领域
 Outputs:
-- alert_report: markdown  # 预警报告
-- actions: [line]  # 应对行动项
+- alert_report % markdown  # 预警报告
+- actions % [line]  # 应对行动项
 
 ## Steps
 1. [subtask] 初始化监控配置
   - ← target_domain
-  + → channels: [line]  # 监控渠道列表
-  + → keywords: [line]  # 监控关键词
+  + → channels % [line]  # 监控渠道列表
+  + → keywords % [line]  # 监控关键词
   > 根据目标领域确定监控渠道和关键词
   1.1. [reason] 确定监控渠道
     + → channels
@@ -505,12 +508,12 @@ Outputs:
     + → keywords
 2. [loop max=5] 每轮监控直到风险降至低级或满 5 轮
   - ← channels, keywords
-  + → risk_level: enum(low, medium, high)  # 当前风险等级
-  + → trend: line  # 风险变化趋势
+  + → risk_level % enum(low, medium, high)  # 当前风险等级
+  + → trend % line  # 风险变化趋势
   > 循环监控各渠道舆情，每轮采集+分析，直到风险降至低级或满 5 轮
   2.1. [subtask] 并行采集各渠道数据   # 容器边界=收齐点：2.2 消费前两路必已收好
-    + → social_data: yaml  # 社交媒体采集数据
-    + → news_data: yaml  # 新闻媒体采集数据
+    + → social_data % yaml  # 社交媒体采集数据
+    + → news_data % yaml  # 新闻媒体采集数据
     2.1.1. [subtask parallel] 采集社交媒体舆情   # parallel：派出去跑
       + → social_data
       2.1.1.1. [act] 调用社交渠道接口
@@ -528,23 +531,23 @@ Outputs:
     > 综合各渠道数据，评估当前舆情风险等级和趋势
 3. [branch] 按风险等级决定响应策略
   - ← risk_level
-  + → alert_report: markdown  # 预警报告（branch 聚合输出：统一接口名）
-  + → actions: [line]  # 应对行动项
+  + → alert_report % markdown  # 预警报告（branch 聚合输出：统一接口名）
+  + → actions % [line]  # 应对行动项
   3.1. [case(risk_level == high)] 高风险
-    + → alert_report: markdown  # 同名填充（同一个东西）
-    + → actions: [line]
+    + → alert_report % markdown  # 同名填充（同一个东西）
+    + → actions % [line]
     3.1.1. [reason] 生成详细预警与应急方案
       - ← risk_level, trend
       + → alert_report, actions
   3.2. [case(else)] 低/中风险
-    + → alert_report: markdown  # 同名填充（同一个东西）
-    + → actions: [line]
+    + → alert_report % markdown  # 同名填充（同一个东西）
+    + → actions % [line]
     3.2.1. [reason] 生成常规监控小结
       - ← risk_level, trend
       + → alert_report, actions
 4. [reason] 复核预警报告完整性        ← 当前执行到这里
   - ← alert_report, actions
-  + → review_note: line  # 复核意见
+  + → review_note % line  # 复核意见
   > 检查预警报告是否覆盖所有识别的风险点
 5. [exit] 交付预警报告和应对方案
   + → alert_report, actions
@@ -609,7 +612,7 @@ actions:  # 应对行动项（来自 case 3.1）
 > 检查预警报告是否覆盖所有识别的风险点
 
 ═══ L6. 输出约束 ═══
-+ → review_note: line  # 复核意见
++ → review_note % line  # 复核意见
 ```
 
 注：L3 中 branch（步骤 3）折叠为单行 + **命中标记 ◀ 命中 3.1** + 展开 branch 的聚合输出（`alert_report`/`actions`，变量名附 `#` 说明防望词生义）——命中 case 内部步骤（3.1.1）不展开、未命中 case（3.2）不显示。聚合输出由 **branch 声明**（统一接口名）、命中 **case 同名填充**（同一个东西）、branch 透传到外层，故当前步骤 4 能直接 `← alert_report, actions`。当前步骤 4 在 L3 中**仅作位置锚点**（标 ◀ 当前步骤），其 `←/>/+→` 契约不在 L3 重复——交由 L4/L5/L6 承载；未来步骤 5 由 L1 骨架承载（三层不重叠，见 [[#^anc-exec-l1-skeleton]] / [[#^anc-exec-l3-branch]]）。
@@ -629,13 +632,13 @@ spec 作者通过节点体（`>`）自然表达 prompt 意图，HopJIT 负责组
 ```
 2. [reason] 分析舆情风险
   - ← social_data, news_data
-  + → risk_level: enum(low, medium, high)
+  + → risk_level % enum(low, medium, high)
   > @model deepseek/deepseek-v4-pro
   > 综合各渠道数据，评估当前舆情风险等级和趋势
 3. [check final] 验证风险评级合理性
   - ← risk_level, social_data
-  + → rating_ok: bool   # 判定槽：评级是否合理
-  + → rating_note: text # 说明槽：不合理时的具体偏差（通过时不被查看）
+  + → rating_ok % bool   # 判定槽：评级是否合理
+  + → rating_note % text # 说明槽：不合理时的具体偏差（通过时不被查看）
   > @model anthropic/claude-sonnet-4-6
   > 独立核验风险评级是否与原始数据一致（交叉验证）
 ```
@@ -646,7 +649,7 @@ Spec 级模型配置在 `Config:` 段声明，两种形态：
 
 ```
 Config:
-- models:                               # Config 段就是一个 HopSchema 字段（^anc-type-hopschema）——内外层条目同用 - 分项
+- models:                               # Config 段是 HopSchema 的配置使用处（^anc-type-hopschema）——内外层条目同用 - 分项,条目写 键: 值
   - act: deepseek/deepseek-v4-flash     # 执行类（含 commit;另写 commit: 键可分档）
   - reason: deepseek/deepseek-v4-pro
   - check: bailian/qwen3.7-plus         # 核验换一家交叉验证
@@ -654,7 +657,7 @@ Config:
 ```
 
 - **单默认 `- model:`**——全类别同值的简写。
-- **Config 段就是一个 HopSchema 字段**（[[#^anc-type-hopschema]]）：条目内外层都用 `-` 分项（与 Inputs/Outputs 复合展开同款——spec 全篇一种分项心智），引擎递归归一为配置映射。
+- **Config 段是 HopSchema 的配置使用处**（[[#^anc-type-hopschema]]）：条目内外层都用 `-` 分项（与 Inputs/Outputs 复合展开同款——spec 全篇一种分项心智），引擎递归归一为配置映射。条目照旧写 `键: 值`、不换 `%`：Config 条目是"配置键: 配置值"，值是配置值不是类型，不是"名字 分隔符 类型"结构，`%` 管不到它。
 
 **`@thinking` 标注**——步骤级思考开关（2026-09-20 新增,0100 批） ^anc-exec-thinking-annotation
 
@@ -833,9 +836,9 @@ kv           ::= key "=" value                    -- 如 retry=3、max=20
 1. [reason] 解读质量画像，制定修复策略
   - ← profile
   + → fix_plan:  # 修复方案
-    - strategy: text  # 整体修复策略
-    - missing_handling: [line]  # 各列缺失值处理方式
-    - outlier_handling: [line]  # 异常值处理方式
+    - strategy % text  # 整体修复策略
+    - missing_handling % [line]  # 各列缺失值处理方式
+    - outlier_handling % [line]  # 异常值处理方式
   > 权衡数据保留率与质量，选择合适的处理方案
 ```
 
@@ -854,19 +857,19 @@ kv           ::= key "=" value                    -- 如 retry=3、max=20
 
 ```
   - ← threshold
-  + → is_valid: bool  # 是否通过验证
-  + → errors: [line]  # 错误信息列表
+  + → is_valid % bool  # 是否通过验证
+  + → errors % [line]  # 错误信息列表
 ```
 
 **复合类型**用 YAML 缩进展开：
 
 ```
   + → report:  # 精算分析报告
-    - summary: text  # 执行摘要
+    - summary % text  # 执行摘要
     - metrics:  # 模型评估指标
-      - gini: float  # 基尼系数
-      - auc: float  # ROC 曲线下面积
-    - recommendations: [line]  # 业务建议列表
+      - gini % float  # 基尼系数
+      - auc % float  # ROC 曲线下面积
+    - recommendations % [line]  # 业务建议列表
 ```
 
 ### 树结构
@@ -898,19 +901,19 @@ Id: demo
 
 Goal: 一句话目标
 Inputs:
-- items: [text]  # 待处理清单
+- items % [text]  # 待处理清单
 
 ## Steps
 
 ### 1. [loop for-each item in items, collect result into processed] 逐个处理每个待办项
-+ → processed: [text]  # 各项处理结果（collect 列表端）
++ → processed % [text]  # 各项处理结果（collect 列表端）
 
 这批 items 来自上游清洗阶段，可能混入已处理项。本循环对每项独立
 执行「起草 → 校验 → 审批 → 落库」，任一项失败不阻断其余项。
 
 #### 1.1. [reason] 为当前项起草处理方案
 - ← item           # 当前遍历到的单个待办项
-+ → result: text   # 本项处理结果（collect 单项端）
++ → result % text   # 本项处理结果（collect 单项端）
 
 依据 item 类型选择处理模板，输出可供后续校验的结构化草案。
 ```
@@ -962,12 +965,12 @@ Inputs:
 Goal: 评估输入数据集的质量问题，自动修复并生成质量报告
 
 Inputs:
-- raw_data: [DataRecord]  # 原始数据集
-- quality_threshold: float  # 质量达标阈值
+- raw_data % [DataRecord]  # 原始数据集
+- quality_threshold % float  # 质量达标阈值
 
 Outputs:
-- clean_data: [DataRecord]  # 修复后数据
-- quality_report: markdown  # 质量报告
+- clean_data % [DataRecord]  # 修复后数据
+- quality_report % markdown  # 质量报告
 
 Constraints:
 - 修复后数据行数保留率 ≥ 90%
@@ -975,20 +978,20 @@ Constraints:
 
 Types:
 - DataRecord:  # 数据记录
-  - id: line  # 记录标识
-  - fields: yaml  # 业务字段
-  - source: line  # 数据来源
+  - id % line  # 记录标识
+  - fields % yaml  # 业务字段
+  - source % line  # 数据来源
 
 ## Steps
 1. [act] 统计数据质量指标（缺失率、异常分布、跨字段一致性）
   - ← raw_data
   + → profile:  # 数据质量画像
-    - missing_rates: [float]  # 各列缺失率
-    - anomaly_count: int  # 异常记录数
-    - issues: [line]  # 质量问题列表
+    - missing_rates % [float]  # 各列缺失率
+    - anomaly_count % int  # 异常记录数
+    - issues % [line]  # 质量问题列表
 2. [reason] 解读质量画像，制定修复策略
   - ← profile
-  + → fix_strategy: text  # 修复策略
+  + → fix_strategy % text  # 修复策略
   > 权衡数据保留率与质量，选择合适的缺失值处理和异常值处理方案
 3. [subtask retry=3 adaptive] 执行修复并验证质量达标
   + → clean_data
@@ -997,8 +1000,8 @@ Types:
     + → clean_data
   3.2. [check final] 验证修复后质量 ≥ threshold 且行数保留率 ≥ 90%
     - ← clean_data, quality_threshold
-    + → quality_ok: bool  # 判定槽：是否达标
-    + → quality_note: text # 说明槽：未达标时缺口（通过时不被查看）
+    + → quality_ok % bool  # 判定槽：是否达标
+    + → quality_note % text # 说明槽：未达标时缺口（通过时不被查看）
 4. [act] 生成质量报告（含修复前后对比）
   - ← profile, clean_data, raw_data
   + → quality_report
@@ -1011,12 +1014,12 @@ Types:
 Goal: 监控多渠道舆情，评估风险等级，生成预警报告和应对方案
 
 Inputs:
-- channels: [line]  # 监控渠道列表
-- keywords: [line]  # 监控关键词
+- channels % [line]  # 监控渠道列表
+- keywords % [line]  # 监控关键词
 
 Outputs:
-- alert_report: markdown  # 预警报告
-- actions: [line]  # 应对行动项
+- alert_report % markdown  # 预警报告
+- actions % [line]  # 应对行动项
 
 Constraints:
 - 最多 5 轮监控
@@ -1025,14 +1028,14 @@ Constraints:
 ## Steps
 1. [act] 初始化监控配置和数据采集接口
   - ← channels, keywords
-  + → config: yaml  # 采集配置
+  + → config % yaml  # 采集配置
 2. [loop max=5] 每轮监控直到风险降至低级或满 5 轮
-  + → risk_level: line  # 最终风险等级
-  + → trend: [line] = []  # 各轮风险变化（累加器：容器进入 init 一次）
-  + → analysis: text  # 最新舆情分析
+  + → risk_level % line  # 最终风险等级
+  + → trend % [line] = []  # 各轮风险变化（累加器：容器进入 init 一次）
+  + → analysis % text  # 最新舆情分析
   2.1. [subtask] 并行采集各渠道数据   # 容器边界=收齐点，2.2 消费前必已收好
-    + → social_data: text  # 社交媒体数据
-    + → news_data: text  # 新闻媒体数据
+    + → social_data % text  # 社交媒体数据
+    + → news_data % text  # 新闻媒体数据
     2.1.1. [subtask parallel] 采集社交媒体舆情   # 派出去跑
       + → social_data
       2.1.1.1. [act] 调用社交渠道接口
@@ -1067,8 +1070,8 @@ Constraints:
     + → alert_report
   3.3. [check final] 验证报告覆盖所有识别的风险点
     - ← alert_report, analysis
-    + → report_ok: bool   # 判定槽：是否完整覆盖
-    + → report_gap: text  # 说明槽：遗漏的风险点（通过时不被查看）
+    + → report_ok % bool   # 判定槽：是否完整覆盖
+    + → report_gap % text  # 说明槽：遗漏的风险点（通过时不被查看）
 4. [exit] 交付预警报告和应对方案
   + → alert_report, actions
 ```

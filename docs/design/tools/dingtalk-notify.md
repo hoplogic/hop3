@@ -3,7 +3,7 @@
 	source: [[../tools]]
 	source_id: hopjit-tools
 	type: extend
-	last_sync: 2026-08-31T00:10+0800
+	last_sync: 2026-09-27T20:38+0800
 	note: 钉钉通知内置通道模块设计——todo/0052 通知半边正式形态（2026-08-30 作者三连纠收口"tools 不再直接通过 hopjit cli 外露"后按工具模块重做;前身 hopjit notify CLI 命令当日立当日撤,史见 [[../hop-cli#^anc-cli-notify]] 退役注记）。
 %%
 
@@ -44,15 +44,15 @@ trait: DingtalkNotify
 struct: NotifyArgs
   Id: dingtalk-notify-args
   Fields:
-    - text: text        # 消息正文（title 在场时作 markdown 正文,支持 markdown 文法）
-    - title: line       # 可选。给了走 markdown 消息（手机通知栏显示标题）,缺席纯 text 消息
-    - at_mobiles: [line] # 可选。@人手机号列表（消息在对方会话里标红——等人停点的提档手段）
+    - text % text        # 消息正文（title 在场时作 markdown 正文,支持 markdown 文法）
+    - title % line       # 可选。给了走 markdown 消息（手机通知栏显示标题）,缺席纯 text 消息
+    - at_mobiles % [line] # 可选。@人手机号列表（消息在对方会话里标红——等人停点的提档手段）
 
 struct: NotifyResult    # ToolResult.result 的 JSON 内容（content_type: json）
   Id: dingtalk-notify-result
   Fields:
-    - sent: bool        # true=钉钉受理（errcode=0）
-    - msgtype: line     # 实发类型 text | markdown
+    - sent % bool        # true=钉钉受理（errcode=0）
+    - msgtype % line     # 实发类型 text | markdown
 ```
 
 ## 关键逻辑【契约】 ^anc-tool-dingtalk-sop

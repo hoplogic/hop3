@@ -5,7 +5,7 @@
 //   审过才执行;题面把沙箱白名单全列给模型(测的是写代码的能力,不是猜白名单的能力)。
 // SQL 题:一个取数需求+表结构,模型写一条 SQLite 查询。每份测试数据建一个临时库(建表+插数),以只读方式打开后
 //   执行模型的查询,结果集逐行逐列与期望比对(顺序敏感,列名不比)。SQLite 用 Node 自带的 node:sqlite。
-// 用法: node model-gearbox/probes/run-code-generation.mjs --service <service_id> [--n 6] [--heal 2] [--task <id>[,<id>…]] [--out <dir>]
+// 用法: node model-gearbox/probes/run-code-generation.mjs --service <service_id> [--n 6] [--heal 2] [--task <id>[,<id>…]] [--thinking on|off] [--max-tokens 32768] [--out <dir>]
 // 测法: 每题 n 发(缺省 6),每发独立会话:
 //   第 1 轮=一次写对率的样本;若沙箱拒绝或公开样例判错,把拒绝报文/公开样例实跑结果反馈给模型再写,
 //   最多再给 heal 轮(缺省 2)——最后一轮的脚本记为自愈后结果。
@@ -26,10 +26,11 @@ const ROOT = join(HERE, 'code-generation');
 const args = process.argv.slice(2);
 const argOf = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
 const SERVICE = argOf('--service');
+const THINKING = argOf('--thinking', 'default');   // on=显式开思考(对照臂,thinking budget=max_tokens/2 与引擎装配同式;产物目录缺省加 -thinking 后缀);off=显式关思考(给缺省开思考的端点量关档,目录加 -nothinking 后缀);default=端点缺省
 const N = parseInt(argOf('--n', '6'), 10);
 const HEAL = parseInt(argOf('--heal', '2'), 10);
 const ONLY = argOf('--task');
-const OUT = argOf('--out', join(ROOT, `run-${SERVICE}-${new Date().toISOString().slice(0, 10)}`));
+const OUT = argOf('--out', join(ROOT, `run-${SERVICE}${THINKING === 'on' ? '-thinking' : THINKING === 'off' ? '-nothinking' : ''}-${new Date().toISOString().slice(0, 10)}`));
 const SELFCHECK = args.includes('--selfcheck');
 // 输出上限 32768:首跑 deepseek 在 16384 下出过"思考烧光预算、正文为空"的截断——截断是预算问题不是写码能力,
 // 上限放宽减少这种混入,残余截断在逐轮记录里单独记为 truncated,不与"没交代码"混记
@@ -111,9 +112,10 @@ async function call(messages) {
   else headers['x-api-key'] = KEY;
   const r = await fetch(`${provider.base_url}/v1/messages`, {
     method: 'POST', headers,
-    body: JSON.stringify({ model: provider.model, max_tokens: MAX_TOKENS, messages }),
+    body: JSON.stringify({ model: provider.model, max_tokens: MAX_TOKENS, ...(THINKING === 'on' ? { thinking: { type: 'enabled', budget_tokens: Math.floor(MAX_TOKENS / 2) } } : THINKING === 'off' ? { thinking: { type: 'disabled' } } : {}), messages }),
   });
   const body = await r.json();
+  if (!r.ok) throw new Error(`端点报错 HTTP ${r.status}——这是环境故障(欠费/限流/服务端错),不是能力读数,探针中止不计分: ${JSON.stringify(body).slice(0, 300)}`);
   const text = (body.content ?? []).filter(b => b.type === 'text').map(b => b.text).join('');
   return { text, model: body.model ?? '(响应体缺 model 字段)', stop: body.stop_reason, error: body.error?.message };
 }
@@ -315,7 +317,7 @@ for (const task of TASKS) {
 
 const summary = {
   service: SERVICE, model_from_response: [...modelSeen],
-  date: new Date().toISOString().slice(0, 10),
+  date: new Date().toISOString().slice(0, 10), thinking: THINKING, max_tokens: MAX_TOKENS,
   维度: `G6 代码生成——Python 档(规范条款→校验脚本,Python 语法沙箱内执行,判分=隐藏测试文件退出码全对)与 SQL 档(取数需求→SQLite 查询,判分=隐藏测试数据上结果集全等);每题 n=${N},自愈回路最多 ${HEAL} 轮只反馈公开样例与沙箱/执行报文`,
   指标说明: '一次写对=第 1 轮的解在全部隐藏测试上全对(Python 退出码全对,SQL 结果集全等);首轮崩溃在 SQL 题=查询执行报错;自愈后通过=回路结束时最后一版脚本全对;公开过隐藏挂=模型看得见的样例都过了但隐藏测试有挂(自验通过的校验在真实文件上失效)',
   tasks: perTask,

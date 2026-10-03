@@ -19,6 +19,7 @@ export enum ErrorCode { // @a: anc-error-error-code
   COMMIT_REQUIRED = 'COMMIT_REQUIRED',
   STEP_TIMEOUT = 'STEP_TIMEOUT',
   CORRUPT_STATE_FILE = 'CORRUPT_STATE_FILE', // 状态文件损坏/版本不符——语义收纯:实例目录在而文件缺/坏才是它,目录不存在归 INSTANCE_NOT_FOUND // @a: anc-exec-parallel-join-preconditions
+  STATE_STALE = 'STATE_STALE', // 写 state.json 前发现盘上写入序号比本进程内存里的大——另一个进程推进过,本进程的账过时,拒绝覆盖 // @a: anc-exec-state-seq-guard
   INSTANCE_NOT_FOUND = 'INSTANCE_NOT_FOUND', // 显式 --instance 的实例目录不存在（典型=实例号手抄错,报文列真实实例指路——契约 hop-cli ^anc-cli-instance-resolve）// @a: anc-cli-instance-resolve
 
   REPLAN_LIMIT_EXCEEDED = 'REPLAN_LIMIT_EXCEEDED',

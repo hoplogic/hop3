@@ -6,11 +6,11 @@ Id: data-quality
 Goal: 评估输入数据集的质量问题，自动修复并生成质量报告
 
 ## Inputs
-- raw_data: yaml  # 原始数据集（JSON 数组）。演示数据在同目录 demo-data.json（12 条：含缺失/离群/跨字段矛盾）——首跑直接读它传入，不要现场编造数据
-- quality_threshold: float  # 质量达标阈值（0-1）。演示跑用 0.8
+- raw_data % yaml  # 原始数据集（JSON 数组）。演示数据在同目录 demo-data.json（12 条：含缺失/离群/跨字段矛盾）——首跑直接读它传入，不要现场编造数据
+- quality_threshold % float  # 质量达标阈值（0-1）。演示跑用 0.8
 
 ## Outputs
-- quality_report: markdown  # 质量报告
+- quality_report % markdown  # 质量报告
 
 ## Constraints
 - 修复后数据行数保留率 ≥ 90%
@@ -18,11 +18,11 @@ Goal: 评估输入数据集的质量问题，自动修复并生成质量报告
 
 ## Types
 - DataRecord:  # 与 demo-data.json 及 3.2 判定公式同一形状（扁平五字段）
-  - id: line  # 记录标识
-  - amount: float  # 金额
-  - qty: int  # 数量
-  - unit_price: float  # 单价
-  - region: line  # 地区
+  - id % line  # 记录标识
+  - amount % float  # 金额
+  - qty % int  # 数量
+  - unit_price % float  # 单价
+  - region % line  # 地区
 
 ## Steps
 1. [act] 统计数据质量指标（缺失率、异常分布、跨字段一致性）
@@ -31,7 +31,7 @@ Goal: 评估输入数据集的质量问题，自动修复并生成质量报告
   - 工具: count_outliers  # 离群值统计
   - 工具: count_rule_violations  # 跨字段规则违例统计
   - 工具: build_profile  # 汇总质量画像
-  + → profile: yaml  # 数据质量画像
+  + → profile % yaml  # 数据质量画像
   > 无推理计算：对 raw_data 逐字段统计（缺失率/Z-score异常/跨字段一致性），纯统计不做语义判断
   > ```hop_python
   > total = len(raw_data)
@@ -43,17 +43,17 @@ Goal: 评估输入数据集的质量问题，自动修复并生成质量报告
 
 2. [reason] 解读质量画像，制定修复策略
   - ← profile
-  + → fix_strategy: text  # 修复策略
+  + → fix_strategy % text  # 修复策略
   > 权衡数据保留率与质量，选择合适的缺失值处理和异常值处理方案。
   > 策略应具体到每个问题字段的处理方式。
 
 3. [subtask retry=2 adaptive] 执行修复并验证质量达标
-  + → repair_summary: text  # 修复摘要
-  + → quality_note: text  # 质量分与验证说明
+  + → repair_summary % text  # 修复摘要
+  + → quality_note % text  # 质量分与验证说明
   3.1. [act free] 按策略修复数据
     - ← raw_data, fix_strategy
-    + → clean_data: yaml  # 修复后数据
-    + → repair_summary: text  # 修复摘要（subtask 聚合此输出）
+    + → clean_data % yaml  # 修复后数据
+    + → repair_summary % text  # 修复摘要（subtask 聚合此输出）
     > 严格按 fix_strategy 已定的每字段处理方式施修（按散文策略施修需要理解策略文本，故 free）：
     > - 按策略填充缺失值（策略已指定填充值/方法）
     > - 按策略处理异常值（策略已指定阈值/动作）
@@ -62,8 +62,8 @@ Goal: 评估输入数据集的质量问题，自动修复并生成质量报告
     > 输入规模注：本演示数据 12 条，逐条施修可行；大数据集须先把策略结构化再脚本化，不走本形态。
   3.2. [check final] 验证修复后质量 ≥ threshold 且行数保留率 ≥ 90%
     - ← raw_data, clean_data, quality_threshold
-    + → quality_ok: bool  # 判定槽：是否达标
-    + → quality_note: text  # 固定格式的质量分、评分明细与未达标缺口
+    + → quality_ok % bool  # 判定槽：是否达标
+    + → quality_note % text  # 固定格式的质量分、评分明细与未达标缺口
     > 固定公式判定由下方 body 引擎直执（零 LLM 手算）：completeness=非 null 单元格比例（按演示数据五字段 id/amount/qty/unit_price/region 逐字段计）、outlier_free=1-离群值占比（各数值字段 |值-均值|>3σ 计离群，标准差为 0 的字段离群数为 0）、consistency=三字段完整记录中 amount=qty*unit_price 的比例（无可评估记录时为 0）、quality_score=三项均值、row_retention=行保留率。仅当 quality_score ≥ quality_threshold 且 row_retention ≥ 0.9 时 quality_ok=true，quality_note 按固定格式拼好。
     > ```hop_python
     > n = len(clean_data)
@@ -96,7 +96,7 @@ Goal: 评估输入数据集的质量问题，自动修复并生成质量报告
 
 4. [reason] 生成质量报告
   - ← profile, fix_strategy, repair_summary, quality_note
-  + → quality_report: markdown  # 最终质量报告
+  + → quality_report % markdown  # 最终质量报告
   > 生成完整质量报告，包含：
   > - 原始数据质量画像摘要
   > - 修复策略说明

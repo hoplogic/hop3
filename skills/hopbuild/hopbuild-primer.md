@@ -33,16 +33,16 @@ Constraints:                     # 可选,硬约束（常映射为 check final�
 - <约束>
 Types:                           # 可选,复用复合类型（PascalCase）
 - <TypeName>:  # 一句话说明
-  - <field>: <type>  # 一句话说明
+  - <field> % <type>  # 一句话说明
 Inputs:                          # 可选,任务的业务输入
-- <name>: <type>  # 一句话说明
+- <name> % <type>  # 一句话说明
 Outputs:                         # 可选,交付物契约（exit 必须全部交付）
-- <name>: <type>  # 一句话说明
+- <name> % <type>  # 一句话说明
 
 ## Steps
 N. [Step类型 修饰] 一句话任务描述
   - ← var                        # 输入:只写变量名（类型在源头已声明）
-  + → var: type  # 一句话说明    # 输出:首现必标类型+说明
+  + → var % type  # 一句话说明    # 输出:首现必标类型+说明
   > 执行说明（角色视角/方法论/约束;可挂 [[知识文件#章节]] doc-ref 注入）
 ```
 
@@ -68,11 +68,11 @@ N. [Step类型 修饰] 一句话任务描述
 ```markdown
 Types:
 - TicketFinding:  # 单个工单的审查结论
-  - ticket_id: line  # 工单编号
-  - severity: enum(high, medium, low)  # 严重度
+  - ticket_id % line  # 工单编号
+  - severity % enum(high, medium, low)  # 严重度
 ## Steps
 1. [reason] 审查工单
-  + → finding: TicketFinding  # 本工单的审查结论
+  + → finding % TicketFinding  # 本工单的审查结论
 2. [branch] 按严重度分流
   2.1. [case(finding.severity == high)] 高危路径
   …
@@ -148,34 +148,34 @@ Types:
 
 ```markdown
 3. [loop for-each doc in doc_list, collect review into reviews] 逐文档并发审查
-  + → reviews: [yaml]  # 全部审查结论（引擎收齐）
+  + → reviews % [yaml]  # 全部审查结论（引擎收齐）
   3.1. [subtask parallel] 审查一份文档
     - ← doc
-    + → review: yaml  # 本文档的审查结论
+    + → review % yaml  # 本文档的审查结论
     3.1.1. [act free] 读取并审查 doc
       - ← doc
-      + → review: yaml
+      + → review % yaml
 ```
 
 **形态二·兄弟并发**（互不相同的几段活同时干——不硬塞进 for-each）。各自具名输出,父容器结束前收齐：
 
 ```markdown
 2. [subtask] 并发取三路材料
-  + → merged: yaml  # 三路汇合结果
+  + → merged % yaml  # 三路汇合结果
   2.1. [subtask parallel] 抓行业报告
-    + → industry_notes: yaml  # 行业面材料
+    + → industry_notes % yaml  # 行业面材料
   2.2. [subtask parallel] 抓财务数据
-    + → finance_notes: yaml  # 财务面材料
+    + → finance_notes % yaml  # 财务面材料
   2.3. [reason] 汇合三路（本步不标 parallel——要等前两路收齐才能做,引擎在容器边界收齐后执行）
     - ← industry_notes, finance_notes
-    + → merged: yaml
+    + → merged % yaml
 ```
 
 **形态三·call 并发**（把独立子 spec 作为子实例并发跑——原文"发 N 个 agent"的正确翻法）。call 步照常写输出收取行,收取名用 collect 点名的单项变量（下例 verdict）——引擎逐轮把它聚进 collect 列表,不需要额外的聚合步骤：
 
 ```markdown
 4. [loop for-each角色 in reviewer_roles, collect verdict into verdicts] 逐角色并发评审
-  + → verdicts: [yaml]  # 各角色判词
+  + → verdicts % [yaml]  # 各角色判词
   4.1. [call reviewer-worker(role: 角色, material: draft) parallel] 派一个评审子实例
     + → verdict: report  # 收取子 spec 的 report 输出为本轮 verdict
 ```
@@ -196,11 +196,11 @@ Types:
 **循环与并发**
 - **V8** for-each 的 listVar 声明必须是列表型 `[T]`。
 - **V10** collect 的单项名须有 child 产出（T 型）、列表名须循环头声明（[T] 且元素型匹配）。
-- **collect 子句里不写类型**：`collect result into results` 后面**不带** `: [yaml]`——类型声明归循环头的 `+ → results: [yaml]` 行（❌ `collect result into results: [yaml]` 会把 `: [yaml]` 切成未知属性 parse error）。
+- **collect 子句里不写类型**：`collect result into results` 后面**不带** `: [yaml]`——类型声明归循环头的 `+ → results % [yaml]` 行（❌ `collect result into results: [yaml]` 会把 `: [yaml]` 切成未知属性 parse error）。
 - **S13** parallel 标注步骤禁带 `= 初值` 的累加器输出。
 
 **输出与类型**
-- **B8** `yaml`/`[T]` 声明的输出禁在 body 里赋标量字面量（`cur = ""` 对 `+ → cur: yaml` 是 error）——结构化声明的空态写 `{}` 或 `[]`。
+- **B8** `yaml`/`[T]` 声明的输出禁在 body 里赋标量字面量（`cur = ""` 对 `+ → cur % yaml` 是 error）——结构化声明的空态写 `{}` 或 `[]`。
 
 **结构与容器**
 - **S5** 容器步骤（subtask/loop/branch/case）必须至少有一个子步骤——动作不能写在容器行自身,下沉为子步。
@@ -237,11 +237,11 @@ Types:
 5. [subtask retry=2] 起草并验收摘要
   5.1. [act free] 写摘要初稿
     - ← source_text
-    + → summary: markdown  # 摘要
+    + → summary % markdown  # 摘要
   5.2. [check final] 验收:三个论点全覆盖且每点有原文行号
     - ← summary, source_text
-    + → ok: bool  # 判定
-    + → note: text  # 失败说明——写具体!这是重跑工单的正文
+    + → ok % bool  # 判定
+    + → note % text  # 失败说明——写具体!这是重跑工单的正文
 ```
 
 执行期 5.2 判 false 且 note 写"论点二'成本反转'未覆盖;论点三有覆盖但缺原文行号"→ 引擎自动重跑 5.1,那一轮 5.1 的执行 LLM 会在上下文尾部看到修正指令区块：被 5.2 打回、上一轮的 summary 全文（基准）、上面那句意见原文、"逐条落实"的行动框架——它据此定向补论点二、给论点三加行号,而不是从零重写。**你全程没为这条通道写任何变量或步骤**——只把 5.2 的 note 写具体了。
@@ -254,17 +254,17 @@ Types:
 
 ```markdown
 3. [subtask retry=2] 诊断并修复
-  + → resolution: yaml  # 处置结论
+  + → resolution % yaml  # 处置结论
   3.1. [act free] 诊断
-    + → findings: yaml
+    + → findings % yaml
   3.2. [check final] 验收:根因确认且修复通过
     - ← findings
-    + → ok: bool  # 判定
-    + → note: text  # 缺口
+    + → ok % bool  # 判定
+    + → note % text  # 缺口
   3.9. [on fail] 三轮不收敛的兜底
     3.9.1. [act free] 把已收集的证据打包成诊断包,引用此前失败情况写明卡在哪
       - ← findings
-      + → resolution: yaml  # 降级交付:诊断包路径与未决原因
+      + → resolution % yaml  # 降级交付:诊断包路径与未决原因
 ```
 
 要点三个：容器行写 `[on fail]`（写成裸 `on fail:` 行会被判不合本段文法忽略掉，连锁报错）；块内步骤照常编号、照常 `+ →` 给容器供值（降级交付物走这里）；它只在所属容器 retry 耗尽时激活，正常路径零参与。
@@ -356,11 +356,11 @@ Types:
 **生成模板**：
 ```markdown
 5. [loop for-each item in items, collect result into results] 逐项处理（体内步骤标 parallel 即并发）
-  + → results: [text]            # collect 子句的列表端（容器头声明类型）
+  + → results % [text]            # collect 子句的列表端（容器头声明类型）
 
   5.1. [subtask retry=2] 处理单项
     - ← item
-    + → result: text             # collect 子句的单项端（每轮产出，引擎轮末收进列表）
+    + → result % text             # collect 子句的单项端（每轮产出，引擎轮末收进列表）
     > 对单个 item 做处理…
 ```
 关键：**取放成镜像**——`for-each <单项> in <列表>` 取的一端、`collect <单项> into <列表>` 放的一端，单项与列表是**两个名字两个变量**；**循环体只写一个 child**（引擎按列表驱动）；`item` 在 child 及后代可作输入引用；列表变量先由前序步骤产出 `[T]` 类型。
@@ -396,15 +396,15 @@ Types:
 **生成模板**（关键验收）：
 ```markdown
 3. [subtask retry=2] 执行并验证
-  + → summary: text
+  + → summary % text
   3.1. [act] 执行操作
     - ← input
-    + → output: yaml
+    + → output % yaml
     > …
   3.2. [check final] 验证 output 满足约束        # 必在探索步骤之后（其后只可 commit/exit）
     - ← output, threshold
-    + → ok: bool                 # 判定槽
-    + → note: text               # 说明槽（未达标时的缺口）
+    + → ok % bool                 # 判定槽
+    + → note % text               # 说明槽（未达标时的缺口）
     > 检查 output 是否达标，输出 true/false。
 ```
 Constraints 里每条可执行的硬约束，都应对应一个 check（关键的用 check final）。
@@ -417,8 +417,8 @@ Constraints 里每条可执行的硬约束，都应对应一个 check（关键�
 ```markdown
 3.2. [check] 合法关：结果非空
   - ← output
-  + → ok: bool     # 判定槽
-  + → note: text   # 说明槽
+  + → ok % bool     # 判定槽
+  + → note % text   # 说明槽
   > ```hop_python
   > ok = len(output) > 0
   > note = "" if ok else "output 为空——上游未产出"
@@ -433,8 +433,8 @@ Constraints 里每条可执行的硬约束，都应对应一个 check（关键�
 ```markdown
   3.2. [check final] 核验对账判定已如实记录
     - ← foot_check, foot_note
-    + → recorded_ok: bool        # 判定槽：pass/fail 已落值 + fail 时 gap 已写进 foot_note
-    + → why: text                # 说明槽
+    + → recorded_ok % bool        # 判定槽：pass/fail 已落值 + fail 时 gap 已写进 foot_note
+    + → why % text                # 说明槽
     > 核验 foot_check 已置 pass/fail 且 fail 时 foot_note 含缺口说明——判定本身是交付数据,两个取值都合法。
 ```
 
@@ -452,7 +452,7 @@ Constraints 里每条可执行的硬约束，都应对应一个 check（关键�
 ```markdown
 6. [confirm require_human] 请批准执行修复
   - ← fix_plan                   # 给决策者看的依据
-  + → approved: bool             # approve→true；reject→全局中止
+  + → approved % bool             # approve→true；reject→全局中止
   > 展示 fix_plan，请决策者批准是否执行。
 ```
 `require_human` 修饰：涉及不可逆/高风险 → 加（强制真人）；一般确认 → 可省（允许上层 agent 代答，但默认倾向问人）。
@@ -461,7 +461,7 @@ Constraints 里每条可执行的硬约束，都应对应一个 check（关键�
 ```markdown
 3. [ask present_inputs=draft_summary] 询问负责人细节偏好
   - ← draft_summary              # 呈交依据（present_inputs 引用的变量必须在 ← 声明——问人要给人看依据,依据变量不声明执行时拿不到）
-  + → detail_preference: text    # 负责人的偏好回答（业务值,不是 approve）
+  + → detail_preference % text    # 负责人的偏好回答（业务值,不是 approve）
   > 呈现 draft_summary，请负责人给出细节详略偏好；有默认倾向时给 default 供直接采用。
 ```
 ask 与 confirm 的分辨：要的是**数据/偏好/裁量**（回答进业务流）→ ask；要的是**批不批**（bool 闸门）→ confirm。
@@ -480,12 +480,12 @@ ask 与 confirm 的分辨：要的是**数据/偏好/裁量**（回答进业务�
 **ask 的两个高频写法**：
 
 - **present_inputs 支持多变量**——逗号列出 `present_inputs=quality_report,proposals`（parser 专门保护属性值内逗号不切碎）,不必为呈多样材料先加一步机械拼接;列出的每个变量必须在本步 `- ←` 声明（V11 精确判）;
-- **收决策值的输出就是普通 enum 输出**——`+ → decision: enum(approve, skip)  # 用户裁决`,下游 branch 按 `decision == approve` 分流。样例：
+- **收决策值的输出就是普通 enum 输出**——`+ → decision % enum(approve, skip)  # 用户裁决`,下游 branch 按 `decision == approve` 分流。样例：
 
 ```markdown
 6. [ask require_human present_inputs=quality_report,proposals] 请审阅报告与修改提议,批准或跳过
   - ← quality_report, proposals
-  + → decision: enum(approve, skip)  # 用户裁决:approve=执行修改,skip=只交付报告
+  + → decision % enum(approve, skip)  # 用户裁决:approve=执行修改,skip=只交付报告
 ```
 
 **"否决后应续行"的审批场景用 ask 收 enum,不用 confirm**：confirm 的 reject 语义是**全局中止**（整个 run 终止,已产出的其他交付物一并作废）;原文的审批若是"不批就走另一条路/不批只影响这一段"（不批更新但报告照交付/不批豁免则回主流程按正常纪律走）,用 confirm 就把"合法的否决路径"变成了"整体失败"。这类场景落 `[ask]` 收 `enum(approve, skip)` + branch 分流——approve 臂做被批的事,else 臂走否决后的正当续行。confirm 只留给"不批=整件事就不该继续"的真中止语义（发布前终审/不可逆大动作的最后闸）。
@@ -502,12 +502,12 @@ ask 与 confirm 的分辨：要的是**数据/偏好/裁量**（回答进业务�
 ```markdown
 7. [confirm require_human] 批准发送
   - ← draft
-  + → approved: bool
+  + → approved % bool
   > 展示 draft，请批准是否发送。
 
 8. [commit] 发送邮件
   - ← draft, approved
-  + → sent: line
+  + → sent % line
   > 不可逆操作（发送后不可撤回，前序 confirm 已放行）：调用邮件工具发送 draft。
   > 幂等设计：按 message_id 去重，避免重复发送。
 ```
@@ -517,8 +517,8 @@ ask 与 confirm 的分辨：要的是**数据/偏好/裁量**（回答进业务�
 5. [subtask retry=2] 校验后落库
   5.1. [check final] 校验记录满足入库约束
     - ← record
-    + → valid: bool
-    + → valid_note: text
+    + → valid % bool
+    + → valid_note % text
     > 检查 record 满足入库约束（必填齐全、无冲突键），输出 true/false。
 5b. [commit] 写入生产库
   - ← record, valid
@@ -530,17 +530,17 @@ ask 与 confirm 的分辨：要的是**数据/偏好/裁量**（回答进业务�
 
 ```markdown
 Tools:
-- db_import(package_dir) -> import_note: line  # 数据库导入服务（授权方提供,按记录稳定 ID upsert 幂等）
+- db_import(package_dir) -> import_note % line  # 数据库导入服务（授权方提供,按记录稳定 ID upsert 幂等）
 
 …
 6. [act] 备齐导入参数
   - ← knowledge_package
-  + → package_dir: line  # 知识包目录路径
+  + → package_dir % line  # 知识包目录路径
   > 把知识包落到固定目录,路径存入 package_dir。
 
 7. [commit] 执行数据库导入
   - ← package_dir, auth_ok
-  + → import_note: line
+  + → import_note % line
   > 不可逆操作（写生产数据库,前序 check 已核验授权完备）：调用声明过的工具做最后一次提交,参数全部来自前置步骤备好的变量。
   > ```hop_python
   > import_note = db_import(package_dir: package_dir)
@@ -558,7 +558,7 @@ Tools:
 ```markdown
 7. [commit] 在目标机执行铲除脚本
   - ← target_host, teardown_approved
-  + → teardown_result: yaml  # 执行结果(含退出码,失败如实在场)
+  + → teardown_result % yaml  # 执行结果(含退出码,失败如实在场)
   > 不可逆操作（前序 confirm 已放行）。命令序列写规约时已完全确定,执行时照跑,不需要任何现场判断:
   > ```hop_python
   > r = subprocess.run(["ssh", target_host, "bash /opt/deploy/teardown.sh"], timeout: 1800)
@@ -570,7 +570,7 @@ Tools:
 
 **文件态环境注入必须显化**（hopissues/0090 P4 实撞:一整条发布链因此挂掉）：原文是 bash 流程时常见 `source env.sh` 把一批阶段变量灌给后续命令（`source env.sh && designer-ctl gate ...`——被调脚本从环境变量里读这些值）。hop 的 subprocess.run 不传环境变量（设计纪律:外部状态以文件为载体传子进程,保重放确定性）,直接照搬调用就是断桥——子进程读到的全是空值,而且失败发生在下游脚本深处,离病根很远（实撞:gate 命令读不到阶段变量→不写发布凭证→计时收口报"凭证缺失"→发布链整条挂,宿主顺着报错查了一整条链才回溯到 `source` 在翻译时蒸发了）。翻译时两件必做：①识别"`source <文件>` 注变量供后续命令消费"套路,在产物的部署前提清单里显化一条"某某命令运行期依赖 <文件> 的文件态注入",把它注入的变量名列出来;②给出桥接约定——与用户对齐"被调命令自读该文件"（改命令入口自举读取,最彻底）,做不到就在步骤说明里写明该文件是命令的运行期配置、宿主部署时必须保证命令进程能读到这些值。静默照搬 = 把断桥留给宿主真跑撞。
 
-**中间产物落点恒用 work_zone_path()**（hopissues/0090 P5 实撞）：原文 bash 套路"子进程把中间产物写到某个目录,后续步骤再读回"搬进 hop 时,落点必须对齐涂鸦区——`out_path = work_zone_path("名字")` 生成路径,子进程经参数（如 `--output <out_path>`）写它,后续 `read(path: out_path)` 读回。照抄原文的绝对路径落点（如 `env.checklist_dir + "/..."`）,子进程写得进去（命令通道不受文件沙箱管）,但内置 read 读不回来——绝对路径禁令只豁免涂鸦区,读回那步必死且反复 retry（写成功读失败,现象离病根隔一步,很难一眼看出是落点问题）。判据一句话：凡是"这一步写、后面步骤读"的中间文件,路径一律 work_zone_path() 生成;只有要交付给用户的最终产物才落 workspace 相对路径。
+**中间产物落点恒用 work_zone_path()**（hopissues/0090 P5 实撞）：原文 bash 套路"子进程把中间产物写到某个目录,后续步骤再读回"搬进 hop 时,落点必须对齐涂鸦区——`out_path = work_zone_path("名字")` 生成路径,子进程经参数（如 `--output <out_path>`）写它,后续 `read(path: out_path)` 读回。照抄原文的绝对路径落点（如 `env.checklist_dir + "/..."`）会出两种错:落点在 workspace 外时,子进程写得进去（命令通道不受文件沙箱管）,但内置 read 拒绝 workspace 外的绝对路径,读回那步必死且反复 retry（写成功读失败,现象离病根隔一步,很难一眼看出是落点问题）;落点在 workspace 内时读得回来,但中间文件散落在 workspace 里,后续步骤和并行的兄弟实例都会读到它,产物被中间件污染。判据一句话：凡是"这一步写、后面步骤读"的中间文件,路径一律 work_zone_path() 生成;只有要交付给用户的最终产物才落 workspace 相对路径。
 
 **外部脚本的退出码语义先核后用**（实撞:通知脚本是 best-effort 设计——凭据缺失/HTTP 失败/网络异常一切路径都 exit(0),spec 按"退出码非零记失败"判定,结果一切失败都被记成已发送,唯一产出必失真）：body 依赖 subprocess.run 的 returncode 判成败时,先读一眼被调脚本的退出码语义（grep sys.exit / exit 即可）——恒退 0 的 best-effort 脚本,改从 stdout 的成功标志判（如"推送成功"字样）,或在台账记"脚本退出码不可判成败"呈裁;语料脚本的行为不擅自改,判定通道选对即可。
 
@@ -582,7 +582,7 @@ Tools:
 ```markdown
 4. [act] 生成候选草稿                # 可反复重跑，不留外部后果
   - ← input
-  + → draft: text
+  + → draft % text
   > 生成草稿，纯产出无副作用。
 ```
 
@@ -650,8 +650,8 @@ hop_python 是 HopSpec 内嵌的确定性小语言——**Python 语法的一个
 ```markdown
 1. [act] 统计并落盘
   - ← raw_data
-  + → profile: yaml  # 字段统计概览
-  + → saved_path: line  # 落盘路径
+  + → profile % yaml  # 字段统计概览
+  + → saved_path % line  # 落盘路径
   > 无推理计算：统计缺失率,结果写入涂鸦区。
   > ```hop_python
   > total = len(raw_data)
@@ -664,8 +664,8 @@ hop_python 是 HopSpec 内嵌的确定性小语言——**Python 语法的一个
 
 2. [check] 核验仓库状态干净
   - ← saved_path
-  + → repo_ok: bool  # 判定
-  + → repo_note: text  # 说明
+  + → repo_ok % bool  # 判定
+  + → repo_note % text  # 说明
   > 机械判定:git status 零输出为净。
   > ```hop_python
   > st = subprocess.run(["git", "status", "--porcelain"], cwd: ".")
@@ -702,7 +702,7 @@ hop_python 是 HopSpec 内嵌的确定性小语言——**Python 语法的一个
    ```markdown
    6. [reason] 审计 mock 质量
      - ← mock_patterns
-     + → mock_audit: yaml
+     + → mock_audit % yaml
      > 对每个 mock 按注入的判据判定应否 FLAG，产出审计结果。引擎已自动注入（doc-ref）：
      > [[test-coverage-audit-knowledge#mock FLAG 判据]]
    ```

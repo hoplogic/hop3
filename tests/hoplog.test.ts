@@ -1,9 +1,9 @@
 // @module: hoplog ^anc-obs-hoplog
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { HopLog, extractHopLogStepKeys, sanitize, toYaml } from '../src/hoplog.js';
+import { HopLog, extractHopLogStepKeys, sanitize, toYaml, pruneRunDirs, DEFAULT_MAX_RUNS } from '../src/hoplog.js';
 import { load as yamlLoad } from 'js-yaml';
 import { ExecutionEngine } from '../src/engine.js';
 import type { HostConfig } from '../src/provider-types.js';
@@ -1539,5 +1539,120 @@ describe('trace_id 落轨（HopLog header）', () => {
     const runId = head.match(/^run_id: (.+)$/m)?.[1];
     expect(runId).toBeTruthy();
     expect(head).toContain(`trace_id: ${runId}`);
+  });
+});
+
+// 日志保留上限（todo/0127 作者定"就留 max runs,缺省 3"——对外分发防塞爆硬盘;改造前零上限零清理,本机 351 个 run 105 MB）。
+// @v: anc-obs-log-retention
+describe('日志保留上限（max_runs,缺省 3）', () => {
+  const mkRun = (root: string, spec: string, stamp: string) => { const d = join(root, `${spec}-${stamp}`); mkdirSync(d, { recursive: true }); writeFileSync(join(d, 'main.yaml'), 'x'); return d; };
+  const opts = (logDir: string, extra: Record<string, unknown> = {}) => ({ specId: 'r', logDir, title: 'T', goal: 'G', ...extra });
+
+  it('正例：根目录已有 4 个 run,新建一个后恰剩 3 个（含本次）,删的是名字时间戳最老的', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-keep-'));
+    for (const st of ['20260901T100000-aaaa', '20260902T100000-bbbb', '20260903T100000-cccc', '20260904T100000-dddd']) mkRun(root, 'r', st);
+    const log = new HopLog(opts(root));
+    const left = readdirSync(root).sort();
+    expect(left).toHaveLength(DEFAULT_MAX_RUNS);
+    expect(left.some(n => n.includes('20260901T100000'))).toBe(false);
+    expect(left.some(n => n.includes('20260902T100000'))).toBe(false);
+    expect(left).toContain('r-20260904T100000-dddd');
+    expect(existsSync(log.getRunDir())).toBe(true);
+  });
+  it('边界：恰 2 个已有 + 本次 = 3,一个不删;maxRuns=1 只留本次', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-edge-'));
+    mkRun(root, 'r', '20260901T100000-aaaa'); mkRun(root, 'r', '20260902T100000-bbbb');
+    new HopLog(opts(root));
+    expect(readdirSync(root)).toHaveLength(3);
+    const root2 = mkdtempSync(join(tmpdir(), 'hl-one-'));
+    mkRun(root2, 'r', '20260901T100000-aaaa'); mkRun(root2, 'r', '20260902T100000-bbbb');
+    const log = new HopLog(opts(root2, { maxRuns: 1 }));
+    expect(readdirSync(root2)).toEqual([log.getRunDir().split('/').pop()]);
+  });
+  it('反例：不合 run 目录形态的条目不计数不删（用户手放的文件/目录、旧版遗留）', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-alien-'));
+    for (const st of ['20260901T100000-aaaa', '20260902T100000-bbbb', '20260903T100000-cccc']) mkRun(root, 'r', st);
+    mkdirSync(join(root, 'notes')); writeFileSync(join(root, 'README.txt'), 'keep me'); mkdirSync(join(root, 'r-badstamp'));
+    new HopLog(opts(root));
+    expect(existsSync(join(root, 'notes'))).toBe(true);
+    expect(existsSync(join(root, 'README.txt'))).toBe(true);
+    expect(existsSync(join(root, 'r-badstamp'))).toBe(true);
+    expect(readdirSync(root).filter(n => /-\d{8}T\d{6}-[0-9a-f]{4}$/.test(n))).toHaveLength(3);
+  });
+  it('反例：排序看目录名时间戳不看 mtime——最老的 run 被 resume 刷新 mtime 后仍是它被删', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-mtime-'));
+    const oldest = mkRun(root, 'r', '20260901T100000-aaaa');
+    const mid = mkRun(root, 'r', '20260902T100000-bbbb'); const newest = mkRun(root, 'r', '20260903T100000-cccc');
+    // 把目录 mtime 摆成与名字时间戳相反的顺序：名字最老的 mtime 最新（模拟它刚被 resume 续写过）
+    const t0 = Date.now() / 1000;
+    utimesSync(oldest, t0, t0); utimesSync(mid, t0 - 200, t0 - 200); utimesSync(newest, t0 - 400, t0 - 400);
+    new HopLog(opts(root));
+    expect(existsSync(oldest)).toBe(false);   // 按名删的是它
+    expect(existsSync(newest)).toBe(true);    // 按 mtime 会误删这个"最旧"的
+  });
+  it('反例：子实例日志（logDir 父目录名为 parallel/calls）不触发清理——嵌在父 run 目录下,随父整目录删', () => {
+    const parentRun = mkRun(mkdtempSync(join(tmpdir(), 'hl-child-')), 'p', '20260901T100000-aaaa');
+    const childLogDir = join(parentRun, 'calls', '3.1', 'log');
+    mkdirSync(childLogDir, { recursive: true });
+    for (const st of ['20260901T110000-1111', '20260901T120000-2222', '20260901T130000-3333', '20260901T140000-4444']) mkRun(childLogDir, 'c', st);
+    new HopLog(opts(childLogDir));
+    expect(readdirSync(childLogDir)).toHaveLength(5);   // 4 旧 + 本次,一个没删
+    expect(pruneRunDirs(childLogDir, 0)).toEqual([]);
+  });
+  it('反例：maxRuns 非正整数在构造期响亮拒（0 / 负 / 小数）', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-bad-'));
+    for (const bad of [0, -1, 1.5]) expect(() => new HopLog(opts(root, { maxRuns: bad }))).toThrow(/max_runs 须为正整数/);
+  });
+  it('正例：pruneRunDirs 返回值列出真删掉的目录（按名升序,留 keep 个）', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-ret-'));
+    for (const st of ['20260901T100000-aaaa', '20260902T100000-bbbb', '20260903T100000-cccc']) mkRun(root, 'r', st);
+    const removed = pruneRunDirs(root, 1);
+    expect(removed).toEqual(['r-20260901T100000-aaaa', 'r-20260902T100000-bbbb']);
+    expect(readdirSync(root)).toEqual(['r-20260903T100000-cccc']);
+  });
+  it('正例：缺省级别 info——不传 level 的 HopLog 头写 level: info', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-lvl-'));
+    const log = new HopLog(opts(root));
+    expect(readFileSync(log.getFilePath(), 'utf-8')).toMatch(/^level: info$/m);
+  });
+});
+
+// hopjit-mcp run_approved_command 执行账（^anc-obs-command-block,todo/0132）
+describe('recordCommand 顶层 command: 块', () => {   // @v: anc-obs-command-block
+  let tmpDir: string;
+  beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), 'hoplog-cmd-')); });
+  afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+  const rec = { argv: ['python3', '-c', 'print(1)'], cwd: '/ws', returncode: 0, duration_ms: 12, stdout_bytes: 2, stderr_bytes: 0, truncated: { stdout: false, stderr: false } };
+
+  it('字段齐且整档 YAML 可 load;level=warn 也恒写（审计性）', () => {
+    const log = new HopLog({ specId: 's', logDir: tmpDir, title: 'T', level: 'warn' });
+    log.recordCommand({ ...rec, caller_step: '3.2' });
+    const doc = yamlLoad(readFileSync(log.getFilePath(), 'utf-8')) as Record<string, unknown>;
+    const cmd = doc.command as Record<string, unknown>;
+    expect(cmd.argv).toEqual(['python3', '-c', 'print(1)']);
+    expect(cmd.cwd).toBe('/ws');
+    expect(cmd.returncode).toBe(0);
+    expect(cmd.duration_ms).toBe(12);
+    expect(cmd.stdout_bytes).toBe(2);
+    expect(cmd.truncated).toEqual({ stdout: false, stderr: false });
+    expect(cmd.caller_step).toBe('3.2');
+    expect(typeof cmd.at).toBe('string');
+  });
+
+  it('HopLog.resume 后 recordCommand：先落顶层 resumed_at 再落 command 块,已有 step 块不破', () => {
+    const log = new HopLog({ specId: 's', logDir: tmpDir, title: 'T' });
+    log.recordStepStart('1', 'act', '跑');
+    log.recordStepDone('1', 'completed');
+    const resumed = HopLog.resume(log.getRunDir());
+    resumed.recordCommand(rec);
+    const text = readFileSync(log.getFilePath(), 'utf-8');
+    expect(text.indexOf('resumed_at:')).toBeGreaterThan(-1);
+    expect(text.indexOf('resumed_at:')).toBeLessThan(text.indexOf('command:'));
+    // hoplog 是 YAMLL（步骤键按块重复,整档不是单一 YAML 文档）——切出 command 块单独 load
+    const tail = text.slice(text.indexOf('command:'));
+    const doc = yamlLoad(tail) as Record<string, unknown>;
+    expect((doc.command as Record<string, unknown>).returncode).toBe(0);
+    expect(extractHopLogStepKeys(text)).toContain('1');
   });
 });

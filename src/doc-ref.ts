@@ -235,13 +235,13 @@ export function sliceByFileType(filePath: string, lines: string[], section: stri
  * // @a: anc-exec-doc-ref-resolve */
 function resolveDocFile(workspaceDir: string, doc: string, specDir?: string): string | undefined {
   for (const cand of candidatePaths(doc)) {
-    // spec 目录级不吃 ../绝对路径（越界逃逸面;字面绝对路径是禁令不许 join 吞掉）——
-    // 这类引用只走 workspace 级,由 resolveWorkspacePath 响亮拦
+    // spec 目录级不吃 ../绝对路径（越界逃逸面;字面绝对路径不许 join 吞成 spec 目录下的相对路径）——
+    // 这类引用只走 workspace 级,由 resolveWorkspacePath 判（workspace 内绝对路径认,外拒;.. 拒）
     if (specDir && !cand.includes('..') && !isAbsolute(cand)) {
       const inSpecDir = normalize(join(specDir, cand));
       if (existsSync(inSpecDir)) return inSpecDir;
     }
-    // 保持既有 workspace 语义（相对路径经 resolveWorkspacePath 拦 ../绝对路径）
+    // workspace 级:resolveWorkspacePath 与文件工具同一判据（^anc-exec-tool-path-resolve）
     const inWs = resolveWorkspacePath(workspaceDir, cand);
     if (existsSync(inWs)) return inWs;
   }
@@ -315,7 +315,7 @@ export function resolveDocRefs(
 
   // hop_env 展开（注入期,步骤 1b——展开后再走既有 sandbox 校验链,展开值同受读权限约束）。
   // 展开产生的绝对路径走 validateReadAccess 直判（hop_env 值常是 workspace 外绝对根,声明根已随
-  // 组合根扩入 read allowed——写配置即授权;未声明根照拒）;字面绝对路径 doc-ref 维持原禁令。
+  // 组合根扩入 read allowed——写配置即授权;未声明根照拒）;字面绝对路径 doc-ref 与文件工具同判（workspace 内认、外拒,不享声明根授权）。
   // @a: anc-exec-doc-ref-hop-env
   const expandedRefs = refs.map(r => {
     const ex = expandHopEnv(r.doc, hopEnv);

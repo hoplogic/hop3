@@ -1,0 +1,62 @@
+```python
+import ast
+import re
+import json
+import sys
+
+def check_function_length(node, filename):
+    violations = []
+    
+    def traverse(node, start_line):
+        if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+            func_start = node.lineno
+            func_end = node.end_lineno
+            length = func_end - func_start + 1
+            
+            if length > 40:
+                violations.append(f"{filename}:{func_start}-{func_end}: 函数长度 {length} 行，超过 40 行限制")
+            
+            for child in ast.iter_child_nodes(node):
+                traverse(child, func_start)
+        
+        elif isinstance(node, ast.ClassDef):
+            for child in ast.iter_child_nodes(node):
+                traverse(child, node.lineno)
+        
+        else:
+            for child in ast.iter_child_nodes(node):
+                traverse(child, start_line)
+    
+    traverse(node, 1)
+    return violations
+
+def main():
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    
+    filepath = sys.argv[1]
+    
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except OSError:
+        print(f"无法读取文件: {filepath}", file=sys.stderr)
+        sys.exit(1)
+    
+    try:
+        tree = ast.parse(content, filename=filepath)
+    except SyntaxError as e:
+        print(f"{filepath}:{e.lineno}: 语法错误: {e.msg}", file=sys.stderr)
+        sys.exit(1)
+    
+    violations = check_function_length(tree, filepath)
+    
+    if violations:
+        for violation in violations:
+            print(violation)
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+main()
+```

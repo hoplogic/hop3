@@ -1,0 +1,104 @@
+service: qwen_flash
+model_from_response:
+  - qwen-flash
+date: '2026-09-28'
+seed: 20260918
+task: mul
+thinking: 'on'
+max_tokens: 32768
+维度: G1 推理复杂度——N 位整数乘法阶梯(直接推理;禁工具纯推理;爬梯每档 n=5,候选最大档 confirm=20 发,正确率>=90% 定档)
+curve:
+  N2:
+    climb: 5/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+    confirm: 未跑成(20 发全部被端点以账户欠费拒收,不计入能力读数;原始响应已移出本目录)
+    confirm_rate: null
+  N3:
+    climb: 5/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+    confirm: 未跑成(20 发全部被端点以账户欠费拒收,不计入能力读数;原始响应已移出本目录)
+    confirm_rate: null
+  N4:
+    climb: 5/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+    confirm: 未跑成(20 发全部被端点以账户欠费拒收,不计入能力读数;原始响应已移出本目录)
+    confirm_rate: null
+  N5:
+    climb: 5/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+    confirm: 未跑成(20 发全部被端点以账户欠费拒收,不计入能力读数;原始响应已移出本目录)
+    confirm_rate: null
+  N6:
+    climb: 5/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: true
+    confirm: 14/15(第 16—20 发被端点以账户欠费拒收,不计;有效 15 发里只错第 7 发)
+    confirm_rate: 0.933
+  N7:
+    climb: 4/5
+    runs:
+      - i: 1
+        correct: true
+      - i: 2
+        correct: true
+      - i: 3
+        correct: true
+      - i: 4
+        correct: true
+      - i: 5
+        correct: false
+        got: '14049671103525'
+        truth: '14044171094525'
+    confirm: 14/20
+    confirm_rate: 0.7
+最大N: 6(暂定——N6 确认只有 15 发有效、14 发对,约 93%;N7 确认 14/20=70% 不达线。充值后补跑 N6 确认 20/20,N=6 已确认,见 ../run-qwen_flash-thinking-topup-2026-09-28/)
+欠费注记: 2026-09-28 约 18:03 起百炼账户欠费(端点回 Arrearage / Billing issue),N2—N5 的确认与 N6 确认后 5 发都是被拒的空响应。探针脚本当时把空响应记成答错,自动汇总误写成"N=2 都不达标";本文件已按逐发核对手工改正,被拒发次的原始响应移出本目录不入库。爬梯 N2—N7 与 N7 确认全部发生在欠费之前,有效。

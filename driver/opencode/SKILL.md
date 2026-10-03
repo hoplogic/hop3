@@ -1,6 +1,7 @@
 ---
 name: hopspec
-description: Drive HopSpec structured execution specs with the hopjit engine (reuse mode — opencode itself is the reasoning LLM via CLI, zero API key). Default entry for running specs; use hopspec-mcp only when the user explicitly asks for MCP/standalone execution.
+description: Run an existing HopSpec file (reuse mode — opencode itself is the reasoning LLM via CLI, zero API key): confirm parameters, answer intervention points, present the final state by contract. Dispatched by the hop skill; users do not invoke it directly. Ad-hoc tasks without a spec go through hop.
+user-invocable: false
 ---
 
 %% @trace
@@ -8,7 +9,7 @@ description: Drive HopSpec structured execution specs with the hopjit engine (re
 	source: [[opencode-driver-carrier]]
 	source_id: hopjit-opencode-driver-carrier
 	type: extract
-	last_sync: 2026-09-21T11:37+0800
+	last_sync: 2026-10-01T15:45+0800
 	note: opencode 复用模式驱动件——派生自 driver/hopspec-skill.md（CC 源）,按 opencode-driver-carrier 原语映射表适配:AskUserQuestion→question 工具/Agent 工具 driver subagent→opencode subagent（无 subagent 能力时 inline 自跑,与 Codex 载体同款降级）/斜杠触发→隐式触发。执行语义/CLI 协议/介入点纪律与 CC 版逐条同构,CC 源改协议面时本件同批随改（rule-parity 同款"接受两份"）。§2 paused:question 工具降级约束贯穿段头+confirm/ask 各分派项——question 工具按 client 类型启用（不按 provider 过滤）,某些 OpenAI 兼容服务端（如 theta）拒收该工具,不可用时降级普通文本消息。
 %%
 

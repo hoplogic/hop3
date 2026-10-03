@@ -3,17 +3,18 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 // @module: step-dispatcher ^anc-struct-step-dispatcher
 import Anthropic from '@anthropic-ai/sdk';
-import { wrapAnthropicClient, makeOpenAiClient, makeOpenAiResponsesClient, type ProtocolClient } from './protocol-openai.js';
+import { wrapAnthropicClient, makeOpenAiClient, makeOpenAiResponsesClient, nonstreamingWaitMs, longWaitFetchOptions, type ProtocolClient } from './protocol-openai.js';
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ExecutionEngine } from './engine.js';
-import { PromptAssembler, injectKnowledgeContext, actRoleKind, roleGuideText, renderPromptParts, SCHEMA_KICK_MARKER, buildTextToolCallHint } from './prompt.js';
+import { PromptAssembler, injectKnowledgeContext, actRoleKind, roleGuideText, renderPromptParts, SCHEMA_KICK_MARKER, EMPTY_RETRY_NOTE, buildTextToolCallHint, ACT_EVIDENCE_GATE_PREFIX } from './prompt.js';
 import { DefaultToolProvider } from './tools.js';
+import { unionApprovedCommandNames } from './command-exec.js';
 import { CompositeToolProvider } from './tools-composite.js';
 import { BodyInterpreter, evalExprSync } from './act-body-interpreter.js';
 import { getWriteScope } from './ast-runtime.js';   // callee 插值解引用取变量 scope（^anc-step-call-dynamic-callee）
-import { repairQuotedPrefixScalars } from './validator.js';
+import { repairYamlScalars } from './validator.js';
 import { deleteNodeAt, insertNodeAt, replaceNodeAt, renumberSteps } from './spec-tree-edit.js';
 import { serializeFragment, parseFragment , flattenFragmentNumbering } from './parser.js';
 import type { ExecutableStepType, OutputDecl, StepNode, ActStep, CallStep, CheckStep, CommitStep, ConfirmStep } from './ast-types.js';
@@ -118,6 +119,17 @@ export function isHighlyRepetitive(text: string): boolean {
   return total > 0 && hits / total > THRESHOLD;
 }
 
+/** 输出键行冒号规范化（^anc-exec-output-fullwidth-key-colon）：顶格、以声明输出名（可带一对
+ * 双引号）打头、后隔可选空格/制表符紧跟全角 `：` 的行,只把这一个全角冒号换成 `: `——加空格因
+ * `key:true` 紧贴形态 YAML 不算键值对。值里的全角冒号、缩进行、非声明名行原样;无命中逐字不变。
+ * // @a: anc-exec-output-fullwidth-key-colon */
+export function normalizeFullwidthKeyColons(text: string, outputNames: string[]): string {
+  if (!text.includes('：') || outputNames.length === 0) return text;
+  const alt = outputNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const re = new RegExp(`^("?(?:${alt})"?)[ \\t]*：[ \\t]*`, 'gm');
+  return text.replace(re, '$1: ');
+}
+
 /** `service/model` 与裸 model 引用的单一解析入口（dispatcher 路由与 mcp-server 配置核对共同消费）。 */
 export function parseModelRef(ref: string): { service_id: string; model: string } {
   if (!ref || ref !== ref.trim()) {
@@ -143,11 +155,32 @@ const EMPTY_RETRY_MAX = 2;
 // API 输出 token 上限缺省值（env / resource_limits 都未指定时）。
 const DEFAULT_MAX_OUTPUT_TOKENS = 32768;   // 2026-08-27 从 16384 抬升（^anc-exec-output-budget——推理型模型 thinking+正文共池,旧值两头紧;上限是物理防线非产出配额,产出归 spec 输出声明约束）
 
+// 错误对象的可读文案——message 优先取字段（SDK 错误对象可能非 Error 子类,String() 得 [object Object]）。
+function errMessage(err: unknown): string {
+  const m = (err as { message?: unknown })?.message;
+  return m != null ? String(m) : String(err);
+}
+
 /** CHILD_NOT_IN_QUEUE 拒因文字（队列 miss 且在飞账无该 child 的 paused 项）——单一来源:dispatcher.resume
  * 异步拒收与 mcp-server resume_run 同步核对共用,防两处文字漂移（todo/0105）。
  * // @a: anc-exec-parallel-hitl-queue */
 export function childNotInQueueMessage(childInstance: string): string {
   return `子实例 '${childInstance}' 不在待答队列（已答过/已终态/杀活清场;或这是串行 call 停点——其应答走 call_path 路由,去掉 child_instance 参数重答。run_status 的 paused_queue 是现存卡权威）`;
+}
+
+/** 截断报文的"两个数 + 建议"一截（三个 OUTPUT_TRUNCATED 抛错点共用,各站点只在前面拼自己的站点半句）。
+ * 实际输出明显低于请求上限（< 请求值×0.9）=端点自带输出上限,改本地配置没有用;否则按本地上限掐断指路调参。
+ * 拿不到的数位写 ?,按本地上限掐断写（todo/0113——百炼端点 4096 硬上限忽略请求 65536,旧报文叫人调大早已是 65536 的本地上限）。
+ * // @a: anc-exec-output-truncation-loud */
+export function truncationAdvice(requestedMaxTokens: number | undefined, outputTokens: number | undefined): string {
+  const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+  const x = isNum(requestedMaxTokens) ? String(requestedMaxTokens) : '?';
+  const y = isNum(outputTokens) ? String(outputTokens) : '?';
+  const nums = `（本次请求上限 max_tokens=${x}，实际输出 output_tokens=${y}）`;
+  if (isNum(requestedMaxTokens) && isNum(outputTokens) && outputTokens < requestedMaxTokens * 0.9) {
+    return `${nums}——实际输出远低于请求上限，是端点自己的输出上限掐断的，与本地配置无关，改本地上限配置没有用。核实端点能力（探针 model-gearbox/probes/run-output-cap.mjs）、换不带此上限的端点，或把本步产出拆小`;
+  }
+  return `${nums}——调大 HOPJIT_MAX_OUTPUT_TOKENS、resource_limits.max_output_tokens 或 provider 的 max_output_tokens`;
 }
 
 /** 独立模式的驱动适配层：跑调度循环（init→next→execute→done）并直调 Anthropic API 完成单步推理与工具调用。见 [[step-dispatcher#^anc-struct-step-dispatcher]] */
@@ -284,25 +317,31 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
     // 见 design ^anc-exec-model-resolve 加载顺序"SDK 隐式 env 读取必须切断"。
     // 协议分派：openai 两形态走适配器（IR 双向转换）；anthropic 直通包装 // @a: anc-exec-protocol-adapter
     const proto = hostConfig.protocol ?? 'anthropic';
+    // client 级等待上限——三种协议同一个数:SDK 构造期 timeout（anthropic 靠它解锁非流式预检,
+    // 未设且 max_tokens 换算超 10min 即拒发"Streaming is required"）+ undici 连接设置的两个时限
+    // （不带就被内建 fetch 缺省 300 秒先掐断,todo/0117）。缺省客户端按 'default' service 解析。
+    // 见 design ^anc-exec-nonstreaming-timeout。// @a: anc-exec-nonstreaming-timeout
+    const waitMs = this.nonstreamingTimeoutMs('default');
     if (proto === 'openai-chat') {
-      this.defaultClient = makeOpenAiClient({ apiKey, ...(baseURL ? { baseURL } : {}) });
+      this.defaultClient = makeOpenAiClient({ apiKey, ...(baseURL ? { baseURL } : {}), waitMs });
     } else if (proto === 'openai-responses') {
-      this.defaultClient = makeOpenAiResponsesClient({ apiKey, ...(baseURL ? { baseURL } : {}) });
+      this.defaultClient = makeOpenAiResponsesClient({ apiKey, ...(baseURL ? { baseURL } : {}), waitMs });
     } else {
-      // client 级 timeout 显式给——SDK 非流式预检只看 _options.timeout,未设且 max_tokens
-      // 换算超 10min 即拒发"Streaming is required"（per-request 第二参不进预检,首修修错层实证）。
-      // 见 design ^anc-exec-nonstreaming-timeout。// @a: anc-exec-nonstreaming-timeout
-      const timeout = this.nonstreamingTimeoutMs();
+      // SDK 内部重试关掉（maxRetries 0）——重试全部归 callLlmWithRetry,重试表写几次就是几次
+      // （^anc-exec-api-retry "SDK 内部重试关掉"条）。// @a: anc-exec-api-retry
+      const common = { timeout: waitMs, maxRetries: 0, fetchOptions: longWaitFetchOptions(waitMs) };
       // 鉴权头档按 HostConfig.auth 分双臂（^anc-config-standalone-schema——2026-09-18 review 抓
       // 缺省 provider 路径漏装:唯一 provider 配 bearer 不写显式路由时 resolveModel 落 'default'
       // 直取本 client,原硬编码 x-api-key 恰撞回该档要治的 InvalidApiKey）。// @a: anc-config-standalone-schema
       const defaultOpts = this.hostConfig.auth === 'bearer'
-        ? { apiKey: null, authToken: apiKey, timeout }
-        : { apiKey, authToken: null, timeout };
+        ? { apiKey: null, authToken: apiKey, ...common }
+        : { apiKey, authToken: null, ...common };
       this.defaultClient = wrapAnthropicClient(
         baseURL ? new Anthropic({ ...defaultOpts, baseURL }) : new Anthropic(defaultOpts),
         Anthropic);
     }
+    // 端点身份盖章——不可达 fail-fast 报文用（^anc-exec-network-pause 末条,0106）// @a: anc-exec-network-pause
+    this.defaultClient.endpoint = { service_id: 'default', ...(baseURL ? { base_url: baseURL } : {}) };
     this.clients.set('default', this.defaultClient);
     // 工具装配（tool-interface ^anc-exec-tool-composite）：宿主注入并入成员而非整体替换——
     // file 十件恒在场,宿主工具增量叠加,同名 fail-fast。// @a: anc-exec-tool-composite
@@ -652,7 +691,7 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
         const msg = e instanceof Error ? e.message : String(e);
         if (!msg.startsWith('EMPTY_OUTPUT:') || emptyTry >= EMPTY_RETRY_MAX) { step.context.instruction = baseInstr; throw e; }
         this.engine.getHopLog()?.recordWarn(step.step_id, `[empty-retry] 空响应第 ${emptyTry + 1} 次,步级重发（${msg.slice(0, 80)}）`);
-        step.context.instruction = `${baseInstr}\n\n[上一次响应为空——请完整产出声明的输出,不要返回空内容]`;
+        step.context.instruction = `${baseInstr}\n\n${EMPTY_RETRY_NOTE}`;
       }
     }
   }
@@ -768,6 +807,11 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
       // 只看失败原因开头,类别随失败记录走不靠文字识别（todo/0116,新错误产生点用枚举）
       // @a: anc-exec-toolloop-ctx-degrade
       if (reason.startsWith('CONTEXT_OVERFLOW:')) {
+        this.engine.failStep(step.step_id, reason, 'deterministic');
+        return;
+      }
+      // 端点不可达同归确定性（死端点下容器每轮重跑都同因,^anc-exec-network-pause 末条;hopissues/0106）
+      if (reason.startsWith('ENDPOINT_UNREACHABLE:')) {   // @a: anc-exec-network-pause
         this.engine.failStep(step.step_id, reason, 'deterministic');
         return;
       }
@@ -1500,7 +1544,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     if (response.stop_reason === 'max_tokens') {
       const rumR = this.checkThinkingExhausted(response, 'replan-pipeline');   // @a: anc-exec-thinking-exhausted
       if (rumR) throw new Error(rumR);
-      throw new Error(`OUTPUT_TRUNCATED: replan 流水线段输出被 max_tokens 掐断（output_tokens=${response.usage?.output_tokens ?? '?'}）——调大 HOPJIT_MAX_OUTPUT_TOKENS 或 resource_limits.max_output_tokens`);
+      throw new Error(`OUTPUT_TRUNCATED: replan 流水线段输出被 max_tokens 掐断${truncationAdvice(request.max_tokens, response.usage?.output_tokens)}`);
     }
     const text = this.extractTextContent(response);
     if (!text.trim()) throw new Error('ADAPTIVE_PIPELINE_EMPTY: 流水线段产物为空');
@@ -1585,6 +1629,8 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     const { request, client } = this.buildApiRequest(step.context, step.step_type, step);
 
     let response: Anthropic.Message;
+    // 产生 response 的那个请求实发的上限——激进重组重发时换成 retryRequest 的值,截断报文用 // @a: anc-exec-output-truncation-loud
+    let sentMaxTokens: number = request.max_tokens;
     try {
       response = await this.callLlmWithRetry(request, client);
     } catch (err: unknown) {
@@ -1600,6 +1646,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
           const { request: retryRequest, client: retryClient } = this.buildApiRequest(aggressiveCtx, step.step_type, step);
           try {
             response = await this.callLlmWithRetry(retryRequest, retryClient);
+            sentMaxTokens = retryRequest.max_tokens;
           } catch (err2: unknown) {
             // 激进重组后二次撞墙=确定性失败（^anc-exec-toolloop-ctx-degrade 归一口袋入口——
             // 原裸 throw err2,容器 retry 原样重跑必然同因更大）。// @a: anc-exec-toolloop-ctx-degrade
@@ -1623,11 +1670,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
         llm: {
           model: request.model, max_tokens: request.max_tokens,   // 发送口抄实际上限（^anc-exec-output-budget 观测条——烧穿排障不再翻代码答"上限是多少"）
           // thinking 实发参数摘要（发送口抄请求对象——0100 真机 probe 实撞:五级链装配后 hoplog 无 thinking 字段,probe '核 llm.request' 无从核）// @a: anc-exec-thinking-routing
-          thinking: (request as { thinking?: { type: string; budget_tokens?: number } }).thinking
-            ? ((request as { thinking?: { type: string; budget_tokens?: number } }).thinking!.type === 'enabled'
-              ? `enabled:budget=${(request as { thinking?: { type: string; budget_tokens?: number } }).thinking!.budget_tokens}`
-              : 'disabled')
-            : 'absent',
+          thinking: this.thinkingSummary(request),   // 关不掉端点的替换形态记 effort:low // @a: anc-exec-thinking-disable-unsupported
           input_tokens: response.usage?.input_tokens, output_tokens: response.usage?.output_tokens,
           // 缓存观测（C）:命中率=cache_read/(input+cache_read);openai 协议恒 null 如实记 // @a: anc-exec-cache-control
           cache_read_input_tokens: response.usage?.cache_read_input_tokens ?? null,
@@ -1665,7 +1708,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     }
     // 单发零工具:记下终轮正文,产出被拒时判"正文疑似工具调用"用 // @a: anc-exec-text-toolcall-hint
     this.lastFinalTurn.set(step.step_id, { text: this.extractTextContent(response), tool_names: [] });
-    return this.parseStepOutput(response, step.context.output_schema, step.step_id);
+    return this.parseStepOutput(response, step.context.output_schema, step.step_id, sentMaxTokens);
   }
 
   /** lack_of_info 前置探测（^anc-exec-lack-of-info-chain 第2/3站——仅 reason 消费）:
@@ -1696,6 +1739,23 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
       return val || emptyFallback;
     }
     return undefined;
+  }
+
+  /** 旁路自报键块剥除（^anc-exec-act-evidence-gate 第二出口=旁路声明,todo/0111）——剥除范围与
+   * extractSelfReportKey 读取范围逐字一致:第一条行首键行+其后缩进续行+其间空行,遇顶格非空行止;
+   * 键块前后文本原序保留。无键行=原文不动。 */
+  private stripSelfReportKey(text: string, key: string): string {
+    const lines = text.split('\n');
+    const re = new RegExp(`^${key}\\s*:`);
+    const i = lines.findIndex(l => re.test(l));
+    if (i < 0) return text;
+    let end = i + 1;   // 键块右开界:最后一条续行之后
+    for (let j = i + 1; j < lines.length; j++) {
+      if (/^\s+\S/.test(lines[j])) end = j + 1;
+      else if (lines[j].trim() === '') continue;
+      else break;
+    }
+    return [...lines.slice(0, i), ...lines.slice(end)].join('\n');
   }
 
   // act 步骤中 LLM 仅能从预注册工具列表选择调用——无任意代码执行 // @a: anc-exec-sandbox-principle, anc-config-sandbox-step-mapping
@@ -1830,11 +1890,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
         llm: {
           model: resolved.model, max_tokens: maxOutputBudget,   // 同上,工具循环轮 // @a: anc-exec-output-budget
           // thinking 实发摘要（工具循环轮,发送口抄 loopRequest——与单发路径同款观测,F1 修后本路径真有此参数）// @a: anc-exec-thinking-routing
-          thinking: (loopRequest as { thinking?: { type: string; budget_tokens?: number } }).thinking
-            ? ((loopRequest as { thinking?: { type: string; budget_tokens?: number } }).thinking!.type === 'enabled'
-              ? `enabled:budget=${(loopRequest as { thinking?: { type: string; budget_tokens?: number } }).thinking!.budget_tokens}`
-              : 'disabled')
-            : 'absent',
+          thinking: this.thinkingSummary(loopRequest),   // 同上 // @a: anc-exec-thinking-disable-unsupported
           input_tokens: response.usage?.input_tokens, output_tokens: response.usage?.output_tokens,
           cache_read_input_tokens: response.usage?.cache_read_input_tokens ?? null,
           cache_creation_input_tokens: response.usage?.cache_creation_input_tokens ?? null,
@@ -1854,7 +1910,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
         // 反刍分流不设本站（^anc-exec-thinking-exhausted 二批删——本分支前提 hasToolUse=true,
         // 而分流函数对 tool_use 恒不碰〔产工具参数被掐非反刍〕,调用结构性空转;终轮无 tool_use
         // 的响应归 parseStepOutput 闸接住,覆盖面无洞）。
-        throw new Error(`OUTPUT_TRUNCATED: 工具循环轮输出被 max_tokens 掐断（output_tokens=${response.usage?.output_tokens ?? '?'}）——工具参数可能残缺,不执行。调大 HOPJIT_MAX_OUTPUT_TOKENS 或 resource_limits.max_output_tokens`);
+        throw new Error(`OUTPUT_TRUNCATED: 工具循环轮输出被 max_tokens 掐断，工具参数可能残缺,不执行${truncationAdvice(loopRequest.max_tokens, response.usage?.output_tokens)}`);
       }
       if (!hasToolUse) {
         this.flushToolLog(step.step_id, toolCallLog);
@@ -1872,14 +1928,32 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
         // 同族文法,行首键匹配机械可判非语义猜测)——自报即放行+warn 留痕审计可对账,不循环拒收。
         // 与上方全败 warn/断路器三者正交。拒收 throw 上浮 handleStepReady catch 走容器级重试
         // （吃 subtask retry 预算——非算子级 SCHEMA 环,阅卷抓陈述失实后从实注明）。
+        // no_change 是旁路声明（todo/0111——T9 qwen27 照"在产出顶格写一行"字面只交这一行,放行后
+        // 被类型校验以缺字段判死,出口成死门）:放行后剥掉键块,后续探测与产出解析一律吃剥后文本;
+        // 剥空=只交了自报没交产出,专用文案点名本步输出拒收。剥除范围=重试轮且工具面在场,不看调没调
+        // 工具（v0.34.3——T9 r6 调了工具仍在完整产出下尾随一行 no_change,原样进解析后产出成了两个键
+        // 的对象,类型校验误报缺字段）;拒收仍只在零工具时。首轮/工具面为空原文不动。
+        // 只核 act 步（v0.40.0——reason 的交付物是产出文字本身,重试轮零工具按反馈改文字是合法形态,
+        // 没有盘面动作可核;deep-validate 2.1 × qwen-flash 改对了报告仍被拒两轮烧尽重试）。
         // @a: anc-exec-act-evidence-gate
-        if (step.context.retry_feedback && tools.length > 0 && toolCallLog.length === 0) {
-          const noChange = this.extractSelfReportKey(this.extractTextContent(response), 'no_change', '（未说明原因）');
-          if (noChange === undefined) {
-            throw new Error('SCHEMA_MISMATCH: 带着修复反馈重做本步却一次工具都没调——要么真调工具修改盘面,要么在产出顶格写一行 `no_change: 原因` 如实声明未做修改;复述工单不算修复');
+        if (step.step_type !== 'reason' && step.context.retry_feedback && tools.length > 0) {
+          const text = this.extractTextContent(response);
+          const noChange = this.extractSelfReportKey(text, 'no_change', '（未说明原因）');
+          if (noChange === undefined && toolCallLog.length === 0) {
+            throw new Error(ACT_EVIDENCE_GATE_PREFIX + '——要么真调工具修改盘面；要么确实无需修改或做不到时，产出照本步输出声明完整交，另起一行顶格写 `no_change: 原因` 如实声明未做修改（这一行不占产出的位置，也不能代替产出）；复述工单不算修复');
           }
-          this.engine.getHopLog()?.recordWarn(step.step_id,
-            `执行证据机核放行:零工具重做轮携 no_change 自报（${noChange}）——审计面可对账真伪`);
+          if (noChange !== undefined) {
+            this.engine.getHopLog()?.recordWarn(step.step_id, toolCallLog.length === 0
+              ? `执行证据机核放行:零工具重做轮携 no_change 自报（${noChange}）——审计面可对账真伪`
+              : `本轮调用了 ${toolCallLog.length} 次工具仍写 no_change 自报（${noChange}）,已按旁路声明剥掉——审计面可对账`);
+            const stripped = this.stripSelfReportKey(text, 'no_change');
+            if (!stripped.trim()) {
+              const names = step.context.output_schema.map(d => d.name).join('、');
+              throw new Error(`SCHEMA_MISMATCH: 只交了 \`no_change\` 自报、没有交产出——no_change 只是旁路声明，不能代替产出。产出仍须按本步输出声明完整交（本步要交：${names}），做不到的就在产出里如实写明做不到的情况；\`no_change: 原因\` 另起一行写在产出之外`);
+            }
+            // 文本块换成剥后文本,非文本块（thinking 等）原样保留——下游只经 extractTextContent 读正文
+            response = { ...response, content: [...response.content.filter(b => b.type !== 'text'), { type: 'text', text: stripped, citations: null } as Anthropic.TextBlock] };
+          }
         }
         // lack_of_info 终轮前置探测（^anc-exec-reason-tools HopSop 第 3 步——reason 走工具循环后
         // 自报出口位置不变:仅 reason 消费,act 无此语义通道〔0053 承接面裁定〕）。
@@ -1896,7 +1970,8 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
         // 终轮无 tool_use:记下正文与本步实际下发的工具名,产出被拒时判"正文疑似工具调用"用
         // @a: anc-exec-text-toolcall-hint
         this.lastFinalTurn.set(step.step_id, { text: this.extractTextContent(response), tool_names: tools.map(t => t.name) });
-        return this.parseStepOutput(response, step.context.output_schema, step.step_id);
+        // 截断报文要本次实发上限——工具循环重发只换 messages,max_tokens 同值 // @a: anc-exec-output-truncation-loud
+        return this.parseStepOutput(response, step.context.output_schema, step.step_id, loopRequest.max_tokens);
       }
 
       const assistantContent = response.content;
@@ -2131,7 +2206,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
       // subprocess.run 双模式接线（^anc-exec-subprocess-run——review 抓 standalone 恒关死:
       // 原不注入 commandWhitelist 必撞"未配置白名单";白名单同源 hostConfig,journal 经引擎
       // 同一账跨进程持久）。// @a: anc-exec-subprocess-run
-      commandWhitelist: this.hostConfig.sandbox?.runtime?.available,
+      commandWhitelist: unionApprovedCommandNames(this.hostConfig.sandbox?.runtime?.available, this.engine.getSpec()?.header.approved_commands),   // ∪ 卡上《已批准命令》命令名（^anc-exec-command-primitive 并集条） // @a: anc-exec-command-primitive
       cmdJournal: this.engine.getCmdJournalFor(step.step_id),
     });
     const outputs = await interp.run(node.body, step.context.output_schema);
@@ -2146,42 +2221,79 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     return outputs;
   }
 
-  /** thinking 五级优先链装配单点（0100 批;review 批 F1 修提为公共件——buildApiRequest 单发路径
-   * 与 executeActWithTools 工具循环路径同一条链,"恒显式"承诺两路径同兑现）。
+  /** 思考参数装配单点（buildApiRequest 单发路径与 executeActWithTools 工具循环路径共用——
+   * "恒显式"承诺与关不掉端点的替换两路径同兑现,不各写一份）。
+   * 两步:①resolveThinkingDecision 算五级链结果（开/关,原样不改）;②结果为关且目标端点声明
+   * 思考关不掉（env {SID}_THINKING_DISABLE_UNSUPPORTED=true,缺省 provider 回退首 provider）时,
+   * 改发 output_config {effort: low}、不带 thinking 键——该类端点收到 disabled 报 400
+   * （glm-5.3-flash 实测,todo/0118）;结果为开时不管端点声明原样发。五级各级给出的关一视同仁。
+   * 设计 ^anc-exec-thinking-disable-unsupported HopSop。 */
+  // @a: anc-exec-thinking-routing, anc-exec-thinking-disable-unsupported
+  private resolveThinkingParam(stepType: ExecutableStepType | 'replan', step: StepReady | undefined, resolved: { service_id: string; thinking?: 'enabled' | 'disabled' }, maxOutput: number): { thinking?: { type: 'disabled' } | { type: 'enabled'; budget_tokens: number }; output_config?: { effort: 'low' } } {
+    const decision = this.resolveThinkingDecision(stepType, step, resolved, maxOutput);
+    if (decision.type === 'enabled') return { thinking: decision };
+    if (this.providerEnvOf(resolved.service_id, 'THINKING_DISABLE_UNSUPPORTED') === 'true') {
+      return { output_config: { effort: 'low' } };
+    }
+    return { thinking: decision };
+  }
+
+  /** provider 级 env 键取值（{SERVICE_ID}_<suffix>）:缺省 provider 路径（service_id 为 default）
+   * 且本键缺席时回退首 provider 的同名键——与 auth defaultClient 补装同构,缺省路径不补则唯一
+   * provider 配了键不写路由时静默失效。五级链第 4 级（_THINKING）与关不掉端点声明
+   * （_THINKING_DISABLE_UNSUPPORTED）共用本函数,回退规则只写一处。 */
+  // @a: anc-exec-thinking-provider-default, anc-exec-thinking-disable-unsupported
+  private providerEnvOf(serviceId: string, suffix: string): string | undefined {
+    let v = this.envOf(`${serviceId.toUpperCase()}_${suffix}`);
+    if (v === undefined && serviceId === 'default') {
+      const firstSid = this.hostConfig.model_engine?.routing_rules?.[0]?.service_id
+        ?? this.hostConfig.model_engine?.default_service_id;
+      if (firstSid && firstSid !== 'default') v = this.envOf(`${firstSid.toUpperCase()}_${suffix}`);
+    }
+    return v;
+  }
+
+  /** thinking 五级优先链（0100 批）——只算开或关,不管端点能不能关（替换在 resolveThinkingParam 出口）。
    * 五级:记名册 > 步骤 @thinking > routing_rules > provider 缺省 > 引擎内建步骤类型缺省
-   * （act 无 body 未标 free/commit 关;act free/reason/check/replan 开——作者拍分类表 2026-09-20）。
-   * 级4 缺省 provider 回退:service_id 为 default 时读首 provider 的 {SID}_THINKING
-   * （与 auth defaultClient 补装同构——缺省路径不补则唯一 provider 配键不写路由时静默失效）。 */
+   * （act 无 body 未标 free/commit 关;act free/reason/check/replan 开——作者拍分类表 2026-09-20）。 */
   // @a: anc-exec-thinking-routing, anc-exec-thinking-exhausted, anc-exec-thinking-step-annotation, anc-exec-thinking-provider-default
-  private resolveThinkingParam(stepType: ExecutableStepType | 'replan', step: StepReady | undefined, resolved: { service_id: string; thinking?: 'enabled' | 'disabled' }, maxOutput: number): { thinking?: { type: 'disabled' } | { type: 'enabled'; budget_tokens: number } } {
+  private resolveThinkingDecision(stepType: ExecutableStepType | 'replan', step: StepReady | undefined, resolved: { service_id: string; thinking?: 'enabled' | 'disabled' }, maxOutput: number): { type: 'disabled' } | { type: 'enabled'; budget_tokens: number } {
     // budget=预算半,下限夹 1024（anthropic 协议最低值——小预算+enabled 组合原发 750 违约 400;
     // 四十六审探针抓）。budget≥maxOutput 时端点自拒,夹上限 maxOutput-1 防倒挂
     const enabledParam = { type: 'enabled' as const, budget_tokens: Math.min(Math.max(Math.floor(maxOutput / 2), 1024), Math.max(maxOutput - 1, 1024)) };
+    const disabledParam = { type: 'disabled' as const };
     // 级1 记名册（止血恒最高——该步已实证烧穿,标 on 也压不回）
-    if (step && this.thinkingExhaustedSteps.has(step.step_id)) return { thinking: { type: 'disabled' } };
+    if (step && this.thinkingExhaustedSteps.has(step.step_id)) return disabledParam;
     // 级2 步骤 @thinking 标注（步骤节点查不到时短路——replan 场景无 step 天然走此路）
     const stepNode = step ? this.findStepInSpec(step.step_id) : undefined;
-    if (stepNode?.thinking_override === 'off') return { thinking: { type: 'disabled' } };
-    if (stepNode?.thinking_override === 'on') return { thinking: enabledParam };
+    if (stepNode?.thinking_override === 'off') return disabledParam;
+    if (stepNode?.thinking_override === 'on') return enabledParam;
     // 级3 routing_rules（resolveModel 带出）
-    if (resolved.thinking === 'disabled') return { thinking: { type: 'disabled' } };
-    if (resolved.thinking === 'enabled') return { thinking: enabledParam };
+    if (resolved.thinking === 'disabled') return disabledParam;
+    if (resolved.thinking === 'enabled') return enabledParam;
     // 级4 provider 缺省（{SERVICE_ID}_THINKING——buildEnvSnapshot 披发;缺省 provider 路径回退首
     // provider 的键,与 auth defaultClient 同构）
-    let provDefault = this.envOf(`${resolved.service_id.toUpperCase()}_THINKING`);
-    if (provDefault === undefined && resolved.service_id === 'default') {
-      const firstSid = this.hostConfig.model_engine?.routing_rules?.[0]?.service_id
-        ?? this.hostConfig.model_engine?.default_service_id;
-      if (firstSid && firstSid !== 'default') provDefault = this.envOf(`${firstSid.toUpperCase()}_THINKING`);
-    }
-    if (provDefault === 'disabled') return { thinking: { type: 'disabled' } };
-    if (provDefault === 'enabled') return { thinking: enabledParam };
+    const provDefault = this.providerEnvOf(resolved.service_id, 'THINKING');
+    if (provDefault === 'disabled') return disabledParam;
+    if (provDefault === 'enabled') return enabledParam;
     // 级5 引擎内建步骤类型缺省（作者拍分类表:act 无 body 未标 free/commit → 关;
     // act free/reason/check/replan → 开。带 body 步骤引擎直执不经本函数;
     // 步骤节点查不到时 act 按非 free 关——设计 1390 落空分叉句）
     const isActFree = stepType === 'act' && stepNode?.step_type === 'act' && (stepNode as { free?: boolean }).free === true;
     const off = (stepType === 'act' && !isActFree) || stepType === 'commit';
-    return { thinking: off ? { type: 'disabled' } : enabledParam };
+    return off ? disabledParam : enabledParam;
+  }
+
+  /** hoplog llm.thinking 摘要——从发送口实际请求对象抄（^anc-obs-record-at-boundary）:
+   * 'enabled:budget=N' / 'disabled' / 'effort:<档位>'（关不掉端点的替换形态,todo/0118）/ 'absent'。
+   * 单发与工具循环两处记录共用。 */
+  // @a: anc-exec-thinking-routing, anc-exec-thinking-disable-unsupported
+  private thinkingSummary(request: Anthropic.MessageCreateParamsNonStreaming): string {
+    const th = (request as { thinking?: { type: string; budget_tokens?: number } }).thinking;
+    if (th) return th.type === 'enabled' ? `enabled:budget=${th.budget_tokens}` : th.type;
+    const effort = (request as { output_config?: { effort?: string | null } }).output_config?.effort;
+    if (effort) return `effort:${effort}`;
+    return 'absent';
   }
 
   private buildApiRequest(context: AssembledContext, stepType: ExecutableStepType | 'replan', step?: StepReady): { request: Anthropic.MessageCreateParamsNonStreaming; client: ProtocolClient } {
@@ -2257,7 +2369,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
 
   formatOutputSchema(schema: OutputDecl[]): string {
     return schema.map(o => {
-      let line = `- ${o.name}: ${o.type}`;
+      let line = `- ${o.name} % ${o.type}`;
       if (o.description) line += ` # ${o.description}`;
       return line;
     }).join('\n');
@@ -2290,6 +2402,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     if (this.tempRejectedClients.has(c)) delete (request as { temperature?: number }).temperature;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const attemptStart = Date.now();   // 本次尝试的发出时刻——客户端等待超时按耗时判（^anc-exec-api-retry）
       try {
         const resp = await c.create(request);
         this.cumulativeTokens += resp.usage.input_tokens + resp.usage.output_tokens;
@@ -2312,6 +2425,23 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
 
         if (kind === 'auth') throw err;
         if (kind === 'context_overflow') throw err;
+        // 端点不可达（ECONNREFUSED/ENOTFOUND/EPERM）：配置指向死端点或策略不放行,等多久都不会好——首次即判,
+        // 不退避不进网络暂停门,ENDPOINT_UNREACHABLE 前缀走 failStep 到 run failed;报文三样
+        //（service_id/base_url/错误码）让用户一眼定位（hopissues/0106 hop3 真机:dead provider
+        // 90s+ 永 running 静默挂死）。// @a: anc-exec-network-pause
+        if (kind === 'unreachable') {
+          throw new Error(this.endpointUnreachableMessage(err, c));
+        }
+
+        // 客户端等待超时（v0.36.0,todo/0117）:timeout 且本次尝试等满了单次请求等待上限的 90%——
+        // 同样的请求再发一遍大概率同样等满,每次又是至少 10 分钟外加一轮生成费用,所以不重试、
+        // 不走网络暂停,以 CLIENT_TIMEOUT: 前缀直接失败,整步重跑与否归 subtask retry 定。
+        // 90% 余量给 undici 粗粒度计时器;短超时（连接超时、ETIMEDOUT）耗时远不到上限,仍走下面的 6 次档。
+        // @a: anc-exec-api-retry
+        const waitMs = nonstreamingWaitMs(request.max_tokens);
+        if (kind === 'timeout' && Date.now() - attemptStart >= waitMs * 0.9) {
+          throw new Error(this.clientTimeoutMessage(err, request.max_tokens, waitMs));
+        }
 
         const retriesForError = this.getMaxRetries(kind);
         if (attempt >= retriesForError) {
@@ -2321,13 +2451,10 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
           // "非内容问题"分流的判据）。// @a: anc-exec-api-retry
           if (kind === 'network' || kind === 'timeout') {
             // message 优先取字段——SDK 错误对象可能非 Error 子类,String() 得 [object Object]
-            const raw = (err as { message?: unknown })?.message != null ? String((err as { message?: unknown }).message) : String(err);
+            const raw = errMessage(err);
             // 超时且水位已越 75% 线:文案追加体量提示（^anc-exec-ctx-watermark ③——超时与
             // 体量相关时重试大概率同因;网络瞬断无水位嫌疑照旧安静文案）。// @a: anc-exec-ctx-watermark
-            const ctxLimit = this.hostConfig.resource_limits?.max_context_tokens;
-            const ctxHint = (kind === 'timeout' && typeof ctxLimit === 'number' && ctxLimit > 0 && this.ctxWatermark > ctxLimit * 0.75)
-              ? `;实例上下文水位 ${Math.round(this.ctxWatermark / 1000)}K 已近告警线——超时与体量相关的概率高,重试大概率同因,考虑拆步骤（0095）`
-              : '';
+            const ctxHint = kind === 'timeout' ? this.ctxWatermarkHint() : '';
             throw new Error(`NETWORK_ERROR: 网络中断（非内容问题——与产出质量无关,原文: ${raw}${ctxHint}）`);
           }
           throw err;
@@ -2339,6 +2466,51 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     }
 
     throw lastError;
+  }
+
+  /** 实例水位越 75% 线时的体量提示（^anc-exec-ctx-watermark ③）——timeout 类失败文案追加,
+   * NETWORK_ERROR 耗尽与 CLIENT_TIMEOUT 两处共用;未越线返回空串。 */ // @a: anc-exec-ctx-watermark
+  private ctxWatermarkHint(): string {
+    const ctxLimit = this.hostConfig.resource_limits?.max_context_tokens;
+    return (typeof ctxLimit === 'number' && ctxLimit > 0 && this.ctxWatermark > ctxLimit * 0.75)
+      ? `;实例上下文水位 ${Math.round(this.ctxWatermark / 1000)}K 已近告警线——超时与体量相关的概率高,重试大概率同因,考虑拆步骤（0095）`
+      : '';
+  }
+
+  /** 端点不可达的报错文案（^anc-exec-network-pause 末条,hopissues/0106）——三样定位信息:配了哪个
+   * 后端（service_id）、指向哪（base_url）、为什么连不上（错误码）;明说不是瞬时网络故障、重试无用,
+   * 指路配置文件。// @a: anc-exec-network-pause */
+  private endpointUnreachableMessage(err: unknown, c: ProtocolClient): string {
+    const sid = c.endpoint?.service_id ?? 'default';
+    const url = c.endpoint?.base_url ?? '(SDK 缺省端点)';
+    const code = (() => {
+      let cur: unknown = err;
+      for (let i = 0; i < 6 && cur != null && typeof cur === 'object'; i++) {
+        const cd = (cur as { code?: unknown }).code;
+        if (typeof cd === 'string') return cd;
+        const errs = (cur as { errors?: unknown }).errors;
+        if (Array.isArray(errs) && errs[0] && typeof (errs[0] as { code?: unknown }).code === 'string') return (errs[0] as { code: string }).code;
+        cur = (cur as { cause?: unknown }).cause;
+      }
+      return 'unknown';
+    })();
+    const why = code === 'ENOTFOUND' ? '主机名解析不到（DNS）'
+      : code === 'ECONNREFUSED' ? '目标端口无进程监听（连接被拒）'
+      : code === 'EPERM' ? '连接被系统策略拒绝（沙箱/防火墙未放行该地址）'
+      : code;
+    return `ENDPOINT_UNREACHABLE: provider '${sid}' 不可达——base_url=${url}，${why}〔${code}〕。`
+      + `这不是瞬时网络故障（重试无用），是配置指向了不存在或未启动的后端：核对 ~/.hopjit/config.yaml（或项目 hopjit.yaml）里该 provider 的 base_url 与端口，确认服务已启动。`;
+  }
+
+  /** 客户端等待超时的报错文案（^anc-exec-api-retry "客户端等待超时"条,todo/0117）——说清是等满了
+   * 等待上限、不是网络中断,给出上限怎么算和怎么调。N=等待上限分钟数向上取整。 */ // @a: anc-exec-api-retry
+  private clientTimeoutMessage(err: unknown, maxTokens: number, waitMs: number): string {
+    const minutes = Math.ceil(waitMs / 60_000);
+    return `CLIENT_TIMEOUT: 客户端等待超过 ${minutes} 分钟仍没收到模型的完整回复，按等待上限中止`
+      + `（不是网络中断，也与产出内容无关——这次请求本身耗时超过了引擎给它的等待上限；`
+      + `等待上限按本次请求的 max_tokens=${maxTokens} 换算，每 128000 tokens 60 分钟、最少 10 分钟。`
+      + `可以精简本步产出，或换更快的端点；调大输出上限〔HOPJIT_MAX_OUTPUT_TOKENS / resource_limits.max_output_tokens / provider 的 max_output_tokens〕会按比例放宽等待上限。`
+      + `原文: ${errMessage(err)}${this.ctxWatermarkHint()}）`;
   }
 
   // 重试预算按错误类别（原 7 个 instanceof 判定收编进 ProtocolClient.classifyError——
@@ -2359,17 +2531,17 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     }
   }
 
-  private parseStepOutput(response: Anthropic.Message, schema: OutputDecl[], stepId?: string): Record<string, unknown> {
+  private parseStepOutput(response: Anthropic.Message, schema: OutputDecl[], stepId?: string, requestedMaxTokens?: number): Record<string, unknown> {
     // 截断响亮失败——max_tokens 掐断的输出是残值（thinking 型可把预算全烧推理,text 空）,
     // 收下=毒值下游+重试反馈错误归因"你没产出"（buildtest 实撞:16384 全 thinking,node_result=""
     // 同因必死）。见 design ^anc-exec-output-truncation-loud。// @a: anc-exec-output-truncation-loud
     if (response.stop_reason === 'max_tokens') {
       const rum = this.checkThinkingExhausted(response, 'parseStepOutput', stepId);   // @a: anc-exec-thinking-exhausted
       if (rum) throw new Error(rum);
-      const used = response.usage?.output_tokens ?? '?';
-      throw new Error(`OUTPUT_TRUNCATED: 输出被 max_tokens 上限掐断（output_tokens=${used}）——产出不完整不可用。调大 HOPJIT_MAX_OUTPUT_TOKENS 或 resource_limits.max_output_tokens`);
+      // 两个数+建议由 truncationAdvice 出（端点自带上限的分辨,todo/0113）;调用点不传实发值时数位写 ?
+      throw new Error(`OUTPUT_TRUNCATED: 输出被 max_tokens 上限掐断，产出不完整不可用${truncationAdvice(requestedMaxTokens, response.usage?.output_tokens)}`);
     }
-    const text = this.extractTextContent(response);
+    let text = this.extractTextContent(response);
     // 空响应响亮失败——正常收尾但全空的响应没有任何闸(doc-review 第十二次实撞:步 20 推定
     // 领域名 response="" output_tokens=9,单输出收空串 completed 零重试,空 domain_name 灌
     // 下游拼出 DocReviewers//reviewers 残路径。截断闸只认 max_tokens,管不到正常收尾的空)。
@@ -2380,9 +2552,16 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
       throw new Error(`EMPTY_OUTPUT: 响应文本全空（output_tokens=${used}）——没有产出任何内容,不能当作有效值收下`);
     }
     const outputs: Record<string, unknown> = {};
+    // 键行全角冒号规范化：顶格声明输出名后紧跟的全角 `：` 换成 `: `,下面全部解析路径都吃
+    // 规范化后的文本（glm-flash 收尾写 `slide_ok： true`,YAML 不认,三连重试烧尽）。
+    // 见 design ^anc-exec-output-fullwidth-key-colon。// @a: anc-exec-output-fullwidth-key-colon
+    const rawText = text;
+    text = normalizeFullwidthKeyColons(text, schema.map(d => d.name));
 
     if (schema.length === 1) {
-      outputs[schema[0].name] = this.unwrapSelfLabeled(text.trim(), schema[0].name);
+      // 单输出：收窄真剥下了标签才用规范化结果;没剥=全文即值,返回原文（值里的 `名：…` 行是内容）
+      const unwrapped = this.unwrapSelfLabeled(text.trim(), schema[0].name);
+      outputs[schema[0].name] = unwrapped === text.trim() ? rawText.trim() : unwrapped;
       return outputs;
     }
 
@@ -2490,11 +2669,13 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     return outputs;
   }
 
-  // 引号前缀行修复后的 yamlLoad（三处解析点一个修复原语——^anc-exec-output-quoted-prefix-repair:
-  // 直载失败→修复命中行→重载;修复无命中原样抛,调用方 catch 走回退）。// @a: anc-exec-output-quoted-prefix-repair
+  // 修复后的 yamlLoad（六处解析点共用一个串联修复原语——引号前缀 ^anc-exec-output-quoted-prefix-repair
+  // + 值里裸冒号 ^anc-exec-output-inline-colon-repair:直载失败→修复→重载;修复无命中原样抛,
+  // 调用方 catch 走回退）。// @a: anc-exec-output-quoted-prefix-repair
+  // @a: anc-exec-output-inline-colon-repair
   private static yamlLoadWithRepairImpl(t: string): unknown {
     try { return yamlLoad(t); } catch (e) {
-      const repaired = repairQuotedPrefixScalars(t);
+      const repaired = repairYamlScalars(t);
       if (repaired === t) throw e;
       return yamlLoad(repaired);
     }
@@ -2789,11 +2970,12 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     return DEFAULT_MAX_OUTPUT_TOKENS;
   }
 
-  /** client 级非流式超时——SDK 预检只看构造期 _options.timeout,按本 run 输出上限换算给足
-   * （max(10min, tokens/128k×60min),与 SDK 估算同式;缺省 16384 恒 10min 零变化）。
+  /** client 级等待上限——按这个客户端所属 service 的输出上限换算（公式唯一一处 nonstreamingWaitMs,
+   * 与 SDK 估算同式;缺省 32768 约 15.4min）。给 SDK 构造期 timeout（解锁非流式预检）与 undici
+   * 连接设置两个时限共用。按 service 解析:该客户端发出的请求 max_tokens 恒不超过它。
    * 见 design ^anc-exec-nonstreaming-timeout。 */ // @a: anc-exec-nonstreaming-timeout
-  private nonstreamingTimeoutMs(): number {
-    return Math.max(10 * 60_000, Math.ceil((this.resolveMaxOutputTokens() / 128_000) * 60 * 60_000));
+  private nonstreamingTimeoutMs(serviceId: string): number {
+    return nonstreamingWaitMs(this.resolveMaxOutputTokens(serviceId));
   }
 
   /** replan 失败收尾：attempts+1 写回，达上限则 failStep。error 分支与 catch 分支共用。 */
@@ -2852,20 +3034,24 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     if (envKey) {
       // {SERVICE_ID}_PROTOCOL env 决定协议（standalone provider 注入面；缺省 anthropic）// @a: anc-exec-protocol-adapter
       const envProto = this.envOf(`${service_id.toUpperCase()}_PROTOCOL`);
-      const timeout = this.nonstreamingTimeoutMs();   // client 级预检解锁,同 defaultClient // @a: anc-exec-nonstreaming-timeout
+      // client 级等待上限按本 service 解析（与实际请求 max_tokens 的解析同源——请求上限恒不超过它）;
+      // 三协议都带:SDK timeout + undici 连接设置,同 defaultClient // @a: anc-exec-nonstreaming-timeout
+      const waitMs = this.nonstreamingTimeoutMs(service_id);
+      const common = { timeout: waitMs, maxRetries: 0, fetchOptions: longWaitFetchOptions(waitMs) };
       // 鉴权头档（^anc-config-standalone-schema auth 字段——bearer=走 SDK authToken 通道发
       // Authorization: Bearer,apiKey 置 null 防双头;缺省 api-key 形态与既有逐字节同）。
       const envAuth = this.envOf(`${service_id.toUpperCase()}_AUTH`);
       const anthropicOpts = envAuth === 'bearer'
-        ? { apiKey: null, authToken: envKey, timeout }
-        : { apiKey: envKey, authToken: null, timeout };
+        ? { apiKey: null, authToken: envKey, ...common }
+        : { apiKey: envKey, authToken: null, ...common };
       const client: ProtocolClient = envProto === 'openai-chat'
-        ? makeOpenAiClient({ apiKey: envKey, ...(envUrl ? { baseURL: envUrl } : {}) })
+        ? makeOpenAiClient({ apiKey: envKey, ...(envUrl ? { baseURL: envUrl } : {}), waitMs })
         : envProto === 'openai-responses'
-          ? makeOpenAiResponsesClient({ apiKey: envKey, ...(envUrl ? { baseURL: envUrl } : {}) })
+          ? makeOpenAiResponsesClient({ apiKey: envKey, ...(envUrl ? { baseURL: envUrl } : {}), waitMs })
           : wrapAnthropicClient(
               envUrl ? new Anthropic({ ...anthropicOpts, baseURL: envUrl }) : new Anthropic(anthropicOpts),
               Anthropic);
+      client.endpoint = { service_id, ...(envUrl ? { base_url: envUrl } : {}) };   // 0106 报文用 // @a: anc-exec-network-pause
       this.clients.set(service_id, client);
       return client;
     }

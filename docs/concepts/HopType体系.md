@@ -3,7 +3,7 @@
 	source: [[HopAnt概念-双态组件模型]]
 	source_id: cyant-concept
 	type: extract
-	last_sync: 2026-08-12T22:13+0800
+	last_sync: 2026-09-27T20:38+0800
 	note: HopType 类型与组合体系——从 HopAnt 概念文档中提取的通用元模型
 %%
 
@@ -44,7 +44,7 @@
 struct: <名称>
   Id: <标识符>
   Fields:                    # 成员字段，HopAnt 实例各自持有
-    - <field>: <type>  # 说明
+    - <field> % <type>  # 说明
   Specs:                     # 行为定义，绑定在组件上
     - <Spec Id>              # 有 Steps 或无 Steps 均可
 ```
@@ -73,9 +73,9 @@ struct: <名称>
 struct: ExecutionEngine
   Id: exec-engine
   Fields:
-    - spec: SpecAST
-    - step_states: yaml
-    - retry_counters: yaml
+    - spec % SpecAST
+    - step_states % yaml
+    - retry_counters % yaml
     ...
 
 ## impl fail_step
@@ -84,8 +84,8 @@ struct: ExecutionEngine
 Id: fail_step
 
 Inputs:
-- step_id: line          # 调用方传入
-- failure_reason: text   # 调用方传入
+- step_id % line          # 调用方传入
+- failure_reason % text   # 调用方传入
 - spec                   # Field
 - step_states            # Field
 - retry_counters         # Field

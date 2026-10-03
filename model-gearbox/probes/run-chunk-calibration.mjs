@@ -79,6 +79,7 @@ async function call(prompt) {
     body: JSON.stringify({ model: provider.model, max_tokens: MAX_TOKENS, messages: [{ role: 'user', content: prompt }] }),
   });
   const body = await r.json();
+  if (!r.ok) throw new Error(`端点报错 HTTP ${r.status}——这是环境故障(欠费/限流/服务端错),不是能力读数,探针中止不计分: ${JSON.stringify(body).slice(0, 300)}`);
   const text = (body.content ?? []).filter(b => b.type === 'text').map(b => b.text).join('');
   return { text, usage: body.usage ?? {} };
 }

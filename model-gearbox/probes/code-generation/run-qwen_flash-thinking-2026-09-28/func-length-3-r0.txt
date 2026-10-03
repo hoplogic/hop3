@@ -1,0 +1,40 @@
+```python
+import ast
+import sys
+
+def main():
+    if len(sys.argv) < 2:
+        sys.stderr.write("Error: No input file specified.\n")
+        sys.exit(1)
+    
+    filename = sys.argv[1]
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except Exception as e:
+        sys.stderr.write(f"Error reading file: {e}\n")
+        sys.exit(1)
+    
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        sys.stderr.write("Error: File has syntax errors.\n")
+        sys.exit(1)
+    
+    violations = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            length = node.end_lineno - node.lineno + 1
+            if length > 40:
+                violations.append((node.lineno, length))
+    
+    if violations:
+        for lineno, length in violations:
+            sys.stderr.write(f"{lineno}: 函数长度为 {length}，超过40行\n")
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+if __name__ == '__main__':
+    main()
+```

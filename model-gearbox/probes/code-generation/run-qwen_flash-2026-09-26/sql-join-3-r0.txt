@@ -1,0 +1,27 @@
+```sql
+WITH region_customer_counts AS (
+    SELECT 
+        c.region,
+        COUNT(*) AS customer_count
+    FROM customers c
+    GROUP BY c.region
+),
+region_paid_orders AS (
+    SELECT 
+        c.region,
+        COUNT(o.id) AS paid_order_count,
+        SUM(CASE WHEN o.amount IS NULL THEN 0 ELSE o.amount END) AS paid_amount
+    FROM customers c
+    LEFT JOIN orders o ON c.id = o.customer_id AND o.status = 'paid'
+    WHERE o.customer_id IS NOT NULL OR o.customer_id IS NULL
+    GROUP BY c.region
+)
+SELECT 
+    rcc.region,
+    rcc.customer_count,
+    COALESCE(rpo.paid_order_count, 0) AS paid_order_count,
+    COALESCE(rpo.paid_amount, 0) AS paid_amount
+FROM region_customer_counts rcc
+LEFT JOIN region_paid_orders rpo ON rcc.region = rpo.region
+ORDER BY paid_amount DESC, region ASC;
+```

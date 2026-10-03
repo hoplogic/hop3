@@ -1,0 +1,14 @@
+```sql
+WITH filtered_orders AS (
+    SELECT id, customer_id, amount, created_at
+    FROM orders
+    WHERE status = 'paid'
+      AND amount >= 100
+      AND amount IS NOT NULL
+      AND created_at >= '2026-03-01 00:00:00'
+      AND created_at <= '2026-03-31 23:59:59'
+)
+SELECT id, customer_id, amount
+FROM filtered_orders
+ORDER BY amount DESC, id DESC;
+```

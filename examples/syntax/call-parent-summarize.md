@@ -3,10 +3,10 @@ Id: call-parent-summarize
 Goal: 对输入文档先调用「文本规整」子 spec 清洗，再生成摘要——示范 call 步骤复用子 spec
 
 ## Inputs
-- doc: text  # 原始文档（可能含噪声：多余空行、乱码、格式不一）
+- doc % text  # 原始文档（可能含噪声：多余空行、乱码、格式不一）
 
 ## Outputs
-- summary: text  # 文档摘要
+- summary % text  # 文档摘要
 
 ## Steps
 1. [call text-normalize(raw_text: doc)] 调用文本规整子流程
@@ -17,7 +17,7 @@ Goal: 对输入文档先调用「文本规整」子 spec 清洗，再生成摘�
 
 2. [reason] 基于规整后文档生成摘要
   - ← clean_doc
-  + → summary: text  # 摘要
+  + → summary % text  # 摘要
   > 阅读 clean_doc，提炼核心要点生成简洁摘要
 
 # 配套子 spec（独立文件）：examples/call-child-normalize.md

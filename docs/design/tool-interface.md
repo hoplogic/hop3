@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-09-25T21:19+0800
+	last_sync: 2026-09-29T02:00+0800
 	note: 工具接口标准（typed request-response 第一层）与绑定机制（第二层）的正式设计——概念上游=核心规范工具签名契约（^anc-step-act-body-lang 段）；推演与实测证据链在 rounds/atomic-io-tools-草案 + rounds/mcp-调研。归 tools 模块（tools.md 是内置实现层，本文是接口标准层）
 %%
 
@@ -33,7 +33,7 @@
 | InProcessBinding 实装      | 契约  | `anc-exec-inprocess-binding`     |
 | 工具 server 生命周期总图         | 契约  | `anc-exec-tool-server-lifecycle` |
 
-> **模块版本**：tool-interface `v0.7.0`（2026-09-25）。本版新增 server 级可选字段 `per_parallel_child`（todo/0112——打开后该 server 在每个并行子任务里各起一个独立进程，子任务收场即关；串行步骤与串行 call 照旧共用顶层进程），Composite 随之新增"为并行子任务派生视图"与"只关自有成员"两项能力，生命周期总图加⑥分支。同批次补一处 McpBinding 旧缺陷：并发首调原来各起一个进程（没有"连接进行中"状态，被覆盖的进程无人关），现在共用同一次连接；连接期间被关闭时刚连好的进程立即关掉（McpBinding HopSop 连接第 5、6 步）。
+> **模块版本**：tool-interface `v0.7.2`（2026-09-29）。本版=notes 并进描述的拼法条款补写"注册面没写 description 时退回成员自报描述"（与本文件 Composite HopSop 1.3 与代码一致;原条款漏写这一支,工程链 review 查出）。上版 v0.7.1=Composite 的 list() 用注册面声明补全运行时投影：notes 并进工具描述、output_schema 渲染成"返回:"行的形状描述（todo/0122——设计早写了 notes 进 prompt、外挂件返回行从 output_schema 渲染,代码没做,模型看到的 web_search 描述是空的）。上版 v0.7.0（2026-09-25）新增 server 级可选字段 `per_parallel_child`（todo/0112——打开后该 server 在每个并行子任务里各起一个独立进程，子任务收场即关；串行步骤与串行 call 照旧共用顶层进程），Composite 随之新增"为并行子任务派生视图"与"只关自有成员"两项能力，生命周期总图加⑥分支。同批次补一处 McpBinding 旧缺陷：并发首调原来各起一个进程（没有"连接进行中"状态，被覆盖的进程无人关），现在共用同一次连接；连接期间被关闭时刚连好的进程立即关掉（McpBinding HopSop 连接第 5、6 步）。
 >
 > - 上版回填算法重写为 params 节窗口+序位配对（review 批四缺陷:错配/防线失效/池污染/引号数组丢弃）；
 > - 上版补装 params 短形态行尾 # 说明回填（todo/0050,enrichParamsComments 三读入口）并修 PARAM_TYPES 词表漂移（number 除名与 output_schema 同表）。0.x 未承诺稳定；
@@ -67,15 +67,15 @@
 struct: ToolSpec
   Id: tool-spec
   Fields:
-    - name: line             # wire 上的工具名，全局唯一（字符串等值判；同名冲突=配置错误 fail-fast）。允许任意 Unicode
-    - tool_id: line          # 可选。hop_python body 的调用名=工具在 HopSpec 语言面的标识符（须合法标识符）——name 非法标识符时必填,缺省=name;与全体 name/tool_id 集合同判唯一
-    - description: line
-    - input_schema: yaml     # 请求类型（JSON Schema）。内置工具内嵌代码；外部工具可省略——从绑定侧发现（mcp tools/list）并做一致性比对
-    - params: yaml           # 可选（v0.5.0 ^anc-tool-params-notes）。逐参数语义声明——条目式 `- 参数名: 类型  # 说明`,说明入结构;与 input_schema 的分工:input_schema=机器校验面(JSON Schema),params=人与 LLM 的语义面(值语义/取值来源/错用后果)。两面并存时引擎核参数名集合一致(不一致=TOOLS_FILE_INVALID fail-fast——防两面漂移);仅有 params 时 input_schema 由其机械生成(类型词映射 JSON Schema 基础类型)
-    - notes: text            # 可选（v0.5.0 同批）。跨参数复杂语义多行扩展块——幂等性/上限/调用纪律/取值约定;进 prompt 工具语义供给面,不参与机器校验
-    - output_schema: yaml     # 可选。响应形状声明（HopSchema——语法与收窄见 ^anc-type-output-schema-syntax）；声明即硬校验（见双端校验）；无声明=放行+warn
-    - requires_commit: bool  # 不可逆标记（act 拦截/commit 放行）——权威在本声明，不信绑定侧自报（mcp annotations 实测会标错）
-    - unwrap: line           # 可选。响应解包指示，枚举 json-in-text（text 块内嵌 JSON 字符串——百炼系四服务一致惯例）；缺省不解包
+    - name % line             # wire 上的工具名，全局唯一（字符串等值判；同名冲突=配置错误 fail-fast）。允许任意 Unicode
+    - tool_id % line          # 可选。hop_python body 的调用名=工具在 HopSpec 语言面的标识符（须合法标识符）——name 非法标识符时必填,缺省=name;与全体 name/tool_id 集合同判唯一
+    - description % line
+    - input_schema % yaml     # 请求类型（JSON Schema）。内置工具内嵌代码；外部工具可省略——从绑定侧发现（mcp tools/list）并做一致性比对
+    - params % yaml           # 可选（v0.5.0 ^anc-tool-params-notes）。逐参数语义声明——条目式 `- 参数名: 类型  # 说明`,说明入结构;与 input_schema 的分工:input_schema=机器校验面(JSON Schema),params=人与 LLM 的语义面(值语义/取值来源/错用后果)。两面并存时引擎核参数名集合一致(不一致=TOOLS_FILE_INVALID fail-fast——防两面漂移);仅有 params 时 input_schema 由其机械生成(类型词映射 JSON Schema 基础类型)
+    - notes % text            # 可选（v0.5.0 同批）。跨参数复杂语义多行扩展块——幂等性/上限/调用纪律/取值约定;进 prompt 工具语义供给面,不参与机器校验
+    - output_schema % yaml     # 可选。响应形状声明（HopSchema——语法与收窄见 ^anc-type-output-schema-syntax）；声明即硬校验（见双端校验）；无声明=放行+warn
+    - requires_commit % bool  # 不可逆标记（act 拦截/commit 放行）——权威在本声明，不信绑定侧自报（mcp annotations 实测会标错）
+    - unwrap % line           # 可选。响应解包指示，枚举 json-in-text（text 块内嵌 JSON 字符串——百炼系四服务一致惯例）；缺省不解包
 ```
 
 **params/notes 语义面（v0.5.0,概念权威 [[../concepts/HopSpec V3核心规范#^anc-tool-two-faces]] 环境注册面半边——2026-08-25 作者定"每个 tools 下面应该用 hop schema 方式来展开介绍每一个参数的意义,避免望词生义"）** ^anc-tool-params-notes：
@@ -102,6 +102,11 @@ tools:
   - 配对安全门=短形态核行键行值一致（值剥缠绕引号——`"[line]"` 数组类型形态照常配）、长形态核行键为 name,任一不合弃整窗口（宁漏勿错配——错说明比丢说明更害）;
   - 类型词汇=HopSpec 原子类型 + `[原子]`（与 output_schema 同词汇表——int/float 唯二数字型,number 已随全库除名,v0.6.1 同批修词表漂移）;
 - **消费面三处**：①prompt 工具语义供给（执行 LLM 每参数拿到"是什么/怎么取值/错了什么后果"——act free 工具循环与 body 生成期都吃）;②spec Tools 段 init 对账的实现侧对照物;③人读注册文件即知全貌;
+- **消费面①的落点：notes 并进工具描述**（todo/0122——原先只取注册条目的 description,模板只写 notes 的件发给模型的描述是空串）。执行 LLM 看到工具说明的地方只有两处：tool_use 协议 tools 数组的 description,和 L4 工具清单每件工具那一行（[[prompt-assembler#^anc-exec-tool-manifest-supply]]）。两处都读 ToolDef.description,所以 notes 在 Composite 的 list() 里并进 description,一处填好两处都有：
+  - 拼法：注册条目的 description（去首尾空白）在前,notes（去首尾空白）在后,中间换一行;注册条目没写 description 时,前半段退回成员自报的描述（MCP server 发现时报的工具说明,或宿主注入件自带的描述）;前后两段缺一就只用在场的那个;都缺则 description 为空串（如实为空,不编）；
+  - 例：hoptools-websearch.yaml 的 bailian_web_search 只写了 notes → 描述就是"网页检索:查询词→结果页清单(标题/URL/摘要)。只读零副作用。";send_message 示例两者都写 → "把消息发送到值班群（发送后撤不回）" 换行接三行 notes；
+  - tool_id 别名条目继承同一份描述,再在末尾接 `（tool_id→<wire 名>）`;
+  - 只并注册面的 notes：内置件与宿主注入件没有 ToolSpec,描述照其 ToolDef 原样;spec Tools 段的 notes 是另一面（todo/0027）,不在此并;
 - **params 缺席向后兼容**：既有注册文件（只有 input_schema）照常工作,params 是增量语义面非破坏性改动。
 
 binding 挂在 ToolServerEntry 层（一个 server 一个绑定，其下工具共享——见注册文件节），不在单工具上。
@@ -206,11 +211,11 @@ tool_servers:
     struct: ToolServerEntry
       Id: tool-server-entry
       Fields:
-        - name: line                  # server 逻辑名（HopLog 记账用;两级配置同名整体替换的键）
-        - binding: ToolBinding        # 绑定形态（kind + 传输参数）
-        - tools: [ToolSpec]           # 白名单——声明即启用
-        - call_timeout_ms: int        # 可选,正整数毫秒;缺省 60000
-        - per_parallel_child: bool    # 可选;缺省 false（解析产物里缺席即 false,只在写了 true 时携带）;只许 kind: mcp
+        - name % line                  # server 逻辑名（HopLog 记账用;两级配置同名整体替换的键）
+        - binding % ToolBinding        # 绑定形态（kind + 传输参数）
+        - tools % [ToolSpec]           # 白名单——声明即启用
+        - call_timeout_ms % int        # 可选,正整数毫秒;缺省 60000
+        - per_parallel_child % bool    # 可选;缺省 false（解析产物里缺席即 false,只在写了 true 时携带）;只许 kind: mcp
     ```
 - **加载 fail-fast**：文件语法错/字段缺失/name 或 tool_id 冲突（含与内置工具冲突）→ **startRun/resume 装配期即拒**（判重发生在装配期非 server 启动期——serve 只加载配置不装配工具面,2026-08-17 hopissues/0005 时点措辞校准），报字段与冲突名（loadStandaloneConfig 同先例）。
   - 拒的形态=startRun/resume 返回结构化 `error: { code: TOOLS_FILE_INVALID | TOOLS_NAME_CONFLICT, message }`（与 TOOLS_UNAVAILABLE 同约定）——不裸抛到 MCP handler、不崩 server;
@@ -262,7 +267,7 @@ Constraints:
 struct: ToolBinding
   Id: tool-binding
   Fields:
-    - kind: line   # 枚举 in-process/mcp（exec 挂起备用；未来形态 MINOR 加枚举）
+    - kind % line   # 枚举 in-process/mcp（exec 挂起备用；未来形态 MINOR 加枚举）
 ```
 
 | kind | 机制 | 生命周期 | 适用 |
@@ -294,10 +299,10 @@ Constraints:
 struct: McpBindingMember
   Id: mcp-binding-member
   Fields:
-    - entry: ToolServerEntry   # 注册条目（binding+tools 白名单）
-    - client: yaml             # SDK Client 句柄——惰性连接（首次调用时 connect,失败=该次调用 fail 不重试——下次调用再试即自然重连面）
-    - connecting: yaml         # 连接进行中的等待句柄（没有连接在进行时为空）——并发首调共用同一次连接,见 HopSop 连接第 5 步
-    - discovered: yaml         # tools/list 发现结果缓存（连接时一次）——input_schema 补全源与一致性比对
+    - entry % ToolServerEntry   # 注册条目（binding+tools 白名单）
+    - client % yaml             # SDK Client 句柄——惰性连接（首次调用时 connect,失败=该次调用 fail 不重试——下次调用再试即自然重连面）
+    - connecting % yaml         # 连接进行中的等待句柄（没有连接在进行时为空）——并发首调共用同一次连接,见 HopSop 连接第 5 步
+    - discovered % yaml         # tools/list 发现结果缓存（连接时一次）——input_schema 补全源与一致性比对
 ```
 
 **关键逻辑（HopSop）**：
@@ -369,8 +374,8 @@ run 终态收（引擎/mcp-server 生命周期钩子——**含 failed-via-throw
 struct: InProcessBindingMember
   Id: inprocess-binding-member
   Fields:
-    - entry: ToolServerEntry   # 注册条目（binding.module 模块路径 + tools 白名单——声明面与 mcp 完全同构）
-    - mod: yaml                # 装载的模块句柄——惰性 import（首次调用时装载,失败=该次调用 fail）
+    - entry % ToolServerEntry   # 注册条目（binding.module 模块路径 + tools 白名单——声明面与 mcp 完全同构）
+    - mod % yaml                # 装载的模块句柄——惰性 import（首次调用时装载,失败=该次调用 fail）
 ```
 
 **注册文法**：`binding` 下 `kind: in-process` + `module: <路径>`——module 为模块文件路径（相对声明所在配置文件目录或绝对路径），加载期解析为绝对路径；写 url/command=文法错误 fail-fast。声明装载=操作者对该模块审计状态的断言（个人版审计闸——引擎机检不了外部库工程链,责任随声明走）。
@@ -482,10 +487,12 @@ run（状态机，真身在 .hopstate 盘上）───────────
 Id: tool-composite-trait
 Goal: 三来源工具（内置组/外部注册/宿主注入）合成一张工具面——消费方（body 解释器/LLM 循环/预检）只见统一 ToolProvider,不见来源差异
 Outputs:
-- list(): 全成员并集清单（tool_id 独立成条目,继承声明 requires_commit——语言面 ID 不豁免安全闸）
+- list(): 全成员并集清单（tool_id 独立成条目,继承声明 requires_commit——语言面 ID 不豁免安全闸）;有 ToolSpec 的成员（注册文件的 mcp/in-process 件）用声明面补全运行时投影：description 并入 notes（拼法见 ^anc-tool-params-notes 消费面①落点）,returns 由 output_schema 渲染成中性词形状描述
 - execute(): 按名路由到成员 → 双端校验包住 → 带 audit 元信息（外部成员记 server 归属+耗时）的结果
 - forkForParallelChild(): 给一个并行子任务用的派生视图——per_parallel_child 打开的 server 换成新成员实例,其余成员与父视图是同一个实例;没有任何打开的 server 时返回父视图自身
 - closeOwned(): 派生视图收场——只关它自己新建的成员（及它再派生出去的视图）,父视图的成员一个不碰
+- registerWorkZoneRoot(root): 把一条本 run 实例树的 work_zone 根转发给全部实现了该可选方法的成员（内置文件成员收下;外部/宿主成员不实现则跳过）;派生视图与父共用同一成员对象,转发自然落到同一处——engine.getWorkZone() 的登记路由经此进提供者,契约 [[tools/file-tools#^anc-exec-work-zone-registry]]（2026-09-30 todo/0124）
+- setWorkZoneScope(scope): 同款转发——当前实例写根 own 与本 run 读树 tree（2026-09-30 todo/0126 读写分权）
 Constraints:
 - 同名即拒: 装配期全体 name/tool_id 判重,冲突=配置错误 fail-fast——不覆盖不遮蔽
 - 装配期零连接: 构造只做声明与判重,外部 server 零感知（惰性连接归成员）;派生同样零连接
@@ -495,9 +502,9 @@ Constraints:
 struct: CompositeToolProvider
   Id: tool-composite
   Fields:
-    - members: [yaml]  # 成员清单：file 内置组（恒在）+ tool_servers 各 server + 宿主注入 ToolProvider（并入成员，不再整体替换）。每个成员记着自己是否来自 per_parallel_child 打开的注册条目（派生时据此判断换不换实例）
-    - owned: [yaml]    # 本视图自己新建、归自己关的成员（顶层视图=全部成员;派生视图=只有换过实例的那几个）
-    - forks: [yaml]    # 从本视图派生出去、还没关闭的视图（close 兜底用;子视图 closeOwned 时把自己摘掉）
+    - members % [yaml]  # 成员清单：file 内置组（恒在）+ tool_servers 各 server + 宿主注入 ToolProvider（并入成员，不再整体替换）。每个成员记着自己是否来自 per_parallel_child 打开的注册条目（派生时据此判断换不换实例）
+    - owned % [yaml]    # 本视图自己新建、归自己关的成员（顶层视图=全部成员;派生视图=只有换过实例的那几个）
+    - forks % [yaml]    # 从本视图派生出去、还没关闭的视图（close 兜底用;子视图 closeOwned 时把自己摘掉）
 ```
 
 **关键逻辑（HopSop）**：
@@ -507,6 +514,35 @@ struct: CompositeToolProvider
 1. [act] 收集全部成员的工具清单（内置组 ToolDef + 注册文件 ToolSpec + 宿主注入 list()）
 2. [act] 全局名字检查：name/tool_id 合并判重——冲突=配置错误 fail-fast（报冲突名与两来源）
 3. [act] list() = 并集（mcp-server 工具面预检自动放宽为并集——hopkb 需求②在此兑现）
+
+list()（每次调用现算,不缓存）:
+1. [loop] 按成员顺序,对成员 list() 出的每条 ToolDef:
+   1.1 [branch] 该成员声明面里没有这件的 ToolSpec（内置组/宿主注入）→ 原样入清单,跳下一件
+   1.2 [act] requires_commit 取 ToolSpec 的声明（权威在注册面,不信绑定侧自报）
+   1.3 [act] description = [ToolSpec.description（缺席时退回成员自报的 ToolDef.description）, ToolSpec.notes]
+       各去首尾空白、丢掉空的,用换行连接
+   1.4 [branch] ToolDef.returns 已有 → 保留;否则 ToolSpec.output_schema 在场 → returns = 形状描述渲染（下表）;
+       两者都无 → returns 缺席（清单如实渲染"未声明形状"）
+   1.5 [branch] ToolSpec.tool_id 在场 → 再入一条别名条目：name=tool_id,description=1.3 结果接 `（tool_id→<wire 名>）`,
+       其余字段同本条
+```
+
+**output_schema → 形状描述的渲染表**（L4 清单"返回:"行的外挂件料源——用中性词,不用 HopSchema 词,理由见 [[prompt-assembler#^anc-exec-tool-manifest-supply]] 第 3 面）：
+
+| 声明值 | 渲染 |
+|---|---|
+| `bool` | 布尔值 |
+| `int` | 整数 |
+| `float` | 数字 |
+| `line` | 单行文本 |
+| `text` / `prompt` | 文本 |
+| `markdown` | Markdown 文本 |
+| `yaml` | 结构化对象 |
+| `[原子]` | 列表（元素为<原子的渲染>） |
+
+整行形态 `JSON: {字段: 渲染, …}`,字段按声明顺序。例：`{pages: [yaml]}` → `JSON: {pages: 列表（元素为结构化对象）}`。声明即双端校验的裁剪集（多余字段裁掉,^anc-exec-tool-shape-check）,所以这行写的就是模型实际拿到的顶层键,不多不少。
+
+```
 
 execute(name, args)（运行期逐调用）:
 1. [act] 按 name（或 tool_id 反查 name）路由到成员

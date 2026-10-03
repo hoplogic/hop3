@@ -4,7 +4,7 @@
 //   div: 2N 位 ÷ N 位除法,商保留 2N+1 位有效数字四舍五入(迭代推理——每位商依赖上一步余数,
 //        错一步后面全错;2N+1 位有效数字逼到小数位,不能整数商糊弄。作者立 2026-09-19:
 //        乘法是直接推理,除法补迭代推理——同一根 G1 轴上的第二种负载形态,分开记档)。
-// 用法: node model-gearbox/probes/run-reasoning-complexity.mjs --service <service_id> [--task mul|div] [--start 2] [--max 12] [--n 5] [--confirm 20] [--out <dir>]
+// 用法: node model-gearbox/probes/run-reasoning-complexity.mjs --service <service_id> [--task mul|div] [--start 2] [--max 12] [--n 5] [--confirm 20] [--thinking on|off] [--max-tokens 16384] [--out <dir>]
 // 测法: 从 N=start 起逐位爬梯,每档 n 发(缺省 5);正确率 >=90% 才继续爬;
 //   首个不达标的 N 停梯,对前一档(候选最大 N)加测到 confirm 发(缺省 20)确认概率——
 //   confirm 发正确率 >=90% 即定档"最大 N",不足则降一档再确认。
@@ -22,12 +22,14 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
 const argOf = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
 const SERVICE = argOf('--service');
+const THINKING = argOf('--thinking', 'default');   // on=显式开思考(对照臂,thinking budget=max_tokens/2 与引擎装配同式;产物目录缺省加 -thinking 后缀);off=显式关思考(给缺省开思考的端点量关档,目录加 -nothinking 后缀);default=端点缺省
+const MAX_TOKENS = parseInt(argOf('--max-tokens', '16384'), 10);
 const TASK = argOf('--task', 'mul');
 const START = parseInt(argOf('--start', '2'), 10);
 const MAXN = parseInt(argOf('--max', '12'), 10);
 const N_CLIMB = parseInt(argOf('--n', '5'), 10);
 const N_CONFIRM = parseInt(argOf('--confirm', '20'), 10);
-const OUT = argOf('--out', join(HERE, 'reasoning-complexity', `run-${SERVICE}${TASK === 'mul' ? '' : '-' + TASK}-${new Date().toISOString().slice(0, 10)}`));
+const OUT = argOf('--out', join(HERE, 'reasoning-complexity', `run-${SERVICE}${TASK === 'mul' ? '' : '-' + TASK}${THINKING === 'on' ? '-thinking' : THINKING === 'off' ? '-nothinking' : ''}-${new Date().toISOString().slice(0, 10)}`));
 if (!SERVICE || !['mul', 'div'].includes(TASK)) { console.error('用法: --service <service_id> [--task mul|div] [--start 2] [--max 12] [--n 5] [--confirm 20]'); process.exit(1); }
 
 const cfg = yamlLoad(readFileSync(join(homedir(), '.hopjit', 'config.yaml'), 'utf-8'));
@@ -101,9 +103,10 @@ async function call(prompt) {
   else headers['x-api-key'] = KEY;
   const r = await fetch(`${provider.base_url}/v1/messages`, {
     method: 'POST', headers,
-    body: JSON.stringify({ model: provider.model, max_tokens: 16384, messages: [{ role: 'user', content: prompt }] }),
+    body: JSON.stringify({ model: provider.model, max_tokens: MAX_TOKENS, ...(THINKING === 'on' ? { thinking: { type: 'enabled', budget_tokens: Math.floor(MAX_TOKENS / 2) } } : THINKING === 'off' ? { thinking: { type: 'disabled' } } : {}), messages: [{ role: 'user', content: prompt }] }),
   });
   const body = await r.json();
+  if (!r.ok) throw new Error(`端点报错 HTTP ${r.status}——这是环境故障(欠费/限流/服务端错),不是能力读数,探针中止不计分: ${JSON.stringify(body).slice(0, 300)}`);
   const text = (body.content ?? []).filter(b => b.type === 'text').map(b => b.text).join('');
   return { text, model: body.model ?? '(响应体缺 model 字段)', stop: body.stop_reason };
 }
@@ -190,7 +193,7 @@ while (candidate !== null && candidate >= START) {
 
 const summary = {
   service: SERVICE, model_from_response: [...modelSeen],
-  date: new Date().toISOString().slice(0, 10), seed: SEED, task: TASK,
+  date: new Date().toISOString().slice(0, 10), seed: SEED, task: TASK, thinking: THINKING, max_tokens: MAX_TOKENS,
   维度: TASK === 'div'
     ? 'G1 推理复杂度——2N÷N 位除法阶梯,商 2N+1 位有效数字(迭代推理:每位商依赖上一步余数;禁工具纯推理;爬梯每档 n=' + N_CLIMB + ',候选最大档 confirm=' + N_CONFIRM + ' 发,正确率>=90% 定档)'
     : 'G1 推理复杂度——N 位整数乘法阶梯(直接推理;禁工具纯推理;爬梯每档 n=' + N_CLIMB + ',候选最大档 confirm=' + N_CONFIRM + ' 发,正确率>=90% 定档)',

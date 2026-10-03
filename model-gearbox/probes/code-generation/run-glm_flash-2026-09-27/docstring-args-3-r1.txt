@@ -1,0 +1,93 @@
+```python
+import ast
+import re
+import sys
+
+
+def collect_params(func):
+    """Collect every parameter name of the function func, in declaration order."""
+    spec = func.args
+    names = []
+    for arg in spec.posonlyargs:
+        names.append(arg.arg)
+    for arg in spec.args:
+        names.append(arg.arg)
+    if spec.vararg is not None:
+        names.append(spec.vararg.arg)
+    for arg in spec.kwonlyargs:
+        names.append(arg.arg)
+    if spec.kwarg is not None:
+        names.append(spec.kwarg.arg)
+    return names
+
+
+def check_function(func, label, out):
+    """Check the function func and append one violation message to out; label is the display name of func."""
+    # A docstring exists only when the first statement of the body is a string literal.
+    doc = ast.get_docstring(func, False)
+    if not isinstance(doc, str):
+        out.append("line " + str(func.lineno) + ": function '" + label + "' has no docstring")
+        return
+    missing = []
+    for arg in collect_params(func):
+        if arg == "self" or arg == "cls":
+            continue
+        # Whole-word, case-sensitive occurrence of the parameter name.
+        pattern = r"\b" + re.escape(arg) + r"\b"
+        if re.search(pattern, doc) is None:
+            missing.append(arg)
+    if len(missing) > 0:
+        out.append("line " + str(func.lineno) + ": function '" + label + "' docstring does not mention parameter(s): " + ", ".join(missing))
+
+
+def scan(node, infunc, prefix, out):
+    """Recursively visit the subtree under node and append violations to out.
+
+    node is an AST node; infunc is True when the subtree lies inside a
+    function body; prefix is the qualification of enclosing classes.
+    """
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # Functions defined inside a function body, and functions whose
+            # name starts with an underscore, are not checked.
+            if not infunc and not child.name.startswith("_"):
+                check_function(child, prefix + child.name, out)
+            scan(child, True, prefix, out)
+        elif isinstance(child, ast.ClassDef):
+            # Methods of nested classes stay checkable unless a function
+            # body was entered earlier.
+            scan(child, infunc, prefix + child.name + ".", out)
+        else:
+            scan(child, infunc, prefix, out)
+
+
+if len(sys.argv) < 2:
+    print("usage: python checker.py <file.py>", file=sys.stderr)
+    sys.exit(2)
+
+path = sys.argv[1]
+
+try:
+    handle = open(path, "r", encoding="utf-8")
+    src = handle.read()
+    handle.close()
+except (OSError, ValueError) as err:
+    print("cannot read '" + path + "': " + str(err), file=sys.stderr)
+    sys.exit(1)
+
+try:
+    tree = ast.parse(src)
+except SyntaxError as err:
+    print("cannot parse '" + path + "': " + str(err))
+    sys.exit(1)
+
+violations = []
+scan(tree, False, "", violations)
+
+for item in violations:
+    print(item)
+
+if len(violations) > 0:
+    sys.exit(1)
+sys.exit(0)
+```

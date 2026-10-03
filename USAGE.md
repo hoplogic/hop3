@@ -30,20 +30,20 @@ hopjit install-skill
 ```
 ~/.claude/skills/
 ├── hopspec/
-│   ├── SKILL.md          # 主 skill（/hopspec）
+│   ├── SKILL.md          # hopspec 执行协议（由 /hop 调用,用户不直接敲）
 │   └── references/       # 驱动细则（自举探测、并行 worker 等）
-└── skills/hopbuild/       # /hopbuild：自然语言 skill → HopSpec
+└── skills/hopbuild/       # hopbuild：自然语言 skill → HopSpec（/hop 内部件）
     └── SKILL.md
 ```
 
-**重启 Claude Code**（或新开会话），`/hopspec` 和 `/hopbuild` 就在 skill 列表里了。
+**重启 Claude Code**（或新开会话），`/hop` 就在 skill 列表里了（跑 spec、翻译、修订都从它进；hopspec/hopbuild 等内部件装在盘上但不占菜单）。
 
 > 只想给单个项目装：`hopjit install-skill --dir .claude/skills`（写当前项目）。
 > Codex 载体：`hopjit install-skill --carrier codex`（缺省装用户级 `~/.codex/skills/`，装一次全项目可用——与 CC 对称）；要装项目级用 `--dir <项目根>/.agents/skills`（--dir 语义=skills 根目录）。注意 Codex 同名 skill 项目级优先于用户级——旧项目级残留会盖住用户级新版，装置器会检测并提示。
 > cfuse 内置载体：cfuse 内置窗口表现为原生 Claude Code 或 Codex,按该载体的原生命令跑即可（环境变量 `CLAUDE_CONFIG_DIR`/`CODEX_HOME` 自动装到 `~/.codefuse/engine/{cc,codex}/skills/`）。裸终端预装（目标 agent 未启动）用显式 carrier:
 >   - `hopjit install-skill --carrier cfuse-cc`（装到 `~/.codefuse/engine/cc/skills/`——cfuse 内置 cc 读取的目录）
 >   - `hopjit install-skill --carrier cfuse-codex`（装到 `~/.codefuse/engine/codex/skills/`——cfuse 内置 codex 读取的目录）
-> OpenCode 载体：`hopjit install-skill --carrier opencode`（装到 `~/.config/opencode/skills/`——opencode 原生发现路径,`OPENCODE_CONFIG_DIR` 在场则优先;驱动件为 `driver/opencode/` 适配版——question 工具问人/subagent 外包,非 CC 原文,2026-09-19 真适配批起）。`--mcp` 注册写用户级 `~/.config/opencode/opencode.jsonc`（缺省;已有 opencode.json/config.json 则写检测到的那份）的 `mcp.hopjit`（`type:"local"` + `command` 数组 + `environment` 留空靠进程环境透传凭证）。装出的条目**默认 `enabled: false`**（防模型在复用模式下误调独立模式工具）——要走 standalone,先把该值改 `true` 再用。
+> OpenCode 载体：`hopjit install-skill --carrier opencode`（装到 `~/.config/opencode/skills/`——opencode 原生发现路径,`OPENCODE_CONFIG_DIR` 在场则优先;驱动件为 `driver/opencode/` 适配版——question 工具问人/subagent 外包,非 CC 原文,2026-09-19 真适配批起）。MCP 注册（`install-skill` 缺省即做）写用户级 `~/.config/opencode/opencode.jsonc`（缺省;已有 opencode.json/config.json 则写检测到的那份）的 `mcp.hopjit`（`type:"local"` + `command` 数组 + `environment` 留空靠进程环境透传凭证）。装出的条目**默认 `enabled: false`**（防模型在复用模式下误调独立模式工具）——要走 standalone,先把该值改 `true` 再用。
 > 想覆盖已装的：加 `--force`。
 > 想要开箱演示：加 `--demo`——附装全部演示 skill（统一 `demo-` 前缀防撞名）：CC 为 `/demo-coffee-week`（入门周报）与 `/demo-fact-check`（事实核查，只核一级事实的简化版），Codex 为 `$demo-*` 同名；演示数据均打包在 skill 内。
 
@@ -63,7 +63,7 @@ hopjit validate my-spec.md
 ### 3b. 在 Claude Code 里驱动执行
 
 ```
-/hopspec run my-spec.md
+/hop 跑 my-spec.md
 ```
 
 Claude Code 作为主 agent 会：
@@ -72,12 +72,12 @@ Claude Code 作为主 agent 会：
    - `ask`/`confirm`（spec 里的人机介入点）→ 停下问你
    - `parallel`（并行步）→ 起多个 worker 并发跑
    - 完成/失败 → 报终态
-3. 全程状态存在 `.hopstate/`，可 `/hopspec status` 查、`/hopspec resume` 从中断恢复。
+3. 全程状态存在 `.hopstate/`，对 `/hop` 说"到哪了"可查、说"接着跑"从中断恢复。
 
 带参数直接跑：
 
 ```
-/hopspec run my-spec.md --params '{"raw_data": "...", "quality_threshold": 0.8}'
+/hop 跑 my-spec.md --params '{"raw_data": "...", "quality_threshold": 0.8}'
 ```
 
 ## 4. 把现有自然语言 skill 转成 HopSpec
@@ -85,10 +85,10 @@ Claude Code 作为主 agent 会：
 如果你有自然语言写的 skill（靠 LLM "记住"纪律，易漏步/跳审核），转成 HopSpec 让引擎强制这些纪律：
 
 ```
-/hopbuild
+/hop 把 <skill 路径> 翻译成 spec
 ```
 
-它按三个正确性焦点翻译：循环遍历不漏（for-each）、审核不跳过（confirm/check）、试错不做不可逆操作（act 可逆 / commit 隔离）。产出的 `.md` 可直接 `/hopspec run`。
+它按三个正确性焦点翻译：循环遍历不漏（for-each）、审核不跳过（confirm/check）、试错不做不可逆操作（act 可逆 / commit 隔离）。产出的 `.md` 可直接让 /hop 跑。
 
 ## 5. CLI 命令速查
 
@@ -115,7 +115,7 @@ Claude Code 作为主 agent 会：
 | 执行位置 | 你的对话会话里（占上下文；会话断了要 resume） | 独立 server 进程（不占对话；你只在需要确认时被叫回来） |
 | 适合 | 入门、调试、需要载体工具的 spec | 跑得久、跑得频、纯推理+计算类任务 |
 
-**路径建议**：从复用模式开始（零配置，`/hopspec run` 即用）；当任务变长、变频、或想换便宜模型时，配一次独立模式——同一份 spec 一个字不用改。
+**路径建议**：从复用模式开始（零配置，`/hop 跑 <spec>` 即用）；当任务变长、变频、或想换便宜模型时，配一次独立模式——同一份 spec 一个字不用改。
 
 **独立模式配置（一次性）**：
 
@@ -130,7 +130,7 @@ providers:
     api_key_env: DEEPSEEK_API_KEY
 ```
 
-2. 在载体注册 hopjit MCP server，并用 `hopjit install-skill --mcp` 装上 MCP 壳——之后**用 `/hopspec-mcp run` 走独立模式**（`/hopspec` 恒复用模式，两命令并存：**名字即模式**，没有运行时自动切换）：
+2. 在载体注册 hopjit MCP server（`hopjit install-skill` 缺省就做了）——之后对 `/hop` 明说"走 MCP 跑 <spec>"即走独立模式；不明说就是复用模式。同一份 spec 两种模式都能跑（模式由你一句话定，没有运行时自动切换）。各载体的注册落点如下：
 
 **Claude Code**（项目 `.mcp.json`）：
 
@@ -140,7 +140,7 @@ providers:
 
 > 不用指配置路径——server 自动读 `~/.hopjit/config.yaml`（系统级）＋ 项目根 `hopjit.yaml`（项目级，可选）并逐节合并。`HOPJIT_CONFIG` 环境变量是显式覆盖（只用指定文件、**不再合并两级**），留给测试等特殊场景。
 
-> **cfuse 内置 cc**：注册格式与上面 Claude Code 完全一致（cfuse-cc 是 CC 套壳，`.mcp.json` 同为项目级，不用另写）。`hopjit install-skill --mcp` 会自动写入 `.mcp.json`。carrier 规则同 §2：在 cfuse 内置窗口里跑不用加 `--carrier`（`CLAUDE_CONFIG_DIR` 自动适配到 `~/.codefuse/engine/cc/`）；在普通终端里跑要加 `--carrier cfuse-cc`，否则会装到 `~/.claude/` 而 cfuse 读不到。
+> **cfuse 内置 cc**：注册格式与上面 Claude Code 完全一致（cfuse-cc 是 CC 套壳，`.mcp.json` 同为项目级，不用另写）。`hopjit install-skill` 会自动写入 `.mcp.json`。carrier 规则同 §2：在 cfuse 内置窗口里跑不用加 `--carrier`（`CLAUDE_CONFIG_DIR` 自动适配到 `~/.codefuse/engine/cc/`）；在普通终端里跑要加 `--carrier cfuse-cc`，否则会装到 `~/.claude/` 而 cfuse 读不到。
 
 **Codex**（`~/.codex/config.toml`）：
 
@@ -155,12 +155,12 @@ default_tools_approval_mode = "auto"
 
 > ⚠️ Codex + DeepSeek 模型用户：先看 `docs/WORKAROUNDS.md` W-1（上游 bug 会让 MCP 工具静默不可用，需给 model catalog 打一行补丁）。
 
-> **cfuse 内置 codex**：注册格式同上，但 `hopjit install-skill --mcp` 会写到 cfuse-codex 的 home（`~/.codefuse/engine/codex/config.toml`，不是 `~/.codex/`）。carrier 规则同 §2：在 cfuse 内置窗口里跑不用加 `--carrier`（`CODEX_HOME` 自动适配）；在普通终端里跑要加 `--carrier cfuse-codex`。
+> **cfuse 内置 codex**：注册格式同上，但 `hopjit install-skill` 会写到 cfuse-codex 的 home（`~/.codefuse/engine/codex/config.toml`，不是 `~/.codex/`）。carrier 规则同 §2：在 cfuse 内置窗口里跑不用加 `--carrier`（`CODEX_HOME` 自动适配）；在普通终端里跑要加 `--carrier cfuse-codex`。
 
 ## 常见问题
 
 - **`hopjit` 命令找不到**：确认 `npm i -g @hoplogic/hopjit` 成功；全局 bin 目录在 PATH 里。
-- **`/hopspec` 不在 skill 列表**：确认 `hopjit install-skill` 跑成功（缺省装到 `~/.claude/skills`，全项目可用），并**重启 Claude Code**。
+- **`/hop` 不在 skill 列表**：确认 `hopjit install-skill` 跑成功（缺省装到 `~/.claude/skills`，全项目可用），并**重启 Claude Code**。
 - **skill 找不到引擎**：skill 用 `command -v hopjit` 一条命令定位——找不到即报错，按提示 `npm i -g @hoplogic/hopjit` 装好重试（不做多级目录探测）。
 - **spec 范本**：项目仓库 `examples/`（data-quality / doc-review / fact-check / parallel-* 等），未随 npm 包发布，去仓库看。
 

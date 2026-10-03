@@ -1,6 +1,6 @@
 // @module: doc-ref ^anc-struct-doc-ref
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -400,10 +400,38 @@ describe('resolveDocRefs', () => {
       .toThrow(DocRefError);
   });
 
-  it('sandbox 拒绝越界路径（绝对路径）', () => {
+  it('sandbox 拒绝越界路径（workspace 外的绝对路径）', () => {
     const dir = setup();
     expect(() => resolveDocRefs([{ doc: '/etc/passwd', section: 'x' }], dir, sandboxFor(dir), ''))
-      .toThrow(/Absolute paths are forbidden/);
+      .toThrow(/Absolute path outside workspace/);
+  });
+
+  // hopissues/0112:落在 workspace 内的字面绝对路径与相对写法同认（判据只问落点）// @v: anc-exec-tool-path-resolve
+  it('正例：workspace 内的字面绝对路径 doc-ref 与相对写法解析到同一节', () => {
+    const dir = setup();
+    const abs = resolveDocRefs([{ doc: join(dir, 'spec'), section: '色板' }], dir, sandboxFor(dir), '');
+    const rel = resolveDocRefs([{ doc: 'spec', section: '色板' }], dir, sandboxFor(dir), '');
+    expect(abs[0].content).toBe(rel[0].content);
+  });
+
+  it('正例：workspace 根以软链别名传入、doc 写成真实路径形态时,真实路径判那一路仍认（doc-ref 传的是未取真实路径的根）', () => {
+    const real = realpathSync(setup());
+    const alias = join(mkdtempSync(join(tmpdir(), 'docref-alias-')), 'ws');
+    symlinkSync(real, alias);
+    const frags = resolveDocRefs([{ doc: join(real, 'spec'), section: '色板' }], alias, sandboxFor(alias), '');
+    expect(frags[0].content).toBe(resolveDocRefs([{ doc: 'spec', section: '色板' }], alias, sandboxFor(alias), '')[0].content);
+  });
+
+  it('反例：doc 经软链父目录指向 workspace 外时拒;经指向 workspace 内的软链照常解析', () => {
+    const dir = setup();
+    const far = mkdtempSync(join(tmpdir(), 'docref-far-'));
+    writeFileSync(join(far, 'secret.md'), SAMPLE);
+    symlinkSync(far, join(dir, 'lout'));
+    expect(() => resolveDocRefs([{ doc: 'lout/secret', section: '色板' }], dir, sandboxFor(dir), ''))
+      .toThrow(/Read outside allowed paths/);
+    symlinkSync(dir, join(dir, 'lin'));
+    const viaIn = resolveDocRefs([{ doc: 'lin/spec', section: '色板' }], dir, sandboxFor(dir), '');
+    expect(viaIn[0].content).toBe(resolveDocRefs([{ doc: 'spec', section: '色板' }], dir, sandboxFor(dir), '')[0].content);
   });
 
   it('sandbox 拒绝路径穿越 ..', () => {
@@ -459,6 +487,28 @@ describe('resolveDocRefs 两级基准（spec 目录优先/workspace 兜底）', 
       .toThrow(DocRefError);
   });
 
+  // hopissues/0112:字面绝对路径只走 workspace 级判落点,不许被 join 吞成 spec 目录下的同名相对路径 // @v: anc-exec-tool-path-resolve
+  it('正例:specDir 在场、doc 写成 workspace 内绝对路径 → 按 workspace 落点解析,spec 目录下的镜像同名文件不抢答', () => {
+    const { ws, specDir } = setupSplit();
+    mkdirSync(join(ws, 'sub'));
+    writeFileSync(join(ws, 'sub', 'k.md'), '## 章\nworkspace版');
+    // spec 目录下按"绝对路径当相对路径拼接"的位置放一份诱饵——拼接一旦发生就会读到它
+    mkdirSync(join(specDir, ws, 'sub'), { recursive: true });
+    writeFileSync(join(specDir, ws, 'sub', 'k.md'), '## 章\n诱饵版');
+    const frags = resolveDocRefs([{ doc: join(ws, 'sub', 'k'), section: '章' }], ws, sandboxBoth(ws, specDir), '', undefined, specDir);
+    expect(frags[0].content).toBe('workspace版');
+  });
+
+  it('反例:specDir 在场、doc 写成 workspace 外绝对路径 → 拒,即使 spec 目录下有拼接后的同名文件', () => {
+    const { ws, specDir } = setupSplit();
+    const outside = mkdtempSync(join(tmpdir(), 'docref-outside-'));
+    writeFileSync(join(outside, 'o.md'), '## 章\n外部真件');
+    mkdirSync(join(specDir, outside), { recursive: true });
+    writeFileSync(join(specDir, outside, 'o.md'), '## 章\n诱饵版');
+    expect(() => resolveDocRefs([{ doc: join(outside, 'o'), section: '章' }], ws, sandboxBoth(ws, specDir), '', undefined, specDir))
+      .toThrow(/Absolute path outside workspace/);
+  });
+
   it('反例:.. 穿越不走 spec 目录级（越界逃逸面）——仍被 workspace 级响亮拦', () => {
     const { ws, specDir } = setupSplit();
     writeFileSync(join(specDir, 'esc.md'), '## 章\n正文');
@@ -492,7 +542,7 @@ describe('checkDocRefExists', () => {
   it('绝对路径 doc → 捕获 resolveDocFile 抛错,返回错误串不抛', () => {
     const dir = setup();
     const r = checkDocRefExists(dir, sandboxFor(dir), { doc: '/etc/passwd', section: 'x' });
-    expect(r).toMatch(/Absolute paths are forbidden/);
+    expect(r).toMatch(/Absolute path outside workspace/);
   });
 
   it('路径穿越 doc → 捕获抛错,返回错误串不抛', () => {
@@ -645,7 +695,7 @@ describe('resolveDocRefs × hop_env（展开+沙箱链）', () => {
       .toThrow(/\.\./);
   });
 
-  it('反例：字面绝对路径（非 hop_env 展开产物）维持原禁令', () => {
+  it('反例：workspace 外的字面绝对路径（非 hop_env 展开产物）不享声明根授权', () => {
     const ws = mkdtempSync(join(tmpdir(), 'hopenv-ws4-'));
     expect(() => resolveDocRefs([{ doc: '/etc/hosts', section: '节' }], ws, sandboxFor(ws), '', { hop_env_x: '/kb' }))
       .toThrow(/Absolute|未找到/);

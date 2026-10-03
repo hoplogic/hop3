@@ -94,6 +94,15 @@ export class CompositeToolProvider implements ToolProvider {
   /** 并行子任务派生视图（todo/0112）：per_parallel_child 打开的 server 换新成员实例（懒连接——
    * 第一次调用才起进程）,其余成员与父视图同一实例;没有打开开关的 server 时返回自身（与 0021
    * 共享形态逐字节相同）。warn 汇与裸奔 warn 记录表与父共用。 // @a: anc-exec-tool-composite */
+  // work_zone 根登记转发（^anc-exec-work-zone-registry）:engine 只认识组合提供者,登记要落到内置文件成员;
+  // 派生视图与父共用同一个成员对象,转发自然落到同一处。// @a: anc-exec-work-zone-registry
+  registerWorkZoneRoot(root: string): void {
+    for (const m of this.members) m.provider.registerWorkZoneRoot?.(root);
+  }
+  setWorkZoneScope(scope: { own: string; tree?: string }): void {   // 同款转发（todo/0126 读写分权）// @a: anc-exec-work-zone-registry
+    for (const m of this.members) m.provider.setWorkZoneScope?.(scope);
+  }
+
   forkForParallelChild(): ToolProvider {
     if (!this.members.some(m => m.perChildEntry)) return this;
     const view = new CompositeToolProvider({} as HostConfig, { [FORK_OF]: this });
@@ -144,10 +153,16 @@ export class CompositeToolProvider implements ToolProvider {
     this.members.push(m);
   }
 
+  // 有 ToolSpec 的成员用声明面补全投影：notes 并进 description、output_schema 渲染成 returns
+  // （todo/0122——模型看到的描述原先只取注册条目 description,只写 notes 的件发出去是空串）。
+  // @a: anc-tool-params-notes, anc-exec-tool-manifest-supply
   list(): ToolDef[] {
     return this.members.flatMap(m => m.provider.list().flatMap(def => {
       const spec = m.specs.get(def.name);
-      const base = { ...def, ...(spec ? { requires_commit: spec.requires_commit } : {}) };
+      if (!spec) return [def];
+      const description = [spec.description ?? def.description, spec.notes].map(s => (s ?? '').trim()).filter(Boolean).join('\n');
+      const returns = def.returns ?? (spec.output_schema ? renderOutputShape(spec.output_schema) : undefined);
+      const base: ToolDef = { ...def, requires_commit: spec.requires_commit, description, ...(returns ? { returns } : {}) };
       // tool_id 独立成清单条目（body 解释器按 list() 名单查名与 requires_commit 拦截——不进
       // 清单则中文名工具经语言面 ID 调用被判未知工具,review 探针实撞 2026-08-12）。同 requires_commit。
       return spec?.tool_id ? [base, { ...base, name: spec.tool_id, description: `${base.description}（tool_id→${def.name}）` }] : [base];
@@ -251,6 +266,21 @@ function checkSchemaType(declared: unknown, actual: unknown): string | null {
     default: return null;   // 词汇表外已被加载期文法闸拒——运行期防御性放行不二次拒
   }
 }
+// output_schema → L4 清单"返回:"行的形状描述（tool-interface ^anc-exec-tool-composite list() 段渲染表）：
+// 用中性词不用 HopSchema 词（prompt-assembler ^anc-exec-tool-manifest-supply 第 3 面）。
+// @a: anc-exec-tool-manifest-supply
+const SHAPE_WORDS: Record<string, string> = {
+  bool: '布尔值', int: '整数', float: '数字', line: '单行文本',
+  text: '文本', prompt: '文本', markdown: 'Markdown 文本', yaml: '结构化对象',
+};
+function shapeWord(declared: unknown): string {
+  if (Array.isArray(declared)) return `列表（元素为${shapeWord(declared[0])}）`;
+  return SHAPE_WORDS[String(declared)] ?? String(declared);   // 词汇表外已被加载期文法闸拒——防御性照抄
+}
+function renderOutputShape(schema: Record<string, unknown>): string {
+  return `JSON: {${Object.entries(schema).map(([k, v]) => `${k}: ${shapeWord(v)}`).join(', ')}}`;
+}
+
 function asResult(v: unknown): string | Record<string, unknown> {
   if (v !== null && typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>;
   return typeof v === 'string' ? v : JSON.stringify(v);

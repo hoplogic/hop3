@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-09-09T09:11+0800
+	last_sync: 2026-09-27T20:38+0800
 	note: act-body 模块设计——hop_python 微语言实现链(解析/AST/解释/内置函数)。2026-07-02 从 exec-engine.md 抽出独立成文(被 parser/engine/prompt/validator 多方调,应独立模块独立文档)。
 %%
 
@@ -13,7 +13,8 @@ act/commit 步骤 `> ```hop_python` 围栏内「无推理编排语言」的实�
 
 ## act-body 模块定位【契约】 ^anc-struct-act-body
 
-> **模块版本**：act-body `v0.24.0`（2026-09-23）。本版=命令执行原语加可选项 `wrapperArgv`（系统沙箱前缀,spawn 时拼在 argv 最前;白名单与 hopjit 恒拒仍只核 argv[0]——py-sandbox 模块执行产物脚本时套 seatbelt 用,见 `^anc-exec-command-primitive`、[[py-sandbox#^anc-pysb-exec]]）。
+> **模块版本**：act-body `v0.26.1`（2026-10-01 工程链 review 修复：并集条加第三消费口 requires_commands 预检闸;出口表 unionApprovedCommandNames 行补签名与三消费口——行为面归 exec-engine v0.50.1,本模块条款与出口说明同步）。上版 v0.26.0（2026-09-30）。本版 body 口 subprocess.run 白名单改为 hopjit.yaml commands: ∪ 本 spec《已批准命令》段命令名（todo/0132——同一张卡不写两遍）;命令原语消费口两个→三个（mcp-server run_approved_command 加入）。上版 v0.25.0（2026-09-26）本版=字符串单下标（`s[0]`/`s[-1]`,两个求值器同扩,见 `^anc-step-act-body-str-index`）+ 括号在本行未闭合的定向报错（替换原五条连环报错,见 `^anc-step-act-body-one-line`）——todo/0102 批次。
+> - 上版 v0.24.0 命令执行原语加可选项 `wrapperArgv`（系统沙箱前缀,spawn 时拼在 argv 最前;白名单与 hopjit 恒拒仍只核 argv[0]——py-sandbox 模块执行产物脚本时套 seatbelt 用,见 `^anc-exec-command-primitive`、[[py-sandbox#^anc-pysb-exec]]）。
 > - 上版 v0.23.0 命令执行原语抽出独立文件 `command-exec.ts`（subprocess.run 与 tools 模块的 run_script 共用一份实现——todo/0110 候选 B 批次）。
 > - 上版 v0.22.2 subprocess.run ENOENT 两因分辨报文(cwd 不存在与命令不存在各自指路——0020 批 review 实撞误诊后立)。
 > - 上版 v0.22.1 禁循环早拦字符串字面量豁免条款(hopissues/0079)+推导判定同用掩后文本半句(review 补)。
@@ -29,7 +30,7 @@ act/commit 步骤 `> ```hop_python` 围栏内「无推理编排语言」的实�
   - **列表推导放行判定同用掩后文本**——for/bracket 位置与 while 检测都对 masked 做,推导判定改回原始行即字符串内 for 假触发推导误判
 - `act-body-interpreter.ts`——ActBody AST 顺序解释执行（求值模型见下文 `^anc-exec-act-body-interp`）
 - `act-builtins.ts`——内置函数白名单（与 Python 同名：len/split/strip/str/int/float/bool…）+ arity 定义,parser 校验与 interpreter 执行共用
-- `command-exec.ts`——命令执行原语（白名单核对/hopjit 恒拒/spawnSync/失败三类分辨指路,见 `^anc-exec-command-primitive`）。**两个消费口**：本模块的 `subprocess.run`（body 内,规约作者写死的命令）与 tools 模块的 `run_script`（工具面,执行步里模型按需跑脚本,契约 [[tools/run-script]]）
+- `command-exec.ts`——命令执行原语（白名单核对/hopjit 恒拒/spawnSync/失败三类分辨指路,见 `^anc-exec-command-primitive`）。**三个消费口**：本模块的 `subprocess.run`（body 内,规约作者写死的命令）、tools 模块的 `run_script`（工具面,执行步里模型按需跑脚本,契约 [[tools/run-script]]）、mcp-server 的 `run_approved_command`（外部 agent 在某 run 上下文里执行已批准命令,白名单位传 argv[0] 只为复用原语,真闸是任务卡前缀清单,契约 [[mcp-server#^anc-mcp-run-command]],2026-09-30）
 
 **③ 边界（负责什么 / 不碰什么）**：
 - **负责**:hop_python 的解析、AST、解释、内置函数。
@@ -41,7 +42,7 @@ act/commit 步骤 `> ```hop_python` 围栏内「无推理编排语言」的实�
 
 **⑤ 对外接口清单【封闭】** ^anc-struct-act-body-exports：
 
-> 本表是 act-body 对外依赖面的封闭集，表外符号即内部实现。出口文件 = `act-body-parser.ts` / `act-body-interpreter.ts` / `act-builtins.ts`（三件按编译管线分，各有对外面）+ `command-exec.ts`（命令执行原语，唯一对外面是给 tools 模块的 `run_script` 共用）。校验见 [[anchor-audit-knowledge#模块边界接口校验]]。
+> 本表是 act-body 对外依赖面的封闭集，表外符号即内部实现。出口文件 = `act-body-parser.ts` / `act-body-interpreter.ts` / `act-builtins.ts`（三件按编译管线分，各有对外面）+ `command-exec.ts`（命令执行原语——对外面给 tools 模块 `run_script`、mcp-server `run_approved_command` 共用;并集函数给 dispatcher/engine 注入点）。校验见 [[anchor-audit-knowledge#模块边界接口校验]]。
 
 | 符号 | 种类 | 出口文件 | 用途（谁依赖） | 稳定性 |
 |---|---|---|---|---|
@@ -61,6 +62,7 @@ act/commit 步骤 `> ```hop_python` 围栏内「无推理编排语言」的实�
 | `makeReplayToolProvider` | 函数 | act-body-interpreter.ts | tool_journal 确定性重放 Provider+direct 直执兜底（engine 消化路径用——2026-09-05 执行主体原则扩 direct 参数,字段约定权威 [[exec-engine#^anc-exec-tool-request]] HopType 条款） | stable |
 | `runWhitelistedCommand` | 函数 | command-exec.ts | 命令执行原语（tools 模块 run_script 调——白名单核/hopjit 恒拒/spawn/失败三类指路共用一份,见 `^anc-exec-command-primitive`） | stable |
 | `CommandResult` | 类型 | command-exec.ts | 原语返回形状 `{stdout, stderr, returncode}`（同上，type-only） | stable |
+| `unionApprovedCommandNames` | 函数 | command-exec.ts | 签名 `(whitelist?: string[], approved?: string[][]) → string[] \| undefined`。body 口白名单并集（hopjit.yaml commands: ∪ spec《已批准命令》各行 argv[0],去重）——dispatcher 与 engine 两个 commandWhitelist 注入点 + engine requires_commands 预检闸三处调;两边都缺席返回原 whitelist（undefined=关死不变,[]=关死）,见 `^anc-exec-command-primitive` 并集条（2026-09-30;2026-10-01 加预检口） | stable |
 
 > **内部（表外即内部）**：tokenizer/递归下降解析的私有函数、interpreter 的求值私有方法、各内置函数实现体。
 
@@ -101,7 +103,8 @@ act/commit 步骤 `> ```hop_python` 围栏内「无推理编排语言」的实�
 - **钳位宽容语义（与单下标的分野——正是 Python 本款）**：切片越界不报错自动钳到边界（`l[10:]`→`[]`、`l[:99]`→整列表）;负数端点按 `len+n` 换算后钳位（`l[-3:]` 末三个、`l[:-1]` 去末元素）;start≥stop（钳位后）→空序列。
   - **单下标越界的既有语义不变**：读得 undefined/None 传播（非报错——tests 既有钉『负数下标越界读 undefined(不炸)』）;
   - 分野是『切片得空序列、单下标得 None』,两者都不炸,与 Python 的『切片钳位/单下标 IndexError』相比我们单下标本就宽容,切片随之取 Python 切片本款钳位;
-- **字符串与列表同语义**：`s[5:]` 剥定长前缀、`items[1:]` 去首元素——两大高频场景;数组与字符串之外的类型上切片=计算异常（warn+None,与单下标在非数组/对象上取值同款处置）;`reversed` 内置双收列表与字符串（字符串返翻转后字符串——step 报错与文档指的反转正路对两类序列都成立,2026-09-05 review 抓:原 `reversed` 只收数组,写 `s[::-1]` 的人按指路改写会再撞一次计算异常,与本条'同语义'承诺冲突）;
+- **字符串与列表同语义**：`s[5:]` 剥定长前缀、`items[1:]` 去首元素——两大高频场景;数组与字符串之外的类型上切片=计算异常（warn+None,与单下标在列表/字符串/对象之外的类型上取值同款处置）;`reversed` 内置双收列表与字符串（字符串返翻转后字符串——step 报错与文档指的反转正路对两类序列都成立,2026-09-05 review 抓:原 `reversed` 只收数组,写 `s[::-1]` 的人按指路改写会再撞一次计算异常,与本条'同语义'承诺冲突）;
+  - 单下标自 2026-09-23 起也收字符串（`s[0]` 取单字符），见 `^anc-step-act-body-str-index`;
 - **端点求值语义**（2026-09-05 review 面二真机探针抓实装漂移后改定）：
   - 改定缘由:原文'端点求值非整数=计算异常'写宽了,`Number()` 强转静默放行 None 与数字串,且 None 端点得 0、undefined 端点得缺省:同一'无值'两个行为,违反值模型『None 与未赋值同视为无值』〔本文档 hop_env 节与核心规范同款〕;
   - **None 与 undefined 端点一律按端点缺席**（`l[:x]` x=None → 整列表——与 Python 本款 `l[:None]` 一致,值模型归一）;
@@ -120,6 +123,103 @@ act/commit 步骤 `> ```hop_python` 围栏内「无推理编排语言」的实�
 - **求值**：键表达式求值后 `str()` 归一为字符串键（Python dict 任意可哈希键,我们值模型键=字符串——数字键求值后 str 归一,与 JS 对象同义;None 键=计算异常响亮）;
 - **静态面**：键位经 checkActExpr 照常核——**裸名键未定义即 B4 error**,报文追加指路两改法（『键写字符串加引号 {"k": v},或先定义该变量』——JS 心智写裸键意图多半是字面量,静态期即断不漂运行期）;
 - **AST**：DictLiteralExpr.entries[].key 从 string 改 ActExpr——exprChildren/exprMapChildren/serializeExpr/exprPrec/双求值器/checkActExpr 全消费面同批（^anc-struct-expr-walk 作业单）;serializeExpr 字符串字面量键紧凑形 `{"k": v}` 往返稳定。
+
+## 字符串单下标【契约】 ^anc-step-act-body-str-index
+
+`s[i]` 在字符串上取单个字符（2026-09-23 作者拍板 todo/0102"解释器补字符串下标"）。
+
+- **实撞**：spec 里写 `x = "yes" if strip(l)[0] in "123456789" else "no"`（按首字符判是不是数字开头），validate 全绿，运行时却走"在非数组/对象上取下标"的计算异常，步骤失败；写在 case 条件里则静默得 undefined，连 warn 都没有。
+- **为什么补**：文法上 `strip(l)[0]` 本来就合法（validate 放行是对的），缺的是解释器那一半。切片早已"字符串与列表同语义"（见 `^anc-step-act-body-slice`），单下标只认列表是漏网面；Python 心智里 `s[0]` 天经地义，概念层"下标含负数"也没把下标限定在列表上——概念层文字不用改。
+- **不做的事**：validate 不加"下标对象的类型推断"规则——hop_python 变量无静态类型，推断只能猜，猜错就误报；解释器补齐后这条路本身就通了，没有需要静态拦的错误形态。
+
+**能力契约（HopTrait）**：
+
+```
+# Spec: 单下标求值
+Id: index_value(obj, idx) -> value
+Goal: 对 obj[idx] 求值——列表与字符串按位置取、对象按键取,其余类型是计算异常
+Inputs:
+- obj % yaml  # 被下标对象（任意求值结果）
+- idx % yaml  # 下标求值结果
+Outputs:
+- value % yaml  # 取到的元素/字符/键值;越界得 None;计算异常时为 None 并留 warn
+Constraints:
+- 列表与字符串走同一段"序列单下标"逻辑,语义完全一致：下标先转数字(与列表既有口径相同,Number 转换)再判整数;非整数=计算异常"下标 X 非整数 → None"
+- 负数下标按 Python 从末尾数（s[-1] 末字符）;换算后越界（含负数越界）得 None,不报错——与列表单下标既有的宽容语义同款
+- 字符串取出的是长度为 1 的字符串;计数口径与 len/切片相同（JS 字符串下标,UTF-16 码元——中文等常用字符与 Python 一致,emoji 等补充平面字符与 Python 不同,既有口径本批次不改）
+- 对象（非列表的 dict）按 str(idx) 键查找——既有行为不变
+- 数字、布尔等其余类型上取下标=计算异常"在非列表/字符串/对象上取下标 → None"
+- 两个求值器同扩：异步 BodyInterpreter.evalExpr（body 语句）与同步 evalExprSync（case 条件、callee 表达式）
+```
+
+**类型约定（HopType）**：模块级共用函数 `indexValue(obj, idx) → { value?: unknown; err?: string }`（与 `sliceValue` 同形——求值结果或计算异常文案二选一），两个求值器都调它，不各写一份。被下标对象三分类：
+
+- **序列**：列表或字符串 → 位置下标（整数核 → 负数换算 → 越界得 undefined）；
+- **映射**：非 null 的普通对象 → `String(idx)` 键查找；
+- **其余**：数字/布尔/None → 计算异常文案。
+
+两个求值器对计算异常的处置沿用各自既有约定：
+
+- 异步路径：文案进 warnLog，返回 None（本步随后 fail）。
+- 同步路径：文案经 onWarn 报出，返回 undefined。**None/undefined 上取下标在同步路径保持静默返回 undefined**——与同步路径"在 None 上取字段静默得 undefined"既有约定一致，case 条件里写 `x[0] == "a"` 而 x 未赋值时仍按不命中处理，不因本批次改成分支失败；数字/布尔上取下标同步路径补 warn（改前静默，与切片同步档"异常路径出文案"惯例对齐）。
+
+**关键逻辑（HopSop）**：
+
+```
+单下标求值:
+1. 求 obj、idx
+2. [分支] 按 obj 判型
+   2.1 [条件(obj 是列表或字符串)] n = Number(idx)
+       - n 非整数 → 计算异常"下标 X 非整数 → None"
+       - k = n < 0 ? len + n : n;k 越界 → undefined(None);否则取第 k 个元素/字符
+   2.2 [条件(obj 是非 null 对象)] 按 String(idx) 键查找
+   2.3 [否则] 计算异常"在非列表/字符串/对象上取下标 → None"
+3. 异步路径:计算异常 → warnLog + 返回 None
+   同步路径:obj 是 None/undefined → 静默 undefined;其余计算异常 → onWarn + 返回 undefined
+```
+
+## 语句写在一行内：括号跨行定向报错【契约】 ^anc-step-act-body-one-line
+
+hop_python 按行解析，每条语句必须写在一行内；字典/列表字面量、调用参数、括号分组、下标只要在本行没有闭合，就报一条定向错误（2026-09-23 作者拍板 todo/0102）。
+
+- **实撞**：LLM 按 Python 习惯把字典写成多行（`x = {` 换行 `"a": s,` 换行 `}`），validate 连环报五条："非法表达式起始: newline"、"对象字面量键后期望 :"、"} 未闭合（对象字面量）"、"语句后期望换行"、"非法语句起始: indent"。写的人读不出"原来是不许跨行"，只能乱改。
+- **validate 与运行时同源**：validate 用的就是运行时同一个解析器（跨行写法本来就被拦），缺的只是一条读得懂的报文，不需要另加校验规则。
+- 教学面（skills/ 下 hopbuild-primer、split-patterns）已经教过"一条语句一行"，本批次不动。
+
+**能力契约（HopTrait）**：
+
+```
+# Spec: 括号跨行定向报错
+Id: one_line_bracket_error(tokens) -> errors
+Goal: 括号在本行没闭合时只报一条读得懂的错误,告诉写的人不能跨行、怎么改
+Inputs:
+- tokens % yaml  # 词法记号流（按行切,每行末尾一个 newline 记号）
+Outputs:
+- errors % yaml  # 恰好一条定向错误
+Constraints:
+- 触发条件:解析器正处在某个括号结构内部（列表字面量 [ / 字典字面量 { / 调用参数 ( / 括号分组 ( / 下标与切片 [）,此时要报任何解析错误而当前记号是换行（或输入结束）——意味着括号没写完这一行就结束了
+- 两种成因都走这一条:①跨行书写（左括号后换行接着写）;②单行里真的漏写了右括号（xs = [1, 2 行尾结束）。hop_python 里一行结束时括号未闭合只有这两种原因,定向文案对两者都指对方向
+- 报文原文:"<左括号> 在本行没有闭合：hop_python 每条语句写在一行内，字典/列表字面量不能跨行，装不下就拆成多个赋值"（解析器统一加前缀 "act body: "）;行号=最内层未闭合左括号所在行
+- 报出这一条后立即停止解析整个 body（或整条 case 条件）,不再连环报后续错误——跨行的续行在按行解析器眼里都是垃圾,重新同步只能猜,猜出来的报错全是噪声
+- 括号内部、不在换行处的错误（如 l[::2] 步长报错、{"a" 1} 缺冒号）照报原文案,不受影响
+- case 条件宿主同款（parseExpression 共用同一 Parser）:条件写在一行里,只可能是漏写右括号,报文前半句"在本行没有闭合"指对方向
+```
+
+**类型约定（HopType）**：Parser 增一个成员 `brackets: Token[]`——当前所处的括号开记号栈（最内层在栈顶）。进括号结构时压栈、离开时出栈，用 `try/finally` 包住保证解析中途报错时也会出栈（不泄漏到后续表达式）。另有一个模块内哨兵 `ONE_LINE_ABORT`（抛出用于中止解析，不是错误本身——错误在抛出前已写进 errors），两个入口 `parseActBody`、`parseExpression` 捕获它后返回 null。
+
+- **时序约束**：括号结构内部的其他报错（如列表推导嵌套超两层）必须在吃掉右括号之前报——吃完右括号时本层还在栈上、当前记号又恰是行末换行，此时报错会被误判成括号跨行（实撞：推导深度检查原本排在吃 `]` 之后，改造后被吞成定向文案，既有测试"3层嵌套拒"转红，已前移）。
+
+**关键逻辑（HopSop）**：
+
+```
+报错(msg):
+1. [条件(brackets 非空 且 当前记号是换行或输入结束)]
+   1.1 写入一条错误:行号=brackets 栈顶记号行号,文案=栈顶左括号 + " 在本行没有闭合：hop_python 每条语句写在一行内，字典/列表字面量不能跨行，装不下就拆成多个赋值"
+   1.2 抛 ONE_LINE_ABORT 中止解析（原 msg 丢弃——它是跨行引起的连带症状）
+2. [否则] 照旧写入 msg
+入口(parseActBody / parseExpression):
+3. 捕获 ONE_LINE_ABORT → 返回 null（errors 里恰好多出那一条）;其他异常照常上抛
+```
 
 ## 表达式遍历原语【契约】 ^anc-struct-expr-walk
 
@@ -183,11 +283,11 @@ act/commit 步骤若有结构化 body（hop_python，见 [[../concepts/HopSpec V
 Id: compare_eval(op, left, right) -> result
 Goal: 对 == != < > <= >= is 按 Python 语义求值,跨类型不静默强转
 Inputs:
-- op: enum(eq, ne, lt, gt, le, ge)  # 等值两个 + 序比较四个（is/is not 解析层已归一为 eq/ne 对 None）
-- left: yaml  # 左操作数（任意求值结果）
-- right: yaml  # 右操作数
+- op % enum(eq, ne, lt, gt, le, ge)  # 等值两个 + 序比较四个（is/is not 解析层已归一为 eq/ne 对 None）
+- left % yaml  # 左操作数（任意求值结果）
+- right % yaml  # 右操作数
 Outputs:
-- result: bool  # 比较结果;序比较不可比时为 None（计算异常）
+- result % bool  # 比较结果;序比较不可比时为 None（计算异常）
 Constraints:
 - 等值 ==/!= Python 严格:跨类型不相等不异常（"3" == 3 假）;数字与 bool 互比按数（True == 1 真）;列表/对象深比较逐元素递归;None 与未赋值同视为"无值"互等（x == None 命中两者——值模型事实非宽松特例）
 - in 的元素查找与 == 同一等值语义（3 in ["3"] 假）
@@ -227,13 +327,13 @@ Constraints:
 Id: builtin-now
 Goal: 返回当前时刻 ISO 8601 字符串（含时区），供产物落款/时间计算
 Outputs:
-- ts: line   # 如 2026-08-12T15:30:00+08:00
+- ts % line   # 如 2026-08-12T15:30:00+08:00
 
 # Spec: today 内置函数
 Id: builtin-today
 Goal: 返回当前日期 YYYY-MM-DD
 Outputs:
-- d: line
+- d % line
 ```
 
 **类型约定（HopType）**：BodyExecContext 增 `timeJournal: [line]`（可选）——本步已求值的时间值序列。
@@ -276,10 +376,10 @@ LLM 产文本值的围栏壳/键前缀污染是稳定病灶家族（`^anc-exec-o
 Id: strip_fence(text, key?) -> text
 Goal: 机械剥除 LLM 文本值外层的代码围栏与自标记键前缀,还原正文——消费侧防线,不依赖产出侧自律
 Inputs:
-- text: text  # 待剥文本;非字符串原样返回
-- key: line   # 可选,自标记键名（如 "draft_fragment"）——剥围栏后首行是 `<key>:` 或 `<key>: |` 时再剥该行及其引入的统一缩进
+- text % text  # 待剥文本;非字符串原样返回
+- key % line   # 可选,自标记键名（如 "draft_fragment"）——剥围栏后首行是 `<key>:` 或 `<key>: |` 时再剥该行及其引入的统一缩进
 Outputs:
-- clean: text  # 剥后正文;无壳时原样返回（幂等,合法围栏正文不被误剥——只剥"整值被单一围栏包裹"形态,正文内嵌围栏不动）
+- clean % text  # 剥后正文;无壳时原样返回（幂等,合法围栏正文不被误剥——只剥"整值被单一围栏包裹"形态,正文内嵌围栏不动）
 Constraints:
 - 纯文本操作零 parse——与 recoverFencedValue（结构档,YAML parse）分工:本内置管文本片段,不解释内容
 - 剥壳判据从紧:仅当整值 trim 后以 ``` 开头且以 ``` 结尾（单围栏包裹）才剥;键前缀仅在 key 实参给出且逐字匹配时剥
@@ -301,9 +401,9 @@ Constraints:
 Id: parse_json(text) -> value
 Goal: JSON 文本 → 结构值(dict/list/标量),供 body 取字段——内置工具 json 返回值的机械解码半边
 Inputs:
-- text: text  # JSON 文本;入参已是结构值/数字/布尔/null 时原样返回（幂等容错,2026-09-05 作者定"parse_json应该需要有容错能力"——上游通道把文本提前解析成对象时 body 不因二次解析炸,0075 批;undefined 照抛——未定义变量信号不吞）
+- text % text  # JSON 文本;入参已是结构值/数字/布尔/null 时原样返回（幂等容错,2026-09-05 作者定"parse_json应该需要有容错能力"——上游通道把文本提前解析成对象时 body 不因二次解析炸,0075 批;undefined 照抛——未定义变量信号不吞）
 Outputs:
-- value: yaml  # 解出的结构值(字段访问/下标照 hop_python 既有文法)
+- value % yaml  # 解出的结构值(字段访问/下标照 hop_python 既有文法)
 Constraints:
 - 解析失败（坏 JSON 文本）/undefined 入参=计算异常（折 None+warnLog 留痕,warnLog 非空即本步 fail——求值面统一罩既有语义,步级仍响亮不静默）;已解析的 JSON 值域成员（对象/列表/数字/布尔/null）原样返回不算失败（幂等——改造前"非字符串一律抛"半边废,沿革见 0075 批）
 - 纯函数零 IO（ACT_BUILTINS 正式成员;case 条件亦可用,与 strip_fence 同格）
@@ -325,12 +425,12 @@ Constraints:
 Id: subprocess.run(argv, input?, timeout?, cwd?) -> {stdout, stderr, returncode}
 Goal: 在 act/commit body 内执行白名单命令,参数列表制不经 shell,结果为结构化值
 Inputs:
-- argv: [line]     # 位置参数第一个:命令与参数在一个列表,命令是第一个元素(subprocess 标准形态)
-- input: text      # 具名可选:喂给命令 stdin 的文本(管道=上一段 .stdout 显式喂给下一段 input=)
-- timeout: number  # 具名可选:秒;缺省 60;**非法值(0/负/非数)=参数解析期 TOOL_EXEC_ERROR 不执行命令**(F6 裁定:非法参数是 spec 写错,早失败优于带病执行——命令副作用已发生再炸步重试=非幂等双执行)
-- cwd: line        # 具名可选:工作目录;缺省=本实例 work_zone
+- argv % [line]     # 位置参数第一个:命令与参数在一个列表,命令是第一个元素(subprocess 标准形态)
+- input % text      # 具名可选:喂给命令 stdin 的文本(管道=上一段 .stdout 显式喂给下一段 input=)
+- timeout % number  # 具名可选:秒;缺省 60;**非法值(0/负/非数)=参数解析期 TOOL_EXEC_ERROR 不执行命令**(F6 裁定:非法参数是 spec 写错,早失败优于带病执行——命令副作用已发生再炸步重试=非幂等双执行)
+- cwd % line        # 具名可选:工作目录;缺省=本实例 work_zone
 Outputs:
-- result: yaml     # {stdout: text, stderr: text, returncode: int}——命令失败不炸,returncode 的处置写 check 步或分支(失败是值,与"计算异常=None+log"同哲学)
+- result % yaml     # {stdout: text, stderr: text, returncode: int}——命令失败不炸,returncode 的处置写 check 步或分支(失败是值,与"计算异常=None+log"同哲学)
 Constraints:
 - 命令名(argv[0])必须 ∈ sandbox.runtime.available 白名单——名单空/未配置=能力关死(缺省安全),运行期拒 TOOL_EXEC_ERROR 点名"命令不在白名单"
 - 不经 shell:参数列表直接 spawn,参数里的空格/分号/$ 都只是字符,注入无门
@@ -417,7 +517,7 @@ subprocess.run 求值(解释器 evalCall 专路):
 Id: runWhitelistedCommand(argv, opts) -> {stdout, stderr, returncode}
 Goal: 白名单管控下 spawn 一个本地进程,结果结构化返回,失败带可照着修的指路报文
 Inputs:
-- argv: [line]        # 命令与参数在一个列表,命令是第一个元素
+- argv % [line]        # 命令与参数在一个列表,命令是第一个元素
 - opts.whitelist: [line]   # 允许的命令名集合(缺席或空=能力关死)
 - opts.cwd: line      # 工作目录
 - opts.timeoutSec: number  # 超时秒数(调用方给,原语不设缺省——两个消费口的缺省各自声明)
@@ -425,10 +525,11 @@ Inputs:
 - opts.input: text    # 可选,喂 stdin 的文本
 - opts.wrapperArgv: [line]  # 可选,系统沙箱前缀(py-sandbox 传 sandbox-exec -p <profile>;缺席=不套)
 Outputs:
-- result: yaml        # {stdout: text, stderr: text, returncode: int}——非零退出码是值不是异常
+- result % yaml        # {stdout: text, stderr: text, returncode: int}——非零退出码是值不是异常
 Constraints:
 - hopjit 恒拒,优先级高于白名单（^anc-exec-subprocess-deny-hopjit 的判据与报文原样归本原语）
 - argv[0] ∉ whitelist 即拒;whitelist 缺席或空=拒（缺省安全）。**两拒报文都带修法指路**"把 <命令名> 加进项目根 hopjit.yaml 的 commands: 列表"（hopissues/0090——用户 1.5 小时废跑换来的条款,不许在任一消费口退化成哑报文）
+- **body 口的 whitelist = hopjit.yaml commands: ∪ 本 spec《已批准命令》段各前缀的 argv[0]**（2026-09-30 todo/0132,[[spec-parser#^anc-rule-approved-commands]]）：同一张任务卡里人不用把命令写两遍——卡上批了 `python3 scripts/ssh_exec.py`,body 的 `subprocess.run(["python3", …])` 就能跑。并集在注入 commandWhitelist 处做（dispatcher.executeActBody 与 engine 复用模式消化路径两处,从 spec.header 取）,原语零变化;**requires_commands 预检闸同吃并集**（[[exec-engine#^anc-exec-requires-commands-gate]]——2026-10-01 review 实抓：卡上批了 echo、Config 又声明 requires_commands: [echo]、宿主白名单空,INIT 闸拦并教人改 hopjit.yaml,与"同一张卡不写两遍"自相矛盾;三个消费口读同一个并集函数）。body 口只并 argv[0]（命令名级）不做前缀级——body 是 spec 作者写死的、经 validate 的确定性代码,不是外部 agent 临场拼的;前缀级匹配只在 [[mcp-server#^anc-mcp-run-command]] 做。工具面 run_script 口**不并**（模型临场跑脚本,粒度归 hopjit.yaml;留口,有实撞再议）
 - shell: false 恒定——参数列表制的物理保证,不是可选项
 - wrapperArgv 只拼在 spawn 的最前面,不参与白名单与 hopjit 恒拒核对(那两道只看 argv[0])。前缀由引擎内部给定(固定的系统沙箱命令),不来自模型也不来自规约;套一层沙箱只会让被执行进程的能力更小,所以不需要白名单放行
 - 失败三类各带指路:ENOBUFS(撞顶,不截断)/ETIMEDOUT(超时)/ENOENT(cwd 不存在与命令不存在两因经 existsSync 分辨,各自指路)
@@ -475,14 +576,14 @@ runWhitelistedCommand(argv, opts):
 Id: work_zone_path(rel_path) -> abs_path
 Goal: 在 body 内给出本实例 work_zone 涂鸦区下的确定路径,供临时文件/中间产物读写
 Inputs:
-- rel_path: line  # 可选,涂鸦区内相对路径;省略返回涂鸦区根
+- rel_path % line  # 可选,涂鸦区内相对路径;省略返回涂鸦区根
 Outputs:
-- abs_path: line  # work_zone 下的绝对路径
+- abs_path % line  # work_zone 下的绝对路径
 Constraints:
 - 仅 act/commit body 可用——case 条件里调用报"需实例上下文"折计算异常（路径不属条件业务面）
 - rel_path 禁 .. 穿越,违者 TOOL_EXEC_ERROR → 本步 fail
 - 执行环境未提供 work_zone（如无实例上下文的裸求值）→ TOOL_EXEC_ERROR,不静默回退
-- 返回路径读写工具放行——.hopstate 禁令与绝对路径禁令的唯一豁免（见 [[tools/file-tools#^anc-exec-builtin-file-tools]]）
+- 返回路径读写工具放行——.hopstate 禁令的唯一豁免,也是"workspace 外绝对路径拒"的唯一豁免（work_zone 可以在 workspace 外;见 [[tools/file-tools#^anc-exec-builtin-file-tools]]）
 ```
 
 **类型约定**：真实现不在 `ACT_BUILTINS`（白名单里是占位项，保 B2 静态校验认名）——实例上下文经 `BodyExecContext.workZone: string`（可选字段）注入，`BodyInterpreter.evalCall` 对 `work_zone_path` 走专路。

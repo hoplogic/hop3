@@ -3,7 +3,7 @@
 	source: [[../design/codex-driver-carrier]]
 	source_id: hopjit-codex-driver-carrier
 	type: compact
-	last_sync: 2026-08-30T13:41+0800
+	last_sync: 2026-10-01T16:04+0800
 	note: 教程 1 Codex 版——双载体入口之一,与 CC 版平行（安装发现+delegated 全程 E2E 已真机验证 2026-08-05；inline 待配置修正后重验）
 %%
 
@@ -23,7 +23,7 @@
 | | Claude Code 载体 | Codex 载体 |
 |---|---|---|
 | 安装位置 | `~/.claude/skills/hopspec/` | `~/.codex/skills/hopspec/`（用户级,装一次全项目可用） |
-| 触发前缀 | `/hopspec` | `$hopspec` |
+| 触发前缀 | `/hop` | `$hop` |
 | 执行段承载 | driver subagent（外包执行循环） | 有 subagent 能力时同构外包；没有时 Main 自己跑（inline），语义不变 |
 | 问人 | AskUserQuestion 组件 | Codex 对话内直接问答 |
 
@@ -64,7 +64,7 @@ $demo-coffee-week
 这条是最短首跑。通用驱动入口仍是：
 
 ```
-$hopspec run examples/data-quality.md
+$hop 跑 examples/data-quality.md
 ```
 
 main orchestrator 会先定位 hopjit CLI（`command -v hopjit` 一条命令，找不到即报错），再按当前环境自动选择执行方式（有 subagent 能力就外包执行段，没有就自己跑；注册了 hopjit MCP server 则整体转独立模式——见下）。无论哪种，你看到的节奏都一样：参数确认 → 执行 → 介入点问人 → 终态报告。
@@ -79,7 +79,7 @@ main orchestrator 会先定位 hopjit CLI（`command -v hopjit` 一条命令，�
 
 | 症状 | 处置 |
 |---|---|
-| Codex 不触发 skill | 确认 `~/.codex/skills/hopspec/SKILL.md` 存在且第一行是 `---`（旧项目级 `.agents/skills/hopspec/` 残留会盖住用户级——同名项目级优先,确认后删除残留）；显式调用 `$hopspec run …`，仍未出现时重启 Codex |
+| Codex 不触发 skill | 确认 `~/.codex/skills/hopspec/SKILL.md` 存在且第一行是 `---`（旧项目级 `.agents/skills/hopspec/` 残留会盖住用户级——同名项目级优先,确认后删除残留）；显式对 `$hop` 说"跑 …"，仍未出现时重启 Codex |
 | `$demo-coffee-week` 不出现 | 用 `hopjit install-skill --carrier codex --demo --force` 重装；也可输入 `/skills` 从列表选择 |
 | 找不到引擎 | `npm i -g @hoplogic/hopjit`；或项目内 `npm i @hoplogic/hopjit` |
 | parallel 好像"卡住" | 对话驱动模式下并行步骤当前按顺序执行（结果一致），多个活依次完成后才继续——等它跑完即可 |
@@ -90,6 +90,6 @@ main orchestrator 会先定位 hopjit CLI（`command -v hopjit` 一条命令，�
 
 ## 下一步
 
-主线顺序读（与 CC 用户同一条线）：[[02-读懂一份spec]] → [[03-探索与提交]] → [[D10-hop_python计算体]] → [[05-并行与遍历]] → [[06-实战-事实核查器]] → [[07-升级你的自然语言skill]]（注：07 的翻译器 /hopbuild 目前仅 CC 载体提供，Codex 用户可在 CC 里翻译、产物两载体通用）。
+主线顺序读（与 CC 用户同一条线）：[[02-读懂一份spec]] → [[03-探索与提交]] → [[D10-hop_python计算体]] → [[05-并行与遍历]] → [[06-实战-事实核查器]] → [[07-升级你的自然语言skill]]（注：07 的翻译器 hopbuild 目前仅 CC 载体提供——对 /hop 说"把 xxx 翻译成 spec"即分派到它，Codex 用户可在 CC 里翻译、产物两载体通用）。
 
 - 载体内部机制（角色拆分、交接协议）：`docs/design/codex-driver-carrier.md`（开发者向）。

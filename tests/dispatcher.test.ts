@@ -1,8 +1,8 @@
 // @module: step-dispatcher ^anc-struct-step-dispatcher
 // @v: anc-struct-shared-providers — Provider 接口族的行为面（凭证解析/SDK 注入）在本文件覆盖
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { load as yamlLoadRaw } from 'js-yaml';
-import { parseModelRef, StepDispatcher, DirSpecProvider, isHighlyRepetitive } from '../src/dispatcher.js';
+import { parseModelRef, StepDispatcher, DirSpecProvider, isHighlyRepetitive, truncationAdvice, normalizeFullwidthKeyColons } from '../src/dispatcher.js';
 import { parseFragment, flattenFragmentNumbering } from '../src/parser.js';
 import Anthropic from '@anthropic-ai/sdk';
 import { mkdtempSync, readFileSync } from 'node:fs';
@@ -161,8 +161,8 @@ describe('StepDispatcher', () => {
         { name: 'score', type: 'int', description: '' },
       ];
       const text = dispatcher.formatOutputSchema(schema);
-      expect(text).toContain('- result: text # the result');
-      expect(text).toContain('- score: int');
+      expect(text).toContain('- result % text # the result');
+      expect(text).toContain('- score % int');
     });
   });
 
@@ -827,6 +827,60 @@ Goal: probe cache blocks
       expect(delays[5]).toBeGreaterThan(30_000);           // 末次退避 32s 档真实生效(非旧 2 次档的 2s)
     });
 
+    // 端点不可达 fail-fast（hopissues/0106,^anc-exec-network-pause 末条）——ECONNREFUSED/ENOTFOUND
+    // 是确定性死端点,不入 6 次退避、不入网络暂停门;首次即抛 ENDPOINT_UNREACHABLE 且报文三样定位。
+    // @v: anc-exec-network-pause
+    it('正例：ECONNREFUSED（cause 链上）→ 首次即抛 ENDPOINT_UNREACHABLE，零重试，报文含 service_id/base_url/错误码', async () => {
+      const { mockCreate, callRetry, dispatcher } = makeDispatcher();
+      const Anthropic = (await import('@anthropic-ai/sdk')).default as any;
+      const connErr = new Anthropic.APIConnectionError();
+      connErr.message = 'Connection error.';
+      connErr.cause = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:9999'), { code: 'ECONNREFUSED' });
+      mockCreate.mockRejectedValue(connErr);
+      (dispatcher as any).defaultClient.endpoint = { service_id: 'dead', base_url: 'http://127.0.0.1:9999/v1' };
+      try { await callRetry({ model: 'test', messages: [] }); expect.unreachable(); } catch (e: any) {
+        const m = String(e.message ?? e);
+        expect(m).toMatch(/^ENDPOINT_UNREACHABLE: /);
+        expect(m).toContain("'dead'");
+        expect(m).toContain('http://127.0.0.1:9999/v1');
+        expect(m).toContain('ECONNREFUSED');
+        expect(m).not.toContain('NETWORK_ERROR');   // 不是瞬时网络故障文案
+      }
+      expect(mockCreate).toHaveBeenCalledTimes(1);   // 首次即判,零重试（对照瞬时 network 的 7 次）
+    });
+
+    it('正例：ENOTFOUND（AggregateError.errors 内）同判不可达；反例：ECONNRESET 仍走瞬时 network 六次档挂 NETWORK_ERROR', async () => {
+      const Anthropic = (await import('@anthropic-ai/sdk')).default as any;
+      // ENOTFOUND 藏在 undici 双栈聚合错的 errors[] 里
+      const { mockCreate, callRetry } = makeDispatcher();
+      const agg = new Anthropic.APIConnectionError();
+      agg.message = 'Connection error.';
+      agg.cause = Object.assign(new Error('getaddrinfo ENOTFOUND nosuch.example'), { errors: [Object.assign(new Error('x'), { code: 'ENOTFOUND' })] });
+      mockCreate.mockRejectedValue(agg);
+      await expect(callRetry({ model: 'test', messages: [] })).rejects.toThrow(/^ENDPOINT_UNREACHABLE: .*ENOTFOUND/);
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+      // ECONNRESET=瞬时,维持 network 待遇
+      const { mockCreate: mc2, callRetry: cr2 } = makeDispatcher();
+      const reset = new Anthropic.APIConnectionError();
+      reset.message = 'read ECONNRESET';
+      reset.cause = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+      mc2.mockRejectedValue(reset);
+      await expect(cr2({ model: 'test', messages: [] })).rejects.toThrow(/^NETWORK_ERROR: /);
+      expect(mc2).toHaveBeenCalledTimes(7);   // 首发+6 次退避——瞬时档不受 0106 影响
+    });
+
+    it('正例：EPERM（沙箱/防火墙拒绝 connect）同判不可达——策略拒绝不随时间自愈,报文点明系统策略', async () => {
+      const Anthropic = (await import('@anthropic-ai/sdk')).default as any;
+      const { mockCreate, callRetry } = makeDispatcher();
+      const eperm = new Anthropic.APIConnectionError();
+      eperm.message = 'Connection error.';
+      // 实测形态（Claude Code 沙箱内 fetch 直连未白名单 IP）:cause.code='EPERM', syscall='connect', errno=-1
+      eperm.cause = Object.assign(new Error('connect EPERM 1.1.1.1:9999'), { code: 'EPERM', syscall: 'connect', errno: -1 });
+      mockCreate.mockRejectedValue(eperm);
+      await expect(callRetry({ model: 'test', messages: [] })).rejects.toThrow(/^ENDPOINT_UNREACHABLE: .*系统策略.*EPERM/);
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+    });
+
     // 网络类耗尽挂可读前缀（2026-08-23 作者定——dr10 实撞:undici 断流原文案 `terminated`
     // 直落 FailRecord 经 L2c 给下一轮 LLM 零信息量,LLM 会试图"修正"网络故障）
     // @v: anc-exec-api-retry
@@ -885,6 +939,89 @@ Goal: probe cache blocks
       mockCreate.mockRejectedValue(new Error('unknown'));
       await expect(callRetry({ model: 'test', messages: [] })).rejects.toThrow('unknown');
       expect(mockCreate).toHaveBeenCalledTimes(1);
+    });
+
+    // 客户端等待超时（^anc-exec-api-retry "客户端等待超时"条,todo/0117）:等满单次请求等待上限的
+    // 90% 才判定——用假时钟让每次失败"耗时"指定毫秒数,不真等。旧形态:当网络瞬断重试 6 次约 35 分钟后报"网络中断"。
+    // @v: anc-exec-api-retry
+    describe('客户端等待超时（todo/0117）', () => {
+      let now = 1_000_000;
+      let nowSpy: ReturnType<typeof vi.spyOn> | undefined;
+      beforeEach(() => { now = 1_000_000; nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now); });
+      afterEach(() => { nowSpy?.mockRestore(); });
+      /** 每次调用先把假时钟推进 elapsedMs 再抛 err */
+      const failAfter = (mockCreate: ReturnType<typeof vi.fn>, err: unknown, elapsedMs: number) =>
+        mockCreate.mockImplementation(async () => { now += elapsedMs; throw err; });
+
+      it('正例：timeout 且等满上限 → 只发 1 次,抛 CLIENT_TIMEOUT 新文案（N 分钟 + max_tokens）,不说"网络中断"', async () => {
+        const { mockCreate, callRetry } = makeDispatcher();
+        const Anthropic = (await import('@anthropic-ai/sdk')).default as any;
+        const err = new Anthropic.APIConnectionTimeoutError(); err.message = 'Request timed out.';
+        const waitMs = Math.ceil((32768 / 128_000) * 60 * 60_000);   // 约 15.36 分钟 → 文案写 16 分钟
+        failAfter(mockCreate, err, waitMs);
+        const e = await callRetry({ model: 'test', messages: [], max_tokens: 32768 }).then(() => undefined, (x: Error) => x);
+        expect(mockCreate).toHaveBeenCalledTimes(1);
+        expect(e.message).toMatch(/^CLIENT_TIMEOUT: 客户端等待超过 16 分钟仍没收到模型的完整回复/);
+        expect(e.message).toContain('max_tokens=32768');
+        expect(e.message).toContain('原文: Request timed out.');
+        expect(e.message).not.toContain('网络中断（非内容问题');
+        expect(e.message).not.toMatch(/^NETWORK_ERROR/);
+      });
+
+      it('正例：undici 等数据超时（裸 terminated,cause 带 UND_ERR_BODY_TIMEOUT）等满上限同样判客户端等待超时', async () => {
+        const { dispatcher, mockCreate, callRetry } = makeDispatcher();
+        // 真 classify 逻辑由 protocol-openai 单测与真 SDK 用例覆盖;这里只验 classify 判 timeout 后的分派
+        (dispatcher as any).defaultClient.classifyError = () => 'timeout';
+        failAfter(mockCreate, Object.assign(new TypeError('terminated'), { cause: { code: 'UND_ERR_BODY_TIMEOUT' } }), 10 * 60_000);
+        await expect(callRetry({ model: 'test', messages: [], max_tokens: 4096 })).rejects.toThrow(/^CLIENT_TIMEOUT: 客户端等待超过 10 分钟/);
+        expect(mockCreate).toHaveBeenCalledTimes(1);
+      });
+
+      it('反例：短超时（耗时远不到上限,如连接超时）→ 照旧按 6 次档重试,耗尽报 NETWORK_ERROR', async () => {
+        const { mockCreate, callRetry } = makeDispatcher();
+        const Anthropic = (await import('@anthropic-ai/sdk')).default as any;
+        failAfter(mockCreate, new Anthropic.APIConnectionTimeoutError(), 10_000);   // 10 秒=undici 连接超时量级
+        await expect(callRetry({ model: 'test', messages: [], max_tokens: 32768 })).rejects.toThrow(/^NETWORK_ERROR: 网络中断/);
+        expect(mockCreate).toHaveBeenCalledTimes(7);
+      });
+
+      it('反例：普通网络错误即使耗时很长也不归客户端等待超时——照旧 6 次重试,第 7 发成功', async () => {
+        const { mockCreate, callRetry } = makeDispatcher();
+        let n = 0;
+        mockCreate.mockImplementation(async () => {
+          now += 20 * 60_000;
+          if (++n <= 6) throw new TypeError('fetch failed');
+          return OK_RESPONSE;
+        });
+        const resp = await callRetry({ model: 'test', messages: [], max_tokens: 32768 });
+        expect(resp.content[0].text).toBe('ok');
+        expect(mockCreate).toHaveBeenCalledTimes(7);
+      });
+
+      it('正例：水位越 75% 线时客户端等待超时文案同样追加体量提示', async () => {
+        const engine = new ExecutionEngine();
+        engine.initExecution(SIMPLE_SPEC, HOST);
+        const host = { ...HOST, resource_limits: { max_tool_iterations: 20, max_context_tokens: 100_000, max_output_tokens: 4096, max_replan_attempts: 2 } };
+        const d = new StepDispatcher(engine, host);
+        (d as any).sleep = () => Promise.resolve();
+        (d as any).ctxWatermark = 90_000;
+        (d as any).defaultClient.classifyError = () => 'timeout';
+        failAfter((d as any).defaultClient.messages.create, new Error('Request timed out.'), 10 * 60_000);
+        await expect((d as any).callLlmWithRetry({ model: 'test', messages: [], max_tokens: 4096 }))
+          .rejects.toThrow(/^CLIENT_TIMEOUT: .*实例上下文水位 90K 已近告警线/);
+      });
+
+      it('正例：runSpec 撞客户端等待超时 → 步骤以 CLIENT_TIMEOUT 失败,不转网络暂停', async () => {
+        const engine = new ExecutionEngine();
+        engine.initExecution(SIMPLE_SPEC, HOST);
+        const d = new StepDispatcher(engine, HOST);
+        (d as any).sleep = () => Promise.resolve();
+        (d as any).defaultClient.classifyError = () => 'timeout';
+        failAfter((d as any).defaultClient.messages.create, new Error('Request timed out.'), 20 * 60_000);
+        const result = await d.runSpec();
+        expect(result.status).toBe('failed');
+        expect(result.failure?.reason).toContain('CLIENT_TIMEOUT: 客户端等待超过');
+      });
     });
   });
 
@@ -1761,6 +1898,158 @@ g
         expect(existsSync(join(runDir, 'calls', '1.1.2', 'log'))).toBe(true);
       });
 
+      // @v: anc-provider-spec-content-addressed —— hopissues/0115 probe ①②:loop for-each 3 材料 + call 子实例,跑到终态后
+      // run 根 specs/ 真身数 == 不同哈希数（同内容子实例不重复落盘）,各实例 spec.json 全为引用;spec 类落盘字节远小于
+      // "实例数 × 单份"（0115 现场 2309 份 1.62G 只有 3 种内容——按实例复制那一层被消掉）。
+      it('正例（0115 probe ①②）：loop+call 三子实例跑完,specs/ 只有 2 份真身（父 spec 一种、子 spec 一种）,4 个 spec.json 全是引用', async () => {
+        const PARENT = `# P
+Id: pcas
+## Goal
+g
+## Inputs
+- segs: [text]  # 段
+## Outputs
+- outs: [text]  # 收集
+## Steps
+1. [loop for-each seg in segs, collect o into outs] 逐段
+  + → outs: [text]  # 收集
+  1.1. [call leaf(s: seg)] 子
+    + → o: r
+2. [exit] 交付
+`;
+        const LEAF = `# L
+Id: leaf
+## Goal
+g
+## Inputs
+- s: text  # 段
+## Outputs
+- r: text  # 回
+## Steps
+1. [act] 回显
+  - ← s
+  + → r: text  # 回
+> \`\`\`hop_python
+> r = "ok:" + s
+> \`\`\`
+`;
+        const dir = mkdtempSync(join(tmpdir(), 'ccp-cas-'));
+        const hostX: HostConfig = { ...HOST, spec_provider: { resolve: async (id: string) => id === 'leaf' ? { spec_id: 'leaf', source: LEAF } : null } };
+        const engine = new ExecutionEngine();
+        engine.initExecution(PARENT, hostX, { stateDir: dir, params: { segs: ['a', 'b', 'c'] }, logDir: join(dir, 'log') });
+        const d = new StepDispatcher(engine, hostX);
+        (d as any).sleep = () => Promise.resolve();
+        const r = await d.runSpec();
+        expect(r.status).toBe('completed');
+        expect(r.outputs?.outs).toEqual(['ok:a', 'ok:b', 'ok:c']);
+        const top = engine.getInstanceDir()!;
+        // 全部 spec.json（顶层 + 三个 calls 子实例）都是引用形态
+        const specFiles = [join(top, 'spec.json'), ...readdirSync(join(top, 'calls')).map(c => join(top, 'calls', c, 'spec.json'))];
+        expect(specFiles).toHaveLength(4);
+        const refs = specFiles.map(f => JSON.parse(readFileSync(f, 'utf-8')) as { $spec_ref?: string });
+        for (const ref of refs) expect(ref.$spec_ref).toMatch(/^[0-9a-f]{64}$/);
+        // probe ①：真身数 == 不同哈希数（父一种、子一种 = 2）;子实例目录下无 specs/
+        const truths = readdirSync(join(top, 'specs'));
+        expect(truths).toHaveLength(2);
+        expect(new Set(refs.map(x => x.$spec_ref)).size).toBe(2);
+        for (const c of readdirSync(join(top, 'calls'))) expect(existsSync(join(top, 'calls', c, 'specs'))).toBe(false);
+        // probe ②：spec 类落盘总字节 ≤ 不同内容数 × 单份 × 2（引用文件几十字节,真身两份）
+        const truthBytes = truths.reduce((n, f) => n + readFileSync(join(top, 'specs', f)).length, 0);
+        const refBytes = specFiles.reduce((n, f) => n + readFileSync(f).length, 0);
+        const maxSingle = Math.max(...truths.map(f => readFileSync(join(top, 'specs', f)).length));
+        expect(truthBytes + refBytes).toBeLessThanOrEqual(2 * maxSingle * 2);
+        // 读侧端到端：引用形态下 load 父与子实例都能拿回真 AST（阅卷指出只钉写侧,去解引用分支时本例仍绿——补此断言）
+        const reTop = ExecutionEngine.load(top);
+        expect((reTop as unknown as { spec: { header: { id: string } } }).spec.header.id).toBe('pcas');
+        const childDir = join(top, 'calls', readdirSync(join(top, 'calls'))[0]);
+        expect((ExecutionEngine.load(childDir) as unknown as { spec: { header: { id: string } } }).spec.header.id).toBe('leaf');
+      });
+
+      // @v: anc-exec-work-zone-registry —— 读写分权端到端（todo/0126 作者定"可以读,但不应该能写"）：父 body 用 work_zone_path()
+      // 生成文件经 call 参数传给子实例——子 body 能 read 它（读对实例树开放）,append 它被拒（写只归本实例）;子写自己的
+      // work_zone 后返回路径,父 read 子产物成功（父读子——hopbuild2 台账通道的新形态）。standalone 下父子共用同一
+      // DefaultToolProvider,own 随 engine.getWorkZone() 在父子间切换——本钉把 dispatcher+FilePersistence+engine 整链串起来。
+      it('正例：父 call 子——子 read 父 work_zone 产物成功、子 append 父文件被拒、父 read 子 work_zone 产物成功（读开放写归己,整链）', async () => {
+        const PARENT = `# P
+Id: p
+## Goal
+g
+## Outputs
+- child_note: text  # 子产物内容
+- parent_file_after: text  # 父文件事后内容
+## Steps
+1. [act] 备父文件
+  + → pf: text  # 父文件路径
+> \`\`\`hop_python
+> pf = work_zone_path("shared.md")
+> w = write(path: pf, content: "父写的\\n")
+> \`\`\`
+2. [call childrw(pf: pf)] 子实例读父、试写父、写自己
+  - ← pf
+  + → child_log: log_path
+  + → seen: seen_parent
+3. [act] 父读子产物与自己文件
+  - ← pf, child_log, seen
+  + → child_note: text  # 子产物
+  + → parent_file_after: text  # 父文件事后内容
+> \`\`\`hop_python
+> child_note = read(path: child_log) + "|seen=" + seen
+> parent_file_after = read(path: pf)
+> \`\`\`
+4. [exit] 交付
+`;
+        const CHILD = `# C
+Id: childrw
+## Goal
+g
+## Inputs
+- pf: text  # 父给的文件路径
+## Outputs
+- log_path: text  # 子自己的台账路径
+- seen_parent: text  # 读到的父内容
+## Steps
+1. [act] 读父、写己
+  - ← pf
+  + → log_path: text  # 台账路径
+  + → seen_parent: text  # 父内容
+> \`\`\`hop_python
+> seen_parent = strip(read(path: pf))
+> log_path = work_zone_path("judgement-log.md")
+> a = append(path: log_path, content: "- 子实例写在自己涂鸦区\\n")
+> \`\`\`
+2. [act] 试写父（须被拒——act body 工具失败即步骤失败,所以放独立 subtask retry=0 里兜住）
+  - ← pf
+  + → tried: text  # 结果
+> \`\`\`hop_python
+> tried = "n/a"
+> \`\`\`
+`;
+        const dir = mkdtempSync(join(tmpdir(), 'ccp-wzrw-'));
+        const hostX: HostConfig = { ...HOST, spec_provider: { resolve: async (id: string) => id === 'childrw' ? { spec_id: 'childrw', source: CHILD } : null } };
+        const engine = new ExecutionEngine();
+        engine.initExecution(PARENT, hostX, { stateDir: dir, logDir: join(dir, 'log') });
+        const d = new StepDispatcher(engine, hostX);
+        (d as any).sleep = () => Promise.resolve();
+        const r = await d.runSpec();
+        expect(r.status).toBe('completed');
+        expect(r.outputs?.child_note).toBe('- 子实例写在自己涂鸦区\n|seen=父写的');   // 子读到父、父读到子
+        expect(r.outputs?.parent_file_after).toBe('父写的\n');   // 父文件没被子动
+        // 子 append 父文件被拒——直接用共用提供者、own 切到子实例根后验（体外重放,避免 body 失败进重试链）
+        const callsDir = join(engine.getInstanceDir()!, 'calls');
+        const childId = readdirSync(callsDir)[0];   // 串行 call 子实例目录名（如 '2' 或 '2.1'）——不猜,读盘取
+        const childWz = join(callsDir, childId, 'work_zone');
+        expect(existsSync(join(childWz, 'judgement-log.md'))).toBe(true);
+        const tp = (d as any).toolProvider as { setWorkZoneScope: (s: { own: string; tree?: string }) => void; execute: (n: string, a: Record<string, unknown>, w?: string) => Promise<{ success: boolean; result: unknown }> };
+        // 先取父路径再切 own——engine.getWorkZone() 每次调用都把"当前实例=父"推回提供者（不变量:谁在执行谁是 own）,
+        // 在 setWorkZoneScope 之后再调它会把切换冲掉（本钉首版恰撞此——是设计不是缺陷）
+        const parentShared = join(engine.getWorkZone(), 'shared.md');
+        tp.setWorkZoneScope({ own: childWz, tree: engine.getInstanceDir()! });
+        const denied = await tp.execute('append', { path: parentShared, content: '子越权\n' });
+        expect(denied.success).toBe(false);
+        expect(String(denied.result)).toContain('WORK_ZONE_ONLY');
+        expect(readFileSync(parentShared, 'utf-8')).toBe('父写的\n');
+      });
+
       it('反例：父纯内存 → 子随纯内存,不落任何盘（"无跨进程"假设在纯内存宿主真成立,现状形态保留）', async () => {
         const hostX: HostConfig = { ...HOST, spec_provider: { resolve: async (id: string) => id === 'child' ? { spec_id: 'child', source: CHILD } : null } };
         const engine = new ExecutionEngine();
@@ -2140,6 +2429,48 @@ Test adaptive
 
     // @v: anc-exec-act-evidence-gate —— 执行证据机核（0095 2e:27b 修错步十轮零工具虚构完成——
   // 读完工单直接编"修了 N 处"交卷,判官点破十轮无效;四与门=重试轮+工具面在场+零调用+无 no_change 自报 → 拒收重做不送判官）
+  // 端点不可达全链（hopissues/0106 probe 判据:run 终态 failed 且错误含不可达语义——非永 running/paused）
+  // @v: anc-exec-network-pause
+  describe('端点不可达 fail-fast 全链（0106）', () => {
+    it('正例：dead provider 首步即 ECONNREFUSED → run 终态 failed（不 paused），失败原因含 ENDPOINT_UNREACHABLE 与 service_id', async () => {
+      const Anthropic = (await import('@anthropic-ai/sdk')).default as any;
+      const engine = new ExecutionEngine();
+      engine.initExecution(SIMPLE_SPEC, HOST);
+      const dispatcher = new StepDispatcher(engine, HOST);
+      (dispatcher as any).sleep = () => Promise.resolve();
+      const connErr = new Anthropic.APIConnectionError();
+      connErr.message = 'Connection error.';
+      connErr.cause = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:9999'), { code: 'ECONNREFUSED' });
+      (dispatcher as any).defaultClient.messages.create.mockRejectedValue(connErr);
+      (dispatcher as any).defaultClient.endpoint = { service_id: 'dead', base_url: 'http://127.0.0.1:9999/v1' };
+      const r = await dispatcher.runSpec();
+      expect(r.status).toBe('failed');                          // 报告方判据:终态 failed
+      expect(r.status).not.toBe('paused');                      // 不入网络暂停门（对照瞬时 network 例）
+      const reason = String(r.failure?.reason ?? '');
+      expect(reason).toContain('ENDPOINT_UNREACHABLE');
+      expect(reason).toContain("'dead'");
+      expect(reason).toContain('ECONNREFUSED');
+      // 事件流零 network_pause 记录——不是暂停后又失败,是直接失败（读引擎真身事件流,不读不存在的字段）
+      const events = engine.getExecEvents();
+      expect(events.length).toBeGreaterThan(0);
+      expect(events.some((e: any) => e.event === 'network_pause')).toBe(false);
+      // 失败记录标确定性——容器 retry 不会拿同一死端点重跑 N 次（与 CONTEXT_OVERFLOW 同款）
+      const kinds = Object.values(engine.exportFailState().stepFailReasons ?? {}).map((r: any) => r.fail_kind);
+      expect(kinds).toContain('deterministic');
+    });
+
+    it('反例守卫：瞬时断流（fetch failed）仍走网络暂停门 → run paused(network)，0106 分档不误伤既有语义', async () => {
+      const engine = new ExecutionEngine();
+      engine.initExecution(SIMPLE_SPEC, HOST);
+      const dispatcher = new StepDispatcher(engine, HOST);
+      (dispatcher as any).sleep = () => Promise.resolve();
+      (dispatcher as any).defaultClient.messages.create.mockRejectedValue(new TypeError('fetch failed'));
+      const r = await dispatcher.runSpec();
+      expect(r.status).toBe('paused');
+      expect(r.pause?.pause_reason).toBe('network');
+    });
+  });
+
   describe('执行证据机核（重试轮零工具即声称完成拒收）', () => {
     const ACT_SPEC = `# T\nId: t-eg\n## Goal\ng\n## Outputs\n- result: text  # o\n## Steps\n1. [act] 修错\n  + → result: text  # o\n  > 按工单修\n`;
     const mkD = () => {
@@ -2218,6 +2549,182 @@ Test adaptive
       }
     });
 
+    // @v: anc-exec-act-evidence-gate —— 适用范围只核 act 步（v0.40.0,deep-validate 2.1 × qwen-flash:reason 步
+    // 声明 read 只为读卸载大件,重试轮按反馈改对报告、零工具、没写 no_change,两轮被拒烧尽重试）
+    const REASON_SPEC = `# T\nId: t-eg-r\n## Goal\ng\n## Outputs\n- result: text  # o\n## Steps\n1. [reason] 出报告\n  - 工具: read  # 读卸载大件\n  + → result: text  # o\n  > 写报告\n`;
+    const mkReason = () => {
+      const engine = new ExecutionEngine();
+      engine.initExecution(REASON_SPEC, HOST);
+      const d = new StepDispatcher(engine, HOST);
+      (d as any).sleep = () => Promise.resolve();
+      (d as any).toolProvider = {
+        list: () => [{ name: 'read', description: 'r', input_schema: { type: 'object', properties: {} }, requires_commit: false, category: 'basic' }],
+        execute: async () => ({ result: 'ok', success: true }),
+      };
+      return { engine, d };
+    };
+
+    it('适用范围正例：reason 步（声明 read）重试轮零调用、无 no_change、按反馈改好的产出 → 不拒收，产出正常收', async () => {
+      const { engine, d } = mkReason();
+      const mockCreate = (d as any).defaultClient.messages.create;
+      mockCreate.mockResolvedValueOnce({
+        content: [{ type: 'text', text: 'result: 风险 1 条;P10 坑位:步骤 4.3' }],
+        usage: { input_tokens: 50, output_tokens: 20 },
+      });
+      const step = engine.nextStep();
+      expect(step.status).toBe('step_ready');
+      if (step.status === 'step_ready') {
+        expect(step.step_type).toBe('reason');
+        step.context.retry_feedback = 'P10 风险条目缺少坑位（步骤号）';
+        const out = await (d as any).executeActWithTools(step);
+        expect(String(out.result)).toContain('步骤 4.3');
+      }
+    });
+
+    it('适用范围第二使用点：打回重跑轮工具清单的追加句（真调工具落实 + no_change 出口）对 reason 步不渲染,act 步照渲染', () => {
+      // 按引擎真实驱动序构造打回轮:1.1 交卷 → 1.2 判官打回 → 1.1 重跑,组装期 retry_feedback 在场
+      const mkManifest = (kind: 'reason' | 'act') => {
+        const spec = `# T\nId: t-eg-m\n## Goal\ng\n## Outputs\n- r: text  # o\n## Steps\n1. [subtask retry=2] 包\n  + → r: text  # o\n\n  1.1. [${kind}] 出报告\n    - 工具: read  # 读卸载大件\n    + → r: text  # o\n    > 写报告\n\n  1.2. [check final] 验收\n    - ← r\n    + → ok: bool  # 判\n    + → gap: text  # 说明\n    > 核对\n`;
+        const engine = new ExecutionEngine();
+        engine.initExecution(spec, HOST);
+        new StepDispatcher(engine, HOST);   // 构造即向引擎挂注册面,清单渲染真身档
+        engine.nextStep();
+        engine.completeStep('1.1', { r: '旧报告' });
+        engine.nextStep();
+        engine.failStep('1.2', 'CHECK_FAILED: P10 缺坑位');
+        const r = engine.nextStep() as { context: { retry_feedback?: string; tool_manifest?: string } };
+        expect(r.context.retry_feedback).toBeDefined();   // 前置自证:打回轮真构造出来了
+        return r.context.tool_manifest ?? '';
+      };
+      const reasonM = mkManifest('reason');
+      expect(reasonM).toContain('read');                    // 工具面照下发,只是不渲染追加句
+      expect(reasonM).not.toContain('但本轮带着修复反馈');
+      expect(reasonM).not.toContain('no_change');
+      expect(mkManifest('act')).toContain('但本轮带着修复反馈');
+    });
+
+    it('适用范围反例：reason 步重试轮产出带一行 no_change → 不剥，原样进产出（reason 从未被教过这个出口）', async () => {
+      const { engine, d } = mkReason();
+      const mockCreate = (d as any).defaultClient.messages.create;
+      mockCreate.mockResolvedValueOnce({
+        content: [{ type: 'text', text: 'result: 报告正文\nno_change: 只改文字' }],
+        usage: { input_tokens: 50, output_tokens: 20 },
+      });
+      const step = engine.nextStep();
+      if (step.status === 'step_ready') {
+        step.context.retry_feedback = '意见一条';
+        const out = await (d as any).executeActWithTools(step);
+        expect(JSON.stringify(out)).toContain('no_change');
+      }
+    });
+
+    // @v: anc-exec-act-evidence-gate —— no_change 旁路声明（todo/0111:T9 sdc×qwen3.8-27b 步 5.1.1
+    // 输出声明 guard_result: GuardResult,照旧文案"在产出顶格写一行"只交 no_change 一行,放行后被类型
+    // 校验以"缺字段 clause_id"判死——放行后剥键块再解析,剥空专用文案拒收）
+    const GR_SPEC = `# T\nId: t-eg-gr\n## Goal\ng\n## Types\n- GuardResult:  # 单条结果\n  - clause_id: line  # 条款编号\n  - guard_path: line  # 校验文件路径\n  - status: enum(已码,降档需人裁)  # 状态\n  - verify_outcome: text  # 实跑留痕\n  - note: text  # 说明\n## Outputs\n- guard_result: GuardResult  # o\n## Steps\n1. [act] 生成并验证单条校验\n  + → guard_result: GuardResult  # 本条校验结果\n  > 跑不通则降档\n`;
+    const T9_DOWNGRADE = "guard_result:\n  clause_id: '2'\n  guard_path: ''\n  status: 降档需人裁\n  verify_outcome: ''\n  note: |-\n    由于工具使用迭代次数超限，无法生成和验证校验脚本。\n    原始判定为可码的条款因技术限制无法实现自动化校验，\n    故降档为需人裁处理。";
+    const T9_NO_CHANGE_ONLY = 'no_change: 上一轮未产生任何工具调用是因为条款本身无法生成有效的校验脚本，该条款"不得使用any类型"需要静态代码分析来检测TypeScript文件中的any类型使用情况，这不是简单的模式匹配可以解决的问题，因此无法生成有效的校验脚本，只能如实报告此情况。根据约束，对于无法生成有效校验的情况，应降级为"需人裁"。';
+    const mkGR = () => {
+      const engine = new ExecutionEngine();
+      engine.initExecution(GR_SPEC, HOST);
+      const d = new StepDispatcher(engine, HOST);
+      (d as any).sleep = () => Promise.resolve();
+      (d as any).toolProvider = {
+        list: () => [{ name: 'edit_file', description: 'e', input_schema: { type: 'object', properties: {} }, requires_commit: false, category: 'basic' }],
+        execute: async () => ({ result: 'ok', success: true }),
+      };
+      const warns: string[] = [];
+      vi.spyOn(engine, 'getHopLog').mockReturnValue({
+        recordWarn: (_id: string, msg: string) => { warns.push(msg); },
+        recordStepMeta: () => {}, recordStepStart: () => {}, recordStepDone: () => {},
+      } as any);
+      return { engine, d, warns };
+    };
+    const reply = (text: string) => ({ content: [{ type: 'text', text }], usage: { input_tokens: 50, output_tokens: 20 } });
+    const runGR = async (text: string) => {
+      const { engine, d, warns } = mkGR();
+      (d as any).defaultClient.messages.create.mockResolvedValueOnce(reply(text));
+      const step = engine.nextStep();
+      if (step.status !== 'step_ready') throw new Error('step not ready');
+      step.context.retry_feedback = '上一轮工具迭代超限,请生成并验证校验';
+      const out = await (d as any).executeActWithTools(step);
+      return { engine, d, warns, step, out };
+    };
+
+    it('旁路①：复合类型步,完整产出+其后另起一行 no_change → 五字段正常收、warn 在场、不抛', async () => {
+      const { engine, d, warns, step, out } = await runGR(`${T9_DOWNGRADE}\nno_change: 条款无法码化,如实降档`);
+      expect(out.guard_result).not.toContain('no_change');
+      expect(warns.some(w => w.includes('no_change 自报'))).toBe(true);
+      // 过类型校验入库（completeStep 走 GuardResult 字段核——T9 死在这一环）
+      const res = engine.completeStep(step.step_id, out);
+      expect((res as any).status).not.toBe('error');
+      const v = engine.getVariableStore().read('guard_result', 'root') as Record<string, unknown>;
+      expect(v).toMatchObject({ clause_id: '2', guard_path: '', status: '降档需人裁', verify_outcome: '' });
+      expect(String(v.note)).toContain('降档为需人裁');
+      void d;
+    });
+
+    it('旁路②：no_change 行放在产出之前 → 同样正常收', async () => {
+      const { engine, warns, step, out } = await runGR(`no_change: 条款无法码化,如实降档\n${T9_DOWNGRADE}`);
+      expect(warns.some(w => w.includes('no_change 自报'))).toBe(true);
+      engine.completeStep(step.step_id, out);
+      expect(engine.getVariableStore().read('guard_result', 'root')).toMatchObject({ clause_id: '2', status: '降档需人裁' });
+    });
+
+    it('旁路③：只交 no_change 一行（T9 第 5 轮原文回放）→ 专用文案拒收,点名本步输出 guard_result', async () => {
+      const { engine, d } = mkGR();
+      (d as any).defaultClient.messages.create.mockResolvedValueOnce(reply(T9_NO_CHANGE_ONLY));
+      const step = engine.nextStep();
+      if (step.status === 'step_ready') {
+        step.context.retry_feedback = '上一轮工具迭代超限';
+        await expect((d as any).executeActWithTools(step)).rejects.toThrow(/SCHEMA_MISMATCH: 只交了 `no_change` 自报.*不能代替产出.*本步要交：guard_result/);
+      }
+    });
+
+    it('旁路④：T9 第 3/4 轮原文（合法降档产出、无 no_change）→ 闸不放宽仍拒,文案教"另起一行"', async () => {
+      const { engine, d } = mkGR();
+      (d as any).defaultClient.messages.create.mockResolvedValueOnce(reply(T9_DOWNGRADE));
+      const step = engine.nextStep();
+      if (step.status === 'step_ready') {
+        step.context.retry_feedback = '上一轮工具迭代超限';
+        await expect((d as any).executeActWithTools(step)).rejects.toThrow(/一次工具都没调.*产出照本步输出声明完整交.*另起一行顶格写 `no_change: 原因`.*不能代替产出/);
+      }
+    });
+
+    it('旁路⑤：单输出 text 步,产出后跟 no_change 行 → 产出值不含 no_change 那一行', async () => {
+      const { engine, d } = mkD();
+      (d as any).defaultClient.messages.create.mockResolvedValueOnce(reply('result: 未做修改,上轮已修好\nno_change: 核对盘面后无需再动'));
+      const step = engine.nextStep();
+      if (step.status === 'step_ready') {
+        step.context.retry_feedback = '工单一条';
+        const out = await (d as any).executeActWithTools(step);
+        expect(out.result).toBe('未做修改,上轮已修好');
+      }
+    });
+
+    it('旁路⑥：多行 no_change（键行后跟缩进续行）→ 续行一并剥掉不进产出', async () => {
+      const { engine, d } = mkD();
+      // 产出不带 result: 自标记——解析不会替我们收窄到某一行,续行没剥掉就会原样混进产出
+      (d as any).defaultClient.messages.create.mockResolvedValueOnce(reply('no_change: |\n  第一行原因:盘面已符合\n\n  第二行原因:工单所指已在上轮修复\n未做修改'));
+      const step = engine.nextStep();
+      if (step.status === 'step_ready') {
+        step.context.retry_feedback = '工单一条';
+        const out = await (d as any).executeActWithTools(step);
+        expect(out.result).toBe('未做修改');
+        expect(String(out.result)).not.toContain('原因');
+      }
+    });
+
+    it('反例：首轮响应恰含 no_change 行 → 不核也不剥（没教过这个出口的轮次原文不动）', async () => {
+      const { engine, d } = mkD();
+      (d as any).defaultClient.messages.create.mockResolvedValueOnce(reply('no_change: 业务正文里恰好有这一行\n正文第二行'));
+      const step = engine.nextStep();
+      if (step.status === 'step_ready') {
+        const out = await (d as any).executeActWithTools(step);
+        expect(String(out.result)).toContain('no_change');
+      }
+    });
+
     it('反例：重试轮真调了工具 → 不拦（toolCallLog 非空即有执行证据）', async () => {
       const { engine, d } = mkD();
       const mockCreate = (d as any).defaultClient.messages.create;
@@ -2236,6 +2743,40 @@ Test adaptive
         const out = await executeAct(step);
         expect(out.result).toBe('真修了');
       }
+    });
+
+    // @v: anc-exec-act-evidence-gate —— 剥除范围扩到调了工具的重试轮（v0.34.3,T9 sdc×qwen3.8-27b r6 第 3 次
+    // 尝试:先列目录读文件〔调了工具〕,交卷=伪代码散文+五字段完整的 guard_result 块+空行+顶格一行 no_change。
+    // 修前只在零工具路径剥,这一行原样进解析,产出成了 {guard_result, no_change} 两个键,类型校验误报缺 clause_id）
+    const R6_FINAL = "# 发现问题：脚本对边界情况处理不当\n# 重新运行测试以确认当前状态\nresult_compliant = run_script(path=\"work_zone/check_function_length.py\", args=[\"compliant_sample.py\"])\n\nguard_result:\n  clause_id: '1'\n  guard_path: work_zone/check_function_length.py\n  status: 已码\n  verify_outcome: |\n    实跑验证结果：\n    1. 能跑不报错：脚本成功运行\n  note: ''\n\nno_change: 所有测试均已通过，脚本功能正常，无需进一步修改";
+    const runGRWithTool = async (text: string, retry: boolean) => {
+      const { engine, d, warns } = mkGR();
+      const mockCreate = (d as any).defaultClient.messages.create;
+      mockCreate.mockResolvedValueOnce({
+        content: [{ type: 'tool_use', id: 't1', name: 'edit_file', input: { path: 'a.md' } }],
+        usage: { input_tokens: 50, output_tokens: 20 },
+      });
+      mockCreate.mockResolvedValueOnce(reply(text));
+      const step = engine.nextStep();
+      if (step.status !== 'step_ready') throw new Error('step not ready');
+      if (retry) step.context.retry_feedback = '工具次数用完,请接着改文件';
+      const out = await (d as any).executeActWithTools(step);
+      return { engine, warns, step, out };
+    };
+
+    it('剥除扩面正例：重试轮调了工具,完整产出后尾随 no_change（T9 r6 原文形态）→ 剥掉、五字段过类型校验入库、warn 注明调了工具', async () => {
+      const { engine, warns, step, out } = await runGRWithTool(R6_FINAL, true);
+      expect(String(out.guard_result)).not.toContain('no_change');
+      expect(warns.some(w => w.includes('本轮调用了 1 次工具仍写 no_change 自报'))).toBe(true);
+      const res = engine.completeStep(step.step_id, out);
+      expect((res as any).status).not.toBe('error');
+      expect(engine.getVariableStore().read('guard_result', 'root')).toMatchObject({ clause_id: '1', status: '已码' });
+    });
+
+    it('剥除扩面反例：首轮调了工具且尾随 no_change → 不剥（首轮没教过这个出口）,原文进解析', async () => {
+      const { warns, out } = await runGRWithTool(R6_FINAL, false);
+      expect(String(out.guard_result)).toContain('no_change');
+      expect(warns.some(w => w.includes('no_change'))).toBe(false);
     });
   });
 
@@ -2479,8 +3020,12 @@ Test truncation
       expect(step.status).toBe('step_ready');
       if (step.status === 'step_ready') {
         const executeAct = (dispatcher as any).executeActWithTools.bind(dispatcher);
-        await expect(executeAct(step)).rejects.toThrow(/OUTPUT_TRUNCATED.*工具/);
+        const err = await executeAct(step).catch((e: Error) => e);
+        expect(err.message).toMatch(/OUTPUT_TRUNCATED.*工具/);
         expect(execSpy).not.toHaveBeenCalled();   // 残缺参数没被执行
+        // 报文走共享函数,数位是本轮实发的 max_tokens（todo/0113）// @v: anc-exec-output-truncation-loud
+        const sent = mockCreate.mock.calls.at(-1)[0].max_tokens;
+        expect(err.message).toBe('OUTPUT_TRUNCATED: 工具循环轮输出被 max_tokens 掐断，工具参数可能残缺,不执行' + truncationAdvice(sent, 16384));
       }
     });
 
@@ -3569,6 +4114,132 @@ Goal: 测试
     });
   });
 
+  // @v: anc-exec-thinking-disable-unsupported —— 思考关不掉的端点（todo/0118,glm-5.3-flash 收到
+  // thinking disabled 报 400）:五级链算出"关"且目标端点声明 {SID}_THINKING_DISABLE_UNSUPPORTED=true
+  // 时改发 output_config {effort: low}、不带 thinking 键;各级给出的关一视同仁;算出"开"照发;
+  // 未声明的端点逐字节不变。正反例成对:同一场景只差端点声明,请求形态必须不同。
+  describe('思考关不掉的端点改发 effort low', () => {
+    const DECL = { DEFAULT_THINKING_DISABLE_UNSUPPORTED: 'true' };
+    const mkWith = (spec: string, host: Partial<HostConfig> = {}) => {
+      const h = { ...HOST, ...host } as HostConfig;
+      const engine = new ExecutionEngine();
+      engine.initExecution(spec, h);
+      return { d: new StepDispatcher(engine, h), engine };
+    };
+    const build = (d: StepDispatcher, stepType: string, stepId = '1') => {
+      const ctx = { task_context: 't', instruction: 'x', progress_summary: '', inputs: {}, output_schema: [] };
+      return (d as never as { buildApiRequest: (c: unknown, t: string, s?: unknown) => { request: Record<string, unknown> } })
+        .buildApiRequest(ctx, stepType, { step_id: stepId, step_type: stepType, context: ctx }).request;
+    };
+    const REASON_ON = `# T
+Id: t
+## Task
+Goal: 测试
+## Outputs
+- r: text  # 结果
+## Steps
+1. [reason] 推理
+  + → r: text  # 结果
+  > @thinking on
+  > 想
+`;
+    const REASON_OFF = REASON_ON.replace('@thinking on', '@thinking off');
+
+    it('级1 记名册给出的关:声明端点 → output_config effort low 且无 thinking 键;未声明端点 → thinking disabled（烧穿止血重试轮不再补刀 400）', () => {
+      const a = mkWith(REASON_ON, { env_snapshot: DECL } as never);
+      (a.d as never as { thinkingExhaustedSteps: Set<string> }).thinkingExhaustedSteps.add('1');
+      const reqA = build(a.d, 'reason', '1');
+      expect(reqA['output_config']).toEqual({ effort: 'low' });
+      expect('thinking' in reqA).toBe(false);
+      // 反例:同场景不声明,仍发 disabled（未声明端点行为不变）
+      const b = mkWith(REASON_ON, { env_snapshot: {} } as never);
+      (b.d as never as { thinkingExhaustedSteps: Set<string> }).thinkingExhaustedSteps.add('1');
+      const reqB = build(b.d, 'reason', '1');
+      expect(reqB['thinking']).toEqual({ type: 'disabled' });
+      expect('output_config' in reqB).toBe(false);
+    });
+
+    it('级2 @thinking off 给出的关:声明端点 → effort low;未声明 → disabled', () => {
+      const reqA = build(mkWith(REASON_OFF, { env_snapshot: DECL } as never).d, 'reason', '1');
+      expect(reqA['output_config']).toEqual({ effort: 'low' });
+      expect('thinking' in reqA).toBe(false);
+      const reqB = build(mkWith(REASON_OFF, { env_snapshot: {} } as never).d, 'reason', '1');
+      expect(reqB['thinking']).toEqual({ type: 'disabled' });
+    });
+
+    it('级3 routing_rules thinking disabled 给出的关:声明端点 → effort low（按路由目标 service 读声明）', () => {
+      const me = { default_model: 'm', default_service_id: 'default', routing_rules: [
+        { match: { step_type: 'reason' as const }, service_id: 'glm', model: 'glm-5.3-flash', thinking: 'disabled' as const },
+      ] };
+      const reqA = build(mkWith(SIMPLE_SPEC, { model_engine: me, env_snapshot: { GLM_API_KEY: 'k', GLM_THINKING_DISABLE_UNSUPPORTED: 'true' } } as never).d, 'reason');
+      expect(reqA['output_config']).toEqual({ effort: 'low' });
+      expect('thinking' in reqA).toBe(false);
+      // 反例:声明挂在别的 service 上,不影响路由到 glm 的请求
+      const reqB = build(mkWith(SIMPLE_SPEC, { model_engine: me, env_snapshot: { GLM_API_KEY: 'k', OTHER_THINKING_DISABLE_UNSUPPORTED: 'true' } } as never).d, 'reason');
+      expect(reqB['thinking']).toEqual({ type: 'disabled' });
+    });
+
+    it('级5 步骤类型缺省给出的关（act/commit）:声明端点 → effort low', () => {
+      const { d } = mkWith(SIMPLE_SPEC, { env_snapshot: DECL } as never);
+      for (const t of ['act', 'commit']) {
+        const req = build(d, t);
+        expect(req['output_config']).toEqual({ effort: 'low' });
+        expect('thinking' in req).toBe(false);
+      }
+    });
+
+    it('算出"开"时声明不起作用:声明端点的 reason 步照发 thinking enabled、不带 output_config', () => {
+      const req = build(mkWith(SIMPLE_SPEC, { env_snapshot: DECL } as never).d, 'reason');
+      expect((req['thinking'] as { type: string }).type).toBe('enabled');
+      expect('output_config' in req).toBe(false);
+    });
+
+    it('缺省 provider 路径回退首 provider 的声明（与第 4 级同一取值函数）;声明值不是 "true" 不生效', () => {
+      const me = { default_model: 'm', default_service_id: 'default', routing_rules: [
+        { match: { step_type: 'check' as const }, service_id: 'glm', model: 'glm-5.3-flash' },
+      ] };
+      // act 步不命中 check 规则 → 走缺省 provider（service_id=default）→ 回退读首条规则的 glm 声明
+      const reqA = build(mkWith(SIMPLE_SPEC, { model_engine: me, env_snapshot: { GLM_THINKING_DISABLE_UNSUPPORTED: 'true' } } as never).d, 'act');
+      expect(reqA['output_config']).toEqual({ effort: 'low' });
+      expect('thinking' in reqA).toBe(false);
+      // 反例:键值不是字符串 "true"（加载期只会披发 true,这里防手工 env 写 1/yes 被误认）
+      const reqB = build(mkWith(SIMPLE_SPEC, { model_engine: me, env_snapshot: { GLM_THINKING_DISABLE_UNSUPPORTED: '1' } } as never).d, 'act');
+      expect(reqB['thinking']).toEqual({ type: 'disabled' });
+    });
+
+    it('工具循环路径:实发请求带 output_config effort low 无 thinking,hoplog llm.thinking 记 effort:low（发送口抄实际请求）', async () => {
+      const freeSpec = `# T\nId: t-think\n## Goal\ng\n## Outputs\n- r: text  # o\n## Steps\n1. [act free] 探索\n  + → r: text  # o\n  > 查资料\n`;
+      const { d, engine } = mkWith(freeSpec, { env_snapshot: DECL } as never);
+      (d as any).sleep = () => Promise.resolve();
+      const metas: Array<Record<string, unknown>> = [];
+      vi.spyOn(engine, 'getHopLog').mockReturnValue({
+        recordStepMeta: (_id: string, meta: Record<string, unknown>) => { metas.push(meta); },
+        recordWarn: () => {}, recordStepStart: () => {}, recordStepDone: () => {},
+      } as any);
+      (d as never as { thinkingExhaustedSteps: Set<string> }).thinkingExhaustedSteps.add('1');
+      const mockCreate = (d as any).defaultClient.messages.create;
+      mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'r: done' }], usage: { input_tokens: 50, output_tokens: 10 } });
+      const step = engine.nextStep();
+      expect(step.status).toBe('step_ready');
+      if (step.status === 'step_ready') await (d as any).executeActWithTools.bind(d)(step);
+      const req = mockCreate.mock.calls[mockCreate.mock.calls.length - 1][0];
+      expect(req.output_config).toEqual({ effort: 'low' });
+      expect('thinking' in req).toBe(false);
+      const llmMetas = metas.filter(m => m.llm) as Array<{ llm: { thinking?: string } }>;
+      expect(llmMetas.length).toBeGreaterThan(0);
+      expect(llmMetas[0].llm.thinking).toBe('effort:low');
+    });
+
+    it('hoplog 摘要函数四种形态:enabled/disabled/effort/absent（单发与工具循环两处记录共用）', () => {
+      const { d } = mkWith(SIMPLE_SPEC);
+      const sum = (r: Record<string, unknown>) => (d as any).thinkingSummary(r);
+      expect(sum({ thinking: { type: 'enabled', budget_tokens: 2048 } })).toBe('enabled:budget=2048');
+      expect(sum({ thinking: { type: 'disabled' } })).toBe('disabled');
+      expect(sum({ output_config: { effort: 'low' } })).toBe('effort:low');
+      expect(sum({})).toBe('absent');
+    });
+  });
+
   describe('parseStepOutput', () => {
     // @v: anc-exec-output-fence-recovery — coffee4 实撞两缺口正反例（2026-08-24）:
     // ①围栏正则只认 yaml|yml,flash 交 \`\`\`json 剥不掉——yamlLoad 对围栏行抛错走回退;
@@ -3683,6 +4354,59 @@ Goal: 测试
       expect(Array.isArray(result.seq_hit)).toBe(false);
     });
 
+    // @v: anc-exec-output-fullwidth-key-colon — glm-flash 全集实撞（2026-09-28）:ppt 每页自检步
+    // 收尾写 `slide_ok： true`（全角冒号）,YAML 不认,判"声明的输出未产出"三连重试烧尽。
+    describe('键行全角冒号等同半角', () => {
+      const mkParse = () => {
+        const engine = new ExecutionEngine();
+        engine.initExecution(SIMPLE_SPEC, HOST);
+        const dispatcher = new StepDispatcher(engine, HOST);
+        return (dispatcher as any).parseStepOutput.bind(dispatcher);
+      };
+      const two = [
+        { name: 'slide_ok', type: 'bool', description: '' },
+        { name: 'slide_issue', type: 'text', description: '' },
+      ];
+      const resp = (text: string) => ({ content: [{ type: 'text', text }] });
+
+      it('正例：思考散文+`slide_ok： true` 全角键行 → 取到布尔 true（ppt 实撞形态）', () => {
+        const r = mkParse()(resp('四项判据逐条核完,判定通过。\n\nslide_ok： true\nslide_issue： ""'), two);
+        expect(r.slide_ok).toBe(true);
+        expect(r.slide_issue).toBe('');
+      });
+
+      it('正例：紧贴无空格 `report_ok：true` 与带双引号键 `"slide_ok"：` 都取到', () => {
+        expect(mkParse()(resp('slide_ok：true\nslide_issue：无'), two).slide_ok).toBe(true);
+        expect(mkParse()(resp('"slide_ok"： false\n"slide_issue"： 缺图'), two).slide_ok).toBe(false);
+      });
+
+      it('反例：值里的全角冒号原样——只换键名后那一个', () => {
+        const r = mkParse()(resp('slide_ok： false\nslide_issue： 结论：第 3 条不过'), two);
+        expect(r.slide_ok).toBe(false);
+        expect(r.slide_issue).toBe('结论：第 3 条不过');
+      });
+
+      it('正例：单输出散文+尾行 `名： 值` → 收到值（散文弃）', () => {
+        const r = mkParse()(resp('我先想一想。\n\nverdict： 通过'), [{ name: 'verdict', type: 'text', description: '' }]);
+        expect(r.verdict).toBe('通过');
+      });
+
+      it('反例：单输出没剥到标签（全文即值）时返回原文,值里的 `名：` 行不被改写', () => {
+        // 标签行后还有非空顶格散文=形态含糊,收窄不剥 → 全文即值;原文里的全角冒号必须保真
+        const text = '报告正文第一段。\nverdict：这里是正文里的一句\n后续正文。';
+        const r = mkParse()(resp(text), [{ name: 'verdict', type: 'text', description: '' }]);
+        expect(r.verdict).toBe(text);
+      });
+
+      it('反例：带缩进的行与前缀相同的别名不改（normalizeFullwidthKeyColons 直测）', () => {
+        expect(normalizeFullwidthKeyColons('  slide_ok： true', ['slide_ok'])).toBe('  slide_ok： true');
+        expect(normalizeFullwidthKeyColons('slide_ok_extra： 1', ['slide_ok'])).toBe('slide_ok_extra： 1');
+        expect(normalizeFullwidthKeyColons('结论：通过', ['slide_ok'])).toBe('结论：通过');
+        expect(normalizeFullwidthKeyColons('slide_ok : x', ['slide_ok'])).toBe('slide_ok : x');   // 半角原样
+        expect(normalizeFullwidthKeyColons('slide_ok ：x', ['slide_ok'])).toBe('slide_ok: x');
+      });
+    });
+
     // @v: anc-exec-output-quoted-prefix-repair — dispatcher 侧接线保护（review 变异3实证:恒 throw
     // 全绿零保护——契约"四处解析点"的 dispatcher 半边正是 doc-review 实撞主路径,必须锁住）。
     it('正例：多输出 text 含引号前缀行 → dispatcher 侧修复接线解出全键（变异3重放保护）', () => {
@@ -3700,6 +4424,50 @@ Goal: 测试
       expect(result.seq_hit).toBe(true);
       expect(result.seq_plan).toContain('陶寺=尧都');
       expect(result.seq_plan).toContain('证据待补');       // 裸文尾巴没丢——修复重包后整值在
+    });
+
+    // @v: anc-exec-output-inline-colon-repair — dispatcher 侧接线保护:多输出整文 yamlLoad 经
+    // yamlLoadWithRepairImpl 走串联修复,值里裸冒号的行修复后整文解出（hb2 qwen-flash 实撞形态）。
+    it('正例：多输出 text 含值里裸冒号行 → dispatcher 侧串联修复解出全键,值原文不丢', () => {
+      const engine = new ExecutionEngine();
+      engine.initExecution(SIMPLE_SPEC, HOST);
+      const dispatcher = new StepDispatcher(engine, HOST);
+      const parse = (dispatcher as any).parseStepOutput.bind(dispatcher);
+      const text = 'seq_hit: true\nseq_plan: 模式（new: 新事故, update: 状态更新）';
+      const response = { content: [{ type: 'text', text }] };
+      const schema = [
+        { name: 'seq_hit', type: 'bool', description: '' },
+        { name: 'seq_plan', type: 'text', description: '' },
+      ];
+      const result = parse(response, schema);
+      expect(result.seq_hit).toBe(true);
+      expect(result.seq_plan).toBe('模式（new: 新事故, update: 状态更新）');
+    });
+
+    // @v: anc-exec-output-inline-colon-repair — 第二种命中形态接线保护:列表输出里某项的值以反引号
+    // 开头（ppt qwen-flash 步 4.1 实撞——修复前 pages 解析落空,归一空列表交付零页演示文稿）。
+    it('正例：多输出列表项值以反引号开头 → 列表输出解出全部元素,不落空', () => {
+      const engine = new ExecutionEngine();
+      engine.initExecution(SIMPLE_SPEC, HOST);
+      const dispatcher = new StepDispatcher(engine, HOST);
+      const parse = (dispatcher as any).parseStepOutput.bind(dispatcher);
+      const text = [
+        'pages:',
+        '  - page: 1',
+        '    content_points: 封面',
+        '  - page: 2',
+        '    content_points: `工程实现链规范`。先于其余一切文档',
+        'deliver_filename: x-slides.html',
+      ].join('\n');
+      const response = { content: [{ type: 'text', text }] };
+      const schema = [
+        { name: 'pages', type: '[text]', description: '' },
+        { name: 'deliver_filename', type: 'line', description: '' },
+      ];
+      const result = parse(response, schema);
+      expect(result.pages).toHaveLength(2);
+      expect(JSON.stringify(result.pages)).toContain('`工程实现链规范`。先于其余一切文档');
+      expect(result.deliver_filename).toBe('x-slides.html');
     });
 
     it('反例：围栏内容不含任何声明键 → 不采围栏,回退逐行（业务围栏不误吞）', () => {
@@ -3872,6 +4640,95 @@ Goal: 测试
       const response = { stop_reason: 'max_tokens', usage: { output_tokens: 16384 }, content: [{ type: 'text', text: '写了一半被掐断的' }] };
       const schema = [{ name: 'result', type: 'text', description: '' }];
       expect(() => parse(response, schema)).toThrow(/OUTPUT_TRUNCATED.*16384/);
+      // 回落:直调不传实发上限 → 数位写 ?,按本地上限掐断指路调参（todo/0113）
+      let thrown: Error | undefined;
+      try { parse(response, schema); } catch (e) { thrown = e as Error; }
+      expect(thrown?.message).toBe('OUTPUT_TRUNCATED: 输出被 max_tokens 上限掐断，产出不完整不可用' + truncationAdvice(undefined, 16384));
+      expect(truncationAdvice(undefined, 16384)).toContain('max_tokens=?，实际输出 output_tokens=16384）——调大 HOPJIT_MAX_OUTPUT_TOKENS');
+    });
+
+    // 端点自带上限的分辨（todo/0113:百炼 claude-code-proxy 端点 4096 硬上限忽略请求 65536,
+    // 旧报文只写 output_tokens 并叫人调大早已是 65536 的本地上限,两格两跑约 10 万 tokens 白烧）。
+    // @v: anc-exec-output-truncation-loud
+    describe('truncationAdvice 端点自带上限的分辨', () => {
+      it('正例：请求 65536、实际 4096 → 两个数都写出,判端点自带上限,不叫人调大本地配置', () => {
+        const a = truncationAdvice(65536, 4096);
+        expect(a).toContain('max_tokens=65536');
+        expect(a).toContain('output_tokens=4096');
+        expect(a).toContain('端点自己的输出上限');
+        expect(a).toContain('run-output-cap.mjs');
+        expect(a).not.toMatch(/调大/);
+      });
+      it('反例：请求 16384、实际 16384 → 两个数都写出,按本地上限掐断指路调参,不提端点', () => {
+        const a = truncationAdvice(16384, 16384);
+        expect(a).toContain('max_tokens=16384');
+        expect(a).toContain('output_tokens=16384');
+        expect(a).toMatch(/调大 HOPJIT_MAX_OUTPUT_TOKENS、resource_limits\.max_output_tokens 或 provider 的 max_output_tokens/);
+        expect(a).not.toContain('端点');
+      });
+      it('边界：阈值 0.9——实际 = 请求×0.9 不判端点,略低于才判', () => {
+        expect(truncationAdvice(10000, 9000)).not.toContain('端点');
+        expect(truncationAdvice(10000, 8999)).toContain('端点自己的输出上限');
+      });
+      it('回落：任一个数拿不到 → 数位写 ?,按本地上限掐断写,不崩', () => {
+        expect(truncationAdvice(undefined, 4096)).toBe('（本次请求上限 max_tokens=?，实际输出 output_tokens=4096）——调大 HOPJIT_MAX_OUTPUT_TOKENS、resource_limits.max_output_tokens 或 provider 的 max_output_tokens');
+        expect(truncationAdvice(65536, undefined)).toContain('max_tokens=65536，实际输出 output_tokens=?');
+        expect(truncationAdvice(65536, undefined)).not.toContain('端点');
+      });
+      it('parseStepOutput 站点：调用点传入实发上限 → 报文走共享函数（站点半句+两个数+端点判定）', () => {
+        const engine = new ExecutionEngine();
+        engine.initExecution(SIMPLE_SPEC, HOST);
+        const dispatcher = new StepDispatcher(engine, HOST);
+        const parse = (dispatcher as any).parseStepOutput.bind(dispatcher);
+        const response = { stop_reason: 'max_tokens', usage: { output_tokens: 4096 }, content: [{ type: 'text', text: '写了一半被掐断的' }] };
+        const schema = [{ name: 'result', type: 'text', description: '' }];
+        let thrown: Error | undefined;
+        try { parse(response, schema, '1', 65536); } catch (e) { thrown = e as Error; }
+        expect(thrown?.message).toBe('OUTPUT_TRUNCATED: 输出被 max_tokens 上限掐断，产出不完整不可用' + truncationAdvice(65536, 4096));
+      });
+      it('executeReasonOrCheck：把本次实发的 max_tokens 传进报文（resource_limits 定 20000,端点只回 4096）', async () => {
+        const host = { ...HOST, resource_limits: { max_output_tokens: 20000 } } as any;
+        const engine = new ExecutionEngine();
+        engine.initExecution(SIMPLE_SPEC, host);
+        const dispatcher = new StepDispatcher(engine, host);
+        const mockCreate = (dispatcher as any).defaultClient.messages.create;
+        mockCreate.mockResolvedValueOnce({ stop_reason: 'max_tokens', content: [{ type: 'text', text: '写了一半被掐断的' }], usage: { input_tokens: 10, output_tokens: 4096 } });
+        const step = engine.nextStep();
+        expect(step.status).toBe('step_ready');
+        if (step.status === 'step_ready') {
+          const exec = (dispatcher as any).executeReasonOrCheck.bind(dispatcher);
+          await expect(exec(step)).rejects.toThrow(/max_tokens=20000，实际输出 output_tokens=4096）——实际输出远低于请求上限/);
+          expect(mockCreate.mock.calls.at(-1)[0].max_tokens).toBe(20000);   // 报文里的数就是实发请求上的数
+        }
+      });
+      it('executeReasonOrCheck 激进重组分支：报文取重发请求的实发上限', async () => {
+        const host = { ...HOST, resource_limits: { max_output_tokens: 20000 } } as any;
+        const engine = new ExecutionEngine();
+        engine.initExecution(SIMPLE_SPEC, host);
+        const dispatcher = new StepDispatcher(engine, host);
+        (dispatcher as any).sleep = () => Promise.resolve();
+        const mockCreate = (dispatcher as any).defaultClient.messages.create;
+        // 重发请求的上限改成与原请求不同的 30000——报文取错请求的值时两个断言都会红
+        const origBuild = (dispatcher as any).buildApiRequest.bind(dispatcher);
+        let builds = 0;
+        (dispatcher as any).buildApiRequest = (...a: unknown[]) => {
+          const r = origBuild(...a);
+          builds += 1;
+          return builds === 2 ? { ...r, request: { ...r.request, max_tokens: 30000 } } : r;
+        };
+        const Anthropic = (await import('@anthropic-ai/sdk')).default as any;
+        mockCreate
+          .mockRejectedValueOnce(new Anthropic.BadRequestError('context length exceeded, too many tokens'))
+          .mockResolvedValueOnce({ stop_reason: 'max_tokens', content: [{ type: 'text', text: '写了一半被掐断的' }], usage: { input_tokens: 10, output_tokens: 20000 } });
+        const step = engine.nextStep();
+        if (step.status === 'step_ready') {
+          const exec = (dispatcher as any).executeReasonOrCheck.bind(dispatcher);
+          // 20000 < 30000×0.9 → 端点上限报文;若误取原请求的 20000 会落成"调大本地配置"报文
+          await expect(exec(step)).rejects.toThrow(/max_tokens=30000，实际输出 output_tokens=20000）——实际输出远低于请求上限/);
+          expect(mockCreate).toHaveBeenCalledTimes(2);
+          expect(mockCreate.mock.calls[1][0].max_tokens).toBe(30000);
+        }
+      });
     });
 
     // 反例：正常 end_turn 不受影响
@@ -4462,8 +5319,12 @@ Test replan escalation
       });
       const pipelineCall = (dispatcher as any).pipelineCall.bind(dispatcher);
       const ctx = { task_context: 't', progress_summary: '', instruction: 'x', inputs: {}, output_schema: [{ name: 'result', type: 'text', description: '' }] };
-      await expect(pipelineCall(ctx, 'replan', 'x'))
-        .rejects.toThrow(/OUTPUT_TRUNCATED.*replan/);
+      const err = await pipelineCall(ctx, 'replan', 'x').catch((e: Error) => e);
+      expect(err.message).toMatch(/OUTPUT_TRUNCATED.*replan/);
+      // 报文走共享函数,数位是本次实发的 max_tokens（todo/0113）// @v: anc-exec-output-truncation-loud
+      const sent = mockCreate.mock.calls.at(-1)[0].max_tokens;
+      expect(err.message).toBe('OUTPUT_TRUNCATED: replan 流水线段输出被 max_tokens 掐断' + truncationAdvice(sent, 16384));
+      expect(err.message).toContain(`max_tokens=${sent}`);
     });
 
     it('calls failStep when replan API throws on last attempt', async () => {
@@ -9832,7 +10693,7 @@ g
     const { engine, mockCreate, handleReady } = setup();
     const { HopLog } = await import('../src/hoplog.js');
     const dir = mkdtempSync(join(tmpdir(), 'unify-'));
-    const hopLog = new HopLog({ specId: 'u', logDir: dir, title: 'T', goal: 'G' });
+    const hopLog = new HopLog({ specId: 'u', logDir: dir, title: 'T', goal: 'G', level: 'debug' });   // prompt 全文只在 debug 级落账（缺省 info,todo/0127）
     (engine as any).hoplog = hopLog;
     mockCreate.mockResolvedValue(OK_RESP);
     const next = engine.nextStep();
@@ -10110,7 +10971,8 @@ Test role tail block
     expect(manifest).toMatch(/- read：[\s\S]*?返回:.*文件内容/);
     expect(manifest).toMatch(/- exists：[\s\S]*?返回:.*exists/);
     // 面2:路径纪律恒有行+act 步 work_zone 写盘行
-    expect(manifest).toContain('路径一律相对 workspace');
+    expect(manifest).toContain('路径写 workspace 相对路径');
+    expect(manifest).toContain('workspace 外的绝对路径会被拒');
     expect(manifest).toContain('写盘唯一合法位置');
     expect(manifest).toContain('.hopstate/x/work_zone');
     // 面3:词表教学句+调用方式行(作者补抓:列了工具没说怎么调/返回行不得用 HopSchema 词)
@@ -10121,6 +10983,20 @@ Test role tail block
     expect(manifest).toContain('任务不需要工具时严格禁止调用');
     expect(manifest).not.toContain('5000');   // 写盘体量约定已挪 L4 输出段（作者抓"在工具那写太远了"）
     expect(manifest).not.toContain('（text）');
+  });
+
+  // todo/0122——外挂件描述带 notes（多行续行缩进 4 格）、返回行读 Composite 渲染好的 returns
+  it('清单供给面1：外挂件多行描述续行缩进、返回行渲染 output_schema 形状;无声明件仍如实"未声明形状"', async () => {
+    const { buildToolManifest } = await import('../src/prompt.js');
+    const defs = [
+      { name: 'web_search', description: '网页检索:查询词→结果页清单\n只读零副作用。', input_schema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] }, returns: 'JSON: {pages: 列表（元素为结构化对象）}' },
+      { name: 'bare_tool', description: '', input_schema: {} },
+    ];
+    const m = buildToolManifest({ tool_grants: [{ name: 'web_search', note: '检索依据' }, { name: 'bare_tool' }] }, defs, { stepType: 'act' });
+    expect(m).toContain('- web_search：网页检索:查询词→结果页清单\n    只读零副作用。（本步用途：检索依据）');
+    expect(m).toMatch(/- web_search：[\s\S]*?返回: JSON: \{pages: 列表（元素为结构化对象）\}/);
+    expect(m).not.toMatch(/^只读零副作用/m);   // 续行不顶格（顶格会被读成另一件工具）
+    expect(m).toMatch(/- bare_tool：\n[\s\S]*?返回: 未声明形状/);
   });
 
   it('清单供给分档：commit 步渲染 workspace 可写口径,work_zone 空串时写盘行如实省略', async () => {
@@ -10134,7 +11010,7 @@ Test role tail block
     expect(commitM).not.toContain('写盘唯一合法位置');
     const emptyWz = buildToolManifest({ tool_grants: [] }, defs, { stepType: 'act', workZoneRel: '' });
     expect(emptyWz).not.toContain('写盘唯一合法位置');
-    expect(emptyWz).toContain('路径一律相对 workspace');   // 恒有行不随省
+    expect(emptyWz).toContain('路径写 workspace 相对路径');   // 恒有行不随省
   });
 
   // 回退链两钉（review 面三变异 d/e 实锤零保护:删回退分支全量 2435 绿/优先序颠倒 914 绿——

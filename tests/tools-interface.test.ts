@@ -527,6 +527,69 @@ describe('CompositeToolProvider 装配', () => {
   });
 });
 
+// todo/0122——注册面 notes 与 output_schema 进工具描述与返回形状（设计早写了,代码原先只取 description）
+// @v: anc-tool-params-notes, anc-exec-tool-manifest-supply
+describe('Composite list() 用注册面声明补全描述与返回形状', () => {
+  const NOTES = '网页检索:查询词→结果页清单(标题/URL/摘要)。只读零副作用。';
+  const notesEntry = (extra: Partial<ToolServerEntry['tools'][number]>): ToolServerEntry => ({
+    ...SEARCH_ENTRY,
+    tools: [{ name: 'bailian_web_search', tool_id: 'web_search', requires_commit: false, unwrap: 'json-in-text', ...extra }],
+  });
+
+  it('正例：只写 notes 的件——description 就是 notes 原文,tool_id 别名条目同带再接后缀', () => {
+    const c = makeComposite(notesEntry({ notes: `${NOTES}\n`, output_schema: { pages: ['yaml'] } }), stubProvider({ bailian_web_search: { result: '{}' } }));
+    const byName = new Map(c.list().map(t => [t.name, t]));
+    expect(byName.get('bailian_web_search')?.description).toBe(NOTES);   // 尾换行去掉
+    expect(byName.get('web_search')?.description).toBe(`${NOTES}（tool_id→bailian_web_search）`);
+  });
+
+  it('正例：description 与 notes 都写——description 在前、notes 在后,换行连接', () => {
+    const c = makeComposite(notesEntry({ description: '网页检索', notes: '只读零副作用。\n单次最多 10 条。' }), stubProvider({ bailian_web_search: { result: '{}' } }));
+    const def = c.list().find(t => t.name === 'bailian_web_search')!;
+    expect(def.description).toBe('网页检索\n只读零副作用。\n单次最多 10 条。');
+  });
+
+  it('正例：output_schema 渲染成中性词形状描述（列表/原子逐类映射,字段按声明顺序）', () => {
+    const c = makeComposite(notesEntry({ output_schema: { pages: ['yaml'], total: 'int', title: 'line', body: 'text', ok: 'bool', score: 'float', tags: ['line'] } }), stubProvider({ bailian_web_search: { result: '{}' } }));
+    const byName = new Map(c.list().map(t => [t.name, t]));
+    const expected = 'JSON: {pages: 列表（元素为结构化对象）, total: 整数, title: 单行文本, body: 文本, ok: 布尔值, score: 数字, tags: 列表（元素为单行文本）}';
+    expect(byName.get('bailian_web_search')?.returns).toBe(expected);
+    expect(byName.get('web_search')?.returns).toBe(expected);   // 别名条目同形状
+    expect(expected).not.toMatch(/\b(yaml|int|line|text|bool|float)\b/);   // 不用 HopSchema 词（第 3 面）
+  });
+
+  it('反例：notes、description、output_schema 都没写——description 如实为空串,returns 缺席（清单渲染"未声明形状"）', () => {
+    const c = makeComposite(notesEntry({}), stubProvider({ bailian_web_search: { result: '{}' } }));
+    const def = c.list().find(t => t.name === 'bailian_web_search')!;
+    expect(def.description).toBe('');
+    expect(def.returns).toBeUndefined();
+  });
+
+  it('反例：内置件描述与 returns 原样不动（无 ToolSpec 不补全;成员自报的 returns 不被 output_schema 覆盖）', () => {
+    const c = makeComposite(notesEntry({ notes: NOTES }), stubProvider({ bailian_web_search: { result: '{}' } }));
+    const read = c.list().find(t => t.name === 'read')!;
+    expect(read.returns).toContain('文件内容');
+    expect(read.description).not.toContain(NOTES);
+    const selfReported: ToolProvider = { ...stubProvider({ bailian_web_search: { result: '{}' } }), list: () => [{ name: 'bailian_web_search', description: '', input_schema: {}, requires_commit: false, returns: '成员自报形状' }] };
+    const c2 = makeComposite(notesEntry({ output_schema: { pages: ['yaml'] } }), selfReported);
+    expect(c2.list().find(t => t.name === 'bailian_web_search')?.returns).toBe('成员自报形状');
+  });
+
+  it('正例：注册条目没写 description——前半段退回成员自报的描述（MCP 发现时报的说明）,notes 换行接在后', () => {
+    const selfDescribed: ToolProvider = { ...stubProvider({ bailian_web_search: { result: '{}' } }), list: () => [{ name: 'bailian_web_search', description: '  服务端自报:网页检索  ', input_schema: {}, requires_commit: false }] };
+    const c = makeComposite(notesEntry({ notes: NOTES }), selfDescribed);
+    expect(c.list().find(t => t.name === 'bailian_web_search')?.description).toBe(`服务端自报:网页检索\n${NOTES}`);
+    // 注册条目写了 description 时压过成员自报
+    const c2 = makeComposite(notesEntry({ description: '注册面描述' }), selfDescribed);
+    expect(c2.list().find(t => t.name === 'bailian_web_search')?.description).toBe('注册面描述');
+  });
+
+  it('正例：output_schema 里的 prompt 与 markdown 两类同走中性词映射', () => {
+    const c = makeComposite(notesEntry({ output_schema: { hint: 'prompt', report: 'markdown' } }), stubProvider({ bailian_web_search: { result: '{}' } }));
+    expect(c.list().find(t => t.name === 'bailian_web_search')?.returns).toBe('JSON: {hint: 文本, report: Markdown 文本}');
+  });
+});
+
 // @v: anc-exec-tool-shape-check
 describe('双端校验（unwrap/output_schema）', () => {
   it('正例：unwrap json-in-text 解包 + shape 相合 + 多余字段裁剪', async () => {

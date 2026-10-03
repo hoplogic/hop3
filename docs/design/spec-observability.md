@@ -41,11 +41,13 @@
 | 实现约束           | 契约               | `anc-obs-execution-log-absorption` / `anc-obs-hoplog-flush` / `anc-obs-hoplog-resume` |
 | debug 上下文记录   | 契约               | `anc-obs-debug-context` |
 | trace_id 继承     | 契约               | `anc-obs-trace-inherit` |
+| run_approved_command 执行账 | 契约 | `anc-obs-command-block` |
+| 日志保留上限 | 契约 | `anc-obs-log-retention` |
 | v1 实现偏差        | 说明               | —                                                                                     |
 
 ## 定位【契约】 ^anc-obs-hoplog
 
-> **模块版本**：hoplog `v0.4.0`（2026-09-02。本版新增 recordRuminationSuspect 文档级留档方法（^anc-exec-thinking-exhausted 二批,hopissues/0060）。0.x 未承诺稳定。日志 YAML 格式是半稳契约——人/agent 复盘读,格式破坏影响既有日志解析；此定位锚点即 hoplog 模块的归属锚点）
+> **模块版本**：hoplog `v0.6.1`（2026-10-01 工程链 review：^anc-obs-command-block 从列表项散文独立成契约节——原锚定形态不合法致真身悬空、三件套缺席;行为零变化）。上版 v0.6.0（2026-09-30）加 recordCommand 顶层 `command:` 块——hopjit-mcp run_approved_command 的执行账,todo/0132。上版 v0.5.0（同日）本版两件——对外分发后防塞爆硬盘（todo/0127,作者定）：①缺省级别 debug→info（prompt+response 占日志字节 65%,本机 8 月起 351 个 run 105 MB 从未清过）;②新增日志保留上限 `max_runs` 缺省 3——新建 run 目录前把日志根目录下多出的最老 run 整目录删掉,契约 ^anc-obs-log-retention。上版 v0.4.0（2026-09-02）新增 recordRuminationSuspect 文档级留档方法（^anc-exec-thinking-exhausted 二批,hopissues/0060）。0.x 未承诺稳定。日志 YAML 格式是半稳契约——人/agent 复盘读,格式破坏影响既有日志解析；此定位锚点即 hoplog 模块的归属锚点）
 
 **① 自身定位**：HopLog 是 HopJIT 的执行轨迹日志组件——只追加、实时落盘的完整执行历史，**给人和 agent 排查深层次 bug 用的**。当 Spec 执行出现预期外结果（LLM 幻觉、数据异常、策略失败、retry 耗尽）时，HopLog 提供足够信息**还原完整的决策链路**：每一步什么时候开始、输入什么、产出什么、调了什么工具、谁批准了 commit、为什么失败。（解释性类比：类似飞行记录仪——事后复盘用，不参与飞行控制。）
 
@@ -63,6 +65,8 @@
 |---|---|---|---|---|
 | `HopLog` | 类 | hoplog.ts | 执行轨迹日志组件（engine 持有并调 record*） | stable |
 | `LogLevel` | 类型 | hoplog.ts | 日志级别枚举（engine/cli 配置最低记录级别） | stable |
+| `pruneRunDirs` | 函数 | hoplog.ts | 日志保留上限清理（HopLog 构造器内调;export 供测试直判与将来 CLI 手工清理口复用）。2026-09-30 todo/0127 | provisional |
+| `DEFAULT_MAX_RUNS` | 常量 | hoplog.ts | 保留上限缺省 3（cli/mcp-server 缺省口同源,不各写字面）。2026-09-30 todo/0127 | provisional |
 | `timestamp` | 函数 | hoplog.ts | 生成带时区偏移的毫秒精度本地时间戳（YAMLL 各事件的时间字段单点来源；engine 记 join/dispatch 时刻复用，保证与日志内时间同源同格式）。2026-08-01 补登 | stable |
 | `extractHopLogStepKeys` | 函数 | hoplog.ts | 从真实 YAMLL `execution:` 下提取精确步骤块键（HopLog resume / carrier-live-e2e G11 消费） | stable |
 
@@ -88,6 +92,7 @@ trait（按职责分三组）：
   - 一般容器（subtask/loop/branch）只记骨架；parallel children 记录骨架 + inputs（params_for_child） ^anc-obs-debug-context
 - `recordStepDone(stepId, outputs?)`——步骤完成。追加 outputs（按级别裁剪）+ `status: completed` + `completed_at`
 - `recordStepFailed(stepId, reason)`——步骤失败。追加 `status: failed` + `failed_at` + `reason`（脱敏后）
+- `recordCommand(rec)`——hopjit-mcp `run_approved_command` 在本 run 上下文里执行一条已批准命令的账,顶层 `command:` 块。契约见下文「run_approved_command 执行账」节（2026-09-30 todo/0132 立;2026-10-01 review 抓真身悬空+三件套缺席后独立成节）;
 - `recordRuminationSuspect(where, outputTokens, content)`——疑似反刍留档（^anc-exec-thinking-exhausted 消费,hopissues/0060 二批次）:
   - **文档级顶层块**（`rumination_suspect:` 键+where/output_tokens/content 子字段——三字段全过 toYaml,'?' 类回退值裸插会写出 YAML 保留指示符破坏整档）;
   - **不过孤儿守卫**（命中时点在截断抛错前,步级归属不可靠——recordWarn 空 stepId 顶层块同先例）;
@@ -287,11 +292,13 @@ specs/
 
 ## 日志级别【契约】 ^anc-obs-log-levels
 
-三级，**向下包含**：debug ⊇ info ⊇ warn。运行时设最低级别（**默认 `debug`**——2026-08-23 作者定"把缺省日志全部调成 debug 级"，原默认 info 废）。
+三级，**向下包含**：debug ⊇ info ⊇ warn。运行时设最低级别（**默认 `info`**——2026-09-30 todo/0127 作者定,对外分发后防塞爆硬盘：prompt+response 是 debug 独有内容、占日志字节 65%;info 仍记步骤骨架、真实 I/O 值、tool/commit/hitl 审计字段与 retry_feedback,够复盘"每步进了什么出了什么",丢的是 LLM prompt 全文与原始回复。开发排障显式 `log_level: debug` / `--log-level debug`）。
+
+演进：2026-08-23 作者曾定缺省 debug（"把缺省日志全部调成 debug 级"）,依据是"日志是 standalone 唯一核验通道、个人开发场景体积可承受"——后一前提在对外分发后不再成立,故收回;两撞里的 L2c 重试反馈半边已由 `retry_feedback` 进 info 级化解,dr9 的 200 字截断半边 info 级早已改记真实值。
 
 - 两撞定案：①standalone 侧 info 不记 prompt 正文，L2c 反馈在不在外部无从核验，走查误判"重试无记忆"；②dr9 走查被 info 级 inputs 200 字截断制造观测幻象——skeleton 真值 7 步、日志显示 2 步带 `[TRUNCATED]`，闸门被误判失灵追查数轮。
-- 日志是核验通道，缺省就该全息；体积敏感场景显式降级：MCP 配置 `log_level` / CLI `--log-level` / EngineOptions.logLevel。
-- **call/parallel 子实例继承父级别**（同批修——原进程内 handleCallStep/launchParallelCallChild 建子引擎不传 logLevel，顶层 debug 而递归全 info：构建类 spec 的真正主体在递归层，恰好是黑箱；CLI 派发路径的 `--log-level debug` 继承先例已有，进程内路径对齐）。
+- 级别配置口：MCP 配置 `log_level` / CLI `--log-level` / EngineOptions.logLevel（三口同一枚举,非法值加载期拒）。
+- **call/parallel 子实例继承父级别**（进程内 handleCallStep/launchParallelCallChild 建子引擎传父 logLevel;CLI 派发命令恒带 `--log-level <父级别>`——2026-09-30 todo/0127 起恒传,原只在父 debug 时传、靠"子缺省=父缺省"巧合成立,缺省改 info 后父 warn 子会回落 info）。
 
 | 级别 | 记录内容 | 典型用途 |
 |------|---------|---------|
@@ -320,6 +327,85 @@ specs/
 - 审计性字段（`tool:` / `commit_audit:` / `hitl:` / `callee_spec_id:`）任何级别都写入
 
 ---
+
+## run_approved_command 执行账【契约】 ^anc-obs-command-block
+
+2026-09-30 todo/0132 立（承接 hopissues/0114 期望第 4 条"有账可审：每次执行的 argv、cwd、returncode、耗时、所属步骤写进引擎账"）。**来由**：hopjit-mcp 的 `run_approved_command` 让人不再逐条点批准（授权按任务卡）,代价必须是事后可查——每条命令在**它所属 run** 的 hoplog 里留一块顶层账。写账的是 server 进程不是引擎进程,所以走 HopLog.resume 跨进程续写。2026-10-01 工程链 review：原以列表项散文承载,锚定形态不合法致真身悬空（机检 code_to_design.orphans 实证）且三件套缺席,重写为本节。
+
+```
+contract: CommandBlock
+  Id: obs-command-block
+  Goal: 每次 run_approved_command 执行在该 run 的 main.yaml 追加一块文档级顶层 `command:`,记齐授权审计所需字段,不记 stdout/stderr 正文
+  Constraints:
+  - 文档级顶层块（0 缩进,键 `command:`）,不归属任何 step——与 rumination_suspect / 文档级 warn 同族;不过孤儿守卫（写账时 server 进程里没有 step 归属信息）
+  - 跨进程写入：server 经 `HopLog.resume(hoplog_run_dir)` 取得实例,写块前先 flushTopLevelResume 把暂存的 resume marker 落成顶层 `resumed_at`（^anc-obs-hoplog-resume 三出口之顶层出口）,再 append 本块——不破已有 step 块（YAMLL 块式追加）
+  - 审计性——无视日志级别恒写（info/warn 都写）
+  - stdout/stderr 正文不入账（体量不定）,只记字节数与"回给调用方时是否截断"
+  - 同一 run 多次 run_approved_command = 多个 `command:` 块顺序追加,YAMLL 读侧按块切
+  - 已知形态：目标 run 若正在同一 server 内活跃执行,引擎自己的 HopLog 与 server 的 resume 实例双写同一文件——块式追加结构不破,但顶层 resumed_at 会出现在日志中段（语义上并无 resume）;/hop 复用模式下 run 不在 server 里跑,该形态只在 standalone 场景理论可达
+```
+
+**类型约定（HopType）**——`CommandRecord`（hoplog.ts 导出;`at` 由 recordCommand 自取不由调用方传）：
+
+| 字段 | 类型 | 值语义 |
+|---|---|---|
+| `at` | string（ISO 时间戳,^anc-obs-timestamp） | 写账时刻 |
+| `argv` | string[] | 实际 spawn 的参数列表,逐项 toYaml（不拼成一串——含空格参数不可逆） |
+| `cwd` | string | 实际工作目录绝对路径（缺省落 workspace_dir 后的值,不是调用方传的原样） |
+| `returncode` | number | 进程退出码;spawn 层失败不写块（那是 COMMAND_FAILED,没有 returncode） |
+| `duration_ms` | number | 从 spawn 到返回的毫秒数 |
+| `stdout_bytes` / `stderr_bytes` | number | 原始输出 UTF-8 字节数（截断前） |
+| `truncated` | `{ stdout: boolean; stderr: boolean }` | 回给调用方的文本是否超 64KB 被截 |
+| `caller_step?` | string | 调用方自报的所属步骤号,只供人对账;缺席不写键 |
+
+**关键逻辑（HopSop）**：
+
+```
+HopLog.recordCommand(rec):
+1. flushTopLevelResume()——pendingResume 非空且顶层未写过 → append `resumed_at: <ts>`,清空;否则 no-op
+2. body = { at: timestamp(), ...rec 八字段（caller_step 缺席不放键）}
+3. append("command:\n" + toYaml(body, 1) + "\n")——整块经 toYaml 渲染,argv 出列表形、truncated 出子映射
+```
+
+**消费侧**：mcp-server.ts `HopjitMcpCore.runCommand` 第 7 步（[[mcp-server#^anc-mcp-run-command]]）——hoplog_run_dir 在场且目录仍在时调本方法;否则落实例目录 commands.log（那是 mcp-server 的兜底,不在本契约内）。
+
+## 日志保留上限【契约】 ^anc-obs-log-retention
+
+2026-09-30 todo/0127 立（作者："现在开始让外部用户用了,hoplog 的 level 要调整,避免硬盘塞爆"→ 上报"级别+三键保留策略"后作者定"太复杂,就留 max runs,缺省 3"）。**来由**：改造前 HopLog 只有级别没有任何上限或清理——run 目录只增不减,本机 8 月 8 日起 351 个 run 105 MB 从未清过;级别管"每个 run 多大",塞爆硬盘的根因是"run 永远不删",两件事缺一不可。
+
+```
+contract: HopLogRetention
+  Id: hoplog-retention
+  Goal: 日志根目录下最多保留 max_runs 个 run 目录,新建 run 前把多出的最老 run 整目录删掉,让日志体积有界
+  Constraints:
+  - 只有一个旋钮 max_runs（正整数,缺省 3）——不做总大小上限、不做按天数轮转（作者定"太复杂"）
+  - 清理时机=HopLog 构造时、在 mkdir 本 run 目录之前：先数、再删、再建。不起后台进程、不在 run 结束时清（run 结束可能是崩溃,没有结束钩子）
+  - 只数日志根目录一层的 run 目录（名形如 <spec_id>-<YYYYMMDD>T<HHMMSS>-<hex>,末段时间戳可直接字典序排）;子实例日志嵌在父 run 目录下的 parallel|calls/<cid>/ 里,随父整目录删,不单独计数——子实例构造 HopLog 时 logDir 不是根目录,清理对它空转（判据:子实例 logDir 恒为 `<父 run 目录>/parallel|calls/<cid>/log`——上溯两级目录名是 parallel 或 calls 即跳过;实现期首版只看上一级,单测抓出后改）
+  - 排序依据=目录名里的时间戳段（不依赖 mtime——mtime 会被 resume 续写刷新,最老的 run 若被 resume 过就排到最新,误删其它）;名字不合 run 目录形态的条目（用户手放的文件、旧版遗留）不计数不删
+  - 删除失败（权限/占用）只 warn 不阻塞本 run——日志是核验通道不是执行前提,清不掉不该让用户的活跑不了
+  - 保留 = 最新的 max_runs 个再加上本次即将新建的这个之外——即建完后根目录恰有 max_runs 个（含本次）;max_runs=1 时只留本次
+  - max_runs 非正整数（0/负/非数）在配置加载期与 CLI 参数解析期响亮拒,不静默当缺省（与 log_level 文法核同姿势）
+```
+
+**类型约定（HopType）**：
+
+- `HopLogOptions.maxRuns?: number`——本次 run 建目录前日志根目录允许保留的 run 目录数上限（含本次）;缺省 3;
+- `EngineOptions.maxRuns?: number`——透传给 HopLog（与 logLevel 同路）;
+- CLI `--max-runs <n>`（run / resume 系命令,与 `--log-level` 并列）;
+- StandaloneConfig `log_retention?: { max_runs: number }`（hopjit.yaml 两级,项目级赢;schema 权威 [[shared-providers#^anc-config-standalone-schema]]）。
+
+**关键逻辑（HopSop）**：
+
+```
+HopLog.constructor(options) 建目录前:
+1. maxRuns = options.maxRuns ?? 3
+2. [条件(basename(dirname(dirname(options.logDir))) ∈ {parallel, calls})] 跳过清理（子实例 logDir=<父 run>/parallel|calls/<cid>/log,上溯两级）
+3. entries = readdir(options.logDir) 里满足 RUN_DIR_RE = /^.+-\d{8}T\d{6}-[0-9a-f]{4}$/ 且是目录的条目,按名字末段 <YYYYMMDDTHHMMSS-hex> 升序
+4. [循环] 当 entries.length > maxRuns - 1：取最老一条 rmSync(recursive) ;失败→记 warn 到 stderr 一行,继续下一条
+5. mkdir 本 run 目录（既有流程）
+```
+
+**消费侧**：hoplog.ts 构造器;engine.ts initExecution 透传 maxRuns;cli.ts run/resume 系 `--max-runs`;mcp-server.ts start_run 取配置 `log_retention.max_runs`、文法核与两级合并。
 
 ## 主文件结构【说明：示例】
 

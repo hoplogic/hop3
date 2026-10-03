@@ -1,0 +1,65 @@
+实现思路说明：
+
+- 用 `ast.parse` 把源码解析成语法树，`ast.walk` 遍历全部节点，天然覆盖模块级函数、类方法和嵌套函数(嵌套函数是外层 body 的一部分，所以外层节点的 `end_lineno` 自动包含内层所占行；内层又会被单独访问到)。
+- 在 Python 3.8+ 中，`FunctionDef` / `AsyncFunctionDef` 的 `lineno` 指向 `def` 行(装饰器不在其中)，`end_lineno` 指向函数体最后一行，所以长度 = `end_lineno - lineno + 1`,装饰器行自动不计入；恰好 40 行不触发、41 行触发。
+- 违规按 def 行号排序后逐条打印，退出码 1;合规时无输出、退出码 0。
+- 防御性处理：缺参数、文件读不了、文件不是合法 Python(含 BOM 的文件先剥掉 BOM 再解析)时给出提示并退出 1。
+
+```python
+import ast
+import sys
+
+# 规范条款:每个函数长度(def 行到函数体最后一行,装饰器不计)不得超过 40 行
+MAX_FUNC_LINES = 40
+
+if len(sys.argv) < 2:
+    print("用法:python check_func_length.py <待检查的Python源文件>", file=sys.stderr)
+    sys.exit(1)
+
+source_path = sys.argv[1]
+source_text = ""
+
+# 用 UTF-8 编码读取待检查文件
+try:
+    file_obj = open(source_path, 'r', encoding='utf-8')
+    source_text = file_obj.read()
+    file_obj.close()
+except OSError as read_err:
+    print("无法读取文件 " + source_path + ":" + str(read_err), file=sys.stderr)
+    sys.exit(1)
+except ValueError as decode_err:
+    print("文件内容无法按 UTF-8 解码:" + str(decode_err), file=sys.stderr)
+    sys.exit(1)
+
+# 剥掉可能存在的 UTF-8 BOM,避免干扰解析
+if source_text.startswith('\ufeff'):
+    source_text = source_text.removeprefix('\ufeff')
+
+try:
+    syntax_tree = ast.parse(source_text)
+except SyntaxError as parse_err:
+    print("文件存在语法错误,无法解析,检查中止:" + str(parse_err), file=sys.stderr)
+    sys.exit(1)
+
+# ast.walk 遍历整棵树:模块级函数、类方法、嵌套函数(含 async)都会被访问到。
+# Python 3.8+ 中函数节点的 lineno 指向 def 行(装饰器不属于节点范围),
+# end_lineno 指向函数体最后一行,因此长度恰好为“def 行到函数体最后一行(含首尾)”。
+# 嵌套函数位于外层 body 内,外层的 end_lineno 自然包含内层所占的行。
+violations = []
+for node in ast.walk(syntax_tree):
+    if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+        func_len = node.end_lineno - node.lineno + 1
+        if func_len > MAX_FUNC_LINES:
+            violations.append((node.lineno, node.name, func_len))
+
+violations.sort()
+
+if len(violations) > 0:
+    for item in violations:
+        print("第 " + str(item[0]) + " 行:函数 '" + item[1] + "' 长度 " + str(item[2])
+              + " 行,超过上限 " + str(MAX_FUNC_LINES)
+              + " 行(函数长度从 def 行算到函数体最后一行,装饰器行不计入)")
+    sys.exit(1)
+
+sys.exit(0)
+```

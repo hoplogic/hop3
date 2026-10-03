@@ -9,7 +9,7 @@
 
 # OpenCode Driver Carrier 设计
 
-> **模块版本**：opencode-driver-carrier `v0.1.0`（2026-09-19）。首版：三层复用判据+原语映射表七行+安装布局+载体准入两档。0.x 未承诺稳定。**逐版演进史归 git log**（本行只记现行版本,升版只改号）。
+> **模块版本**：opencode-driver-carrier `v0.1.1`（2026-10-01 安装布局登 hop/references/hop-ops.md;键名 user-invocable 勘正）。上版 v0.1.0（2026-09-19）首版：三层复用判据+原语映射表七行+安装布局+载体准入两档。0.x 未承诺稳定。**逐版演进史归 git log**（本行只记现行版本,升版只改号）。
 
 ## 文档结构与内容分级
 
@@ -26,7 +26,7 @@ opencode（sst/opencode,npm `opencode-ai`）是独立的开源 agent 家族—�
 
 **复用判据（三层各自裁定,2026-09-19 真机核实 v1.18.31）**：
 
-1. **skill 发现层=同构复用**：opencode 的 skill 机制按 CC 设计（`<name>/SKILL.md`+YAML frontmatter,只校验 name+description,`user_invocable` 忽略不报错;甚至主动扫 `~/.claude/skills/`）——0089 批已核,维持；
+1. **skill 发现层=同构复用**：opencode 的 skill 机制按 CC 设计（`<name>/SKILL.md`+YAML frontmatter,只校验 name+description,`user-invocable` 忽略不报错;甚至主动扫 `~/.claude/skills/`）——0089 批已核,维持；
 2. **driver 正文层=派生适配**（本批新立）：CC 正文含 CC 专属原语（AskUserQuestion/driver subagent/task-notification 等,hopspec-skill.md 计 30 处），opencode **有原生等价物**（见原语映射表）但名字与调用形态不同。
    - 真机 E2E 实证:装 CC 原文 opencode 也能跑通 coffee-week 全链——但通靠的是模型自由发挥（transcript 自述"我没有 AskUserQuestion 工具,改为直接问"）,不是协议。**协议不能靠模型每次现场翻译**（[[codex-driver-carrier#^anc-driver-codex-rule-parity]] 同一裁定:载体必须自包含）;
    - 故 `driver/opencode/` 持有派生自 CC 源的适配版正文——只做原语映射与措辞替换,执行语义/CLI 协议/介入点纪律与 CC 版逐条同构（语义签名表同 codex 文档该节）；
@@ -56,6 +56,8 @@ CC 原语 → opencode 等价物（适配正文的替换依据,2026-09-19 对 op
 driver/opencode/
 ├── SKILL.md          # hopspec 复用模式主件（派生自 driver/hopspec-skill.md,原语映射适配）
 ├── SKILL-mcp.md      # hopspec-mcp 薄壳（派生自 driver/hopspec-skill-mcp.md）
+├── hop-references/
+│   └── hop-ops.md    # hop 运维按需件（三载体同文）
 └── references/       # 自包含执行细则（cli-discovery/discovery/step-execution-rules 适配版;
                       #  driver-subagent.md 的 CC 派发模板改 subagent 派发说明）
 ```
@@ -66,7 +68,7 @@ install-skill `--carrier opencode` 装载面：
 - `driver/opencode/SKILL-mcp.md` → `<home>/skills/hopspec-mcp/SKILL.md`（+discovery.md）
 - `driver/opencode/references/` → `<home>/skills/hopspec/references/`
 - hopbuild/hopbuild2/hopfix 照旧整目录拷（构建工具件载体中立度高——正文以 spec 编写知识为主,CC 原语密度低;如实记:未逐件适配,v1 接受,撞到原语问题按增量修）
-- **`hop`（日常任务管理件）照装**——`driver/opencode/hop-skill.md` → `<home>/skills/hop/SKILL.md`。
+- **`hop`（日常任务管理件）照装**——`driver/opencode/hop-skill.md` → `<home>/skills/hop/SKILL.md`;`driver/opencode/hop-references/hop-ops.md` → `<home>/skills/hop/references/hop-ops.md`（2026-10-01,运维按需件,^anc-cli-hop-dispatch）。
   - 撤销沿革（2026-09-20 作者抓"在 codex /hop 都能用,为什么在 opencode 不装?"撤销首版"v1 不装"裁定）:该裁定把"原语密度高"误当"适配成本高",而 Codex 先例〔driver/codex/hop-skill.md,type: adapt〕已证 /hop 适配=三处载体差异——触发前缀/问人形态/spawn 能力降级,全部降级路径 Codex 版已铺好;opencode 能力面〔question 工具+内置 subagent〕只强不弱;
   - opencode 版以 codex 版为适配基准,载体差异:隐式触发/question 工具问人/subagent 降级判据同 codex。首版的 stale 清理与 carrier_note 随撤——hop 现为正装件
 - MCP 注册与配置自举照旧（0089 批产物,jsonc 写法与 deep-merge 面零变化,权威 [[hop-cli#^anc-cli-install-skill]] opencode 条款）

@@ -1,0 +1,30 @@
+- round: 0
+  outcome: ran
+  public_pass: false
+  hidden_pass: false
+  hidden_failed:
+    - duplicates.yaml(结果不对)
+    - month-year.yaml(结果不对)
+    - shuffled-short.yaml(结果不对)
+    - ties.yaml(结果不对)
+  crashed_files: 0
+- round: 1
+  outcome: ran
+  public_pass: false
+  hidden_pass: false
+  hidden_failed:
+    - duplicates.yaml(结果不对)
+    - month-year.yaml(结果不对)
+    - shuffled-short.yaml(结果不对)
+    - ties.yaml(结果不对)
+  crashed_files: 0
+- round: 2
+  outcome: ran
+  public_pass: false
+  hidden_pass: false
+  hidden_failed:
+    - duplicates.yaml(结果不对)
+    - month-year.yaml(结果不对)
+    - shuffled-short.yaml(结果不对)
+    - ties.yaml(结果不对)
+  crashed_files: 0

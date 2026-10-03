@@ -1,0 +1,44 @@
+```python
+import ast
+import re
+import json
+import sys
+
+def check_function_length(filename):
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except Exception as e:
+        print(f"无法读取文件: {filename}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        tree = ast.parse(content)
+    except SyntaxError as e:
+        # 用错误信息中的行号和位置信息，但不能直接用 .offset
+        msg = str(e)
+        lineno = e.lineno
+        # 从消息中提取错误信息，不依赖属性
+        print(f"语法错误: {filename}:{lineno}: {msg}", file=sys.stderr)
+        sys.exit(1)
+
+    violations = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            start_line = node.lineno
+            end_line = node.end_lineno
+            length = end_line - start_line + 1
+            if length > 40:
+                violations.append((start_line, length))
+
+    for line_num, length in violations:
+        print(f"函数从第 {line_num} 行开始，共 {length} 行，超过 40 行限制。", file=sys.stderr)
+
+    if violations:
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+filename = sys.argv[1]
+check_function_length(filename)
+```

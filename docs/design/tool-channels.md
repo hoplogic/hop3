@@ -11,7 +11,7 @@
 
 > 家族分工（接口标准/通道地图/装配层/具体工具四切面）见 [[tools]] 开头"工具设计面地图"节——本文管"工具怎么被步骤消费"这一面。
 
-> **模块版本**：tool-channels `v0.3.0`（枢纽文档——本文只汇总不定义，各通道条款权威在原锚点；冲突以权威为准）。v0.3.0（2026-08-31）——⑥的服务面收窄：非内建件缺省走 caller 原生能力，⑥退为兜底（作者定"复用模式下应该用 agent 自己的 web search"，权威=prompt-assembler ^anc-exec-tool-manifest-source 第 4 条）。演进史归 git log。
+> **模块版本**：tool-channels `v0.4.0`（2026-09-30 加通道⑦ run_approved_command,todo/0132;枢纽文档——本文只汇总不定义，各通道条款权威在原锚点；冲突以权威为准）。上版 v0.3.0（2026-08-31）——⑥的服务面收窄：非内建件缺省走 caller 原生能力，⑥退为兜底（作者定"复用模式下应该用 agent 自己的 web search"，权威=prompt-assembler ^anc-exec-tool-manifest-source 第 4 条）。演进史归 git log。
 
 ## 文档结构与内容分级
 
@@ -28,9 +28,9 @@
 
 ---
 
-## 六条通道一张表【契约】 ^anc-exec-tool-channels
+## 七条通道一张表【契约】 ^anc-exec-tool-channels
 
-"spec 里的一步要用工具"在 hopjit 里共有五条物理路径。**选路规则**：act/commit 有 hop_python body → 走 ①②③（确定性面）；无 body → 走 ④（LLM 兜底面）。⑤ 是独立模式的缺省工具实体，被 ①-④ 消费。
+"spec 里的一步要用工具"在 hopjit 里共有七条物理路径（⑦ 2026-09-30 todo/0132 加：复用模式下 caller 把**已批准命令**交给 hopjit-mcp 在 run 上下文里执行——授权按任务卡不按项目,载体一次性放行本工具即可,与 ⑥ 同为复用模式通道但 ⑥ 是纯函数族直调、⑦ 是外部命令）。**选路规则**：act/commit 有 hop_python body → 走 ①②③（确定性面）；无 body → 走 ④（LLM 兜底面）。⑤ 是独立模式的缺省工具实体，被 ①-④ 消费。
 
 | # | 通道 | 谁执行 | 接口形状 | 协议面 | 权威 |
 |---|---|---|---|---|---|
@@ -39,7 +39,8 @@
 | ③ | **body 非内置工具·复用模式** | caller（CC/Codex） | 引擎吐 `tool_request` 介入点响应（`{tool, args, tool_call_seq, output_path, work_zone}`，args 已求值、超阈值 $file 卸载〔2026-09-04〕），caller 执行后 `--tool-result` 回注；结果入 tool_journal，**跨进程确定性重放**（重放撞第 N 个调用查 journal[N-1]，有则代入,无则按分派判据处置(引擎 provider 命中直执入账,不命中再吐——2026-09-05 执行主体原则;直执面=内置∪hopjit.yaml 注册件,0076 补齐注入 2026-09-06)） | CLI JSON 往返 | [[exec-engine#^anc-exec-tool-request]] |
 | ④ | **无 body act 的 LLM 工具循环** | LLM 自选工具（executeActWithTools） | Anthropic tool_use/tool_result 消息往返（IR）,ToolProvider.list() 注入 tools 数组，maxToolIterations 封顶 | **anthropic 与 openai-responses 两协议承载**（responses 的 function_call/function_call_output typed items 与 IR 一一映射,0020 批实装）;openai-chat 协议 provider 入口 fail-fast（PROTOCOL_TOOL_LOOP_UNSUPPORTED 指路,含"改配 openai-responses"选项） | [[step-dispatcher#^anc-exec-protocol-adapter]]（工具循环协议边界）+ dispatcher.ts executeActWithTools |
 | ⑤ | **DefaultToolProvider 内置文件工具** | 引擎内置实体（宿主不注入时的缺省） | read/write/listdir/exists/create/append/edit_file/makedirs/move/remove 十个文件工具，全部过 sandbox 路径校验 | 无 | [[tools/file-tools#^anc-exec-builtin-file-tools]] + [[sandbox]] 拦截规则 |
-| ⑥ | **复用模式特殊工具直调（`hopjit tool-call`）** | caller agent（CC/Codex 的 act free 执行期主动调） | `hopjit tool-call <名> --args '<json>'`（大参数 `--args @file`）——CLI 直达 CompositeToolProvider 全量注册面执行一件工具，无实例无状态；`requires_commit=true` 恒拒（与 body 闸同一分界——不可逆动作不许经无实例通道绕过 commit 步授权） | CLI JSON 单发单收 | cli.ts tool-call（@a: anc-step-tool-grant）；L4 清单通道指引档教 caller 用它（[[prompt-assembler#^anc-exec-tool-manifest-source]]） |
+| ⑥ | **复用模式特殊工具直调（`hopjit tool-call`）** | caller agent（CC/Codex 的 act free 执行期主动调） | `hopjit tool-call <名> --args '<json>'`（大参数 `--args @file`）——CLI 直达 CompositeToolProvider 全量注册面执行一件工具，无实例无状态；`requires_commit=true` 恒拒（与 body 闸同一分界——不可逆动作不许经无实例通道绕过 commit 步授权） | CLI JSON 单发单收 | cli.ts tool-call（@a: anc-step-tool-grant）；L4 清单通道指引档教 caller 用它（[[prompt-assembler#^anc-exec-tool-manifest-source]]）。该通道自建提供者不经 engine、无 work_zone 登记（[[tools/file-tools#^anc-exec-work-zone-registry]]）,work_zone 绝对路径在此按 workspace 外拒——只该调纯函数族 |
+| ⑦ | **复用模式已批准命令经 hopjit-mcp 执行（`run_approved_command`）** | hopjit-mcp server（在某 run 的上下文里 spawn） | `mcp__hopjit__run_approved_command(state_dir?, instance_id, argv, cwd?, timeout_sec?, caller_step?)`——caller agent（/hop driver）把要跑的命令交给 server;server 读该 run 的任务卡《已批准命令》前缀清单判放行,经 runWhitelistedCommand 执行（hopjit 恒拒/shell:false/失败分辨）,账进该 run 的 hoplog `command:` 块 | MCP 工具 | [[mcp-server#^anc-mcp-run-command]] / 授权文法 [[spec-parser#^anc-rule-approved-commands]] |
 
 **架构方向**（概念权威 [[../docs/concepts/HopSpec V3核心规范#^anc-step-act-body-lang]]）：④ 是无 body act 的兜底窗口，不是架构必需品——工具编排应在 body 里确定性表达（①②③），"body 在场即唯一执行体"。openai-chat 不做 ④ 映射的依据即此（兜底窗口不值得做 chat 的多层报文映射）;openai-responses 例外实装（0020 批）——其 typed items 与 IR 结构同构映射成本低,且 OpenAI 官方生态的工具调用正路已迁 responses,不做=官方生态整体失能。
 

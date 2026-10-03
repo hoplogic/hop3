@@ -15,9 +15,13 @@ export interface PersistenceProvider { // @a: anc-provider-persistence
   loadSnapshot(): EngineSnapshot;
   exists(): boolean;
   // work_zone 工作区绝对路径(driver @file 临时文件 + deflate $file 指针存放)。
-  // FilePersistence 返回 <instanceDir>/work_zone;MemoryPersistence 返回空串(独立模式不暴露给外部 driver)。
+  // FilePersistence 返回 <instanceDir>/work_zone;MemoryPersistence 首次调用时在系统临时区惰性自建 hopjit-workzone-* 并返回真路径。
   // 见 design/exec-engine.md ^anc-exec-work-zone。// @a: anc-exec-work-zone
   getWorkZone(): string;
+  // 可选:本实例 work_zone 加全部祖先实例 work_zone 的绝对路径清单(自身在首位)——engine 据此把本 run
+  // 实例树的涂鸦区集合登记给文件工具提供者;缺席时 engine 只登记 getWorkZone() 一条。
+  // 见 [[tools/file-tools#^anc-exec-work-zone-registry]]。// @a: anc-exec-work-zone-registry
+  getWorkZoneRoots?(): string[];
 }
 
 /** 内置文件工具写域（2026-08-28 作者定分域,权威 [[tools/file-tools#^anc-exec-builtin-file-tools]]）：
@@ -32,6 +36,13 @@ export type WriteScope = 'work_zone' | 'workspace';
 export interface ToolProvider { // @a: anc-provider-tool
   execute(tool_name: string, tool_args: Record<string, unknown>, write_scope?: WriteScope): Promise<ToolResult>;
   list(): ToolDef[];
+  // 可选:收下一条本次运行实例树的 work_zone 根(原始形态绝对路径),供文件工具的 work_zone 豁免判定。
+  // 不实现的提供者(外部 MCP 成员/宿主注入件/测试替身)被 engine 跳过;Composite 转发给实现了它的成员。
+  // 见 [[tools/file-tools#^anc-exec-work-zone-registry]]。// @a: anc-exec-work-zone-registry
+  registerWorkZoneRoot?(root: string): void;
+  // 可选:设当前执行实例的写根 own 与本 run 读树 tree（顶层实例目录）——写豁免只认 own,读豁免认 tree 内任意
+  // work_zone;每次 engine.getWorkZone() 都调,后调覆盖先调（todo/0126 读写分权）。// @a: anc-exec-work-zone-registry
+  setWorkZoneScope?(scope: { own: string; tree?: string }): void;
 }
 
 /** ToolResult：工具执行结果——承载返回值、内容类型（text/json）与成功标志。见 [[shared-providers#^anc-provider-tool]] */
@@ -150,6 +161,10 @@ export const ROUTING_CATEGORIES = ['act', 'commit', 'reason', 'check', 'replan']
 /** 引擎缺省模型——单一事实源（0086 续账修:原 dispatcher 路由兜底与 install-skill CC 缺省两处
  * 各写死字面量,引擎升缺省时 install 侧静默旧值;设计口径'缺省引擎缺省模型'要求同源）。 */
 export const ENGINE_DEFAULT_MODEL = 'claude-sonnet-4-6';
+/** hopjit-mcp 里按任务卡《已批准命令》放行执行的工具名（^anc-mcp-run-command;2026-10-01 作者改名,原 run_command——
+ * "这个名字非常容易被封":载体权限分类器按工具名判风险）。mcp-server 注册与 cli install-skill 写放行条目共用,
+ * 载体侧全名 = `mcp__hopjit__` + 本名（server 注册名三载体恒 hopjit）。 */
+export const RUN_APPROVED_COMMAND_TOOL = 'run_approved_command';   // @a: anc-mcp-run-command
 /** RoutingCategory：模型路由类别字面量联合（自 ROUTING_CATEGORIES 推导——类型与运行期闸同源单点）。 */
 export type RoutingCategory = typeof ROUTING_CATEGORIES[number];
 

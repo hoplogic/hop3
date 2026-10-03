@@ -1,7 +1,7 @@
 ---
 name: hopspec-mcp
-description: 驱动 HopJIT 引擎执行 HopSpec 规约（MCP 装配——执行在 hopjit MCP server 进程内，server 自己调 LLM API，本壳只做启动、介入与结果呈现）。仅当用户明说走 MCP/standalone 时使用；跑 spec 的缺省入口是 /hopspec（复用模式，零 API key）。
-user_invocable: true
+description: 只在用户明说"走 MCP / standalone"时由 /hop 分派调用：spec 在 hopjit MCP server 进程里由它自己的 LLM 跑完，本对话只做启动、介入点应答和结果呈现。其他一切情况走 /hop 主路或 hopspec 复用模式。
+user-invocable: false
 ---
 
 %% @trace
@@ -9,7 +9,7 @@ user_invocable: true
 	source: [[HopSpec V3配套HopJIT运行时能力]]
 	source_id: hopjit-runtime
 	type: intent
-	last_sync: 2026-08-31T09:51+0800
+	last_sync: 2026-10-01T16:11+0800
 	note: MCP 装配薄壳（CC 载体）。2026-08-27 四改双名双壳（作者定'skill 简单点直接指定'）：与复用壳 /hopspec 不同名并存安装——名字即模式,用户敲 /hopspec-mcp 即选定 MCP 装配,零判定零配置零 NL 分发（8-16 同名互斥与 8-27 上午的单壳双协议段两代形态均退役,演进史 design codex-driver-carrier ^anc-driver-codex-standalone-dispatch 四改条款）。执行全在 hopjit MCP server 进程（Dispatcher 自调 LLM）,本壳=人意图→五 MCP 工具调用的翻译层:spec 定位/参数组装/薄协议/HITL 呈交/终态呈现。防双执行=引擎 driver_channel 硬闸（exec-engine ^anc-exec-driver-channel）。
 %%
 
@@ -19,9 +19,9 @@ user_invocable: true
 
 本壳为 **MCP 装配**：执行全在 hopjit MCP server 进程内（server 自己调 LLM 推理），你只负责把用户意图翻译成五个 MCP 工具调用（`mcp__hopjit__start_run` / `run_status` / `resume_run` / `list_runs` / `stop_run`），并在需要真人决策时问人。
 
-> **注册缺失**：若 `mcp__hopjit__*` 工具调用被运行时拒绝（无法解析），说明 MCP server 未注册——提示用户跑 `hopjit install-skill --mcp`（配置自举+注册一次完成）或检查 `.mcp.json`，**不要**改用 hopjit CLI 驱动（那是 `/hopspec` 复用壳的协议——用户敲的是本壳，静默换协议=绕过用户的模式指定）。
+> **注册缺失**：若 `mcp__hopjit__*` 工具调用被运行时拒绝（无法解析），说明 MCP server 未注册——提示用户跑 `hopjit install-skill`（缺省即注册——配置自举+注册一次完成）或检查 `.mcp.json`，**不要**改用 hopjit CLI 驱动（那是 `/hopspec` 复用壳的协议——用户敲的是本壳，静默换协议=绕过用户的模式指定）。
 >
-> **跨通道防线**：`resume_run`/`stop_run` 返回 `DRIVER_CHANNEL_MISMATCH` = 该 run 由 CLI（复用模式）建立——提示用户用 `/hopspec` 继续那个 run，不要强行重试（双执行是最高危事故，引擎硬闸拒绝即防线生效）。
+> **跨通道防线**：`resume_run`/`stop_run` 返回 `DRIVER_CHANNEL_MISMATCH` = 该 run 由 CLI（复用模式）建立——提示用户对 `/hop` 说"继续那个活"（走复用模式），不要强行重试（双执行是最高危事故，引擎硬闸拒绝即防线生效）。
 
 ## 0. 前置：定位 spec + 组装 params
 

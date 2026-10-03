@@ -1,0 +1,3 @@
+extract_ok: true
+extract_gap: |
+  无。L1–L4 全部可查证断言均已覆盖：L1 消费量（P1 fact）、L2 半衰期（P2 fact）与“因此”引出的睡眠影响结论（P3 inference，前提含半衰期，分类符合原文推演结构）、L3 FDA 建议（P4 fact）、L4“这说明”引出的安全性结论（P5 inference，前提含 FDA 建议及补全的四杯咖啡因含量假设，核查路径完整）。分类无误，无断言遗漏，无致命前提缺失。

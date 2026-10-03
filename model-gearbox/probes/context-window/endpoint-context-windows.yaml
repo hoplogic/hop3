@@ -1,0 +1,780 @@
+说明: 端点上下文窗口实测表(run-context-window.mjs)。context_window_at_least=最后一次收下的请求里端点自己数的 input_tokens;rejected_at_estimated=第一次被拒的请求按字符估算的输入规模;secret_recall=收下的请求里模型答对开头暗号的次数(收下却答不出=名义窗口够、实际读不到开头)
+endpoints:
+  - service: qwen_flash
+    model_from_response:
+      - qwen-flash
+    date: '2026-09-28'
+    context_window_at_least: 992059
+    rejected_at_estimated: 1024000
+    rejected_error: '{"request_id":"7b9f45ab-4e95-9017-a3b9-2be4a4905482","code":"InvalidParameter","message":"<400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 1000000]"}'
+    over_window_behavior: 报错拒收 HTTP 400
+    reading: 收下 992059 输入 token,估算 1024000 时被拒——窗口在两者之间
+    secret_recall: 3/7 次完整收下的请求答对开头暗号
+    shots:
+      - target_tokens: 128000
+        prompt_chars: 204815
+        http: 200
+        seconds: 20
+        accepted: true
+        input_tokens: 173173
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: qwen-flash
+        silently_truncated: false
+      - target_tokens: 256000
+        prompt_chars: 302795
+        http: 200
+        seconds: 34
+        accepted: true
+        input_tokens: 256348
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: qwen-flash
+        silently_truncated: false
+      - target_tokens: 512000
+        prompt_chars: 604790
+        http: 200
+        seconds: 90
+        accepted: true
+        input_tokens: 513655
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: qwen-flash
+        silently_truncated: false
+      - target_tokens: 1024000
+        prompt_chars: 1205703
+        http: 400
+        seconds: 4
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: '{"request_id":"7b9f45ab-4e95-9017-a3b9-2be4a4905482","code":"InvalidParameter","message":"<400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 1000000]"}'
+      - target_tokens: 768000
+        prompt_chars: 904274
+        http: 200
+        seconds: 147
+        accepted: true
+        input_tokens: 768820
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: false
+        model_from_response: qwen-flash
+        silently_truncated: false
+        answer_head: '421088'
+      - target_tokens: 896000
+        prompt_chars: 1053881
+        http: 200
+        seconds: 175
+        accepted: true
+        input_tokens: 896287
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: false
+        model_from_response: qwen-flash
+        silently_truncated: false
+        answer_head: '428516'
+      - target_tokens: 960000
+        prompt_chars: 1128806
+        http: 200
+        seconds: 189
+        accepted: true
+        input_tokens: 960126
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: false
+        model_from_response: qwen-flash
+        silently_truncated: false
+        answer_head: '918368'
+      - target_tokens: 992000
+        prompt_chars: 1166282
+        http: 200
+        seconds: 195
+        accepted: true
+        input_tokens: 992059
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: false
+        model_from_response: qwen-flash
+        silently_truncated: false
+        answer_head: '830272'
+  - service: glm_flash
+    model_from_response:
+      - glm-5.3-flash
+    date: '2026-09-28'
+    context_window_at_least: 1030553
+    rejected_at_estimated: 1054500
+    rejected_error: '[1261][prompt is too long][202609281650096c47b7a2e93e4d5c]'
+    over_window_behavior: 报错拒收 HTTP 400
+    reading: 收下 1030553 输入 token,估算 1054500 时被拒——窗口在两者之间
+    secret_recall: 4/4 次完整收下的请求答对开头暗号
+    shots:
+      - target_tokens: 128000
+        prompt_chars: 204815
+        http: 200
+        seconds: 12
+        accepted: true
+        input_tokens: 136283
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: glm-5.3-flash
+        silently_truncated: false
+      - target_tokens: 256000
+        prompt_chars: 384740
+        http: 200
+        seconds: 23
+        accepted: true
+        input_tokens: 250041
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: glm-5.3-flash
+        silently_truncated: false
+      - target_tokens: 512000
+        prompt_chars: 787823
+        http: 200
+        seconds: 42
+        accepted: true
+        input_tokens: 503859
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: glm-5.3-flash
+        silently_truncated: false
+      - target_tokens: 1024000
+        prompt_chars: 1601118
+        http: 200
+        seconds: 110
+        accepted: true
+        input_tokens: 1030553
+        cache_read_tokens: 1000512
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: glm-5.3-flash
+        silently_truncated: false
+      - target_tokens: 2000000
+        prompt_chars: 3107324
+        http: 400
+        seconds: 5
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: '[1261][prompt is too long][20260928164953620f1ecf4f324a1c]'
+      - target_tokens: 1512000
+        prompt_chars: 2349126
+        http: 400
+        seconds: 4
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: '[1261][prompt is too long][2026092816495832bcb1010a1b4e1e]'
+      - target_tokens: 1268000
+        prompt_chars: 1970046
+        http: 400
+        seconds: 3
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: '[1261][prompt is too long][20260928165002444333dafa4049f5]'
+      - target_tokens: 1146000
+        prompt_chars: 1780506
+        http: 400
+        seconds: 2
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: '[1261][prompt is too long][20260928165004feadfd2be2e14cd6]'
+      - target_tokens: 1085000
+        prompt_chars: 1685709
+        http: 400
+        seconds: 2
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: '[1261][prompt is too long][20260928165007e683504134b348be]'
+      - target_tokens: 1054500
+        prompt_chars: 1638326
+        http: 400
+        seconds: 2
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: '[1261][prompt is too long][202609281650096c47b7a2e93e4d5c]'
+  - service: deepseek
+    model_from_response:
+      - deepseek-flash
+    date: '2026-09-28'
+    context_window_at_least: 1018695
+    rejected_at_estimated: 1054500
+    rejected_error: >-
+      This model's maximum context length is 1048576 tokens. However, you requested 1056368 tokens (1054320 in the messages, 2048 in the completion). Please reduce the length of the messages or
+      completion. (request_id: 0858d881-f361-46ad-bc4d-11462d3954cc)
+    over_window_behavior: 报错拒收 HTTP 400
+    reading: 收下 1018695 输入 token,估算 1054500 时被拒——窗口在两者之间
+    secret_recall: 8/8 次完整收下的请求答对开头暗号
+    shots:
+      - target_tokens: 8000
+        prompt_chars: 12820
+        http: 200
+        seconds: 1
+        accepted: true
+        input_tokens: 7279
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: deepseek-flash
+        silently_truncated: false
+      - target_tokens: 16000
+        prompt_chars: 28196
+        http: 200
+        seconds: 1
+        accepted: true
+        input_tokens: 15944
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: deepseek-flash
+        silently_truncated: false
+      - target_tokens: 32000
+        prompt_chars: 56614
+        http: 200
+        seconds: 2
+        accepted: true
+        input_tokens: 32339
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: deepseek-flash
+        silently_truncated: false
+      - target_tokens: 64000
+        prompt_chars: 112046
+        http: 200
+        seconds: 2
+        accepted: true
+        input_tokens: 64319
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: deepseek-flash
+        silently_truncated: false
+      - target_tokens: 128000
+        prompt_chars: 222989
+        http: 200
+        seconds: 3
+        accepted: true
+        input_tokens: 128324
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: deepseek-flash
+        silently_truncated: false
+      - target_tokens: 256000
+        prompt_chars: 444869
+        http: 200
+        seconds: 5
+        accepted: true
+        input_tokens: 252359
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: deepseek-flash
+        silently_truncated: false
+      - target_tokens: 512000
+        prompt_chars: 902600
+        http: 200
+        seconds: 9
+        accepted: true
+        input_tokens: 506654
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: deepseek-flash
+        silently_truncated: false
+      - target_tokens: 1024000
+        prompt_chars: 1824273
+        http: 200
+        seconds: 20
+        accepted: true
+        input_tokens: 1018695
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: deepseek-flash
+        silently_truncated: false
+      - target_tokens: 2000000
+        prompt_chars: 3581588
+        http: 400
+        seconds: 14
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: >-
+          This model's maximum context length is 1048576 tokens. However, you requested 1979318 tokens (1977270 in the messages, 2048 in the completion). Please reduce the length of the messages or
+          completion. (request_id: d6186d58-c04e-45b3-ac12-bef8404b66d7)
+      - target_tokens: 1512000
+        prompt_chars: 2707682
+        http: 400
+        seconds: 7
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: >-
+          This model's maximum context length is 1048576 tokens. However, you requested 1511153 tokens (1509105 in the messages, 2048 in the completion). Please reduce the length of the messages or
+          completion. (request_id: 08abdd60-fbfc-4c8e-8ea9-f8a132cc6040)
+      - target_tokens: 1268000
+        prompt_chars: 2270747
+        http: 400
+        seconds: 7
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: >-
+          This model's maximum context length is 1048576 tokens. However, you requested 1268783 tokens (1266735 in the messages, 2048 in the completion). Please reduce the length of the messages or
+          completion. (request_id: 4bdd2726-03bc-45af-97fc-0d7cc1c73d3e)
+      - target_tokens: 1146000
+        prompt_chars: 2052263
+        http: 400
+        seconds: 7
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: >-
+          This model's maximum context length is 1048576 tokens. However, you requested 1147403 tokens (1145355 in the messages, 2048 in the completion). Please reduce the length of the messages or
+          completion. (request_id: 04317b5e-9eec-4414-9a7f-6a155c53e23e)
+      - target_tokens: 1085000
+        prompt_chars: 1943021
+        http: 400
+        seconds: 8
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: >-
+          This model's maximum context length is 1048576 tokens. However, you requested 1086713 tokens (1084665 in the messages, 2048 in the completion). Please reduce the length of the messages or
+          completion. (request_id: 91b34b1a-518f-4ebd-896e-faee85542d3b)
+      - target_tokens: 1054500
+        prompt_chars: 1888400
+        http: 400
+        seconds: 11
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: >-
+          This model's maximum context length is 1048576 tokens. However, you requested 1056368 tokens (1054320 in the messages, 2048 in the completion). Please reduce the length of the messages or
+          completion. (request_id: 0858d881-f361-46ad-bc4d-11462d3954cc)
+  - service: antchat
+    model_from_response:
+      - Ling-3.0-Flash
+    date: '2026-09-28'
+    context_window_at_least: 256420
+    rejected_at_estimated: 264000
+    rejected_error: The input (264062 tokens) is longer than the model's context length (262144 tokens).
+    over_window_behavior: 报错拒收 HTTP 400
+    reading: 收下 256420 输入 token,估算 264000 时被拒——窗口在两者之间
+    secret_recall: 6/6 次完整收下的请求答对开头暗号
+    shots:
+      - target_tokens: 8000
+        prompt_chars: 12820
+        http: 200
+        seconds: 1
+        accepted: true
+        input_tokens: 10766
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: Ling-3.0-Flash
+        silently_truncated: false
+      - target_tokens: 16000
+        prompt_chars: 19071
+        http: 200
+        seconds: 1
+        accepted: true
+        input_tokens: 16017
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: Ling-3.0-Flash
+        silently_truncated: false
+      - target_tokens: 32000
+        prompt_chars: 38102
+        http: 200
+        seconds: 48
+        accepted: true
+        input_tokens: 32084
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: Ling-3.0-Flash
+        silently_truncated: false
+      - target_tokens: 64000
+        prompt_chars: 76010
+        http: 200
+        seconds: 3
+        accepted: true
+        input_tokens: 64160
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: Ling-3.0-Flash
+        silently_truncated: false
+      - target_tokens: 128000
+        prompt_chars: 151645
+        http: 200
+        seconds: 7
+        accepted: true
+        input_tokens: 128159
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: Ling-3.0-Flash
+        silently_truncated: false
+      - target_tokens: 256000
+        prompt_chars: 302930
+        http: 200
+        seconds: 20
+        accepted: true
+        input_tokens: 256420
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: Ling-3.0-Flash
+        silently_truncated: false
+      - target_tokens: 512000
+        prompt_chars: 604871
+        http: 400
+        seconds: 4
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: The input (513633 tokens) is longer than the model's context length (262144 tokens).
+      - target_tokens: 384000
+        prompt_chars: 453671
+        http: 400
+        seconds: 36
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: The input (384833 tokens) is longer than the model's context length (262144 tokens).
+      - target_tokens: 320000
+        prompt_chars: 378044
+        http: 400
+        seconds: 2
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: The input (320410 tokens) is longer than the model's context length (262144 tokens).
+      - target_tokens: 288000
+        prompt_chars: 340246
+        http: 400
+        seconds: 2
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: The input (288212 tokens) is longer than the model's context length (262144 tokens).
+      - target_tokens: 272000
+        prompt_chars: 321346
+        http: 400
+        seconds: 64
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: The input (272112 tokens) is longer than the model's context length (262144 tokens).
+      - target_tokens: 264000
+        prompt_chars: 311896
+        http: 400
+        seconds: 1
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: The input (264062 tokens) is longer than the model's context length (262144 tokens).
+  - service: bailian_qwen
+    model_from_response:
+      - qwen3.8-27b
+    date: '2026-09-28'
+    context_window_at_least: 1000203
+    rejected_at_estimated: 1050000
+    rejected_error: >-
+      {"request_id":"5826b3a8-3c94-9d00-a9d7-6c804ea509d2","code":"error","message":"Error code: 400 - {'error': {'message': '<400> InternalError.Algo.InvalidParameter: Range of input length should be
+      [1, 1048576]', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_parameter_error'}, 'id': 
+    over_window_behavior: 报错拒收 HTTP 400
+    reading: 收下 1000203 输入 token,估算 105 万时 400 拒收,报错写明输入长度须在 1 到 1048576 之间——窗口约 100 万(端点硬限 1048576)。档案原记的 262144 已被推翻
+    secret_recall: 12/12 次完整收下的请求答对开头暗号(第一次跑 9/9 最大 896289,充值后续量 3/3 最大 1000203)
+    note: 分两次量:第一次(18:02 前)量到 896289 后百炼账户欠费,更大两发被 Arrearage 拒收、102.4 万那发端点 500 超时,上界没量出来;充值后(19:12)从 45 万起步续量出上界。下面 shots=续量那次,earlier_shots=第一次
+    shots:
+      - target_tokens: 450000
+        prompt_chars: 720026
+        http: 200
+        seconds: 85
+        accepted: true
+        input_tokens: 611838
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: qwen3.8-27b
+        silently_truncated: false
+      - target_tokens: 900000
+        prompt_chars: 1059146
+        http: 200
+        seconds: 383
+        accepted: true
+        input_tokens: 900772
+        cache_read_tokens: 786432
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: qwen3.8-27b
+        silently_truncated: false
+      - target_tokens: 1100000
+        prompt_chars: 1293426
+        http: 400
+        seconds: 4
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: >-
+          {"request_id":"f2890181-ac00-9020-adf7-4216001f3da8","code":"error","message":"Error code: 400 - {'error': {'message': '<400> InternalError.Algo.InvalidParameter: Range of input length
+          should be [1, 1048576]', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_parameter_error'}, 'id': 
+      - target_tokens: 1000000
+        prompt_chars: 1175841
+        http: 200
+        seconds: 385
+        accepted: true
+        input_tokens: 1000203
+        cache_read_tokens: 786432
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: qwen3.8-27b
+        silently_truncated: false
+      - target_tokens: 1050000
+        prompt_chars: 1234404
+        http: 400
+        seconds: 5
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: >-
+          {"request_id":"5826b3a8-3c94-9d00-a9d7-6c804ea509d2","code":"error","message":"Error code: 400 - {'error': {'message': '<400> InternalError.Algo.InvalidParameter: Range of input length
+          should be [1, 1048576]', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_parameter_error'}, 'id': 
+    earlier_shots:
+      - target_tokens: 8000
+        prompt_chars: 12820
+        http: 200
+        seconds: 2
+        accepted: true
+        input_tokens: 10759
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: qwen3.8-27b
+        silently_truncated: false
+      - target_tokens: 16000
+        prompt_chars: 19071
+        http: 200
+        seconds: 2
+        accepted: true
+        input_tokens: 16010
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: qwen3.8-27b
+        silently_truncated: false
+      - target_tokens: 32000
+        prompt_chars: 38128
+        http: 200
+        seconds: 3
+        accepted: true
+        input_tokens: 32105
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: qwen3.8-27b
+        silently_truncated: false
+      - target_tokens: 64000
+        prompt_chars: 76010
+        http: 200
+        seconds: 6
+        accepted: true
+        input_tokens: 64160
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: qwen3.8-27b
+        silently_truncated: false
+      - target_tokens: 128000
+        prompt_chars: 151645
+        http: 200
+        seconds: 36
+        accepted: true
+        input_tokens: 128174
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: qwen3.8-27b
+        silently_truncated: false
+      - target_tokens: 256000
+        prompt_chars: 302903
+        http: 200
+        seconds: 21
+        accepted: true
+        input_tokens: 256440
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: qwen3.8-27b
+        silently_truncated: false
+      - target_tokens: 512000
+        prompt_chars: 604790
+        http: 200
+        seconds: 62
+        accepted: true
+        input_tokens: 513655
+        cache_read_tokens: 0
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: qwen3.8-27b
+        silently_truncated: false
+      - target_tokens: 1024000
+        prompt_chars: 1205703
+        http: 500
+        seconds: 1216
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: '{"request_id":"ef8bd711-745b-9cd1-9fab-eb561ed09f68","code":"error","message":"Request timed out."}'
+      - target_tokens: 768000
+        prompt_chars: 904274
+        http: 200
+        seconds: 188
+        accepted: true
+        input_tokens: 768820
+        cache_read_tokens: 768768
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: qwen3.8-27b
+        silently_truncated: false
+      - target_tokens: 896000
+        prompt_chars: 1053883
+        http: 200
+        seconds: 388
+        accepted: true
+        input_tokens: 896289
+        cache_read_tokens: 786432
+        stop_reason: end_turn
+        secret_recalled: true
+        model_from_response: qwen3.8-27b
+        silently_truncated: false
+      - target_tokens: 960000
+        prompt_chars: 1128808
+        http: 400
+        seconds: 92
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: '{"request_id":"4daf3cb3-909d-9e2d-a310-fc745584fa05","code":"error","message":"Billing issue. Please check your OpenAI account billing status."}'
+      - target_tokens: 928000
+        prompt_chars: 1091170
+        http: 400
+        seconds: 2
+        accepted: false
+        input_tokens: null
+        cache_read_tokens: null
+        stop_reason: null
+        secret_recalled: false
+        model_from_response: null
+        silently_truncated: false
+        error: >-
+          {"code":"Arrearage","message":"Access denied, please make sure your account is in good standing. For details, see:
+          https://help.aliyun.com/zh/model-studio/error-code#overdue-payment","request_id":"21c34ec9-ecb7-9aae-adea-ce170f5bb66e"}

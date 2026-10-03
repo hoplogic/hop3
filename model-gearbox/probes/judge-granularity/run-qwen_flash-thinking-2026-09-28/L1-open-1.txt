@@ -1,0 +1,3 @@
+extract_ok: false
+extract_gap: |
+  - 漏了断言: "四杯以内的标准咖啡含有的咖啡因量不超过 400 毫克" 未列为 fact

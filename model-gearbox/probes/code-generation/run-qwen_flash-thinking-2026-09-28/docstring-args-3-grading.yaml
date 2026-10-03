@@ -1,0 +1,26 @@
+- round: 0
+  outcome: ran
+  public_pass: false
+  hidden_pass: false
+  hidden_failed:
+    - bad_async_method.py(应1实1 崩溃)
+    - bad_case.py(应1实1 崩溃)
+    - bad_missing_kwargs.py(应1实1 崩溃)
+    - bad_missing_kwonly.py(应1实1 崩溃)
+    - bad_missing_varargs.py(应1实1 崩溃)
+    - bad_nested_class_method.py(应1实0)
+    - bad_no_docstring.py(应1实1 崩溃)
+    - bad_posonly.py(应1实0)
+    - bad_substring.py(应1实1 崩溃)
+    - ok_docstring_formats.py(应0实1 崩溃)
+    - ok_full.py(应0实1 崩溃)
+    - ok_private_nested.py(应0实1 崩溃)
+  crashed_files: 10
+- round: 1
+  outcome: ran
+  public_pass: true
+  hidden_pass: false
+  hidden_failed:
+    - bad_nested_class_method.py(应1实0)
+    - bad_posonly.py(应1实0)
+  crashed_files: 0

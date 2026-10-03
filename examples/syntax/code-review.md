@@ -3,10 +3,10 @@ Id: code-review
 Goal: 审查当前 git diff 的代码变更，输出结构化审查报告
 
 Inputs:
-- target_dir: text  # 要审查的项目目录路径
+- target_dir % text  # 要审查的项目目录路径
 
 Outputs:
-- review_report: text  # 审查报告（markdown 格式）
+- review_report % text  # 审查报告（markdown 格式）
 
 Constraints:
 - 只审查已暂存或已修改的文件，不审查未跟踪文件
@@ -16,8 +16,8 @@ Constraints:
 ## Steps
 1. [act] 获取代码变更
   - ← target_dir
-  + → diff_content: text  # git diff 输出
-  + → changed_files: [line]  # 变更文件列表
+  + → diff_content % text  # git diff 输出
+  + → changed_files % [line]  # 变更文件列表
   > body 引擎直执：在 target_dir 执行 git diff HEAD（含已暂存与已修改）取完整变更内容，
   > 再执行 git diff HEAD --name-only 取变更文件列表（git 在命令白名单；空行剔除）。
   > ```hop_python
@@ -29,7 +29,7 @@ Constraints:
 
 2. [reason] 分析变更并识别问题
   - ← diff_content, changed_files
-  + → findings: [yaml]  # 结构化审查发现列表，每条 {file, severity, issue, suggestion}（severity ∈ P0/P1/P2；无问题的方面用 severity: PASS 记通过项）
+  + → findings % [yaml]  # 结构化审查发现列表，每条 {file, severity, issue, suggestion}（severity ∈ P0/P1/P2；无问题的方面用 severity: PASS 记通过项）
   > 逐文件审查变更：
   > - 正确性：逻辑错误、边界条件、类型安全
   > - 安全性：注入风险、敏感数据泄露、权限检查
@@ -39,7 +39,7 @@ Constraints:
 
 3. [act] 生成审查报告
   - ← findings, changed_files
-  + → review_report: text  # markdown 格式报告
+  + → review_report % text  # markdown 格式报告
   > 无推理组装由 body 引擎直执：按固定模板机械拼 markdown——概要计数（P0/P1/P2 各多少个、覆盖多少文件）
   > 与各级问题逐条列举全部来自 findings 结构化字段，不重新分析。
   > ```hop_python

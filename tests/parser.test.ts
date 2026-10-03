@@ -1,6 +1,8 @@
 // @module: spec-parser ^anc-struct-spec-parser
 import { describe, it, expect } from 'vitest';
-import { parseSpec, parseFragment, serializeSpec, convertSpecKeywords } from '../src/parser.js';
+import { parseSpec, parseFragment, serializeSpec, convertSpecKeywords, convertSchemaSeparators } from '../src/parser.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { validateSpec } from '../src/validator.js';
 import { isContainerStep, hasChildren, getChildren } from '../src/ast-helpers.js';
 import type { CallStep, SubtaskStep, ReasonStep, LoopStep } from '../src/ast-types.js';
@@ -1491,9 +1493,9 @@ Test goal
     expect(serialized).toContain('## Constraints');
     expect(serialized).toContain('- Constraint 1');
     expect(serialized).toContain('## Inputs');
-    expect(serialized).toContain('- x: text');
+    expect(serialized).toContain('- x % text');
     expect(serialized).toContain('## Outputs');
-    expect(serialized).toContain('- y: yaml');
+    expect(serialized).toContain('- y % yaml');
   });
 });
 
@@ -1917,8 +1919,8 @@ describe('serializeSpec — full round-trip with all sections', () => {
     // Verify types section
     expect(serialized).toContain('## Types');
     expect(serialized).toContain('- Item:');
-    expect(serialized).toContain('    name: text');
-    expect(serialized).toContain('    count: int');
+    expect(serialized).toContain('    name % text');
+    expect(serialized).toContain('    count % int');
 
     // Verify config section
     expect(serialized).toContain('## Config');
@@ -3767,7 +3769,7 @@ Types:
     const r1 = parseSpec(SRC);
     const out = serializeSpec(r1.ast!);
     expect(out).toContain('CheckPoint:  # 一个待核查点');
-    expect(out).toContain('id: line  # 点编号（P1/P2…）');
+    expect(out).toContain('id % line  # 点编号（P1/P2…）');
     const r2 = parseSpec(out);
     const t2 = r2.ast!.header.types![0];
     expect(t2.description).toBe('一个待核查点');
@@ -4117,7 +4119,8 @@ Goal: g
     const ser = serializeSpec(ast!);
     expect(ser).toMatch(/\+ → findings\n|\+ → findings$/m);   // 裸名无尾冒号
     const round = parseSpec(ser);
-    const n = (x: unknown) => JSON.stringify(x, (k, v) => (k === 'source_location' ? undefined : v));
+    // colon_separators 记行号,serializer 重排版后行号必变——与 source_location 同属位置元数据,一起剥
+    const n = (x: unknown) => JSON.stringify(x, (k, v) => (k === 'source_location' || k === 'colon_separators' ? undefined : v));
     expect(n(round.ast)).toBe(n(ast));
   });
 
@@ -4139,9 +4142,10 @@ Goal: g
     const { ast, errors } = parseSpec(md);
     expect(errors).toHaveLength(0);
     const ser = serializeSpec(ast!);
-    expect(ser).toContain('- total: int');
+    expect(ser).toContain('- total % int');
     const round = parseSpec(ser);
-    const n = (x: unknown) => JSON.stringify(x, (k, v) => (k === 'source_location' ? undefined : v));
+    // colon_separators 记行号,serializer 重排版后行号必变——与 source_location 同属位置元数据,一起剥
+    const n = (x: unknown) => JSON.stringify(x, (k, v) => (k === 'source_location' || k === 'colon_separators' ? undefined : v));
     expect(n(round.ast)).toBe(n(ast));
   });
 
@@ -4347,5 +4351,280 @@ describe('输入大小上限(0080)', () => {
     const hit = errors.find(e => e.message.includes('exceeds'));
     expect(hit).toBeTruthy();
     expect(hit!.message).toMatch(/actual: \d+ bytes/);
+  });
+});
+
+// HopSchema 名/类型分隔符双文法并收（^anc-rule-schema-sep-dual,todo/0109 第 1 步——作者定"% 是正式
+// hopschema 语法,: 将成为 deprecated"）：六站点同收 % 与 :,冒号行记 colon_separators,validator 出一条 W2
+// @v: anc-rule-schema-sep-dual
+describe('HopSchema 分隔符双文法并收（% 正字、: 出 W2）', () => {
+  const strip = (ast: unknown) => JSON.parse(JSON.stringify(ast, (k, v) => (k === 'source_location' || k === 'colon_separators') ? undefined : v));
+
+  it('probe1 正反成对：Outputs 用 % 与用 : 解析出等价 AST;: 写法出一条 W2 且报文含具体改法与迁移命令,% 写法零 W2', () => {
+    const mk = (decl: string) => `# Spec: P\nId: p\n\n## Outputs\n${decl}\n\n## Steps\n1. [reason] 写\n  + → report % markdown\n`;
+    const a = parseSpec(mk('- report % markdown  # 报告'));
+    const b = parseSpec(mk('- report: markdown  # 报告'));
+    expect(a.errors).toHaveLength(0);
+    expect(b.errors).toHaveLength(0);
+    expect(a.ast.header.outputs).toEqual([{ name: 'report', type: 'markdown', description: '报告' }]);
+    expect(strip(a.ast)).toEqual(strip(b.ast));
+    expect(a.ast.header.colon_separators).toBeUndefined();   // 无冒号行时字段不设置,AST 与旧版同形
+    const wa = validateSpec(a.ast).filter(e => e.rule === 'W2');
+    const wb = validateSpec(b.ast).filter(e => e.rule === 'W2');
+    expect(wa).toHaveLength(0);
+    expect(wb).toHaveLength(1);
+    expect(wb[0].severity).toBe('warn');
+    expect(wb[0].message).toContain("':' 已废弃");
+    expect(wb[0].message).toContain('把 `report: markdown` 写成 `report % markdown`');
+    expect(wb[0].message).toContain('hopjit schema-sep <spec 文件>');
+    expect(wb[0].message).toContain('1.0 起冒号写法将报错');   // 弃用截止点（作者定 2026-09-27"1.0 再报错"）
+    expect(wb[0].message).toContain('第 5 行');
+  });
+
+  it('六站点：% 与 : 两份 AST 剥记录后逐字段相等;冒号写法记录的行号与名字/类型逐条精确', () => {
+    const a = parseSpec(SEP_TPL(' % '));
+    const b = parseSpec(SEP_TPL(': '));
+    expect(a.errors).toEqual(b.errors);
+    expect(strip(a.ast)).toEqual(strip(b.ast));
+    expect(a.ast.header.colon_separators).toBeUndefined();
+    const seps = b.ast.header.colon_separators!;
+    expect(seps.map(s => [s.line, s.section, s.name, s.type])).toEqual([
+      [6, 'Types', 'id', 'line'],
+      [7, 'Types', 'tag', 'enum(a, b)'],   // 类型原文不归一（迁移工具按原文定位）
+      [10, 'Tools', 'result', 'yaml'],
+      [11, 'Tools', 'query', 'text'],
+      [14, 'Inputs', 'doc_path', 'line'],
+      [17, 'Outputs', 'report', 'markdown'],
+      [25, 'Steps', 'items', '[Item]'],
+      [27, 'Steps', 'ok', 'bool'],
+    ]);
+    // 反面：类型头行（5）、Config（20）、复合展开头（26）、> 行（28）、call 映射（30）、围栏（34）都不记
+    const w2 = validateSpec(b.ast).filter(e => e.rule === 'W2');
+    expect(w2).toHaveLength(1);   // 整份只一条汇总
+    expect(w2[0].message).toContain('本文件有 8 行仍在用冒号（第 6、7、10、11、14、17、25、27 行）');
+    expect(w2[0].message).toContain('把 `id: line` 写成 `id % line`');
+    expect(validateSpec(a.ast).filter(e => e.rule === 'W2')).toHaveLength(0);
+  });
+
+  it('% 两侧空白任意（含零个）等价收下,不掉成 W1 孤儿行、不被当成裸名变量', () => {
+    const mk = (S: string) => `# Spec: S\nId: s\n\n## Inputs\n- doc${S}line\n\n## Steps\n1. [reason] 读\n  - ← doc\n  + → out${S}text\n`;
+    const base = parseSpec(mk(' % '));
+    for (const S of ['%', '  %  ', '% ', ' %']) {
+      const r = parseSpec(mk(S));
+      expect(r.errors).toHaveLength(0);
+      expect(strip(r.ast)).toEqual(strip(base.ast));
+      expect(validateSpec(r.ast).filter(e => e.rule === 'W1' || e.rule === 'W2')).toHaveLength(0);
+    }
+    expect((base.ast.steps![0] as ReasonStep).outputs).toEqual([{ name: 'out', type: 'text', description: '' }]);
+  });
+
+  it('裸键段头形态（类型:/输入: 无 ## 标题）行号也精确——拿真实范例的冒号写法快照（tests/fixtures/hop-fact-check.colon.md）逐条核:记录行号上的原文确实是"名: 类型"', () => {
+    const src = readFileSync(join(import.meta.dirname, 'fixtures', 'hop-fact-check.colon.md'), 'utf-8');
+    const lines = src.split('\n');
+    const seps = parseSpec(src).ast.header.colon_separators!;
+    expect(seps.length).toBeGreaterThan(20);
+    const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    for (const r of seps) {
+      expect(lines[r.line - 1], `第 ${r.line} 行`).toMatch(new RegExp(`${esc(r.name)}\\s*:\\s*${esc(r.type)}`));
+    }
+    const docPath = seps.find(r => r.name === 'doc_path')!;
+    expect(lines[docPath.line - 1].startsWith('- doc_path: line')).toBe(true);
+  });
+
+  it('超过十行冒号时 W2 报文只列前十个行号并写"等"', () => {
+    const decls = Array.from({ length: 12 }, (_, i) => `- v${i}: text`).join('\n');
+    const md = `# Spec: M\nId: m\n\n## Inputs\n${decls}\n\n## Steps\n1. [reason] 读\n  + → out % text\n`;
+    const w2 = validateSpec(parseSpec(md).ast).filter(e => e.rule === 'W2');
+    expect(w2).toHaveLength(1);
+    expect(w2[0].message).toContain('本文件有 12 行仍在用冒号（第 5、6、7、8、9、10、11、12、13、14 行等）');
+  });
+
+  it('片段模式同规：片段里步骤输出行用冒号也记录（行号=片段内行号）,call 步骤输出映射不记', () => {
+    const f = parseFragment('1. [reason] 读\n  + → o: text\n2. [call sub] 调\n  + → p: q\n');
+    expect(f.ast.header.colon_separators).toEqual([{ line: 2, section: 'Steps', name: 'o', type: 'text' }]);
+    const g = parseFragment('1. [reason] 读\n  + → o % text\n');
+    expect(g.ast.header.colon_separators).toBeUndefined();
+  });
+});
+
+// 六站点全覆盖的模板（双文法与转换核两组共用）;{S} 处填分隔符。另含不是分隔符的冒号——
+// 类型头行/Config/复合输出展开头/> 行/call 映射/围栏/# 说明里的同名字样
+const SEP_TPL = (S: string) => `# Spec: 双文法
+Id: dual
+
+## Types
+- Item:  # 条目
+  - id${S}line  # 编号 id: 字样
+  - tag${S}enum(a, b)
+
+## Tools
+- web_search(query) -> result${S}yaml  # 检索
+  - query${S}text  # 查询词
+
+## Inputs
+- doc_path${S}line  # 路径
+
+## Outputs
+- report${S}markdown  # 报告 report: markdown 写在说明里不许动
+
+## Config
+- expansion_max: 5
+
+## Steps
+1. [reason] 读
+  - ← doc_path
+  + → items${S}[Item] = []  # 条目
+  + → verdict:  # 判定
+    - ok${S}bool  # 是否
+  > 形如 items: [Item] 的输出
+2. [call sub(x: items)] 调
+  + → report: out
+
+## 说明
+\`\`\`yaml
+- id: P5
+\`\`\`
+`;
+
+// HopSchema 分隔符转换核（^anc-rule-schema-sep-convert,todo/0109 第 2 步）：由 parser 记录驱动的行级手术
+// @v: anc-rule-schema-sep-convert
+describe('convertSchemaSeparators（冒号分隔符 → " % " 行级手术）', () => {
+  it('六站点全部换成 " % ",其余每一字节不动（call 映射/类型头行/复合展开头/Config/> 行/围栏/# 说明里的同名字样）', () => {
+    const r = convertSchemaSeparators(SEP_TPL(': '));
+    expect(r.text).toBe(SEP_TPL(' % '));
+    expect(r.changed_lines).toEqual([6, 7, 10, 11, 14, 17, 25, 27]);
+    expect(r.unmatched_lines).toEqual([]);
+  });
+
+  it('幂等：已全是 % 的输入零改动;转换后 re-parse 零冒号记录且 AST 与原件等价', () => {
+    const once = convertSchemaSeparators(SEP_TPL(': '));
+    const twice = convertSchemaSeparators(once.text);
+    expect(twice.text).toBe(once.text);
+    expect(twice.changed_lines).toEqual([]);
+    const strip = (ast: unknown) => JSON.stringify(ast, (k, v) => (k === 'source_location' || k === 'colon_separators') ? undefined : v);
+    const after = parseSpec(once.text);
+    expect(after.ast.header.colon_separators).toBeUndefined();
+    expect(strip(after.ast)).toBe(strip(parseSpec(SEP_TPL(': ')).ast));
+  });
+
+  it('冒号两侧空白不规整的旧写法也归一成规范形 " % "', () => {
+    const src = '# Spec: W\nId: w\n\n## Inputs\n- a:text\n- b  :   line  # 说明\n\n## Steps\n1. [reason] 读\n  + → o :text\n';
+    const r = convertSchemaSeparators(src);
+    expect(r.text).toBe('# Spec: W\nId: w\n\n## Inputs\n- a % text\n- b % line  # 说明\n\n## Steps\n1. [reason] 读\n  + → o % text\n');
+  });
+});
+
+// 《已批准命令》段（^anc-rule-approved-commands,todo/0132 承接 hopissues/0114——批准单位是任务不是命令名）
+describe('已批准命令段', () => {   // @v: anc-rule-approved-commands
+  const wrap = (section: string) => `# Spec: A\nId: a\nGoal: g\n\n${section}\n## Steps\n1. [reason] 想\n  + → o % text\n`;
+
+  it('中文段头与英文段头等价,一行一条 argv 前缀进 header.approved_commands', () => {
+    const zh = parseSpec(wrap('## 已批准命令\n- python3 scripts/ssh_exec.py --config configs/x.json\n- git status\n'));
+    const en = parseSpec(wrap('## Approved Commands\n- python3 scripts/ssh_exec.py --config configs/x.json\n- git status\n'));
+    expect(zh.errors).toEqual([]);
+    expect(en.errors).toEqual([]);
+    expect(zh.ast.header.approved_commands).toEqual([['python3', 'scripts/ssh_exec.py', '--config', 'configs/x.json'], ['git', 'status']]);
+    expect(en.ast.header.approved_commands).toEqual(zh.ast.header.approved_commands);
+  });
+
+  it('引号包住的词元内空白不切、引号剥掉;行尾 # 注释不入词元;空行与注释行豁免', () => {
+    const { ast, errors } = parseSpec(wrap('## 已批准命令\n\n# 远端入口\n- echo "hello world" \'a b\'   # 注释\n'));
+    expect(errors).toEqual([]);
+    expect(ast.header.approved_commands).toEqual([['echo', 'hello world', 'a b']]);
+  });
+
+  it('缺段时 header.approved_commands 为 undefined 不是空数组', () => {
+    const { ast } = parseSpec(wrap(''));
+    expect(ast.header.approved_commands).toBeUndefined();
+  });
+
+  it('serializeSpec 回写同形段且往返可逆（含空白词元双引号包回）', () => {
+    const src = wrap('## 已批准命令\n- echo "hello world"\n- git status\n');
+    const { ast } = parseSpec(src);
+    const out = serializeSpec(ast, { lang: 'zh' });
+    expect(out).toContain('## 已批准命令\n- echo "hello world"\n- git status\n');
+    const again = parseSpec(out);
+    expect(again.errors).toEqual([]);
+    expect(again.ast.header.approved_commands).toEqual(ast.header.approved_commands);
+    expect(serializeSpec(ast, { lang: 'en' })).toContain('## Approved Commands\n');
+  });
+
+  it('反例：首项为 hopjit（含路径尾段）→ parse error 点名行号', () => {
+    const r1 = parseSpec(wrap('## 已批准命令\n- hopjit run x.md\n'));
+    expect(r1.errors.some(e => e.kind === 'parse' && e.line === 6 && /hopjit/.test(e.message))).toBe(true);
+    const r2 = parseSpec(wrap('## 已批准命令\n- /usr/local/bin/hopjit run x.md\n'));
+    expect(r2.errors.some(e => /hopjit/.test(e.message))).toBe(true);
+    expect(r2.ast.header.approved_commands).toEqual([]);
+  });
+
+  it('反例：空条目 → parse error', () => {
+    const { errors } = parseSpec(wrap('## 已批准命令\n- \n'));
+    expect(errors.some(e => e.kind === 'parse' && /为空/.test(e.message))).toBe(true);
+  });
+
+  it('反例：非 `- ` 条目的非空行 → parse error（不静默蒸发）', () => {
+    const { errors } = parseSpec(wrap("## 已批准命令\npython3 -c 'print(1)'\n"));
+    expect(errors.some(e => e.kind === 'parse' && /只认/.test(e.message))).toBe(true);
+  });
+
+  // ---- 0132 工程链 review 补钉（面二 D1/D2/D4/G3、面三 k 变异全绿） ----
+
+  it('往返可逆边界：词元含双引号用单引号包回、以 # 起头必包引号——回读前缀不缩短（review 探针 A/B:原实现删引号、#TODO 裸写回读成注释,授权变宽）', () => {
+    const src = wrap("## 已批准命令\n- echo 'say \"hi\"'\n- grep '#TODO' src\n");
+    const { ast, errors } = parseSpec(src);
+    expect(errors).toEqual([]);
+    expect(ast.header.approved_commands).toEqual([['echo', 'say "hi"'], ['grep', '#TODO', 'src']]);
+    const out = serializeSpec(ast, { lang: 'zh' });
+    expect(out).toContain(`- echo 'say "hi"'`);
+    expect(out).toContain(`- grep "#TODO" src`);
+    const again = parseSpec(out);
+    expect(again.errors).toEqual([]);
+    expect(again.ast.header.approved_commands).toEqual(ast.header.approved_commands);
+  });
+
+  it('反例：词元同时含单引号与双引号 → serializeSpec 抛错（文法不做转义,不可表示就响亮,不静默失真）', () => {
+    const ast = parseSpec(wrap('## 已批准命令\n- echo x\n')).ast;
+    ast.header.approved_commands = [['echo', `a"b'c`]];
+    expect(() => serializeSpec(ast, { lang: 'zh' })).toThrow(/单引号与双引号/);
+  });
+
+  it('反例：引号未闭合 → parse error（原静默收尾）', () => {
+    const { errors, ast } = parseSpec(wrap('## 已批准命令\n- echo "abc\n'));
+    expect(errors.some(e => e.kind === 'parse' && /未闭合/.test(e.message))).toBe(true);
+    expect(ast.header.approved_commands).toEqual([]);
+  });
+
+  it('反例：内联标签形 `已批准命令:` → parse error 指路 ## 段头（原被认成段,lang 转英文后清单静默蒸发）', () => {
+    const { errors, ast } = parseSpec(wrap('已批准命令: python3 -c\n'));
+    expect(errors.some(e => e.kind === 'parse' && /只认 '## 已批准命令' 段头形/.test(e.message))).toBe(true);
+    expect(ast.header.approved_commands).toBeUndefined();
+    // lang 转换不碰内联形——转完 parser 仍报同一个错,而不是变成一行静默散文
+    const en = convertSpecKeywords(wrap('已批准命令: python3 -c\n'), 'en');
+    expect(en).toContain('已批准命令: python3 -c');
+    expect(parseSpec(en).errors.some(e => /只认 '## 已批准命令' 段头形/.test(e.message))).toBe(true);
+  });
+
+  it('serializeSpec 回写位置：Config 之后、Steps 之前（与概念结构图同序;变异 k 重放:挪到 Config 前即红）', () => {
+    const src = '# Spec: A\nId: a\nGoal: g\n\n## Config\n- expansion_max: 5\n\n## 已批准命令\n- git status\n\n## Steps\n1. [reason] 想\n  + → o % text\n';
+    const out = serializeSpec(parseSpec(src).ast, { lang: 'zh' });
+    const iCfg = out.indexOf('## 配置'), iAp = out.indexOf('## 已批准命令'), iSteps = out.indexOf('## 步骤');
+    expect(iCfg).toBeGreaterThan(-1);
+    expect(iAp).toBeGreaterThan(iCfg);
+    expect(iSteps).toBeGreaterThan(iAp);
+  });
+
+  it('段头位置不设限：写在 Steps 之后同样被解析（设计原句"放 Steps 后 parser 不认"为假,已改）', () => {
+    const src = '# Spec: A\nId: a\nGoal: g\n\n## Steps\n1. [reason] 想\n  + → o % text\n\n## 已批准命令\n- git status\n';
+    const { ast, errors } = parseSpec(src);
+    expect(errors).toEqual([]);
+    expect(ast.header.approved_commands).toEqual([['git', 'status']]);
+    expect(ast.steps).toHaveLength(1);
+  });
+
+  it('lang 转换：段头随语言互转,条目行字节不动', () => {
+    const src = wrap('## Approved Commands\n- git status\n');
+    const zh = convertSpecKeywords(src, 'zh');
+    expect(zh).toContain('## 已批准命令\n- git status\n');
+    expect(convertSpecKeywords(zh, 'en')).toContain('## Approved Commands\n- git status\n');
   });
 });

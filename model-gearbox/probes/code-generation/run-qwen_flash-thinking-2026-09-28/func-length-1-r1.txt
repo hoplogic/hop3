@@ -1,0 +1,35 @@
+```python
+import ast
+import sys
+
+if len(sys.argv) < 2:
+    sys.exit(1)
+
+filename = sys.argv[1]
+
+try:
+    with open(filename, 'r', encoding='utf-8') as f:
+        content = f.read()
+except Exception:
+    sys.exit(1)
+
+try:
+    tree = ast.parse(content, filename=filename)
+except SyntaxError:
+    sys.exit(1)
+
+violations = []
+for node in ast.walk(tree):
+    if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+        lines = node.end_lineno - node.lineno + 1
+        if lines > 40:
+            violations.append((node.lineno, lines))
+
+for lineno, ignored in violations:
+    print(f"{lineno}: 函数长度超过40行")
+
+if violations:
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

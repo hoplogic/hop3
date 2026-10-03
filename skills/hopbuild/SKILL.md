@@ -1,17 +1,18 @@
 ---
 name: hopbuild
 description: >
+  由 /hop 分派调用（用户要把自然语言 skill 翻译成 HopSpec 时）；用户不直接调。
   把一个自然语言 skill 翻译成结构化的 HopSpec 规约（hopskill），
   执行纪律由 HopJIT 引擎结构化强制。
   Trigger: "把 skill 转成 spec", "生成 hopskill", "skill 转 hopspec",
   "translate skill to hopspec", "hopskill 构建", "/hopbuild".
-user_invocable: true
+user-invocable: false
 ---
 
 %% @trace
 	id: hopbuild-skill
 	type: intent
-	last_sync: 2026-09-15T19:29+0800
+	last_sync: 2026-10-01T15:45+0800
 	note: hopbuild v1 NL skill 形态（2026-08-25 作者定"把 /hopbuild 改成一个 NL skill"——自举形态退役:spec.md/expand-node.md 迁 docs/obsolete/hopbuild/,流程从引擎强制退回散文纪律,本文自足承载全流程;与 hopbuild2〔hopspec skill 形态,引擎强制〕构成同任务双形态对照,亦可作 hopbuild2 的翻译输入样本。2026-09-05 作者三拍定分工:本文=流程+宪法+核心常用知识+贯穿示例（通读自足,标准翻译零跳转）,高级不常用知识（生成模板全集/边角情形/语言面细则）归 hopbuild-primer.md 按需查阅。设计权威 docs/design/hopbuild.md ^anc-build-bootstrap（NL 回归条）+ ^anc-build-first-principles（宪法权威）+ ^anc-build-layout（分工契约）。
 %%
 
@@ -93,48 +94,48 @@ user_invocable: true
 Goal: 从本周工单记录生成分类周报,核对无误后交付主管
 
 Inputs:
-- tickets_path: line  # 工单记录 CSV 路径
+- tickets_path % line  # 工单记录 CSV 路径
 
 Outputs:
-- weekly_report: markdown  # 分类周报
+- weekly_report % markdown  # 分类周报
 
 Tools:
-- send_report(content) -> sent: line  # 发送周报给主管（外部发送服务,对齐门盘点定稿）
-  - content: text  # 要发送的周报全文
+- send_report(content) -> sent % line  # 发送周报给主管（外部发送服务,对齐门盘点定稿）
+  - content % text  # 要发送的周报全文
 
 ## Steps
 1. [act] 读入工单记录
   - ← tickets_path
-  + → tickets: [yaml]  # 工单列表,每条含类别字段
+  + → tickets % [yaml]  # 工单列表,每条含类别字段
   > 纯机械读取:
   > ```hop_python
   > tickets = parse_json(read(path: tickets_path))
   > ```
 
 2. [loop for-each t in tickets, collect item into items] 逐条分类整理
-  + → items: [yaml]  # 全部分类结果（引擎驱动游标,"一条不许漏"由结构保证）
+  + → items % [yaml]  # 全部分类结果（引擎驱动游标,"一条不许漏"由结构保证）
   2.1. [reason] 给一条工单分类并写摘要
     - ← t
-    + → item: yaml  # 本条的类别与摘要
+    + → item % yaml  # 本条的类别与摘要
     > 分类规则按注入判据执行: [[references/rules#分类规则]]
 
 3. [subtask retry=2] 成文并自查
-  + → weekly_report: markdown
+  + → weekly_report % markdown
   3.1. [act free] 按类汇总成周报草稿（草稿写 work_zone,修订用 edit_file 改点）
     - ← items
-    + → weekly_report: markdown
+    + → weekly_report % markdown
   3.2. [check final] 自查:数字与原始记录一致、每类都有小结
     - ← weekly_report, items
-    + → ok: bool  # 判定
-    + → note: text  # 检查不过时写清具体缺了什么——引擎重跑这一组时会把它注入给 3.1,照着定向修
+    + → ok % bool  # 判定
+    + → note % text  # 检查不过时写清具体缺了什么——引擎重跑这一组时会把它注入给 3.1,照着定向修
 
 4. [confirm require_human] 确认周报可发送
   - ← weekly_report
-  + → approved: bool
+  + → approved % bool
 
 5. [commit] 保存并发送
   - ← weekly_report, approved
-  + → sent: line
+  + → sent % line
   > 不可逆动作（前序 confirm 已放行）。命令序列写规约时已完全确定,执行时照跑即可,不需要任何现场判断:
   > ```hop_python
   > written = write(path: "report.md", content: weekly_report)
@@ -169,7 +170,7 @@ Tools:
 从原文抽头部契约并**呈给用户核查**，有修订意见就改了再呈，直到用户确认无误：
 
 - **goal**：一句话说清产出什么；
-- **inputs**：只收任务的业务输入（原文需要外部提供的数据，一个不漏、不添；执行设施不是业务输入）。**路径类输入按 workspace 相对形态收**——引擎沙箱禁止文件工具直接吃绝对路径，Inputs 若声明"某某目录的绝对路径"，产物真跑时第一步读文件就会被拒（deep-validate 三轮反复抓到的最高频部署缺口）。原文要求用户给外部目录的，正确形态是：输入说明写明"相对 workspace 的路径"，并在部署前提清单里写清"部署时把数据目录挂进 workspace 或以 workspace 为锚"；确实必须收绝对路径的（如系统固定位置），读写走 subprocess.run 命令通道（cat/cp，进白名单）不走内置文件工具；
+- **inputs**：只收任务的业务输入（原文需要外部提供的数据，一个不漏、不添；执行设施不是业务输入）。**路径类输入按 workspace 相对形态收**——引擎沙箱拒绝文件工具吃 workspace 外的绝对路径（落在 workspace 内的绝对路径可用，但外部目录才是这类输入的常见情形），Inputs 若声明"某某目录的绝对路径"而该目录不在 workspace 内，产物真跑时第一步读文件就会被拒（deep-validate 三轮反复抓到的最高频部署缺口）。原文要求用户给外部目录的，正确形态是：输入说明写明"相对 workspace 的路径"，并在部署前提清单里写清"部署时把数据目录挂进 workspace 或以 workspace 为锚"；确实必须收绝对路径的（如系统固定位置），读写走 subprocess.run 命令通道（cat/cp，进白名单）不走内置文件工具；
 - **outputs**：只放原文承诺的交付物（中间产物不进）；
 - **constraints**：翻原文的"必须/不可"条款；
 - **tools_available**：盘点产物能调什么——只登记真正的外部服务（搜索/发送/专有 API）。三类"假工具"不进清单：文件读写（hop_python 内置函数）、并行发射 agent（parallel 结构）、问人交互（ask/confirm 步骤）。拿不准的标"待确认"请用户在这一步裁定。**对齐定稿的工具面翻译成产物 spec 文件头的 Tools 段**——每工具一条签名行加逐参数子条目（`- 参数名: 类型  # 说明`，说明写到杜绝望词生义），复杂语义放 `>` 扩展行；引擎 init 会对环境注册面对账。

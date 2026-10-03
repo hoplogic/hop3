@@ -99,6 +99,37 @@ describe('anchor-audit scan.py 判据回归', () => {
     expect(yaml).toContain('owner: anc-rule-demo');
   });
 
+  // @v: anc-meta-card-ref-owner —— 整词判（todo/0125 条目 6：子串包含让 anc-x 被 anc-x-y 标注行误命中假绿）
+  it('反例：文件里只有 anc-step-demo-extra 的标注，卡引用行归属 anc-step-demo 必须报无效（前缀不算命中）', () => {
+    const yaml = runScan(python!,
+      [
+        '### anc-step-demo ✅',
+        '',
+        '演示',
+        '',
+        '- ast-types.ts `DemoStep` — @a: anc-step-demo',
+        '',
+      ].join('\n'),
+      { 'src/ast-types.ts': 'export interface DemoStep {} // @a: anc-step-demo-extra\n' },
+    );
+    expect(yaml).toContain('invalid_refs:');
+    expect(yaml).toMatch(/无归属锚点 anc-step-demo/);
+  });
+  it('正例：标注行多锚逗号段里含该 id（非首段、带尾注）仍判有效', () => {
+    const yaml = runScan(python!,
+      [
+        '### anc-step-demo ✅',
+        '',
+        '演示',
+        '',
+        '- ast-types.ts `DemoStep` — @a: anc-step-demo',
+        '',
+      ].join('\n'),
+      { 'src/ast-types.ts': 'export interface DemoStep {} // @a: anc-step-other, anc-step-demo — 说明文字\n' },
+    );
+    expect(yaml).not.toMatch(/无归属锚点 anc-step-demo\b/);
+  });
+
   // @v: anc-meta-card-ref-owner
   it('真缺锚点仍被抓出（防止归属逻辑把断链一起放过）', () => {
     // ast-types.ts 里没有 anc-step-demo 标注 → 必须报无效引用

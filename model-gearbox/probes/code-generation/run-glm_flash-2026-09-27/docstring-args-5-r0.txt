@@ -1,0 +1,86 @@
+```python
+import ast
+import re
+import sys
+
+
+def check_function(func_node, violations):
+    """Check one function definition against the rule."""
+    func_name = func_node.name
+    # Functions whose name starts with an underscore are exempt.
+    if func_name.startswith("_"):
+        return
+    # A docstring exists only when the first body statement is a string literal.
+    doc = None
+    try:
+        doc = ast.get_docstring(func_node, False)
+    except Exception:
+        doc = None
+    if not isinstance(doc, str):
+        violations.append((func_node.lineno, "function '" + func_name + "' has no docstring"))
+        return
+    arg_spec = func_node.args
+    param_names = []
+    for arg_node in arg_spec.posonlyargs:
+        param_names.append(arg_node.arg)
+    for arg_node in arg_spec.args:
+        param_names.append(arg_node.arg)
+    if arg_spec.vararg is not None:
+        param_names.append(arg_spec.vararg.arg)
+    for arg_node in arg_spec.kwonlyargs:
+        param_names.append(arg_node.arg)
+    if arg_spec.kwarg is not None:
+        param_names.append(arg_spec.kwarg.arg)
+    for param_name in param_names:
+        # Parameters named self or cls do not need to be mentioned.
+        if param_name == "self" or param_name == "cls":
+            continue
+        pattern = r"\b" + re.escape(param_name) + r"\b"
+        if re.search(pattern, doc) is None:
+            violations.append((func_node.lineno, "function '" + func_name + "' docstring does not mention parameter '" + param_name + "'"))
+
+
+def scan_node(node, violations):
+    """Visit statements; never enter function bodies (nested defs and local classes are exempt)."""
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, ast.FunctionDef) or isinstance(child, ast.AsyncFunctionDef):
+            check_function(child, violations)
+        else:
+            scan_node(child, violations)
+
+
+if len(sys.argv) < 2:
+    print("usage: python checker.py <path-to-python-file>")
+    sys.exit(1)
+
+path = sys.argv[1]
+
+content = ""
+try:
+    file_obj = open(path, "r", encoding="utf-8")
+    content = file_obj.read()
+    file_obj.close()
+except Exception:
+    print("error: cannot read file: " + str(path))
+    sys.exit(1)
+
+# Strip a leading byte-order mark if present so the file still parses.
+if content.startswith("\ufeff"):
+    content = content[1:]
+
+try:
+    tree = ast.parse(content)
+except Exception:
+    print("error: cannot parse file as Python source: " + str(path))
+    sys.exit(1)
+
+violations = []
+scan_node(tree, violations)
+
+if len(violations) > 0:
+    for item in sorted(violations):
+        print("line " + str(item[0]) + ": " + item[1])
+    sys.exit(1)
+
+sys.exit(0)
+```

@@ -1,0 +1,16 @@
+- round: 0
+  outcome: ran
+  public_pass: false
+  hidden_pass: false
+  hidden_failed:
+    - fanout.yaml(执行报错)
+    - no-orders.yaml(执行报错)
+    - orphan-null.yaml(执行报错)
+    - unpaid-only.yaml(执行报错)
+  crashed_files: 4
+- round: 1
+  outcome: ran
+  public_pass: true
+  hidden_pass: true
+  hidden_failed: []
+  crashed_files: 0

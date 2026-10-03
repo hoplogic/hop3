@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-09-09T00:18+0800
+	last_sync: 2026-09-27T20:38+0800
 	note: HopCLI 组件定义 + CLI 命令表 + CLI 响应类型。2026-07-31 收窄 Codex install-skill 展开契约：安装 main/agents/Codex references，仅复用公共 cli-discovery，不改变 CC 分支。
 %%
 
@@ -26,15 +26,16 @@
 | 定位（四要素） | 契约 | `anc-struct-hop-cli` |
 | 关键决策 | 决策 | — |
 | CLI 命令表 | 说明 | — |
-| 命令契约 | 契约 | `anc-cli-dispatch` / `anc-cli-instance-resolve` / `anc-cli-state-load` / `anc-cli-list` / `anc-cli-pack` / `anc-cli-install-skill` / `anc-cli-carrier-home-resolution` / `anc-cli-notify-reuse` / `anc-cli-abort` |
+| 命令契约 | 契约 | `anc-cli-dispatch` / `anc-cli-instance-resolve` / `anc-cli-state-load` / `anc-cli-list` / `anc-cli-pack` / `anc-cli-install-skill` / `anc-cli-install-skill-permission` / `anc-cli-install-skill-single-entry` / `anc-cli-hop-dispatch` / `anc-cli-carrier-home-resolution` / `anc-cli-notify-reuse` / `anc-cli-abort` / `anc-cli-schema-sep` |
 | CLI 响应类型 | 契约 | `anc-cli-response-types`（组标题）/ `anc-cli-init-response` / `anc-cli-validate-response` / `anc-cli-list-response` / `anc-cli-next-response` / `anc-cli-step-ready` / `anc-cli-execution-paused` / `anc-cli-command-response` / `anc-cli-vars-response` / `anc-cli-status-response` / `anc-cli-status-nested-pause` / `anc-cli-abort-response` / `anc-cli-replan-response` / `anc-cli-branch-request` |
 | JSON I/O 约定 | 契约 | `anc-cli-json-io` / `anc-cli-file-arg-safety` |
 | JSON 交互示例 | 说明 | — |
 
 ## 定位【契约】 ^anc-struct-hop-cli
 
-> **模块版本**：hop-cli `v0.33.0`（2026-09-25）。0.x 未承诺稳定。
-> - 本版=status 对网络暂停与嵌套串行调用子流程里的停点也报 paused,StatusResponse 新增可选字段 call_path（^anc-cli-status-nested-pause,todo/0105 作者拍甲案）；
+> **模块版本**：hop-cli `v0.35.1`（2026-10-01 工程链 review 修复：frontmatter 键名 user_invocable→user-invocable〔官方连字符,下划线自 8 月起空操作〕;放行判据显式枚举 cc/cfuse-cc 不借 carrierFamily〔opencode 被误写 CC 文件〕;放行七形态写全〔permissions 非对象/allow 非数组不写只 note〕;缺省注册条补自举三支与注册面失败两支;其他载体小节加 opencode 启用句;装载清单登 hop-ops.md;出口表登 ensureCcPermission;InstallSkillResponse 小节加锚;:225 旧句清）。上版 v0.35.0（同日）。本版 install-skill 三改（作者定"核心是通过安装和 /hop 完成对 coding agent 的教育,对用户尽可能傻瓜化"）：①缺省即注册 MCP server 并自举配置（原须 --mcp）;②CC 载体自动放行 `mcp__hopjit__run_approved_command`（写 `<cwd>/.claude/settings.local.json` permissions.allow,幂等）;③用户可见 skill 收敛为 `hop` 一个——hopspec/hopspec-mcp/hopbuild/hopbuild2/hopfix 仍装到盘上但 `user_invocable: false`,由 /hop 分派;InstallSkillResponse 加 permission_written/permission_note。上版 v0.34.0（2026-09-27）。0.x 未承诺稳定。
+> - 本版=新增 schema-sep 命令（把 spec 源文件里 HopSchema 名/类型分隔符从 `:` 原地迁移到 ` % ` 的工具,先备份、转换后三道校验不过就拒绝写回,todo/0109 第 2 步,^anc-cli-schema-sep）；
+> - 上版 v0.33.0=status 对网络暂停与嵌套串行调用子流程里的停点也报 paused,StatusResponse 新增可选字段 call_path（^anc-cli-status-nested-pause,todo/0105 作者拍甲案）；
 > - 上版 v0.32.0=init 新增 --child-instance（循环里的串行 call 子实例按轮次命名,子实例 ID 与步骤号分开传,hopissues/0098）；
 > - 上版 v0.31.0=init 的 --upstream-feedback 支持 @file（引擎拼给 driver 的命令里数据值一律走参数文件,hopissues/0097）；
 > - 上版 v0.30.0=PR#8 opencode 两契约行为（--mcp 注册缺省 enabled:false 防复用模式误调独立模式工具〔hopissues/0099〕+ hopbuild 族装 opencode 时 SKILL.md 副本 /hopspec run 改写为隐式触发〔hopissues/0101〕）+ 联审修复批；
@@ -69,6 +70,7 @@
 > 本表是 hop-cli 对外依赖面的封闭集，表外符号即内部实现。出口文件 = `cli-types.ts`（响应/请求 JSON 契约，是 driver 依赖的包级对外稳定面）。校验见 [[anchor-audit-knowledge#模块边界接口校验]]。
 > - `cli.ts` 是可执行入口薄壳，**但并非零导出**（原文"无被 import 的对外符号"与实况不符,2026-09-11 审计勘误）——实况四个测试面导出符号：
 >   - `program`（`export { program }`,src/cli.ts:1666,消费方=tests——tests/cli.test.ts:19 直接 import 用 `program.parseAsync` 进程内驱动命令）；
+>   - `ensureCcPermission`（2026-10-01,^anc-cli-install-skill-permission——CC 放行写入,面向测试可达性导出,当前测试经 program 路由）；
 >   - `bootstrapStandaloneConfig`/`readStandaloneCredentialNames`/`detectCcHopjitRegistration`（src/cli.ts:923/1010/1029,export 面在场,面向测试可达性导出;当前测试经 program 进程内路由间接覆盖,无静态 import 点）；
 > - 另有 resolveParam/assertOutputInWorkZone 等 CLI 参数处理 helper 同被 tests 直接 import——这些是测试可达面,不是跨模块业务出口,生产代码跨模块 import cli.ts 仍违规（guard-scripts 越层检查在案）。
 
@@ -173,7 +175,8 @@ trait：
 | `hopjit vars [--instance id]` | ExecutionEngine.get_vars | VarsResponse |
 | `hopjit resume [--instance id]` | ExecutionEngine.recover → completeAndAdvance | NextResponse |
 | `hopjit abort [--instance id] [--reason text]` | ExecutionEngine.abort（实例主动中止,契约 [[exec-engine#^anc-exec-abort]]:非终态→aborted 持久幂等/completed·failed 拒改写/aborted 后一切推进命令墓碑拒;加载走 load 保留现场） | AbortResponse |
-| `hopjit install-skill [--dir <目标>] [--carrier cc\|codex\|cfuse-cc\|cfuse-codex\|opencode] [--demo]` | 从包内 `driver/` 展开 skill 到目标——目标按 carrier 解析（`--dir` 覆盖；`cc`/`codex` 读官方环境变量 `CLAUDE_CONFIG_DIR`/`CODEX_HOME` 自动适配当前环境,`cfuse-cc`/`cfuse-codex` 固定 cfuse home,详见 ^anc-cli-carrier-home-resolution）；`--demo` 附装演示集（**demo 恒项目级**落 cwd `.agents/skills`）；Codex 旧项目级残留检测→`legacy_note`；不涉引擎状态 | InstallSkillResponse |
+| `hopjit install-skill [--dir <目标>] [--carrier cc\|codex\|cfuse-cc\|cfuse-codex\|opencode] [--demo] [--plus] [--mcp] [--force]` | 从包内 `driver/` 展开 skill 到目标（**缺省即注册 MCP server + 自举配置 + CC 放行 run_approved_command**,2026-10-01;`--mcp` 保留为显式别名）;用户可见 skill 只有 `hop`,其余五件装为内部件——目标按 carrier 解析（`--dir` 覆盖；`cc`/`codex` 读官方环境变量 `CLAUDE_CONFIG_DIR`/`CODEX_HOME` 自动适配当前环境,`cfuse-cc`/`cfuse-codex` 固定 cfuse home,详见 ^anc-cli-carrier-home-resolution）；`--demo` 附装演示集（**demo 恒项目级**落 cwd `.agents/skills`）；Codex 旧项目级残留检测→`legacy_note`；不涉引擎状态 | InstallSkillResponse |
+| `hopjit schema-sep <spec.md>` | parseSpec + convertSchemaSeparators + validateSpec（把 HopSchema 名/类型分隔符从 `:` 原地改成 ` % `,先备份;不创建实例、不调 Engine,契约见 ^anc-cli-schema-sep） | SchemaSepResponse |
 | `hopjit pack <spec.md> [--carrier cc\|codex\|cfuse-cc\|cfuse-codex\|opencode] [--dir <目标>] [--name <skill名>] [--assets <逗号分隔文件>] [--force]` | 把一个 hopskill spec 打包成载体对应的**独立具名 skill**（CC 系 `/skill`；Codex 系 `$skill`；`cfuse-*` 复用对应原生系的包装模板,仅目标 home 不同） | PackResponse |
 
 **`submit_and_fetch_next` 的互斥参数**（driver 主循环唯一应答命令，提交内容由参数区分）：
@@ -220,7 +223,7 @@ trait：
 - **opencode 载体（2026-09-15 加,见 todo/0089）**：opencode 是独立载体家族（非 CC/Codex 套壳）,home 用 XDG——`OPENCODE_CONFIG_DIR` 重定向 config 目录,缺席回落 `$XDG_CONFIG_HOME/opencode`（默认 `~/.config/opencode`,**不是** `~/.opencode`）。与 cfuse 的两点关键不同:
   - **driver 源=driver/opencode/ 自有内容层**（2026-09-19 改判,原'复用 CC 不新写'废）：skill 展开走 opencode 专属分支装 `driver/opencode/` 原语适配版（权威 [[opencode-driver-carrier#^anc-driver-opencode-primitive-map]]）。
     - 改判缘起：作者抓'opencode 完全复用 cc 的?'——发现层兼容（`<name>/SKILL.md`+frontmatter 同构,opencode 甚至主动兼容 `~/.claude/skills/`）**不等于**执行层可用,CC 正文 30 处 CC 专属原语（AskUserQuestion/driver subagent/task-notification）对 opencode 无协议保证,真机能通靠模型自由发挥；
-    - hopbuild 族照旧共装;**hop 件不装**（CC 机制深绑定,carrier_note 明示——待真实需求适配）;`carrierFamily('opencode')='cc'` 仅余 demo/pack 包装模板选型语义。
+    - hopbuild 族照旧共装;hop 件照装（2026-09-20 作者撤销"不装",见 [[opencode-driver-carrier#^anc-driver-opencode-install-layout]];本句 2026-10-01 review 随 :310 六件全装条款清旧文）;`carrierFamily('opencode')='cc'` 仅余 demo/pack 包装模板选型语义——放行判据不得借它。
   - **MCP 注册与 LLM 自举形态不同,须单独分支**:opencode 把所有配置（含 MCP）集中在 opencode 配置文件（`opencode.jsonc`/`opencode.json`/`config.json`,opencode 加载 deep-merge 三者、`.jsonc` 优先;非 TOML/YAML）,无独立 `.mcp.json`。
     - hoplogic3 跟随 opencode 配置管理——写 `opencode.jsonc`（opencode 标准,globalConfigFile candidates[0]）,用 jsonc-parser 保留注释（opencode 同款 modify/applyEdits）;检测 candidates `[opencode.jsonc, opencode.json, config.json]` 查 mcp.hopjit;坏 JSON best-effort 不阻断；
     - MCP 条目 `mcp.<name> = { type:"local", command:[...], environment:{...} }`（`command` 是 command+args 合并的数组、`type` 必填、env 字段叫 `environment` 非 `env`）；
@@ -254,6 +257,7 @@ trait：
   - `driver/references/` → `<目标>/hopspec/references/`（**随 skill 拷贝**，使 skill 自包含，不依赖 `<PKG>` 探测能否回指 node_modules——用户可能只装 skill 未装包，或全局装路径探测失败）。
     - 拷贝后 skill 内 `<PKG>/driver/references/` 引用由自举探测解析：探到包→引包内；探不到→引 `.claude/skills/hopspec/references/` 本地副本作兜底；
     - references/ 是受管目录，`--force` 时清除源里已不存在的残留 `.md`（条款见下方 Codex 段"受管目录清理"——两载体同一契约）。
+  - 三载体 `hop` 件都附装 `driver/<载体>/hop-references/hop-ops.md`（CC 源在 `driver/hop-references/`）→ `<目标>/hop/references/hop-ops.md`——运维规则按需读件,[[#^anc-cli-hop-dispatch]];
   - `--carrier codex`：按 [[codex-driver-carrier#^anc-driver-codex-install-layout]] 展开**按 agent 主体拆分**的 Codex skill：
     - `driver/codex/SKILL.md` → `<目标>/.agents/skills/hopspec/SKILL.md`
     - `driver/codex/agents/` → `<目标>/.agents/skills/hopspec/agents/`
@@ -269,7 +273,9 @@ trait：
       - ① AGENTS.md 是用户的项目级常驻指令（等位 CC 的 CLAUDE.md），驱动指令只是一个可选能力，占顶层身份即鸠占鹊巢，且与用户已有 AGENTS.md 冲突不可调和（跳过=装不上，--force=毁用户文件）；
       - ② AGENTS.md 每会话全文常驻（32 KiB 硬限），驱动指令常驻浪费用户注意力预算；
       - ③ Codex 官方明确"可复用 workflow 属 Skills 不属 AGENTS.md"，skills 描述常驻、正文按需加载（渐进式），且支持隐式触发（按 SKILL.md frontmatter description 匹配任务）。
-- **`--mcp`：装 MCP 变体壳并同步注册 MCP server（2026-08-16 作者定——模式选定装配时化,见 [[codex-driver-carrier#^anc-driver-codex-standalone-dispatch]]）**：
+- **MCP server 注册与配置自举——缺省即做（2026-10-01 作者定"缺省安装 mcp"：装完就能用,不另要 flag;`--mcp` 保留为显式别名,带不带行为相同。此前 2026-08-16 作者定"模式选定装配时化"时为显式 flag,见 [[codex-driver-carrier#^anc-driver-codex-standalone-dispatch]]）**。自举失败（学不到模型/凭证）只留 note 不阻断 skill 安装——server 要到有 providers 配置才起得来,这是 run_approved_command 可达的前提,note 要把这一点说出来：
+  - **自举三支**：学到模型/凭证→写 `~/.hopjit/config.yaml`,`mcp_config_bootstrapped`=路径;学不到→不写,`mcp_config_note` 说明学习源缺什么;学不到**且**系统级 `~/.hopjit/config.yaml` 不在→note 末尾追一句"没有 providers 配置时 hopjit MCP server 起不来,run_approved_command 要等配置就位才可用"（server 起不来的真实后果,不藏）。自举抛异常同第二支处理（note 带异常文字）。
+  - **注册面失败两支（2026-10-01 review 补——规则原只在代码注释）**：用户配置文件损坏（CC `.mcp.json` 坏 JSON 等,报文前缀 `INSTALL_SKILL_ERROR:`）→仍响亮退出,不静默覆盖用户文件（既有契约）;环境性失败（家目录不可写/路径受限等其余异常）→降为 `mcp_note` 不阻断 skill 安装——skill 装好了但 MCP 工具不可达,note 指路"修复后重跑 install-skill 即补注册"。
   - 壳：CC 装 `driver/hopspec-skill-mcp.md` → `<目标>/hopspec-mcp/SKILL.md`（双名双壳恒装,不同名并存、名字即模式——与复用变体 `hopspec/` 各居其位;原文"同名互斥同位"系 2026-08-27 四改前旧口径,同文档 §install-skill 现行条款已按双名双壳改定,本句 2026-09-12 0088 批清同文档残句）；Codex 装 `driver/codex/SKILL-mcp.md`；两变体共享 `references/discovery.md`（§0 spec 定位与参数组装是模式无关的人机前置）；
   - 注册：CC 合并写 `<cwd>/.mcp.json` 的 `mcpServers.hopjit = {command: "hopjit-mcp"}`（JSON 合并保留其他 server;项目作用域——.mcp.json 是 CC 项目级注册位）。
     - **CC 跨 scope 已注册感知（2026-08-20 实撞立——开发库 local 级注册在场时 install 又写 project 级,CC 报同名多 scope 冲突诊断且新注册被窄 scope 盖住）**：写 .mcp.json 前先查 `<CC home>/.claude.json`（home 按 ^anc-cli-carrier-home-resolution 解析,原生=`~/.claude.json`）。
@@ -298,8 +304,15 @@ trait：
   |---|---|---|---|
   | `demo-coffee-week` | `examples/coffee-week.md` | `coffee-sales.json` | 入门：ask 确认 + act 纯计算 + reason 判断 + check 核验 |
   | `demo-fact-check` | `examples/fact-check-demo.md` | `fact-check-sample.md` | 实战：for-each 并行核查一级事实（fact-check 完整版的适度简化——只核可直接查证的事实断言，不做推演审查/自查回路） |
-  | `demo-rename` | `examples/syntax/confirm-commit.md` | — | 探索提交分离：批量重命名——act 探索 → confirm 人审 → commit 不可逆（幂等设计；教程 03 主角） |
+  | `demo-rename` | `examples/syntax/confirm-commit.md` | — | 探索-核验-提交：批量重命名——act 探索 → confirm 人审 → commit 不可逆（幂等设计；教程 03 主角） |
   CC 入口 `/demo-*`，Codex 入口 `$demo-*`（也可经 `/skills` 选择）。均依赖同载体 hopspec driver，不复制驱动协议。默认不装：demo 不该未经请求占用户的 skills 目录。InstallSkillResponse 的 `installed` 含各 demo 路径；任一 demo 安装失败记 note 不中断其余。
+- **CC 载体自动放行 `mcp__hopjit__run_approved_command`（2026-10-01 作者定,hopissues/0114 零弹窗半边的安装侧）** ^anc-cli-install-skill-permission：Claude Code 对每个 MCP 工具的调用缺省弹窗确认,它只认工具名、看不见命令内容——放行这一个工具名=撤掉这层空闸,把"这条命令能不能跑"的判定全部交给 hopjit 的任务卡闸（[[mcp-server#^anc-mcp-run-command]]）。
+  - 落点：`<cwd>/.claude/settings.local.json` 的 `permissions.allow` 数组追加字符串 `mcp__hopjit__run_approved_command`（工具全名=`mcp__<server 注册名>__<工具名>`,server 注册名三载体恒 `hopjit`）。项目级 local 文件（不进 git）——与 `.mcp.json` 同为项目作用域。
+  - 幂等与不覆盖（七形态,2026-10-01 review 从四补全——'不覆盖用户配置'要在每一支成立）：①文件不存在→新建 `{ "permissions": { "allow": [...] } }`;②存在且已含该串→不动;③存在不含→追加（保留其他条目与其他键）;④不是合法 JSON→不写,`permission_note` 说明路径与"请修复后重跑";⑤顶层不是对象（null/数组/标量）→不写只 note;⑥`permissions` 存在但不是对象→不写只 note;⑦`permissions.allow` 存在但不是数组→不写只 note（⑥⑦首版静默替换成 `{}`/`[]` 后写盘,覆盖了用户原值——review 面二/面三实抓）;⑧写入时环境性失败（目录只读等）→不抛,`permission_note` 带原因与手动修法（与注册面同律——review 补测试时实抓:注册面 catch 住了,放行这里再抛仍炸整条安装）。只加这一个精确工具名,不加任何 Bash 规则、不动 deny。
+  - 其他载体（判据=显式枚举 `carrier === 'cc' || carrier === 'cfuse-cc'`,**不借 `carrierFamily`**——那个函数把 opencode 也归 'cc' 系,只是包装模板选型语义,首版误用致 opencode 被写了 CC 文件,review 面二实抓）：Codex 与 opencode 都有按 `<server>_<tool>` 粒度的放行配置,但公开文档未给出完整工具名规范——本器不猜格式,`permission_note` 输出一行指路"请在载体里放行 hopjit 的 run_approved_command 工具"。**opencode 另加一句"并把 mcp.hopjit.enabled 改为 true"**——opencode 注册缺省 `enabled:false`（既有决策,见上 opencode 载体条款：防复用模式 LLM 误调 start_run）,server 不启动工具不注入,run_approved_command 在 opencode 上要用户显式启用后才可达;缺省要不要改 true 归作者（todo/0134）。
+  - 响应：`permission_written`（写入的文件路径;跳过/非 CC 时 null）+ `permission_note`。
+- **用户可见 skill 收敛为 `hop` 一个（2026-10-01 作者定——"现在安装时会装好几个 hop 家族的 skill,也要考虑避免 coding agent 的认知混乱"）** ^anc-cli-install-skill-single-entry：六件仍全部装到盘上（清单与路径不变）,但只有 `hop/SKILL.md` 保持 `user-invocable: true`（三载体源都显式写,不靠缺省）;`hopspec`/`hopspec-mcp`/`hopbuild`/`hopbuild2`/`hopfix` 五件 frontmatter 改 `user-invocable: false`（**连字符**——Claude Code 官方 frontmatter 键名,未识别的键静默忽略;本库自 2026-08 起写的下划线 `user_invocable` 一直是空操作,2026-10-01 review 面四对官方表实锤后全库改正）。Claude Code 对该字段的语义：不出现在用户的 `/` 菜单,模型仍可按 description 调用,description 仍进上下文（官方 skills 文档"Control who invokes a skill"）。/hop 的分派节决定什么情况走哪件（[[#^anc-cli-hop-dispatch]]）。Codex/opencode 载体同改 frontmatter（载体不认该字段时无害）。缺省件铁律不变：零配置可跑;`--plus` 件仍是显式附装。
+
 - **`--plus`：附装进阶研究件并自动落位工具配置（2026-08-30 作者定"install-skill --plus 这样比较简单的"——进阶件不进缺省〔缺省件铁律=零配置可跑,这两件依赖外部工具注册,不配即死;deep-research 另有费用时长面〕,但值得一开关到位）** ^anc-cli-install-skill-plus：带 `--plus` 时做三件：
   1. **装 plus 集**（carrier-aware pack,与 --demo 同机制;名字即 spec Id 不加前缀——这两件本就带 hop- 前缀命名空间）：
   | skill 名 | 源 spec | 资产 | 是什么 |
@@ -319,10 +332,22 @@ trait：
   - **扫描面**：①当前 carrier 的历史装载位置（Codex 族=`~/.agents/skills/`——"demo 恒项目级"口径〔2026-08-27〕之前的历史用户级装载点,0096 事故病灶;CC 族=`~/.claude/skills/` 下的 demo 件——demo 改恒项目级前的旧装）;②cwd 项目级 demo 位置。**只读扫描**——翻用户主目录的敏感性在"改"不在"看",本条恒只读;
   - **认领判据**：目录下 SKILL.md 含本安装器版本戳（`driver: @hoplogic/hopjit`）才认——不是本器写的文件零打扰;版本戳的版本号落后当前包版本、或 spec.md 无 `engine_min_version` 指纹（0093 前的旧产物）,即判陈旧;
   - **提示内容=升级命令按对象分流**：引擎自带件（demo/驱动 skill）→ 指路 `hopjit install-skill --carrier <c> --demo --force`（对现行装载位置刷新）**并点名旧位置文件已不受 --force 管辖、附具体路径供用户自行处置**;用户自建 spec 产物 → 指路 `/hopfix`（0093 版本迁移正门——validate error 清单为工单的定向修正,不是简单覆盖）。响应字段 `stale_notes: [line]`（可选,零发现缺席）。
-- **输出 InstallSkillResponse**：`{ status:'ok', carrier, driver_version, driver_source, installed: [路径…], target }`；`--mcp` 时另带 `mcp_registered`/`mcp_note`/`mcp_config_bootstrapped`/`mcp_config_note`（配置自举明示——学了什么模型/端点/凭证名,或未学习原因）；`stale_notes`（可选——陈旧副本提示,见上条）；失败 `{ status:'error', message }`。
+- **输出 InstallSkillResponse**：`{ status:'ok', carrier, driver_version, driver_source, installed: [路径…], target }`；恒带 `mcp_registered`/`mcp_config_bootstrapped`（2026-10-01 起缺省注册,可为 null）与 `permission_written`,另按情况带 `mcp_note`/`mcp_config_note`/`permission_note`（配置自举明示——学了什么模型/端点/凭证名,或未学习原因）；`stale_notes`（可选——陈旧副本提示,见上条）；失败 `{ status:'error', message }`。
 - **为何随包发 driver 是前提**：install-skill 从 `node_modules/@hoplogic/hopjit/driver/` 读源——`files` 白名单必含 `driver/`（已含）。
-- **入门 examples 随包（2026-08-04 作者定；2026-08-05 收平路径——作者指出别让新手多敲字）**：入门四件（`data-quality.md`+`doc-review.md`+`demo-data.json`+`GETTING-STARTED.md`）直接放 `examples/` 根随包（files 白名单按文件挑）。全量 22 个 spec 仍只在仓库。
+- **入门 examples 随包（2026-08-04 作者定；2026-08-05 收平路径——作者指出别让新手多敲字）**：入门四件（`data-quality.md`+`doc-review.md`+`demo-data.json`+`GETTING-STARTED.md`）直接放 `examples/` 根随包（files 白名单按文件挑）。全量 22 个 spec 仍只在仓库。 **用户面文档随包（2026-10-02 作者三轮定口径）**：入口五件 + 概念层 15 份 + 教程用户系列 14 份 + D10 共 35 份**逐文件**进 files 白名单（不进整目录;ARCHITECTURE/D 系列/工程实现链/设计层/追溯表/Doctree/i18n 不进）,且进包的是 prepack 清洗后的发布件、postpack 恢复源——清单权威 `scripts/pkgdocs-manifest.json`,规则权威 [[release-engineering#^anc-release-tarball-self-contained]]，本条只记装载面事实。
   - **仓库路径与包内路径同形**——新手命令恒为 `run examples/data-quality.md`，无论 clone 仓库还是纯 npm 全局装都一次命中（getting-started 子目录曾致命令变长+两处路径不同形，已废）。
+
+**`/hop` 分派规则（driver 面契约,2026-10-01 作者定——用户可见入口收敛后 hop 要替用户选路）** ^anc-cli-hop-dispatch：/hop 进来先判用户给的是什么,五条路,拿不准问一句不猜：
+
+| 用户给的 | 走 | 说明 |
+|---|---|---|
+| 一句话能答完、不需要留痕的 | 直接答,不进 hop | hop 不劫持对话 |
+| 复杂的、需要可控可靠保障的活（多步/要进度/要核验/要可续） | 升格为任务卡,引擎管进度与把关 | hop 的主路（driver/hop-skill.md §1 起） |
+| 一份现成的 HopSpec 文件 | 按 `hopspec` skill 协议直接跑,不升格 | 参数确认/介入点/终态呈现归 hopspec 协议;`/hop list` 不列它 |
+| 构建/翻译/修订 HopSpec | 翻译→`hopbuild`;改几处→`hopfix`;`hopbuild2` 仅用户点名时 | hopbuild2 是实验件,不按模型能力自动选（留卡） |
+| 用户明说"走 MCP / standalone" | 按 `hopspec-mcp` skill 协议 | 另一种运行形态,server 进程自跑,本对话只启动与介入 |
+
+**运维场景的特殊规则按需加载**（作者定"针对运维场景下的特殊规则,普通人用不上,要考虑如何触发"）：机器分级（测试机整机放行/生产机只读进 act、变更进 commit）、按机器写 `## 已批准命令` 前缀等规则放包内 `driver/hop-references/hop-ops.md`（三载体各一份,装到 `<目标>/hop/references/hop-ops.md`——不放 driver/references/ 是因为那个目录整体拷进 hopspec/references/）,主线只留一句触发指引——活涉及 ssh/远端机器/多台环境,或项目 `hopjit.yaml` 有 `environments:` 段（本批只是 agent 读的约定,引擎不解析;配置加载对未知顶层键不拒——core 配置只对 resource_limits 内部键做未知拒）时才读。普通人永远不碰到这一段。
 
 **`hopjit pack` 契约** ^anc-cli-pack：把一个 hopskill spec 打包成**独立具名 skill**——用户视角是"装了一个叫 doc-review 的能力"，HopSpec/hopjit/通用 driver 全部成为实现细节。用户要的是具名能力，spec 是能力实现。
 
@@ -435,18 +460,18 @@ trait: CliNotifyReuse
 struct: EngineSnapshotNotifyExt    # StateFile 新字段（代码实况落 src/runtime-types.ts StateFile.notify_channel:105——快照经 EngineSnapshot.state 携带同一字段持久化,等价;terminal_state 同款可选形态。struct 名保留历史命名,字段归属以本注为准）
   Id: engine-snapshot-notify-ext
   Fields:
-    - notify_channel: line     # 可选,缺省缺席=不通知——run --notify <渠道> 置渠道名持久（现枚举只 dingtalk）,load 恢复;子实例不继承（通知归顶层 run,worker 不发）
+    - notify_channel % line     # 可选,缺省缺席=不通知——run --notify <渠道> 置渠道名持久（现枚举只 dingtalk）,load 恢复;子实例不继承（通知归顶层 run,worker 不发）
 
 struct: RunCardInput               # composeRunCard 入参（两挂点共用的数据面）
   Id: run-card-input
   Fields:
-    - spec_title: line       # 卡片名（人读的"这活叫什么"——恒取 spec 标题,不用文件名）
-    - state: line            # completed | failed | paused（徽记三态映射 ✅/❌/⏸️）
-    - completed_steps: int   # 进度分子
-    - total_steps: int       # 进度分母
-    - current_step: line     # 可选,当前步/失败步
-    - paused_question: text  # 可选,停点问题摘要（paused 卡片正文）
-    - run_id_tail: line      # 实例 id 尾段（多 run 并存对号）
+    - spec_title % line       # 卡片名（人读的"这活叫什么"——恒取 spec 标题,不用文件名）
+    - state % line            # completed | failed | paused（徽记三态映射 ✅/❌/⏸️）
+    - completed_steps % int   # 进度分子
+    - total_steps % int       # 进度分母
+    - current_step % line     # 可选,当前步/失败步
+    - paused_question % text  # 可选,停点问题摘要（paused 卡片正文）
+    - run_id_tail % line      # 实例 id 尾段（多 run 并存对号）
 # 返回 {title: line, text: markdown}——text 是 markdown 卡片正文,喂 sendDingtalk
 ```
 
@@ -473,6 +498,74 @@ driver 接线口径：用户话语点名钉钉渠道（"跑完钉钉通知我/�
 - `hopjit tool-call`（通道⑥,[[tool-channels#^anc-exec-tool-channels]]）是**给复用模式 driver 的机器通道**——caller agent 在 act free 执行期按 L4 清单调引擎内建工具,引擎实现是唯一语义源,driver 不用 Bash 模仿；
 - 判据一句话:命令的预期使用者是人=违反本条;是 driver 按清单指引的机器调用=通道⑥职权。tool-call 因此是复用模式的工具标准出口,不是本条的翻案。
 
+**`hopjit schema-sep <spec>` 契约（HopSchema 分隔符迁移工具）** ^anc-cli-schema-sep
+
+来由：作者 2026-09-22 定"`%` 是正式 HopSchema 语法，`:` 将成为 deprecated"。parser 已双文法并收、用 `:` 的 spec 会收到 W2 告警（[[spec-parser#^anc-rule-schema-sep-dual]]）；本命令是 todo/0109 第 2 步，给作者一个一键把整份 spec 迁到 `%` 的工具。形态仿 `hopjit lang`（[[i18n#^anc-i18n-language-config]] 转换工具条款）：先备份，再行级手术原地改写，转换引病就拒绝写回。
+
+**命名**：`schema-sep`——与 `lang` 同为"短名词直指改写对象"的风格：schema 指 HopSchema，sep 指 separator（分隔符），合起来就是"HopSchema 分隔符"，不看文档也能猜到改的是什么。不带 `--to` 参数：迁移方向是单向的（`:` 到 `%`），`%` 转回 `:` 没有合法用途（`:` 正在走向废弃），做成双向只会多一个没人该用的开关。
+
+**与薄壳分层契约的关系**：本命令同 validate / list / lang 一样是纯文本工具命令，不创建实例、不调任何 Engine 方法，只调 parser 与 validator 的出口函数——"一命令一 Engine 方法"（^anc-cli-dispatch）约束的是实例命令，本命令不在其列。
+
+**能力契约（HopTrait）**：
+
+```
+trait: CliSchemaSeparatorMigrate
+  Id: cli-schema-separator-migrate
+  Inputs:
+  - spec % line          # spec 文件路径（相对 cwd 或绝对）
+  Constraints:
+  - 改写面只有 HopSchema 名/类型分隔符：由 convertSchemaSeparators 执行（识别面=parser 的 colon_separators 记录，
+    见 [[spec-parser#^anc-rule-schema-sep-convert]]），变量名、类型原文、# 说明、> 指令文字、hop_python body、
+    围栏内内容、Config 段、call 映射、段头标签一律逐字节不动
+  - 写回前在内存里做三道核对，任一不过就拒绝写回、以非 0 退出：原件一个字节不动、不产生备份文件：
+    ① 转换后 parse 错误数加 validate error 数，与转换前相比不许增加（转换前已有的错误不算转换的锅——同 lang 的基线对照律）；
+    ② 语义不变，分两半核：
+       ②a 转换前后两份 AST 剥掉 source_location、colon_separators、narrative_sections 后必须逐字段相等
+           （narrative_sections 是内容章节的原文字节收集——声明区写在非关键字 ## 节下时〔如 hop-fact-check 的
+           ## 任务〕，节原文里就含声明行，随分隔符改动而变是预期内的，所以不参与 AST 比对，由 ②b 在字节层兜住）；
+       ②b 逐行比对原件与转换产物：有差异的行必须恰好是转换前 parse 记录的冒号分隔符行（行数也不许变）——
+           不信转换函数自报的改动清单，用 parser 记录独立核对；
+    ③ 转换函数报告的 unmatched_lines 必须为空，且转换后 re-parse 的 colon_separators 必须为空（有该改没改成的行=转换不完整）
+    拒绝报文说清是哪道核对没过、前后各是多少、涉及哪些行号，并提示"原件未动、无备份产生，请把这份 spec 附到 hopissues 报告"
+  - 零改动（文件里已经没有用 : 的分隔符）→ 返回 changed_lines=0、backup=null，不写文件不产生备份
+  - 有改动 → 先写备份 <原文件名>.bak.<时间戳>（同目录；时间戳=UTC 年月日时分秒 14 位；同名已存在加 .2/.3 序号，不覆盖旧备份），
+    再原地写回转换产物
+  - 输出走 JSON 单行（^anc-cli-json-io）；拒绝走 errorExit（stderr + 退出码 1）
+```
+
+**类型约定（HopType）**：
+
+```
+struct: SchemaSepResponse          # hopjit schema-sep 成功时的 stdout JSON
+  Id: schema-sep-response
+  Fields:
+    - status % line            # 恒为 ok（拒绝走 errorExit，不产生本结构）
+    - changed_lines % int      # 改写了几行（零改动时为 0）
+    - backup % line            # 备份文件的绝对路径；零改动时为 null
+    - note % line              # 可选，仅零改动时出现，说明"没有用冒号的分隔符，零改动零备份"
+```
+
+**关键逻辑（HopSop）**：
+
+```
+schema-sep(spec):
+1. [act] original = 读文件全文；before = parseSpec(original)
+2. [act] beforeErrs = before 的 parse 错误数（非零时）或 validateSpec(before.ast) 的 error 数
+3. [act] {text: converted, changed_lines, unmatched_lines} = convertSchemaSeparators(original)
+4. [act] after = parseSpec(converted)；afterErrs 同第 2 步口径
+5. [条件(afterErrs > beforeErrs)] errorExit（核对①：报前后错误数）
+6. [条件(两份 AST 剥 source_location、colon_separators、narrative_sections 后不等
+        或 行数变了 或 有差异的行集合 ≠ before 记录的冒号分隔符行集合)] errorExit（核对②）
+7. [条件(unmatched_lines 非空 或 after.ast.header.colon_separators 非空)] errorExit（核对③：报行号）
+8. [条件(converted === original)] 输出 {status: ok, changed_lines: 0, backup: null, note}，结束
+9. [act] 写备份（时间戳命名，撞名加序号）→ 写回 converted → 输出 {status: ok, changed_lines, backup}
+```
+
+测试正反例（tests/cli.test.ts，@v: anc-cli-schema-sep）：
+- 正例：拿 examples/hop-fact-check.md（含 Types、Tools、hop_python body、围栏 YAML 示例，裸键段头形态）拷到 os.tmpdir() 并在步骤段前补一段 Config，跑命令——所有用冒号的分隔符行都换成 ` % `，其余每一行逐字节不变，备份文件在场且内容等于原件，转换后 validate 零 error 且零 W2；再跑一次零改动零备份；
+- 反例：正确的转换函数造不出"转换引病"的输入，测试用 vi.mock 对 parser 模块做透传包装——convertSchemaSeparators 平时调真实现，拒绝用例里单次换成会改坏文件的桩（ESM 的具名导入是只读绑定，vi.spyOn 换不掉 cli.ts 已绑定的那个函数，所以走 vi.mock）；
+- 每道核对各一个反例：①桩删掉标题与 Id 行使错误数上升；②a 桩改了 Outputs 的说明；②b 桩在真转换之外改了一行 HTML 注释（AST 不变，只有字节层能抓）；③桩什么都不改却报成功。命令都拒绝写回、退出码 1、报文点名是哪道核对、原件不动、零备份。
+
 **实现**：TypeScript（代码侧），文件 `src/cli.ts`（commander.js）。
 
 ---
@@ -488,15 +581,15 @@ driver 接线口径：用户话语点名钉钉渠道（"跑完钉钉通知我/�
 struct: InitSuccess
   Id: init-success
   Fields:
-    - status: line           # 恒为 'ok'
-    - instance_id: line      # 新建实例 ID
-    - warnings: [SpecError]  # 可选。warn 级校验结果（不阻断 init，但透传供作者修复）
+    - status % line           # 恒为 'ok'
+    - instance_id % line      # 新建实例 ID
+    - warnings % [SpecError]  # 可选。warn 级校验结果（不阻断 init，但透传供作者修复）
 
 struct: InitError
   Id: init-error
   Fields:
-    - status: line         # 恒为 'error'
-    - errors: [SpecError]  # ParseError 或 ValidationError（仅 error 级）
+    - status % line         # 恒为 'error'
+    - errors % [SpecError]  # ParseError 或 ValidationError（仅 error 级）
 ```
 
 （TS 形态是代码层投影，在 src/cli-types.ts——设计以本 HopType 为准。）
@@ -517,9 +610,9 @@ init 跑完整校验：**error 级阻断**（不创建实例、不写状态目�
 struct: ValidateResponse
   Id: validate-response
   Fields:
-    - status: line           # 'ok' 或 'error'——error = 存在 error 级违规（spec 不可执行）；ok = 无 error（可能有 warn）
-    - errors: [SpecError]    # error 级违规（空 = 结构合法）
-    - warnings: [SpecError]  # warn 级违规（建议修复）
+    - status % line           # 'ok' 或 'error'——error = 存在 error 级违规（spec 不可执行）；ok = 无 error（可能有 warn）
+    - errors % [SpecError]    # error 级违规（空 = 结构合法）
+    - warnings % [SpecError]  # warn 级违规（建议修复）
 ```
 
 `validate` 与 init 共用同一套校验规则（规则集权威与条数归 [[spec-parser]]——本处不复记具体数字,历史上此处写死"35 条"后随批加规则失配），区别在于：validate 只读（不创建实例、不写状态）、且 error 与 warn **全集返回**（不阻断——它本就是给作者看的检查报告）。纯结构校验，不需要 params。
@@ -530,39 +623,41 @@ struct: ValidateResponse
 struct: ListResponse
   Id: list-response
   Fields:
-    - status: line   # 恒为 'ok'
-    - dir: line      # 被扫描的目录
-    - specs: [yaml]  # 每项 { file: 文件名（非全路径）、id: ast.header.id（缺省用 title）、goal: Goal 首句 }；按文件名稳定排序，排序偏好（recent 优先）由 skill 决定。可执行判定规则见 [[hop-cli#^anc-cli-list]]
+    - status % line   # 恒为 'ok'
+    - dir % line      # 被扫描的目录
+    - specs % [yaml]  # 每项 { file: 文件名（非全路径）、id: ast.header.id（缺省用 title）、goal: Goal 首句 }；按文件名稳定排序，排序偏好（recent 优先）由 skill 决定。可执行判定规则见 [[hop-cli#^anc-cli-list]]
 ```
 
 `list` 对目录内每个 `.md` 做 `parseSpec` 后判定可执行 spec（goal 非空 + steps 非空 + 排除设计文档），解析失败的跳过。无状态纯函数（同 dir → 同输出），便于测试与跨 runtime 复用。recent-dirs LRU 与首次目录交互留 skill，引擎不假设 `.hopspec/` 布局。
 
-### InstallSkillResponse（hopjit install-skill）
+### InstallSkillResponse（hopjit install-skill） ^anc-cli-install-skill-response
 
 ```
 struct: InstallSkillResponse
   Id: install-skill-response
   Fields:
-    - status: line                    # 'ok' 或 'error'
-    - carrier: line                   # 本次安装的载体（cc/codex/cfuse-cc/cfuse-codex）
-    - driver_version: line            # 包 package.json version（装的是哪个版本）
-    - driver_source: line             # 包根绝对路径（从哪个源装的）
-    - target: line                    # 展开目标 skills 目录
-    - installed: [line]               # 本次写入的文件/目录路径清单（含 demo/plus 附装项与"旧名残留已清理"记录）
-    - removed: [line]                 # 可选。受管目录清理实删项（--force 档才出现）
-    - demo_note: line                 # 可选。--demo 附装说明（已存在跳过/某 demo 安装失败）
-    - plus_note: line                 # 可选。--plus 附装说明（含剩余人工动作提示）
-    - plus_tools_merged: [line]       # 可选。--plus 合并进 config.yaml 的 tool server 名列表
-    - legacy_note: line               # 可选。Codex 旧项目级残留检测提示
-    - stale_notes: [line]             # 可选。陈旧副本新鲜度提示（^anc-cli-stale-skill-scan——旧位置本器产物版本落后/缺指纹,携升级路径,零发现缺席）
-    - mcp_registered: line            # 可选(--mcp 时恒带,可为 null)。写入的注册配置路径,跳过时 null
-    - mcp_note: line                  # 可选。注册跳过原因（已有条目/scope 冲突指路）
-    - mcp_config_bootstrapped: line   # 可选(--mcp 时恒带,可为 null)。配置自举写入路径,未自举 null
-    - mcp_config_note: line           # 可选。自举明示——学了什么模型/端点/凭证名,或未学习原因
-    - note: line                      # 可选。零写入提示（目标已存在,用 --force 覆盖）
+    - status % line                    # 'ok' 或 'error'
+    - carrier % line                   # 本次安装的载体（cc/codex/cfuse-cc/cfuse-codex）
+    - driver_version % line            # 包 package.json version（装的是哪个版本）
+    - driver_source % line             # 包根绝对路径（从哪个源装的）
+    - target % line                    # 展开目标 skills 目录
+    - installed % [line]               # 本次写入的文件/目录路径清单（含 demo/plus 附装项与"旧名残留已清理"记录）
+    - removed % [line]                 # 可选。受管目录清理实删项（--force 档才出现）
+    - demo_note % line                 # 可选。--demo 附装说明（已存在跳过/某 demo 安装失败）
+    - plus_note % line                 # 可选。--plus 附装说明（含剩余人工动作提示）
+    - plus_tools_merged % [line]       # 可选。--plus 合并进 config.yaml 的 tool server 名列表
+    - legacy_note % line               # 可选。Codex 旧项目级残留检测提示
+    - stale_notes % [line]             # 可选。陈旧副本新鲜度提示（^anc-cli-stale-skill-scan——旧位置本器产物版本落后/缺指纹,携升级路径,零发现缺席）
+    - mcp_registered % line            # 恒带(可为 null)。写入的注册配置路径,跳过/失败时 null（2026-10-01 起缺省注册,不再依 --mcp）
+    - mcp_note % line                  # 可选。注册跳过原因（已有条目/scope 冲突指路）或注册环境性失败的降级说明（2026-10-01）
+    - permission_written % line        # 恒带(可为 null)。CC 载体写入放行的 settings.local.json 路径;跳过/非 CC 时 null（^anc-cli-install-skill-permission）
+    - permission_note % line           # 可选。放行跳过原因或其他载体的手动指路
+    - mcp_config_bootstrapped % line   # 恒带(可为 null)。配置自举写入路径,未自举 null;未自举且系统级配置缺席时 mcp_config_note 点明 run_approved_command 不可达
+    - mcp_config_note % line           # 可选。自举明示——学了什么模型/端点/凭证名,或未学习原因
+    - note % line                      # 可选。零写入提示（目标已存在,用 --force 覆盖）
 ```
 
-（代码实况：本响应无独立 TS 类型——形状在 `cli.ts` install-skill 命令的 output 字面量（src/cli.ts:1390-1405），可选字段按条件展开。失败形态 `{ status:'error', message }` 经 errorExit 走 stderr。）
+（代码实况：本响应无独立 TS 类型——形状在 `cli.ts` install-skill 命令的 output 字面量（src/cli.ts install-skill 命令末尾 output({...}) 字面量（行号随代码漂移,以 grep `driver_source` 定位）），可选字段按条件展开。失败形态 `{ status:'error', message }` 经 errorExit 走 stderr。）
 
 ### PackResponse（hopjit pack）
 
@@ -570,21 +665,21 @@ struct: InstallSkillResponse
 struct: PackResponse
   Id: pack-response
   Fields:
-    - status: line          # 'ok' 或 'error'
-    - carrier: line         # 打包目标载体
-    - skill_name: line      # 最终 skill 名（--name 覆盖或 spec Id）
-    - target: line          # 产物落点目录
-    - installed: [line]     # 本次写入的文件路径清单
-    - knowledge_docs: [line] # 随包收集的知识文档清单（doc-ref 闭合面）
-    - assets: [line]        # 随包资产文件清单（--assets）
-    - note: line            # 可选。零写入提示（目标已存在,用 --force 覆盖）
+    - status % line          # 'ok' 或 'error'
+    - carrier % line         # 打包目标载体
+    - skill_name % line      # 最终 skill 名（--name 覆盖或 spec Id）
+    - target % line          # 产物落点目录
+    - installed % [line]     # 本次写入的文件路径清单
+    - knowledge_docs % [line] # 随包收集的知识文档清单（doc-ref 闭合面）
+    - assets % [line]        # 随包资产文件清单（--assets）
+    - note % line            # 可选。零写入提示（目标已存在,用 --force 覆盖）
 
 struct: PackError
   Id: pack-error
   Fields:
-    - status: line          # 恒为 'error'
-    - message: line         # 错因（spec 不存在/解析失败/校验失败/资产缺失）
-    - errors: [line]        # 可选。parse/validate 逐条错误
+    - status % line          # 恒为 'error'
+    - message % line         # 错因（spec 不存在/解析失败/校验失败/资产缺失）
+    - errors % [line]        # 可选。parse/validate 逐条错误
 ```
 
 （代码实况：TS 形态是 `cli.ts` 内部 `PackResult` 联合类型（src/cli.ts:1419-1421）——pack 命令与 install-skill --demo/--plus 共用 `packSpec()` 返回同型。）
@@ -597,25 +692,25 @@ NextResponse 是联合类型，8 形态由 `status` 字段区分：StepReady / A
 struct: StepReady
   Id: step-ready
   Fields:
-    - status: line                # 恒为 'step_ready'
-    - instance_id: line           # 所属实例 ID
-    - step_id: line               # 步骤 ID，如 "2.1.3"
-    - step_type: line             # 枚举 reason/act/check/confirm/ask/commit/call（ExecutableStepType）
-    - summary: line               # 摘要行描述
-    - context: AssembledContext   # 装配好的执行上下文
-    - work_zone: line             # 实例 work_zone 工作区绝对路径（driver 写临时文件用，见 [[exec-engine#^anc-exec-work-zone]]）
-    - output_path: line           # 本步输出文件确切路径（<work_zone>/out_<step_id>.json，^anc-exec-work-zone 权威）
-    - call_protocol: CallProtocol # 可选。仅 step_type=call 且复用模式 CLI 通道（engine 持 cliAbsPath+specPath）——命令拼装权归引擎,driver 照抄零手拼（语义权威 [[exec-engine#^anc-exec-call-protocol-payload]]）
+    - status % line                # 恒为 'step_ready'
+    - instance_id % line           # 所属实例 ID
+    - step_id % line               # 步骤 ID，如 "2.1.3"
+    - step_type % line             # 枚举 reason/act/check/confirm/ask/commit/call（ExecutableStepType）
+    - summary % line               # 摘要行描述
+    - context % AssembledContext   # 装配好的执行上下文
+    - work_zone % line             # 实例 work_zone 工作区绝对路径（driver 写临时文件用，见 [[exec-engine#^anc-exec-work-zone]]）
+    - output_path % line           # 本步输出文件确切路径（<work_zone>/out_<step_id>.json，^anc-exec-work-zone 权威）
+    - call_protocol % CallProtocol # 可选。仅 step_type=call 且复用模式 CLI 通道（engine 持 cliAbsPath+specPath）——命令拼装权归引擎,driver 照抄零手拼（语义权威 [[exec-engine#^anc-exec-call-protocol-payload]]）
 
 struct: CallProtocol
   Id: call-protocol
   Fields:
-    - init_command: line          # 完整 init 命令,callee 路径 <CALLEE_SPEC_PATH:id> 占位（寻址归 caller,同 DispatchReady.launch_command 先例）;params=引擎 auto-map 快照+hop_env 透传;trace/log-dir/级别继承已折入;父层有修正意见时另拼 --upstream-feedback（重跑轮才有,D41 复用半边）;参数表与反馈文本都以 "@<文件绝对路径>" 形态出现,值由引擎预先写进父实例目录 cmd_args/ 下的文件,命令行上不含数据值（[[exec-engine#^anc-exec-cmd-args-file]],hopissues/0097）
-    - child_state_dir: line       # 子实例驱动循环的 --state-dir 值（<顶层STATE>/<inst>/calls）
-    - child_instance: line        # 子实例 ID（确定性:不在 loop 里=call 步骤号,在 loop 里=<步骤号>.<各祖先 loop 当前轮次,外层到内层>——[[exec-engine#^anc-exec-call-child-iter-id]];init_command 以 --child-instance 带同一值）
-    - child_advance: line         # 循环起步命令全文（init 建的子实例是未推进态,advance 领首个介入点——cc:call 真机实撞:未给起步命令则 driver 翻 CLI 源码反推,8 轮侧查顶过超时线;照抄纪律不许有"你自己想第一步"的洞）
-    - report_completed: line      # 成功回报命令全文（--child-instance 机器通道）
-    - report_failed: line         # 失败回报命令全文（--failure-child 机器通道）
+    - init_command % line          # 完整 init 命令,callee 路径 <CALLEE_SPEC_PATH:id> 占位（寻址归 caller,同 DispatchReady.launch_command 先例）;params=引擎 auto-map 快照+hop_env 透传;trace/log-dir/级别继承已折入;父层有修正意见时另拼 --upstream-feedback（重跑轮才有,D41 复用半边）;参数表与反馈文本都以 "@<文件绝对路径>" 形态出现,值由引擎预先写进父实例目录 cmd_args/ 下的文件,命令行上不含数据值（[[exec-engine#^anc-exec-cmd-args-file]],hopissues/0097）
+    - child_state_dir % line       # 子实例驱动循环的 --state-dir 值（<顶层STATE>/<inst>/calls）
+    - child_instance % line        # 子实例 ID（确定性:不在 loop 里=call 步骤号,在 loop 里=<步骤号>.<各祖先 loop 当前轮次,外层到内层>——[[exec-engine#^anc-exec-call-child-iter-id]];init_command 以 --child-instance 带同一值）
+    - child_advance % line         # 循环起步命令全文（init 建的子实例是未推进态,advance 领首个介入点——cc:call 真机实撞:未给起步命令则 driver 翻 CLI 源码反推,8 轮侧查顶过超时线;照抄纪律不许有"你自己想第一步"的洞）
+    - report_completed % line      # 成功回报命令全文（--child-instance 机器通道）
+    - report_failed % line         # 失败回报命令全文（--failure-child 机器通道）
 ```
 
 StepReady 是 agent 主循环的正常推进信号，返回待执行步骤的上下文 ^anc-cli-step-ready
@@ -630,9 +725,9 @@ ExecutionPaused 是 CITL 介入点（confirm 审批 / ask 数据收集）触发�
 struct: CommandResponse
   Id: command-response
   Fields:
-    - status: line      # 'ok' 或 'error'
-    - code: ErrorCode   # 可选。错误时必填
-    - message: line     # 可选。错误说明
+    - status % line      # 'ok' 或 'error'
+    - code % ErrorCode   # 可选。错误时必填
+    - message % line     # 可选。错误说明
 ```
 
 ### VarsResponse（hopjit vars） ^anc-cli-vars-response
@@ -641,11 +736,11 @@ struct: CommandResponse
 struct: VarsResponse
   Id: vars-response
   Fields:
-    - status: line             # 恒为 'ok'
-    - instance_id: line        # 实例 ID
-    - execution_status: line   # 枚举 running/paused/completed/failed/aborted（与 StatusResponse 同源同口径——两响应共用引擎同一状态推导;paused/aborted 语义见 StatusResponse 节。2026-09-09 前此行漏写 aborted 且缺 paused,存量文实偏差随 0081 批齐修）
-    - variables: yaml          # var_name → value，null = None
-    - pending_outputs: [line]  # Outputs 中尚未赋值的变量名
+    - status % line             # 恒为 'ok'
+    - instance_id % line        # 实例 ID
+    - execution_status % line   # 枚举 running/paused/completed/failed/aborted（与 StatusResponse 同源同口径——两响应共用引擎同一状态推导;paused/aborted 语义见 StatusResponse 节。2026-09-09 前此行漏写 aborted 且缺 paused,存量文实偏差随 0081 批齐修）
+    - variables % yaml          # var_name → value，null = None
+    - pending_outputs % [line]  # Outputs 中尚未赋值的变量名
 ```
 
 ### StatusResponse（hopjit status） ^anc-cli-status-response
@@ -654,17 +749,17 @@ struct: VarsResponse
 struct: StatusResponse
   Id: status-response
   Fields:
-    - status: line            # 恒为 'ok'
-    - instance_id: line       # 实例 ID
-    - execution_status: line  # 枚举 running/paused/completed/failed/aborted（aborted=主动中止,[[exec-engine#^anc-exec-abort]];paused=停驻等外部应答——todo/0081:此前枚举缺 paused,停驻被报 running,看护方接此通道感知不到"引擎在等人",停点挂死〔2026-09-09 实撞挂 30+ 分钟〕）
-    - total_steps: number     # 步骤总数
-    - completed: number       # 已完成步骤数
-    - failed: number          # 已失败步骤数
-    - pending: number         # 待执行步骤数
-    - current_step: line      # 可选。本实例当前 running 的步骤 ID（无则已结束）。paused 时分三种情形:停点是本层的 confirm/ask/escalate 步→与 paused_step_id 同指停驻步（暂停态由 running 编码,^anc-exec-pause-persist）;停点是本层的网络暂停→该步已回置 pending,本字段取本层仍 running 的步骤（通常是网络暂停步的父容器;顶层步网络暂停时缺席）;停点在嵌套串行调用的子流程里→本字段照旧取本层 running 的步骤（步骤账先父后子排列、取最后一个 running 的,即那个调用步）,停点本身看 paused_step_id + call_path
-    - pause_reason: line      # 可选。仅 paused 时在场——停驻原因摘要（confirm/waiting_human/ask/escalate/network——network=网络重试用完后的网络暂停,todo/0105 起在场;停点在嵌套子流程里时取最深那层的值;畸形卡兜底 unknown——卡在场但 pause_reason 字段非字符串时的防御值,引擎自产卡恒带 reason 正常不出现）,看护方判"该叫人了"用;问题卡全文不在本响应（归 resume/run_status 通道,status 不膨胀）
-    - paused_step_id: line    # 可选。仅 paused 时在场——停驻步骤 ID（停点在嵌套子流程里时是最深那层子流程自己的步骤号,不是父层步骤号——配合 call_path 定位）
-    - call_path: [line]       # 可选。仅当停点在嵌套串行调用的子流程里时在场——从顶层调用步到停点所在子流程的直接父调用步,逐层的步骤号（与 MCP 暂停载荷 ExecutionPaused.call_path 同语义,[[step-dispatcher#^anc-exec-call-recursion]]）;停点在顶层时缺席。todo/0105 新增
+    - status % line            # 恒为 'ok'
+    - instance_id % line       # 实例 ID
+    - execution_status % line  # 枚举 running/paused/completed/failed/aborted（aborted=主动中止,[[exec-engine#^anc-exec-abort]];paused=停驻等外部应答——todo/0081:此前枚举缺 paused,停驻被报 running,看护方接此通道感知不到"引擎在等人",停点挂死〔2026-09-09 实撞挂 30+ 分钟〕）
+    - total_steps % number     # 步骤总数
+    - completed % number       # 已完成步骤数
+    - failed % number          # 已失败步骤数
+    - pending % number         # 待执行步骤数
+    - current_step % line      # 可选。本实例当前 running 的步骤 ID（无则已结束）。paused 时分三种情形:停点是本层的 confirm/ask/escalate 步→与 paused_step_id 同指停驻步（暂停态由 running 编码,^anc-exec-pause-persist）;停点是本层的网络暂停→该步已回置 pending,本字段取本层仍 running 的步骤（通常是网络暂停步的父容器;顶层步网络暂停时缺席）;停点在嵌套串行调用的子流程里→本字段照旧取本层 running 的步骤（步骤账先父后子排列、取最后一个 running 的,即那个调用步）,停点本身看 paused_step_id + call_path
+    - pause_reason % line      # 可选。仅 paused 时在场——停驻原因摘要（confirm/waiting_human/ask/escalate/network——network=网络重试用完后的网络暂停,todo/0105 起在场;停点在嵌套子流程里时取最深那层的值;畸形卡兜底 unknown——卡在场但 pause_reason 字段非字符串时的防御值,引擎自产卡恒带 reason 正常不出现）,看护方判"该叫人了"用;问题卡全文不在本响应（归 resume/run_status 通道,status 不膨胀）
+    - paused_step_id % line    # 可选。仅 paused 时在场——停驻步骤 ID（停点在嵌套子流程里时是最深那层子流程自己的步骤号,不是父层步骤号——配合 call_path 定位）
+    - call_path % [line]       # 可选。仅当停点在嵌套串行调用的子流程里时在场——从顶层调用步到停点所在子流程的直接父调用步,逐层的步骤号（与 MCP 暂停载荷 ExecutionPaused.call_path 同语义,[[step-dispatcher#^anc-exec-call-recursion]]）;停点在顶层时缺席。todo/0105 新增
 ```
 
 **paused 判定三源（0081 原判;0105 追加的源④⑤见下一段——引擎侧,状态源优先不依赖递送件;判定位置=终态凌驾之后、步骤态推导之前——aborted 凌驾〔[[exec-engine#^anc-exec-abort]] 第5条〕与 failed/completed 终态标记凌驾〔todo/0058〕两条既有决策不被扰动:实例已终态时纵有残卡也恒报终态）**：
@@ -679,7 +774,7 @@ struct: StatusResponse
 
 演进来由：
 - 0081 批次（2026-09-09）当时把网络暂停写成"已知边界,显式不覆盖"——理由是网络暂停由 dispatcher 在内存里组装载荷、不落问题卡、步骤回置 pending,快照侧判不出;且它是"非人工停点,resume 即续",不在"主 agent 感知等人停驻"的痛点面。嵌套子流程里的停点当时没有讨论,父实例 status 不下钻子实例目录;
-- 0105 实撞推翻了这个判断（2026-09-21 完工清单 T5,hb2 自建 × Ling）：主任务第 5.1.2.2.1.1 步串行调用子流程,子流程第 1.1 步网络重试用完进入网络暂停。观察方全程用命令行 `hopjit status`,30 多分钟看到的一直是"running、停在 5.1.2.2.1.1",最后停掉任务。网络暂停没人调 resume 就永远停着——恰是 0081 要消灭的"引擎停下了外面没人知道";嵌套子流程里的 ask 停点经复现测试确认同样报 running;
+- 0105 实撞推翻了这个判断（2026-09-21 宏观任务验收与成绩 T5,hb2 自建 × Ling）：主任务第 5.1.2.2.1.1 步串行调用子流程,子流程第 1.1 步网络重试用完进入网络暂停。观察方全程用命令行 `hopjit status`,30 多分钟看到的一直是"running、停在 5.1.2.2.1.1",最后停掉任务。网络暂停没人调 resume 就永远停着——恰是 0081 要消灭的"引擎停下了外面没人知道";嵌套子流程里的 ask 停点经复现测试确认同样报 running;
 - 判断"判不出"也不成立：网络暂停在状态账事件流里留有 network_pause 事件（随 state.json 持久化）,子流程的快照在父实例目录的 `calls/<子实例>/` 下,都是盘上可读的状态源,不需要新增问题卡;
 - 作者 2026-09-25 拍板,选项原文"甲：顶层+嵌套都看见（推荐）"：命令行 status 对顶层网络暂停和嵌套串行调用子流程里的停点都报 paused,判定只看状态账。
 
@@ -725,10 +820,10 @@ getStatus:paused 时 pauseSummary = {pause_reason, paused_step_id, call_path(仅
 struct: AbortResponse
   Id: abort-response
   Fields:
-    - status: line            # 恒为 'ok'（幂等重放同形态;异态改写走 error 面 ABORT_TERMINAL_CONFLICT）
-    - instance_id: line       # 实例 ID
-    - execution_status: line  # 恒为 'aborted'
-    - abort_reason: text      # 中止原因（入账值——显式传入或缺省 '(user abort)'）
+    - status % line            # 恒为 'ok'（幂等重放同形态;异态改写走 error 面 ABORT_TERMINAL_CONFLICT）
+    - instance_id % line       # 实例 ID
+    - execution_status % line  # 恒为 'aborted'
+    - abort_reason % text      # 中止原因（入账值——显式传入或缺省 '(user abort)'）
 ```
 
 ### ReplanResponse（hopjit replan） ^anc-cli-replan-response
@@ -739,15 +834,15 @@ ReplanResponse 是联合类型，成员 ReplanSuccess / ReplanError，由 `statu
 struct: ReplanSuccess
   Id: replan-success
   Fields:
-    - status: line                 # 恒为 'ok'
-    - new_children: [StepSummary]  # 替换后的新步骤摘要
+    - status % line                 # 恒为 'ok'
+    - new_children % [StepSummary]  # 替换后的新步骤摘要
 
 struct: ReplanError
   Id: replan-error
   Fields:
-    - status: line         # 恒为 'error'
-    - code: ErrorCode      # 错误码
-    - errors: [SpecError]  # 解析或验证错误
+    - status % line         # 恒为 'error'
+    - code % ErrorCode      # 错误码
+    - errors % [SpecError]  # 解析或验证错误
 ```
 
 ### ~~driver-mode~~（已废止,2026-08-27 四改） 
@@ -760,9 +855,9 @@ struct: ReplanError
 struct: BranchRequest
   Id: branch-request
   Fields:
-    - step_id: line           # branch 步骤 ID（如 "2.3"）
-    - selected_case_id: line  # 选中的 case 步骤 ID（如 "2.3.1"）
-    - reason: line            # 可选。Agent 选择该 case 的理由（用于日志/调试）
+    - step_id % line           # branch 步骤 ID（如 "2.3"）
+    - selected_case_id % line  # 选中的 case 步骤 ID（如 "2.3.1"）
+    - reason % line            # 可选。Agent 选择该 case 的理由（用于日志/调试）
 ```
 
 响应复用 CommandResponse。

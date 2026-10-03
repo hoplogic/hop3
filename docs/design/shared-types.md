@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-07-02T15:21+0800
+	last_sync: 2026-09-27T20:38+0800
 	note: 跨模块共享类型层——不属任一单一模块的公共类型：大内容阈值卸载协议（deflate）、值类型系统与执行辅助结构（辅助类型）、命令幂等契约。2026-07-02 拆分：CLI 响应类型→hop-cli，Provider 三件套+Config→shared-providers，ErrorCode/SpecError→shared-errors，DocRef→spec-ast。本文件退化为纯跨模块共享层（类比 sandbox.md 只承载跨模块契约）。
 %%
 
@@ -123,35 +123,35 @@ OutputDecl 定义步骤输出变量的名称、类型和描述 ^anc-type-output-
 struct: OutputDecl
   Id: output-decl
   Fields:
-    - name: line         # 输出变量名
-    - type: line         # ValueTypeString 或自定义 TypeDecl 名；复合 YAML 展开声明头记 'yaml'
-    - description: line  # `#` 注释
-    - default: yaml      # 可选。`+ → x: type = 初值` 的初值（parser 解析）——容器节点=init 一次、叶子=每次执行重置。见 [[exec-engine#^anc-exec-output-init]]
-    - fields: [yaml]     # 可选。复合类型 YAML 展开的字段说明（每项 name/type/description）——仅供人读与 L6 输出约束渲染，不注册为独立变量（见 [[spec-parser]] 复合输出解析）
+    - name % line         # 输出变量名
+    - type % line         # ValueTypeString 或自定义 TypeDecl 名；复合 YAML 展开声明头记 'yaml'
+    - description % line  # `#` 注释
+    - default % yaml      # 可选。`+ → x: type = 初值` 的初值（parser 解析）——容器节点=init 一次、叶子=每次执行重置。见 [[exec-engine#^anc-exec-output-init]]
+    - fields % [yaml]     # 可选。复合类型 YAML 展开的字段说明（每项 name/type/description）——仅供人读与 L6 输出约束渲染，不注册为独立变量（见 [[spec-parser]] 复合输出解析）
 
 struct: StepSummary
   Id: step-summary
   Fields:
-    - step_id: line
-    - step_type: line    # 全部 15 种 StepType（见 [[spec-ast]]），非仅 ExecutableStepType
-    - summary: line
-    - outputs: [line]    # 变量名列表
+    - step_id % line
+    - step_type % line    # 全部 15 种 StepType（见 [[spec-ast]]），非仅 ExecutableStepType
+    - summary % line
+    - outputs % [line]    # 变量名列表
 
 struct: RetryRecord
   Id: retry-record
   Fields:
-    - attempt: number
-    - failure_reason: line
-    - steps_tried: [StepSummary]
-    - event_seq: number   # 可选（v0.3.0,todo/0107）。记账那一刻执行事件流的长度（位置戳）;L2c 注入只取位置在容器本轮起点（祖先 loop 最晚一条轮进事件）之后的记录,缺席按本轮处理（旧状态文件）。权威 [[exec-engine#^anc-exec-retry-feedback-iter-scope]]
+    - attempt % number
+    - failure_reason % line
+    - steps_tried % [StepSummary]
+    - event_seq % number   # 可选（v0.3.0,todo/0107）。记账那一刻执行事件流的长度（位置戳）;L2c 注入只取位置在容器本轮起点（祖先 loop 最晚一条轮进事件）之后的记录,缺席按本轮处理（旧状态文件）。权威 [[exec-engine#^anc-exec-retry-feedback-iter-scope]]
 
 struct: ExecEvent
   Id: exec-event
   Fields:
-    - at: line       # ISO 8601 时刻
-    - step_id: line  # 触发事件的步骤 ID
-    - event: line    # step_start | step_done | step_failed | retry | replan | branch_select | loop_iter 等（loop_iter:loop 轮次被设定时记,step_id=loop id,detail=新轮次号;detail 为 '1' 是入口,其余是轮进,只有轮进划本轮起点——v0.3.0,todo/0107）
-    - detail: line   # 可选。失败原因、选择理由等
+    - at % line       # ISO 8601 时刻
+    - step_id % line  # 触发事件的步骤 ID
+    - event % line    # step_start | step_done | step_failed | retry | replan | branch_select | loop_iter 等（loop_iter:loop 轮次被设定时记,step_id=loop id,detail=新轮次号;detail 为 '1' 是入口,其余是轮进,只有轮进划本轮起点——v0.3.0,todo/0107）
+    - detail % line   # 可选。失败原因、选择理由等
 ```
 
 ExecEvent 是 Engine 执行事件流条目（执行历史原料，供 L3 上下文重建；持久化到 state.json 的 exec_events，跨进程续上 loop 迭代时序与子步状态。与 HopLog 分工见 exec-engine「执行历史进 state.json」）。

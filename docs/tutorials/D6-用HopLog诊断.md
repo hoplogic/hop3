@@ -73,7 +73,7 @@ ended_at: "…"
 
 **③ LLM 到底看到了什么？**（怀疑 prompt 组装有问题时）debug 级日志的 `llm.prompt` 是交付的完整 6 层上下文原文——不用猜"它是不是没看到约束"，打开看。这是排查"AI 为什么这么答"的唯一可靠通道。
 
-**④ 卡住不动，走到哪了？** 看 `execution:` 最后一个块：有 `at` 没 `status` = 该步交付出去还没回（复用模式=还在等 caller submit）；块是 `type: confirm/ask` = 停在介入点等人。配合 `/hopspec status` 看引擎侧状态。
+**④ 卡住不动，走到哪了？** 看 `execution:` 最后一个块：有 `at` 没 `status` = 该步交付出去还没回（复用模式=还在等 caller submit）；块是 `type: confirm/ask` = 停在介入点等人。引擎侧状态问 /hop（"这活到哪了"）即可看到。
 
 **⑤ 介入点是谁答的、答了什么？**（怀疑 AI 替答时）confirm/ask 块的 `hitl:` 字段记录呈现了什么、选项、回答、决策者——**没有 `hitl:` 块 = 没人答过**。e2e 的 cc:paused 场景断言的正是"无 hitl 块"。
 
@@ -91,7 +91,9 @@ ended_at: "…"
 
 ## 级别与审计：能调详略，不能关审计
 
-三级向下包含：`debug`（完整 prompt 原文）⊇ `info`（值与轨迹，缺省）⊇ `warn`（骨架）。跑法：`--log-level debug`（driver 协议缺省已带）。
+三级向下包含：`debug`（完整 prompt 原文）⊇ `info`（值与轨迹，缺省）⊇ `warn`（骨架）。跑法：`--log-level debug`（CLI）或 hopjit.yaml `log_level: debug`（MCP）——缺省 info 看不到 `llm.prompt`，要排"模型看到了什么"先升级再复现。
+
+**日志保留上限**：`.hoplog` 下缺省只留最近 3 个 run（`log_retention.max_runs` / `--max-runs` 可调），新起 run 前自动删最老的——排障要保留现场就先把它调大，或把要留的 run 目录挪走。
 
 **审计无级别豁免**：不可逆操作（commit）、人工决策（hitl）、跨 spec 调用、重规划（`replan_audit`）**无视级别始终记录**——安全审计不能被调低日志级别绕过。这意味着：即便 warn 级的日志，审计链也是完整的，grep 即提取。
 

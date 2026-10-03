@@ -3,7 +3,7 @@
 	source: [[../concepts/HopSpec V3配套HopJIT运行时能力]]
 	source_id: hopjit-runtime
 	type: extend
-	last_sync: 2026-08-28T13:21+0800
+	last_sync: 2026-09-27T20:38+0800
 	note: 复用模式 prompt 完整场景——skill 常驻指令层 + engine 每步 context 层如何叠加驱动 CC；engine 每步进出的进程模型；三个要害风险（skill 不可压缩、context 跨步重复、compact 不可自管只能状态外置复位）+ 两个 context 治理（minimal 精简治标、subagent driver 治因）。综合 hop-cli / prompt-assembler / spec-observability 的复用模式侧。
 		2026-08-27 +四之补三 ^anc-exec-reuse-verdict-outsource：/hop 自驱阅卷分权（出题/答题留主对话,check final 判定恒外移 fresh subagent——作者三分叉拍定 F1 只final/F2 恒外移/F3 内联高频+指路全量）+知识供给两面（任务上下文落卡必做/构建知识不吝啬token）——abort批review 三处失守 meta-review 的机制化对治,落点 driver 两载体。
 		2026-08-28 +四之补四 ^anc-exec-reuse-distill：/hop 提纯与现货复用一对机制（distill 干完的活→hop_tasks/specs/ 成品 spec,四动作参数化/结构固化/把关强化/语境泛化;查现货=开活前扫存量,同类复用差一截作底稿）——触发从宽"有总结的意思就主动",引擎零改动,落点 driver 两载体;同日生命周期走查改定:命中恒底稿实例化不直接跑（缝一）+"直接开"跳查口子（作者留）+修订同过目（缝二）+原料两形态（对话直干的活同可提纯,步骤类型现判验证面降档）。
@@ -164,13 +164,13 @@ Id: hop-verdict-split
 Goal: check final 判定权外移至无执行语境的独立判定者,出题/答题仍留主对话
 
 ## Inputs
-- 待判产出物: text      # check final 的 ← 输入全文
-- 判据原文: text        # spec 里该 check 步的核对条目
-- 任务卡叙事节: markdown # 背景/参考(口径与语境)——不含执行过程叙事
+- 待判产出物 % text      # check final 的 ← 输入全文
+- 判据原文 % text        # spec 里该 check 步的核对条目
+- 任务卡叙事节 % markdown # 背景/参考(口径与语境)——不含执行过程叙事
 
 ## Outputs
-- ok: bool   # 判定
-- note: text # 理由/缺口——主对话哑搬运给引擎,不改判不软化
+- ok % bool   # 判定
+- note % text # 理由/缺口——主对话哑搬运给引擎,不改判不软化
 ```
 
 **分权表（HopType——三权字段逐条）**：
@@ -226,11 +226,11 @@ Id: hop-distill
 Goal: 把一个跑通的 /hop 任务提纯为可复用的成品 spec,落 hop_tasks/specs/,经用户过目确认后落定
 
 ## Inputs
-- 任务卡终态: markdown   # Steps=replan 写回的生效版(不是开工初版);背景/处置记录供泛化判断
-- 引擎账展开物: yaml     # [subtask free] 到步展开的实际子步(status/hoplog,复盘场景可读)
+- 任务卡终态 % markdown   # Steps=replan 写回的生效版(不是开工初版);背景/处置记录供泛化判断
+- 引擎账展开物 % yaml     # [subtask free] 到步展开的实际子步(status/hoplog,复盘场景可读)
 
 ## Outputs
-- 提纯件: markdown       # hop_tasks/specs/<语义名>.md——validate 0 error+开头 [[原任务]] 回指
+- 提纯件 % markdown       # hop_tasks/specs/<语义名>.md——validate 0 error+开头 [[原任务]] 回指
 ```
 
 **要素表（HopType——四动作字段逐条）**：
@@ -294,9 +294,9 @@ Id: hop-worktree-act
 Goal: 修改仓库正式文件的活,改动阶段在 worktree 内进行(act 可逆的物理兑现),合入主区归 commit——语言的 act/commit 分界在操作面成立
 
 ## Inputs
-- 活的改动面: text   # 这个活要改哪些仓库正式文件
+- 活的改动面 % text   # 这个活要改哪些仓库正式文件
 ## Outputs
-- 隔离出口: text     # worktree 里的成品经 check final 验收后由 commit 步合入主区,或弃区零后果
+- 隔离出口 % text     # worktree 里的成品经 check final 验收后由 commit 步合入主区,或弃区零后果
 ```
 
 **分界表（HopType——动代码的两种性质,物理形态逐条）**：

@@ -6,7 +6,7 @@
 // Remark was evaluated and rejected (nesting, +→ outputs, blockquotes all break).
 
 import { load as yamlLoad } from 'js-yaml';
-import type { SpecAST, SpecHeader, ToolNeed, SpecConfig, TypeDecl, VarDecl, StepNode, StepType, VarBinding, OutputDecl, ParamMapping, SourceLocation, ActBody, ActExpr, SubtaskStep, ParallelStep, LoopStep, CallStep, CommitStep, CaseStep, ExitStep, CheckStep, ConfirmStep, AskStep, ActStep , BreakStep, ContinueStep } from './ast-types.js';
+import type { SpecAST, SpecHeader, SchemaColonSeparatorRecord, ToolNeed, SpecConfig, TypeDecl, VarDecl, StepNode, StepType, VarBinding, OutputDecl, ParamMapping, SourceLocation, ActBody, ActExpr, SubtaskStep, ParallelStep, LoopStep, CallStep, CommitStep, CaseStep, ExitStep, CheckStep, ConfirmStep, AskStep, ActStep , BreakStep, ContinueStep } from './ast-types.js';
 import type { ParseError } from './errors.js';
 import { ALL_STEP_TYPES, CONTAINER_STEP_TYPES } from './ast-helpers.js';
 import { extractHopPythonFence, parseActBody, serializeActBody, parseExpression } from './act-body-parser.js';
@@ -23,14 +23,14 @@ const RE_TOOL_GRANT = /^-\s*(?:工具|tools)\s*[:：]\s*(.+)/;   // 节点工具
 const RE_TOOL_DENY = /^-\s*(?:禁工具|deny_tools)\s*[:：]\s*(.+)/;   // 节点工具禁用条目（^anc-step-tool-deny——授权行对称半边,每行恰一名,禁 *;# 原因注释）// @a: anc-step-tool-deny
 const RE_OUTPUT = /^\+\s*→\s*(.+)/;
 const RE_INSTRUCTION = /^>\s?(.*)/;
-const RE_VAR_DECL = /^-\s*([^\s:=]+)\s*:\s*(\S+(?:\([^)]*\))?\]?)\s*(?:#\s*(.*))?$/;   // 名位宽一档收中文（原 \w+ 只认 ASCII,中文名整行被静默吞——^todo-parser-silent-swallow 同因;合法性归 V2b;类型位尾 \]? 收 [enum(a, b)] 列表元素含参形——括号内逗号带空格时 \S+ 停在空格前吞不到闭括号后的 ],整行跌出文法静默消失,^todo-parser-silent-swallow 同族 28 轮 review 抓;三站点同修,类型合法性归 V4/V7）// @a: anc-i18n-keyword-impl, anc-rule-v2b
+const RE_VAR_DECL = /^-\s*([^\s:=%]+)\s*([:%])\s*([^\s%]\S*(?:\([^)]*\))?\]?)\s*(?:#\s*(.*))?$/;   // 名位宽一档收中文（原 \w+ 只认 ASCII,中文名整行被静默吞——^todo-parser-silent-swallow 同因;合法性归 V2b;类型位尾 \]? 收 [enum(a, b)] 列表元素含参形——括号内逗号带空格时 \S+ 停在空格前吞不到闭括号后的 ],整行跌出文法静默消失,^todo-parser-silent-swallow 同族 28 轮 review 抓;三站点同修,类型合法性归 V4/V7）;名/类型分隔符双文法 [:%]（% 正字、: 仍收记 colon_separators,名位排除 %、类型位不以 % 开头——^anc-rule-schema-sep-dual;捕获组 1 名/2 分隔符/3 类型/4 说明）// @a: anc-i18n-keyword-impl, anc-rule-v2b, anc-rule-schema-sep-dual
 const RE_LIST_ITEM = /^-\s+(.*)/;
 const RE_ID_LINE = /^(?:Id|标识)\s*:\s*(\S+)/;   // Id 中文别名 标识（术语表 ^anc-i18n-glossary）// @a: anc-i18n-keyword-impl
 const RE_FENCE = /^```/;
 
 // ===== Section identification =====
 
-type SectionKind = 'title' | 'id' | 'goal' | 'constraints' | 'types' | 'inputs' | 'outputs' | 'tools' | 'config' | 'steps';
+type SectionKind = 'title' | 'id' | 'goal' | 'constraints' | 'types' | 'inputs' | 'outputs' | 'tools' | 'approved_commands' | 'config' | 'steps';
 
 interface Section {
   kind: SectionKind;
@@ -45,6 +45,7 @@ const SECTION_KEYWORDS: Record<string, SectionKind> = {
   inputs: 'inputs',
   outputs: 'outputs',
   tools: 'tools',
+  approvedcommands: 'approved_commands',   // 段头 `## Approved Commands`——键侧按 identifySections 的去空白小写形登（^anc-rule-approved-commands）// @a: anc-rule-approved-commands
   config: 'config',
   steps: 'steps',
   // 中文段头（i18n 方案 B 直通等价,术语表权威 design/i18n.md ^anc-i18n-glossary）// @a: anc-i18n-keyword-impl
@@ -54,6 +55,7 @@ const SECTION_KEYWORDS: Record<string, SectionKind> = {
   '输入': 'inputs',
   '输出': 'outputs',
   '工具': 'tools',
+  '已批准命令': 'approved_commands',   // @a: anc-rule-approved-commands
   '配置': 'config',
   '步骤': 'steps',
 };
@@ -114,7 +116,7 @@ const SECTION_ZH: Record<string, string> = (() => {              // goal→目�
   }
   return rev;
 })();
-const SECTION_EN: Record<string, string> = { goal: 'Goal', constraints: 'Constraints', types: 'Types', inputs: 'Inputs', outputs: 'Outputs', tools: 'Tools', config: 'Config', steps: 'Steps' };
+const SECTION_EN: Record<string, string> = { goal: 'Goal', constraints: 'Constraints', types: 'Types', inputs: 'Inputs', outputs: 'Outputs', tools: 'Tools', approved_commands: 'Approved Commands', config: 'Config', steps: 'Steps' };
 // 段头出词:zh 查中文表,en 用英文首大写形——单一取词点,serializeSpec 八节共用
 function sectionWord(kind: string, lang: SpecLang): string {
   return lang === 'zh' ? (SECTION_ZH[kind] ?? SECTION_EN[kind] ?? kind) : (SECTION_EN[kind] ?? kind);
@@ -200,10 +202,10 @@ export function convertSpecKeywords(text: string, to: SpecLang): string {
     if (/^#\s+\S/.test(line)) sectionsOpen = true;               // 一级标题(多词亦算,parser 的 title 段)
     if (RE_ID_LINE.test(line)) sectionsOpen = true;              // Id 行不论位置都开启段区 // @a: anc-i18n-convert-surface
     // 段头行 ## Word——词转小写查表,出规范形(作者拍甲案:大小写不敏感、一律规范形)
-    const hm = line.match(/^(#{1,6})(\s+)([A-Za-z\u4e00-\u9fff]+)(\s*)$/);
+    const hm = line.match(/^(#{1,6})(\s+)([A-Za-z\u4e00-\u9fff]+(?: [A-Za-z]+)*)(\s*)$/);   // 多词段头（Approved Commands）放行,键按 identifySections 同法去空白小写 // @a: anc-rule-approved-commands
     if (hm) {
       seenHeading = true;
-      const kind = SECTION_KEYWORDS[hm[3].toLowerCase()];
+      const kind = SECTION_KEYWORDS[hm[3].toLowerCase().replace(/\s+/g, '')];
       if (!kind) return line;
       if (hm[1].length === 2) {
         sectionsOpen = true;
@@ -228,7 +230,7 @@ export function convertSpecKeywords(text: string, to: SpecLang): string {
     if (sectionsOpen && !stepsStarted) {
       const bm = line.match(/^([\w\u4e00-\u9fff]+)(\s*:.*)$/);
       const kind = bm ? SECTION_KEYWORDS[bm[1].toLowerCase()] : undefined;
-      if (bm && kind) {
+      if (bm && kind && kind !== 'approved_commands') {   // 内联形 `已批准命令:` parser 本就不认,转换器不碰它（转成 `Approved Commands:` 也没人认,只会把报错的行变成静默行） // @a: anc-rule-approved-commands
         if (seenKinds.has(kind)) return line;
         seenKinds.add(kind);
         if (kind === 'steps') stepsStarted = true;
@@ -241,6 +243,29 @@ export function convertSpecKeywords(text: string, to: SpecLang): string {
     return line;
   });
   return out.join('\n');
+}
+
+/** HopSchema 名/类型分隔符 `:` → ` % ` 行级手术——hopjit schema-sep 命令消费。由 parseSpec 的
+ * header.colon_separators 记录驱动（parser 认作"用冒号的名/类型分隔符"的行就是要改的行,识别面与
+ * parser 天然对齐,不另写识别器）;每行只替换"名字 + 冒号及两侧空白"一处,其余字节不动。
+ * 定位不到的记录进 unmatched_lines 交调用方处理,不静默。见 [[spec-parser#^anc-rule-schema-sep-convert]]。
+ * // @a: anc-rule-schema-sep-convert */
+export function convertSchemaSeparators(text: string): { text: string; changed_lines: number[]; unmatched_lines: number[] } {
+  const records = parseSpec(text).ast.header.colon_separators ?? [];
+  const lines = text.split('\n');
+  const changed_lines: number[] = [];
+  const unmatched_lines: number[] = [];
+  const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  for (const r of records) {
+    const idx = r.line - 1;
+    const line = lines[idx];
+    // 名字前不是标识符字符（防匹配到别的名字的后缀）、冒号后紧跟记录的类型原文（防匹配到 # 说明里的同名文字）
+    const re = new RegExp(`(^|[^\\p{L}\\p{N}_])(${esc(r.name)})\\s*:\\s*(?=${esc(r.type)})`, 'u');
+    if (line === undefined || !re.test(line)) { unmatched_lines.push(r.line); continue; }
+    lines[idx] = line.replace(re, (_m, pre: string, name: string) => `${pre}${name} % `);
+    changed_lines.push(r.line);
+  }
+  return { text: lines.join('\n'), changed_lines, unmatched_lines };
 }
 
 function identifySections(lines: string[], errors?: ParseError[]): Section[] {
@@ -276,7 +301,9 @@ function identifySections(lines: string[], errors?: ParseError[]): Section[] {
       if (labelMatch) {
         const key = labelMatch[1].toLowerCase();
         const kind = SECTION_KEYWORDS[key];
-        if (kind && !sections.some(s => s.kind === kind)) {
+        if (kind === 'approved_commands') {   // 只认 ## 段头形——内联形经 lang 转换会变成 parser 不认的多词形态,清单静默蒸发（^anc-rule-approved-commands） // @a: anc-rule-approved-commands
+          errors?.push({ kind: 'parse', line: i + 1, message: `已批准命令段只认 '## 已批准命令' 段头形,内联标签 '${labelMatch[1]}:' 不认——改成独立段头` });
+        } else if (kind && !sections.some(s => s.kind === kind)) {
           sections.push({ kind, startLine: i, endLine: i + 1 });
         }
       }
@@ -313,6 +340,9 @@ function parseHeaderSections(
   // 声明区孤儿行收集容器（^anc-rule-decl-zone-warn）——Inputs/Outputs/Types/Constraints/Config
   // 五段+Id 行,parser 零报错只收集,validator W1 判定（Tools 段自身响亮报错,不入此道）
   const declOrphans: Array<{ line: number; text: string; section: string }> = [];
+  // 名/类型分隔符仍用冒号的行（^anc-rule-schema-sep-dual）——Inputs/Outputs/Types/Tools 四段收集,
+  // 步骤区由 parseSpec 追加;parser 零报错,validator W2 出一条汇总告警。// @a: anc-rule-schema-sep-dual
+  const colonSeps: SchemaColonSeparatorRecord[] = [];
 
   const titleSec = sections.find(s => s.kind === 'title');
   if (titleSec) {
@@ -351,24 +381,27 @@ function parseHeaderSections(
   }
 
   const typesSec = sections.find(s => s.kind === 'types');
-  if (typesSec) header.types = parseTypesSection(lines, typesSec, errors, declOrphans);
+  if (typesSec) header.types = parseTypesSection(lines, typesSec, errors, declOrphans, colonSeps);
 
   const inputsSec = sections.find(s => s.kind === 'inputs');
   if (inputsSec) {
-    header.inputs = parseVarDeclSection(lines, inputsSec);
+    header.inputs = parseVarDeclSection(lines, inputsSec, colonSeps);
     collectDeclZoneOrphans(lines, inputsSec, 'Inputs',
       t => RE_VAR_DECL.test(t), declOrphans);
   }
 
   const outputsSec = sections.find(s => s.kind === 'outputs');
   if (outputsSec) {
-    header.outputs = parseOutputDeclSection(lines, outputsSec);
+    header.outputs = parseOutputDeclSection(lines, outputsSec, colonSeps);
     collectDeclZoneOrphans(lines, outputsSec, 'Outputs',
       t => RE_VAR_DECL.test(t), declOrphans);
   }
 
   const toolsSec = sections.find(s => s.kind === 'tools');
-  if (toolsSec) header.tools = parseToolsSection(lines, toolsSec, errors);   // Tools 段自身已响亮报错（三分支外皆 parse error）,无静默吞行面,不入孤儿收集
+  if (toolsSec) header.tools = parseToolsSection(lines, toolsSec, errors, colonSeps);   // Tools 段自身已响亮报错（三分支外皆 parse error）,无静默吞行面,不入孤儿收集
+
+  const approvedSec = sections.find(s => s.kind === 'approved_commands');
+  if (approvedSec) header.approved_commands = parseApprovedCommandsSection(lines, approvedSec, errors);   // 段自身响亮报错（非条目行/空项/hopjit 首项）,不入孤儿收集 // @a: anc-rule-approved-commands
 
   const configSec = sections.find(s => s.kind === 'config');
   if (configSec) {
@@ -391,6 +424,8 @@ function parseHeaderSections(
     }
   }
   if (declOrphans.length > 0) header.decl_zone_orphans = declOrphans;
+  // 各段解析顺序不等于文件顺序（Types 先于 Inputs 解析,但文件里可能写在后面）——按行号排序
+  if (colonSeps.length > 0) header.colon_separators = colonSeps.sort((a, b) => a.line - b.line);
 
   return header;
 }
@@ -399,10 +434,13 @@ function parseHeaderSections(
 // 签名行 `- tool(p1, p2) -> out: type  # 用途` + 参数子条目 `  - p: type  # 说明` + `  > 扩展`。
 // 校验:签名括号参数与子条目按名一致（多/漏/错名 error）;同名工具重复 error。
 // 类型词汇表核对归 validator（T 组规则）——parser 只收结构。// @a: anc-rule-tools-section
-const RE_TOOL_SIG = /^-\s+([\w\u4e00-\u9fff][\w\u4e00-\u9fff-]*)\s*\(([^)]*)\)\s*(?:->\s*([\w\u4e00-\u9fff][\w\u4e00-\u9fff_-]*)\s*:\s*(\S+))?\s*(?:#\s*(.*))?$/;
-const RE_TOOL_PARAM = /^-\s+([\w\u4e00-\u9fff][\w\u4e00-\u9fff_-]*)\s*:\s*(\S+)\s*(?:#\s*(.*))?$/;
+// 输出名/类型与参数名/类型之间的分隔符 % 与 : 同收（^anc-rule-schema-sep-dual）——
+// SIG 捕获组 1 工具名/2 参数表/3 输出名/4 分隔符/5 输出类型/6 用途;PARAM 捕获组 1 名/2 分隔符/3 类型/4 说明。
+// @a: anc-rule-schema-sep-dual
+const RE_TOOL_SIG = /^-\s+([\w\u4e00-\u9fff][\w\u4e00-\u9fff-]*)\s*\(([^)]*)\)\s*(?:->\s*([\w\u4e00-\u9fff][\w\u4e00-\u9fff_-]*)\s*([:%])\s*([^\s%]\S*))?\s*(?:#\s*(.*))?$/;
+const RE_TOOL_PARAM = /^-\s+([\w\u4e00-\u9fff][\w\u4e00-\u9fff_-]*)\s*([:%])\s*([^\s%]\S*)\s*(?:#\s*(.*))?$/;
 
-function parseToolsSection(lines: string[], sec: Section, errors: ParseError[]): ToolNeed[] {
+function parseToolsSection(lines: string[], sec: Section, errors: ParseError[], colonSeps: SchemaColonSeparatorRecord[]): ToolNeed[] {
   const tools: ToolNeed[] = [];
   let cur: (ToolNeed & { sigParams: string[] }) | null = null;
   const flush = () => {
@@ -412,7 +450,7 @@ function parseToolsSection(lines: string[], sec: Section, errors: ParseError[]):
     const missing = sig.filter(n => !declared.includes(n));
     const extra = declared.filter(n => !sig.includes(n));
     if (missing.length || extra.length) {
-      errors.push({ kind: 'parse', line: sec.startLine + 1, message: `Tools 段 '${cur.name}' 签名参数与子条目不一致${missing.length ? `——签名有而子条目缺: ${missing.join(', ')}` : ''}${extra.length ? `——子条目多出: ${extra.join(', ')}` : ''}（签名括号列参数名,每个参数一条 '- 名: 类型  # 说明' 子条目按名对应）` });
+      errors.push({ kind: 'parse', line: sec.startLine + 1, message: `Tools 段 '${cur.name}' 签名参数与子条目不一致${missing.length ? `——签名有而子条目缺: ${missing.join(', ')}` : ''}${extra.length ? `——子条目多出: ${extra.join(', ')}` : ''}（签名括号列参数名,每个参数一条 '- 名 % 类型  # 说明' 子条目按名对应）` });
     }
     if (tools.some(t => t.name === cur!.name)) {
       errors.push({ kind: 'parse', line: sec.startLine + 1, message: `Tools 段工具 '${cur.name}' 重复声明` });
@@ -431,33 +469,100 @@ function parseToolsSection(lines: string[], sec: Section, errors: ParseError[]):
     const t = line.trim();
     if (indent === 0 && t.startsWith('- ')) {
       const m = t.match(RE_TOOL_SIG);
-      if (!m) { errors.push({ kind: 'parse', line: lineNo, message: `Tools 段签名行不合文法: '${t}'——形态 '- 工具名(参数, …) -> 输出名: 类型  # 用途'` }); continue; }
+      if (!m) { errors.push({ kind: 'parse', line: lineNo, message: `Tools 段签名行不合文法: '${t}'——形态 '- 工具名(参数, …) -> 输出名 % 类型  # 用途'` }); continue; }
       flush();
       cur = {
         name: m[1],
         sigParams: m[2].split(',').map(x => x.trim()).filter(Boolean),
         params: [],
-        ...(m[3] ? { output: { name: m[3], type: normalizeTypeToken(m[4]) } } : {}),
-        ...(m[5] ? { description: m[5].trim() } : {}),
+        ...(m[3] ? { output: { name: m[3], type: normalizeTypeToken(m[5]) } } : {}),
+        ...(m[6] ? { description: m[6].trim() } : {}),
       };
+      if (m[3] && m[4] === ':') colonSeps.push({ line: lineNo, section: 'Tools', name: m[3], type: m[5] });   // @a: anc-rule-schema-sep-dual
     } else if (indent >= 2 && t.startsWith('- ') && cur) {
       const m = t.match(RE_TOOL_PARAM);
-      if (!m) { errors.push({ kind: 'parse', line: lineNo, message: `Tools 段参数条目不合文法: '${t}'——形态 '- 参数名: 类型  # 说明'` }); continue; }
-      cur.params.push({ name: m[1], type: normalizeTypeToken(m[2]), ...(m[3] ? { description: m[3].trim() } : {}) });
+      if (!m) { errors.push({ kind: 'parse', line: lineNo, message: `Tools 段参数条目不合文法: '${t}'——形态 '- 参数名 % 类型  # 说明'` }); continue; }
+      cur.params.push({ name: m[1], type: normalizeTypeToken(m[3]), ...(m[4] ? { description: m[4].trim() } : {}) });
+      if (m[2] === ':') colonSeps.push({ line: lineNo, section: 'Tools', name: m[1], type: m[3] });   // @a: anc-rule-schema-sep-dual
     } else if (indent >= 2 && t.startsWith('>') && cur) {
       const noteLine = t.replace(/^>\s?/, '');
       cur.notes = cur.notes ? cur.notes + '\n' + noteLine : noteLine;
     } else {
       // 三分支外一律响亮报错（review D7:缩进 2 格的签名行整段静默丢——interim 拦截防的
       // "静默吞"在段内复发;Tools 段内不存在合法的第四种行形态）
-      errors.push({ kind: 'parse', line: lineNo, message: `Tools 段行形态不合文法: '${t}'——合法形态三种:顶格签名行 '- 工具名(…)'/缩进参数条目 '- 名: 类型'/缩进 '> 扩展'${cur ? '' : '（参数条目须在签名行之后）'}` });
+      errors.push({ kind: 'parse', line: lineNo, message: `Tools 段行形态不合文法: '${t}'——合法形态三种:顶格签名行 '- 工具名(…)'/缩进参数条目 '- 名 % 类型'/缩进 '> 扩展'${cur ? '' : '（参数条目须在签名行之后）'}` });
     }
   }
   flush();
   return tools;
 }
 
+// 《已批准命令》段解析（^anc-rule-approved-commands,概念 ^anc-rule-approved-commands-section）：一行一条 argv 前缀。
+// 只认 `- ` 条目行;空行与 `#` 注释行豁免;其余非空行 parse error（与 Tools 段同档响亮,不入 W1 宽容——
+// 段内不存在合法散文形态）。空项、首项为 hopjit（含路径尾段）parse error 点名行号——恒拒名单
+// （^anc-exec-subprocess-deny-hopjit）提前到写卡时拦。匹配语义归消费侧,这里只收结构。// @a: anc-rule-approved-commands
+function parseApprovedCommandsSection(lines: string[], sec: Section, errors: ParseError[]): string[][] {
+  const out: string[][] = [];
+  for (const { text, line } of sectionBodyEntries(lines, sec)) {
+    const t = text.trim();
+    if (!t || t.startsWith('#')) continue;
+    const m = t === '-' ? ['-', ''] : t.match(RE_LIST_ITEM);   // 裸 `-` 也是条目（空的）,走空项报错不走非条目报错
+    if (!m) { errors.push({ kind: 'parse', line, message: `已批准命令段只认 '- <命令前缀>' 条目行: '${t}'` }); continue; }
+    const split = splitArgvPrefix(m[1]);
+    if (split.unclosed) { errors.push({ kind: 'parse', line, message: `已批准命令条目引号未闭合: '${t}'——引号内空白不切,但引号必须成对` }); continue; }
+    const tokens = split.tokens;
+    if (tokens.length === 0) { errors.push({ kind: 'parse', line, message: '已批准命令条目为空——一行写一条命令前缀,如 `- python3 scripts/x.py --config c.json`' }); continue; }
+    const head = tokens[0].split('/').pop();
+    if (head === 'hopjit') { errors.push({ kind: 'parse', line, message: '已批准命令不得含 hopjit——步骤内容不驱动引擎（跑别的 spec 用 [call],不可逆动作走注册工具）' }); continue; }
+    out.push(tokens);
+  }
+  return out;
+}
+
+// 前缀文本 → 词元：按空白切;单/双引号包住的段落内空白不切、引号剥掉;不做反斜杠转义
+// （hop_python 字符串字面量同一子集,不是完整 shell-words）。行读完仍在引号内 → unclosed=true,
+// 调用方报 parse error（原静默收尾——review 探针抓出,与 Tools 段同档响亮）。// @a: anc-rule-approved-commands
+function splitArgvPrefix(text: string): { tokens: string[]; unclosed: boolean } {
+  const tokens: string[] = [];
+  let cur = '';
+  let quote: string | null = null;
+  let has = false;
+  for (const ch of text) {
+    if (quote) {
+      if (ch === quote) quote = null; else cur += ch;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch; has = true;
+    } else if (ch === '#' && !has) {
+      break;   // 词元边界上的 # 起行尾注释（引号内的 # 是内容,不在此分支）
+    } else if (/\s/.test(ch)) {
+      if (has) { tokens.push(cur); cur = ''; has = false; }
+    } else { cur += ch; has = true; }
+  }
+  if (has) tokens.push(cur);
+  return { tokens, unclosed: quote !== null };
+}
+
+// 词元 → 条目文本（serializeSpec 回写）。包回规则=往返可逆的边界（^anc-rule-approved-commands 第 5 条）：
+// 含空白/为空/以 # 起头/含任一引号 → 必包引号;含双引号用单引号包,含单引号用双引号包;两种都含=本文法
+// （无转义）不可表示,抛错不静默失真。review 探针实抓：原实现把词元内双引号删掉、`#TODO` 裸写回读被当注释
+// ——三词前缀缩成一词,授权变宽。// @a: anc-rule-approved-commands
+function joinArgvPrefix(tokens: string[]): string {
+  return tokens.map(t => {
+    const hasDq = t.includes('"'), hasSq = t.includes("'");
+    if (hasDq && hasSq) throw new Error(`已批准命令词元同时含单引号与双引号,本文法（不做转义）无法回写: ${JSON.stringify(t)}`);
+    if (t === '' || /\s/.test(t) || t.startsWith('#') || hasDq || hasSq) return hasDq ? `'${t}'` : `"${t}"`;
+    return t;
+  }).join(' ');
+}
+
 function sectionBodyLines(lines: string[], sec: Section): string[] {
+  return sectionBodyEntries(lines, sec).map(e => e.text);
+}
+
+// 段体行 + 各行 1 起算的真实行号（sectionBodyLines 的带行号版本,切分规则完全相同）。
+// 分隔符记录（^anc-rule-schema-sep-dual）要精确行号供迁移工具定位,不能用"段起始+段内偏移"近似
+// ——裸键段头无同行内容时段头行被跳过,偏移会差一行。// @a: anc-rule-schema-sep-dual
+function sectionBodyEntries(lines: string[], sec: Section): Array<{ text: string; line: number }> {
   const start = sec.startLine;
   const firstLine = lines[start];
   // Skip the heading/label line itself; for inline label with content, handle separately
@@ -465,7 +570,7 @@ function sectionBodyLines(lines: string[], sec: Section): string[] {
   const bodyStart = isHeading ? start + 1 : start;
 
   // For inline label format "Goal: text", the text after ":" is part of content
-  const result: string[] = [];
+  const result: Array<{ text: string; line: number }> = [];
   for (let i = bodyStart; i < sec.endLine; i++) {
     const line = lines[i];
     if (i === start && !isHeading) {
@@ -473,11 +578,11 @@ function sectionBodyLines(lines: string[], sec: Section): string[] {
       const colonIdx = line.indexOf(':');
       if (colonIdx >= 0) {
         const rest = line.slice(colonIdx + 1).trim();
-        if (rest) result.push(rest);
+        if (rest) result.push({ text: rest, line: i + 1 });
         continue;
       }
     }
-    result.push(line);
+    result.push({ text: line, line: i + 1 });
   }
   return result;
 }
@@ -498,9 +603,10 @@ function parseListSection(lines: string[], sec: Section): string[] {
   return items;
 }
 
-function parseTypesSection(lines: string[], sec: Section, errors: ParseError[], orphans?: Array<{ line: number; text: string; section: string }>): TypeDecl[] {
+function parseTypesSection(lines: string[], sec: Section, errors: ParseError[], orphans?: Array<{ line: number; text: string; section: string }>, colonSeps?: SchemaColonSeparatorRecord[]): TypeDecl[] {
   const types: TypeDecl[] = [];
-  const bodyLines = sectionBodyLines(lines, sec);
+  const bodyEntries = sectionBodyEntries(lines, sec);   // 真实行号只供分隔符记录用（^anc-rule-schema-sep-dual）
+  const bodyLines = bodyEntries.map(e => e.text);
   // 孤儿上报（^anc-rule-decl-zone-warn）：Types 段文法有状态（字段行仅在类型声明下合法）,
   // 静默丢点在段内三处,收集只能做在这里。bodyLines 丢了原始行号,报段起始行+段内偏移近似定位。
   const headOffset = RE_HEADING.test(lines[sec.startLine]) ? 1 : 0;
@@ -533,26 +639,27 @@ function parseTypesSection(lines: string[], sec: Section, errors: ParseError[], 
       if (lineIndent > typeIndent) {
         // 容忍字段行首的 `- ` 列表前缀（`- id: line` 与 `id: line` 均可，与 TypeName 行 `-?` 一致）。
         // 旧正则漏了 `-?\s*`，致 `- field: type` 写法的字段被整体丢弃、fields 空（C8 字段校验落空）。
-        const fieldMatch = trimmed.match(/^-?\s*([\w\u4e00-\u9fff]+)\s*:\s*([^\s(]+(?:\([^)]*\))?\]?)/);   // 字段名同族收中文;类型串分词=先收标识符（[^\s(]+——不吞括号）再整收括号组（括号内容容空格,enum(high, low) 一次收全——原 \S+ 贪婪在空格断截出 enum(high, 触发余料闸,与 Inputs 位行为劈叉,^anc-rule-v7-header-types ④） // @a: anc-i18n-keyword-impl
+        const fieldMatch = trimmed.match(/^-?\s*([\w\u4e00-\u9fff]+)\s*([:%])\s*([^\s(%][^\s(]*(?:\([^)]*\))?\]?)/);   // 名/类型分隔符 % 与 : 同收（^anc-rule-schema-sep-dual;捕获组 1 字段名/2 分隔符/3 类型;类型位不以 % 开头）——类型头行 `- X:` 仍只认冒号（块标签不是分隔符）,由上方 typeMatch 先接走   // 字段名同族收中文;类型串分词=先收标识符（[^\s(]+——不吞括号）再整收括号组（括号内容容空格,enum(high, low) 一次收全——原 \S+ 贪婪在空格断截出 enum(high, 触发余料闸,与 Inputs 位行为劈叉,^anc-rule-v7-header-types ④） // @a: anc-i18n-keyword-impl
         // 整串核余料（todo/0064——前缀匹配曾把 line( 非空 ) 截成 line( 静默入 fields:
         // 类型串之后只许空白或 # 注释,余料非空=非法形态响亮报错不静默切值）// @a: anc-type-constraint-annotation
         if (fieldMatch) {
           // 余料起点=整段匹配的结束位（不许 indexOf 类型串——"line" 会先在字段名 "line_ref" 里命中,存量扫描实撞误伤）
           const rest = trimmed.slice((fieldMatch.index ?? 0) + fieldMatch[0].length);
           if (rest.trim() !== '' && !rest.trimStart().startsWith('#')) {
-            errors.push({ kind: 'parse', line: i + 1, message: `Types 节字段 "${fieldMatch[1]}" 的类型 "${fieldMatch[2]}${rest.split('#')[0].trimEnd()}" 不合类型文法（类型串之后只许 # 注释）。非空约束的正确写法: line(非空) 或 line(nonempty)（括号内不带空格）` });
+            errors.push({ kind: 'parse', line: i + 1, message: `Types 节字段 "${fieldMatch[1]}" 的类型 "${fieldMatch[3]}${rest.split('#')[0].trimEnd()}" 不合类型文法（类型串之后只许 # 注释）。非空约束的正确写法: line(非空) 或 line(nonempty)（括号内不带空格）` });
             continue;
           }
           // 括号组整收后残余空白核（^anc-rule-v7-header-types ④——分词容空格是为 enum 逗号形,
           // 逗号归一后仍含空白的括号组〔line( 非空 )〕是 0064 拍板的非法形态,拒点从余料闸移
           // 至此,消息不变钉不动）。
-          if (/\s/.test(normalizeTypeToken(fieldMatch[2]))) {
-            errors.push({ kind: 'parse', line: i + 1, message: `Types 节字段 "${fieldMatch[1]}" 的类型 "${fieldMatch[2]}" 不合类型文法（类型串之后只许 # 注释）。非空约束的正确写法: line(非空) 或 line(nonempty)（括号内不带空格）` });
+          if (/\s/.test(normalizeTypeToken(fieldMatch[3]))) {
+            errors.push({ kind: 'parse', line: i + 1, message: `Types 节字段 "${fieldMatch[1]}" 的类型 "${fieldMatch[3]}" 不合类型文法（类型串之后只许 # 注释）。非空约束的正确写法: line(非空) 或 line(nonempty)（括号内不带空格）` });
             continue;
           }
         }
         if (fieldMatch) {
-          current.fields[fieldMatch[1]] = normalizeTypeToken(fieldMatch[2]);   // 第七收取点——头部 Types 节字段（review 实抓:漏归一的 line(非空) 在此位静默零保护,0043 形态复刻）// @a: anc-type-constraint-annotation
+          current.fields[fieldMatch[1]] = normalizeTypeToken(fieldMatch[3]);
+          if (fieldMatch[2] === ':') colonSeps?.push({ line: bodyEntries[i].line, section: 'Types', name: fieldMatch[1], type: fieldMatch[3] });   // @a: anc-rule-schema-sep-dual   // 第七收取点——头部 Types 节字段（review 实抓:漏归一的 line(非空) 在此位静默零保护,0043 形态复刻）// @a: anc-type-constraint-annotation
           // 字段 # 注释入 field_descriptions（原样保留不截断）// @a: anc-type-type-decl
           const hashIdx = trimmed.indexOf('#');
           if (hashIdx >= 0) {
@@ -594,27 +701,30 @@ function collectDeclZoneOrphans(
   }
 }
 
-function parseVarDeclSection(lines: string[], sec: Section): VarDecl[] {
+// Inputs/Outputs 声明行：分隔符 % 与 : 同收,用 : 的行记进 colonSeps（^anc-rule-schema-sep-dual）
+function parseVarDeclSection(lines: string[], sec: Section, colonSeps: SchemaColonSeparatorRecord[]): VarDecl[] {
   const vars: VarDecl[] = [];
-  for (const line of sectionBodyLines(lines, sec)) {
-    const trimmed = line.trim();
+  for (const { text, line } of sectionBodyEntries(lines, sec)) {
+    const trimmed = text.trim();
     if (!trimmed) continue;
     const m = trimmed.match(RE_VAR_DECL);
     if (m) {
-      vars.push({ name: m[1], type: normalizeTypeToken(m[2]), description: m[3]?.trim() });
+      vars.push({ name: m[1], type: normalizeTypeToken(m[3]), description: m[4]?.trim() });
+      if (m[2] === ':') colonSeps.push({ line, section: 'Inputs', name: m[1], type: m[3] });   // @a: anc-rule-schema-sep-dual
     }
   }
   return vars;
 }
 
-function parseOutputDeclSection(lines: string[], sec: Section): OutputDecl[] {
+function parseOutputDeclSection(lines: string[], sec: Section, colonSeps: SchemaColonSeparatorRecord[]): OutputDecl[] {
   const outputs: OutputDecl[] = [];
-  for (const line of sectionBodyLines(lines, sec)) {
-    const trimmed = line.trim();
+  for (const { text, line } of sectionBodyEntries(lines, sec)) {
+    const trimmed = text.trim();
     if (!trimmed) continue;
     const m = trimmed.match(RE_VAR_DECL);
     if (m) {
-      outputs.push({ name: m[1], type: normalizeTypeToken(m[2]), description: m[3]?.trim() ?? '' });
+      outputs.push({ name: m[1], type: normalizeTypeToken(m[3]), description: m[4]?.trim() ?? '' });
+      if (m[2] === ':') colonSeps.push({ line, section: 'Outputs', name: m[1], type: m[3] });   // @a: anc-rule-schema-sep-dual
     }
   }
   return outputs;
@@ -687,6 +797,7 @@ function parseStepSection(
   sec: Section,
   errors: ParseError[],
   orphans?: Array<{ line: number; text: string; section: string }>,
+  colonSeps?: SchemaColonSeparatorRecord[],   // 步骤输出行/复合字段子行仍用冒号分隔符的记录（^anc-rule-schema-sep-dual）
 ): StepNode[] {
   const flatSteps: FlatStep[] = [];
   let current: FlatStep | null = null;
@@ -967,21 +1078,30 @@ function parseStepSection(
         continue;
       }
       pendingCompound = null;
-      current.outputs.push(...parseOutputExpr(outBody,
-        msg => errors.push({ kind: 'parse', line: i + 1, message: msg })));   // 初值坏 JSON 响亮（0002）
+      const outDecls = parseOutputExpr(outBody,
+        msg => errors.push({ kind: 'parse', line: i + 1, message: msg }),   // 初值坏 JSON 响亮（0002）
+        (name, type) => {
+          // call 步骤的 + → 行是"父变量: 子输出"映射（buildOutputMapping 按冒号切）,不是名/类型声明,不记录
+          // @a: anc-rule-schema-sep-dual
+          if (current!.step_type !== 'call') colonSeps?.push({ line: i + 1, section: 'Steps', name, type });
+        });
+      current.outputs.push(...outDecls);
       current.rawOutputs.push(outBody);
       continue;
     }
 
     // 复合输出的缩进子行（`- field: type  # 说明`，缩进深于声明头行）→ fields 字段说明
     if (pendingCompound && line.length - line.trimStart().length > pendingCompound.indent) {
-      const fieldMatch = trimmed.match(/^-\s*(\w+)\s*:\s*(\S*?)\s*(?:#\s*(.*))?$/);
+      // 名/类型分隔符 % 与 : 同收（^anc-rule-schema-sep-dual;捕获组 1 名/2 分隔符/3 类型〔可空〕/4 说明）;
+      // 用冒号且类型非空才记录——`- verdict:` 无类型时冒号只是块标签,不是名/类型分隔符
+      const fieldMatch = trimmed.match(/^-\s*(\w+)\s*([:%])\s*((?:[^\s%]\S*?)?)\s*(?:#\s*(.*))?$/);   // @a: anc-rule-schema-sep-dual
       if (fieldMatch) {
         pendingCompound.decl.fields!.push({
           name: fieldMatch[1],
-          type: fieldMatch[2] ? normalizeTypeToken(fieldMatch[2]) : '',
-          description: fieldMatch[3]?.trim() ?? '',
+          type: fieldMatch[3] ? normalizeTypeToken(fieldMatch[3]) : '',
+          description: fieldMatch[4]?.trim() ?? '',
         });
+        if (fieldMatch[2] === ':' && fieldMatch[3]) colonSeps?.push({ line: i + 1, section: 'Steps', name: fieldMatch[1], type: fieldMatch[3] });
         continue;
       }
     }
@@ -1178,23 +1298,27 @@ function parseInitValue(raw: string, onError?: (msg: string) => void): unknown {
   return q ? q[1] : s;
 }
 
-function parseOutputExpr(text: string, onError?: (msg: string) => void): OutputDecl[] {
+function parseOutputExpr(text: string, onError?: (msg: string) => void, onColonSeparator?: (name: string, type: string) => void): OutputDecl[] {
   if (text.toLowerCase() === 'none') return [];
 
   // Single output with type + optional init: "name: type = 初值  # description"
   // 名字符集=Unicode 标识符 Python 3 同款（2026-08-15 作者两轮裁定——原 \w+ 只认 ASCII,
   // 中文名整行跌进裸名分支,'name: type'连型都切不出）。合法性归 V2b（此处只切分,宽一档:
   // 非法名也切出来让 V2b 报准确错,不静默跌裸名分支）。
-  const singleMatch = text.match(/^([^\s:=]+)\s*:\s*(\S+(?:\([^)]*\))?\]?)\s*(?:=\s*([^#]*?))?\s*(?:#\s*(.*))?$/u);
+  // 名/类型分隔符 % 与 : 同收（^anc-rule-schema-sep-dual）：名位排除 %,类型位不以 % 开头;
+  // 捕获组 1 名/2 分隔符/3 类型/4 初值/5 说明。用冒号时回调 onColonSeparator 交调用方决定是否记录
+  // （调用方知道所在步骤是不是 call——call 的 + → 是映射不是声明）。// @a: anc-rule-schema-sep-dual
+  const singleMatch = text.match(/^([^\s:=%]+)\s*([:%])\s*([^\s%]\S*(?:\([^)]*\))?\]?)\s*(?:=\s*([^#]*?))?\s*(?:#\s*(.*))?$/u);
   if (singleMatch) {
     const decl: OutputDecl = {
       name: singleMatch[1],
-      type: normalizeTypeToken(singleMatch[2]),
-      description: singleMatch[4]?.trim() ?? '',
+      type: normalizeTypeToken(singleMatch[3]),
+      description: singleMatch[5]?.trim() ?? '',
     };
-    if (singleMatch[3] !== undefined && singleMatch[3].trim() !== '') {
-      decl.default = parseInitValue(singleMatch[3], onError);
+    if (singleMatch[4] !== undefined && singleMatch[4].trim() !== '') {
+      decl.default = parseInitValue(singleMatch[4], onError);
     }
+    if (singleMatch[2] === ':') onColonSeparator?.(singleMatch[1], singleMatch[3]);
     return [decl];
   }
 
@@ -1807,7 +1931,8 @@ export function parseFragment(markdown: string): { ast: SpecAST; errors: ParseEr
   const lines = markdown.split('\n');
   // 整个输入当 steps 节（Section 行号 0 基,parseStepSection 内部 +1 得真实行号）
   const sec: Section = { kind: 'steps', startLine: -1, endLine: lines.length };
-  const steps = parseStepSection(lines, sec, errors);
+  const colonSeps: SchemaColonSeparatorRecord[] = [];   // 片段与全文同规记录（^anc-rule-schema-sep-dual）
+  const steps = parseStepSection(lines, sec, errors, undefined, colonSeps);
   if (steps.length === 0) {
     errors.push({ kind: 'parse', line: 1, message: '片段内无可解析步骤行（片段=裸步骤序列,如 `1. [reason] …`）' });
   }
@@ -1815,7 +1940,9 @@ export function parseFragment(markdown: string): { ast: SpecAST; errors: ParseEr
   if (maxDepth > MAX_NESTING_DEPTH) {
     errors.push({ kind: 'parse', line: 1, message: `Step nesting depth ${maxDepth} exceeds limit of ${MAX_NESTING_DEPTH}` });
   }
-  return { ast: { header: { title: '(fragment)' }, steps }, errors };
+  const header: SpecHeader = { title: '(fragment)' };
+  if (colonSeps.length > 0) header.colon_separators = colonSeps;   // @a: anc-rule-schema-sep-dual
+  return { ast: { header, steps }, errors };
 }
 
 /** 主解析入口：HopSpec markdown 全文 → SpecAST + 解析错误（engine/cli init 调）。见 [[spec-parser#^anc-struct-spec-parser]] */
@@ -1892,9 +2019,15 @@ export function parseSpec(markdown: string): { ast: SpecAST; errors: ParseError[
   if (stepsSec) {
     // Steps 区孤儿并入同一容器同走 W1（^anc-rule-decl-zone-warn Steps 扩围）
     const stepOrphans: Array<{ line: number; text: string; section: string }> = [];
-    steps = parseStepSection(lines, stepsSec, errors, stepOrphans);
+    const stepColonSeps: SchemaColonSeparatorRecord[] = [];
+    steps = parseStepSection(lines, stepsSec, errors, stepOrphans, stepColonSeps);
     if (stepOrphans.length > 0) {
       header.decl_zone_orphans = [...(header.decl_zone_orphans ?? []), ...stepOrphans];
+    }
+    // 步骤区分隔符记录并入头区记录,按行号排序（W2 报文列行号、迁移工具逐行定位都按文件顺序）
+    // @a: anc-rule-schema-sep-dual
+    if (stepColonSeps.length > 0) {
+      header.colon_separators = [...(header.colon_separators ?? []), ...stepColonSeps].sort((a, b) => a.line - b.line);
     }
     const maxDepth = getMaxNesting(steps);
     if (maxDepth > MAX_NESTING_DEPTH) {
@@ -1938,7 +2071,7 @@ export function serializeSpec(ast: SpecAST, opts?: { lang?: SpecLang }): string 
       lines.push(`- ${t.name}:${t.description ? `  # ${t.description}` : ''}`);
       for (const [field, type] of Object.entries(t.fields)) {
         const d = t.field_descriptions?.[field];
-        lines.push(`    ${field}: ${type}${d ? `  # ${d}` : ''}`);   // 注释是声明的一部分,往返不丢 // @a: anc-type-type-decl
+        lines.push(`    ${field} % ${type}${d ? `  # ${d}` : ''}`);   // 注释是声明的一部分,往返不丢 // @a: anc-type-type-decl
       }
     }
     lines.push('');
@@ -1947,7 +2080,7 @@ export function serializeSpec(ast: SpecAST, opts?: { lang?: SpecLang }): string 
   if (ast.header.inputs?.length) {
     lines.push('## ' + sectionWord('inputs', lang));
     for (const v of ast.header.inputs) {
-      let line = `- ${v.name}: ${v.type}`;
+      let line = `- ${v.name} % ${v.type}`;
       if (v.description) line += `  # ${v.description}`;
       lines.push(line);
     }
@@ -1957,7 +2090,7 @@ export function serializeSpec(ast: SpecAST, opts?: { lang?: SpecLang }): string 
   if (ast.header.outputs?.length) {
     lines.push('## ' + sectionWord('outputs', lang));
     for (const o of ast.header.outputs) {
-      let line = `- ${o.name}: ${o.type}`;
+      let line = `- ${o.name} % ${o.type}`;
       if (o.description) line += `  # ${o.description}`;
       lines.push(line);
     }
@@ -1969,11 +2102,11 @@ export function serializeSpec(ast: SpecAST, opts?: { lang?: SpecLang }): string 
     lines.push('## ' + sectionWord('tools', lang));
     for (const t of ast.header.tools) {
       let sig = `- ${t.name}(${t.params.map(p => p.name).join(', ')})`;
-      if (t.output) sig += ` -> ${t.output.name}: ${t.output.type}`;
+      if (t.output) sig += ` -> ${t.output.name} % ${t.output.type}`;
       if (t.description) sig += `  # ${t.description}`;
       lines.push(sig);
       for (const p of t.params) {
-        let pl = `  - ${p.name}: ${p.type}`;
+        let pl = `  - ${p.name} % ${p.type}`;
         if (p.description) pl += `  # ${p.description}`;
         lines.push(pl);
       }
@@ -1987,6 +2120,12 @@ export function serializeSpec(ast: SpecAST, opts?: { lang?: SpecLang }): string 
     for (const [key, val] of Object.entries(ast.header.config)) {
       lines.push(`- ${key}: ${val}`);
     }
+    lines.push('');
+  }
+
+  if (ast.header.approved_commands?.length) {   // Config 之后 Steps 之前——与概念结构图同序 // @a: anc-rule-approved-commands
+    lines.push('## ' + sectionWord('approved_commands', lang));
+    for (const prefix of ast.header.approved_commands) lines.push('- ' + joinArgvPrefix(prefix));
     lines.push('');
   }
 
@@ -2094,17 +2233,17 @@ function serializeSteps(steps: StepNode[], lines: string[], lang: SpecLang = 'en
         // ①复合输出（fields 非空）→ 展开头 `name:` + 缩进字段子行（原写 `name: yaml` 丢 fields）;
         // ②裸名引用（type 空串=更新/引用既有变量）→ 裸名不写冒号（原写 `name: ` 尾空型,
         //   re-parse 误认复合头得 type=yaml——投影漂移实锤形态）;
-        // ③常规声明 → `name: type` 照旧。
+        // ③常规声明 → `name % type`（HopSchema 分隔符正字,^anc-rule-schema-sep-dual）。
         if (o.fields?.length) {
           lines.push(`${bodyIndent}+ → ${o.name}:${o.description ? `  # ${o.description}` : ''}`);
           for (const f of o.fields) {
-            lines.push(`${bodyIndent}  - ${f.name}: ${f.type}${f.description ? `  # ${f.description}` : ''}`);
+            lines.push(`${bodyIndent}  - ${f.name} % ${f.type}${f.description ? `  # ${f.description}` : ''}`);
           }
           continue;
         }
         let outLine = o.type === ''
           ? `${bodyIndent}+ → ${o.name}`
-          : `${bodyIndent}+ → ${o.name}: ${o.type}`;
+          : `${bodyIndent}+ → ${o.name} % ${o.type}`;
         // = 初值写回（v0.10.2——原全丢:初值是语义子句〔累加器 init/每轮重置〕,丢失后 re-parse
         // 语义不同,超出"格式不保真"豁免;JSON 形态经 parseInitValue 往返稳定）// @a: anc-rule-init-value
         if (o.default !== undefined) {

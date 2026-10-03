@@ -32,12 +32,12 @@
 struct: ToolSpec
   Id: tool-spec
   Fields:
-    - name: line          # 全局唯一（同名冲突=配置错误 fail-fast，作者既裁）
-    - description: line
-    - input_schema: yaml  # 请求类型（JSON Schema）——引擎发调用前校验实参
-    - output_shape: yaml  # 响应类型——引擎收结果后校验：缺字段拒收（同 SCHEMA_MISMATCH 语义）、多字段裁剪
-    - effect: line        # 枚举 pure/read/write——副作用分级，权威在此不在实现侧申报
-    - binding: ToolBinding # 怎么送达（第二层，见下）
+    - name % line          # 全局唯一（同名冲突=配置错误 fail-fast，作者既裁）
+    - description % line
+    - input_schema % yaml  # 请求类型（JSON Schema）——引擎发调用前校验实参
+    - output_shape % yaml  # 响应类型——引擎收结果后校验：缺字段拒收（同 SCHEMA_MISMATCH 语义）、多字段裁剪
+    - effect % line        # 枚举 pure/read/write——副作用分级，权威在此不在实现侧申报
+    - binding % ToolBinding # 怎么送达（第二层，见下）
 ```
 
 要点：
@@ -76,7 +76,7 @@ struct: ToolSpec
 struct: ToolBinding
   Id: tool-binding
   Fields:
-    - kind: line   # 枚举 in-process/mcp（作者定 2026-08-12 两档收敛；exec 挂起备用——真出现'单调用即弃隔离'需求时以 mcp 的 restart_per_call 选项或复活 exec 覆盖）
+    - kind % line   # 枚举 in-process/mcp（作者定 2026-08-12 两档收敛；exec 挂起备用——真出现'单调用即弃隔离'需求时以 mcp 的 restart_per_call 选项或复活 exec 覆盖）
 ```
 
 | kind | 机制 | 附加字段 | 生命周期 | 适用 |

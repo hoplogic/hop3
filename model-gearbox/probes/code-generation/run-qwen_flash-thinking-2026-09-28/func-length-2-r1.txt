@@ -1,0 +1,36 @@
+```python
+import ast
+import sys
+
+if len(sys.argv) < 2:
+    print("Usage: script.py <file>", file=sys.stderr)
+    sys.exit(1)
+
+filename = sys.argv[1]
+try:
+    with open(filename, 'rt', encoding='utf-8') as file:
+        content = file.read()
+except Exception:
+    print(f"Failed to read file: {filename}", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    tree = ast.parse(content, filename=filename, mode='exec')
+except SyntaxError:
+    print(f"Syntax error in file: {filename}", file=sys.stderr)
+    sys.exit(1)
+
+violations = []
+for node in ast.walk(tree):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        length = node.end_lineno - node.lineno + 1
+        if length > 40:
+            violations.append((node.lineno, node.name, length))
+
+if violations:
+    for lineno, name, length in violations:
+        print(f"行{lineno}: 函数 '{name}' 长度为 {length} 行，超过40行限制。", file=sys.stderr)
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

@@ -1,0 +1,109 @@
+```python
+import ast
+import re
+import json
+import sys
+
+def get_parameters(func_node):
+    params = []
+    for arg in func_node.args.args:
+        params.append(arg.arg)
+    if func_node.args.vararg:
+        params.append(func_node.args.vararg.arg)
+    for arg in func_node.args.kwonlyargs:
+        params.append(arg.arg)
+    if func_node.args.kwarg:
+        params.append(func_node.args.kwarg.arg)
+    return params
+
+def is_public_function(node):
+    if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+        if node.name.startswith('_'):
+            return False
+        return True
+    return False
+
+def has_docstring(node):
+    if not node.body:
+        return False
+    first_stmt = node.body[0]
+    if isinstance(first_stmt, ast.Expr) and isinstance(first_stmt.value, str):
+        return True
+    return False
+
+def get_docstring_text(node):
+    if not has_docstring(node):
+        return ""
+    return node.body[0].value
+
+def extract_param_names(docstring):
+    words = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', docstring)
+    return set(words)
+
+def should_skip_param(param_name):
+    return param_name in ('self', 'cls')
+
+def check_function(node, filename, errors):
+    if not is_public_function(node):
+        return
+
+    if not has_docstring(node):
+        errors.append(f"{filename}:{node.lineno}: function '{node.name}' has no docstring")
+        return
+
+    docstring = get_docstring_text(node)
+    param_names = get_parameters(node)
+    filtered_params = [p for p in param_names if not should_skip_param(p)]
+    if not filtered_params:
+        return
+
+    found_params = extract_param_names(docstring)
+
+    for param in filtered_params:
+        if param not in found_params:
+            errors.append(f"{filename}:{node.lineno}: docstring for '{node.name}' does not mention parameter '{param}'")
+
+def check_class_methods(class_node, filename, errors):
+    for child in ast.iter_child_nodes(class_node):
+        if isinstance(child, ast.FunctionDef) or isinstance(child, ast.AsyncFunctionDef):
+            check_function(child, filename, errors)
+        elif isinstance(child, ast.ClassDef):
+            check_class_methods(child, filename, errors)
+
+def main():
+    if len(sys.argv) < 2:
+        sys.exit(1)
+
+    filename = sys.argv[1]
+
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            source = f.read()
+    except Exception:
+        sys.exit(1)
+
+    if not source.strip():
+        sys.exit(0)
+
+    try:
+        tree = ast.parse(source, filename=filename)
+    except SyntaxError:
+        sys.exit(1)
+
+    errors = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+            check_function(node, filename, errors)
+        elif isinstance(node, ast.ClassDef):
+            check_class_methods(node, filename, errors)
+
+    if errors:
+        for error in errors:
+            print(error, file=sys.stderr)
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+main()
+```

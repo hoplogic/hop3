@@ -1,0 +1,58 @@
+下面是校验脚本的实现要点：
+
+- 用 `open(path, "r", encoding="utf-8")` 以 UTF-8 文本模式整读文件，`len()` 统计的是字符数(一个汉字算 1 个)，自然满足“按字符不按字节”；
+- 读入后先 `replace("\r\n", "\n")`、`replace("\r", "\n")` 做换行规范化(文本模式的 universal newlines 本身也会做同样转换，这里是双保险)，保证 `\r` 永远不会计入行长；
+- 用 `split("\n")` 切分行，文件以换行结尾(或为空文件)时丢弃切分出的末尾空片段；最后一行没有换行符结尾时会照常保留并参与检查；
+- 判定条件是 `len > 100`：恰好 100 合规，101 才违规；空文件切分后没有行，合规；
+- 违规时逐行打印 `line N: length X exceeds limit 100`,最后 `sys.exit(1)`;全部合规静默通过并 `sys.exit(0)`;打不开文件/UTF-8 解码失败时向 `sys.stderr` 报错并以非零码退出；
+- 整个脚本只用 `import sys`,全部使用白名单内的内置名与方法(`replace split endswith pop read close` 等)，没有下划线开头的名字，没有重绑定内置名，主逻辑全部在模块顶层。
+
+```python
+"""校验文本文件每一行长度是否不超过 100 个字符(按字符数, 换行符不计)。"""
+import sys
+
+LIMIT = 100
+
+# 从命令行参数取得待检查文件路径
+if len(sys.argv) < 2:
+    print("usage: python check_line_length.py <file>", file=sys.stderr)
+    sys.exit(1)
+
+path = sys.argv[1]
+
+# 用 UTF-8 文本模式读取整个文件
+try:
+    handle = open(path, "r", encoding="utf-8")
+except OSError as err:
+    print(f"error: cannot open {path}: {err}", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    content = handle.read()
+except ValueError as err:
+    print(f"error: cannot decode {path} as utf-8: {err}", file=sys.stderr)
+    handle.close()
+    sys.exit(1)
+handle.close()
+
+# 规范化换行: \r\n 与孤立 \r 都视作换行, 保证 \r 永远不会计入行长
+content = content.replace("\r\n", "\n")
+content = content.replace("\r", "\n")
+
+# 按 \n 切分行; 文件以换行结尾(或为空)时, 切分出的末尾空片段不是一个真实的行
+lines = content.split("\n")
+if content == "" or content.endswith("\n"):
+    lines.pop()
+
+# 逐行检查, 逐条打印违规位置(行号与原因); 恰好 100 合规, 101 才违规
+has_violation = False
+for num, text in enumerate(lines):
+    width = len(text)
+    if width > LIMIT:
+        has_violation = True
+        print(f"line {num + 1}: length {width} exceeds limit {LIMIT}")
+
+if has_violation:
+    sys.exit(1)
+sys.exit(0)
+```

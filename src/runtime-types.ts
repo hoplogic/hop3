@@ -126,6 +126,10 @@ export interface StateFile {
   // 两条通道各推一遍是最高危事故。run 建立时入口写入,推进类入口核对不符响亮拒;缺席=旧 run
   // 宽容,首个推进入口认领。见 [[exec-engine#^anc-exec-driver-channel]]）。// @a: anc-exec-driver-channel
   driver_channel?: 'cli' | 'mcp';
+  // 写入序号与最后写入者（todo/0114——同一实例目录被两个进程推进时,内存里的账过时的那个
+  // 写盘前回读发现盘上序号更大即拒绝覆盖。缺席=旧文件,按 0 算。见 [[exec-engine#^anc-exec-state-seq-guard]]）。// @a: anc-exec-state-seq-guard
+  state_seq?: number;
+  last_writer?: { pid: number; at: string };
   abort_reason?: string;  // 中止原因（仅 aborted 在场;人话入账供追溯——中止是意图不是失败,与 terminal_failure 区分）// @a: anc-exec-abort
   expansion_count?: number;  // 全实例累计展开次数（subtask free 熔断底账,上限=Config expansion_max 缺省20——跨进程持久防空炮）// @a: anc-exec-subtask-free-expand
   // 重复 replan 检测（REPLAN_DUPLICATE）跨进程稳定——两模式的 replan 都跨进程（复用模式每命令
@@ -168,7 +172,7 @@ export interface StateFile {
   max_concurrent?: number; // fan-out 窗口上限（来自 resource_limits），持久化供顾问跨进程复原——host_context 不含 resource_limits
   // HostConfig 可序列化最小子集（不含凭证）——doc-ref/P15 跨进程 resume 需 workspace+sandbox。
   // 见 design/exec-engine.md ^anc-exec-host-context-persist。// @a: anc-exec-doc-ref-resolve
-  host_context?: { workspace_dir: string; sandbox: SandboxConfig; hop_env?: Record<string, string>; config_project_dir?: string };   // hop_env 随 state 持久化——复用模式 next/done 独立进程,doc-ref 展开/L2e/ask 回填须同表 // @a: anc-config-hop-env ; config_project_dir=配置读取根随快照钉住（BUG-I）// @a: anc-mcp-run-restore
+  host_context?: { workspace_dir: string; sandbox: SandboxConfig; hop_env?: Record<string, string>; config_project_dir?: string };   // hop_env 随 state 持久化——复用模式 next/done 独立进程,doc-ref 展开/L2e/ask 回填须同表 // @a: anc-config-hop-env, anc-mcp-run-restore — config_project_dir=配置读取根随快照钉住（BUG-I）
 }
 
 /** 单个作用域的持久化数据——父 scope id（root 为 null）+ 本层变量。见 [[exec-engine#^anc-exec-vars-scope-persist]] */

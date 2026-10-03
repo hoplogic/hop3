@@ -1,0 +1,28 @@
+```python
+import ast
+import sys
+
+file_path = sys.argv[1]
+with open(file_path, 'rt', encoding='utf-8') as f:
+    content = f.read()
+
+tree = ast.parse(content)
+violations = []
+
+for node in ast.walk(tree):
+    if isinstance(node, ast.FunctionDef):
+        length = node.end_lineno - node.lineno + 1
+        if length > 40:
+            violations.append((node.lineno, length))
+    elif isinstance(node, ast.AsyncFunctionDef):
+        length = node.end_lineno - node.lineno + 1
+        if length > 40:
+            violations.append((node.lineno, length))
+
+if violations:
+    for lineno, length in violations:
+        sys.stderr.write('Function at line {0} has length {1}, which exceeds 40.\n'.format(lineno, length))
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

@@ -1,0 +1,98 @@
+思路说明：
+
+- **找出要检查的函数**：自己递归遍历 AST(只用 `ast.iter_child_nodes`),用一个 `scope` 标记区分“模块/类体”(`outer`)和“函数体内部”(`func`)。穿过任何 `FunctionDef`/`AsyncFunctionDef` 后一律变为 `func`,因此嵌套函数、局部类的方法都不会被检查；类不改变 `scope`,所以类里嵌套的类的方法仍会检查。名字以下划线开头的函数直接跳过。
+- **文档字符串**：用 `ast.get_docstring`,它只认“函数体第一条语句是字符串字面量”，与条款定义一致；取不到即缺文档字符串。
+- **参数收集**：依次取 `posonlyargs`、`args`、`vararg`、`kwonlyargs`、`kwarg`,跳过 `self`/`cls`。
+- **完整词判断**：对每个参数用 `re.search(r"\b" + re.escape(name) + r"\b", docstring)`,大小写敏感；`recounting`/`counter` 不算，`count.`、`` `count` ``、`(count)` 算。
+- 违规逐条打印行号与原因，退出码 1;合规或空文件退出码 0。全程只使用沙箱允许的 import 形式、模块符号、内置名和方法。
+
+```python
+import ast
+import re
+import sys
+
+violations = []
+
+
+# 收集需要检查的参数名:仅位置参数、普通参数、*args、仅关键字参数、**kwargs;
+# 名叫 self 或 cls 的参数不要求提到。
+def collect_params(func):
+    arginfo = func.args
+    names = []
+    for argnode in arginfo.posonlyargs:
+        names.append(argnode.arg)
+    for argnode in arginfo.args:
+        names.append(argnode.arg)
+    if arginfo.vararg is not None:
+        names.append(arginfo.vararg.arg)
+    for argnode in arginfo.kwonlyargs:
+        names.append(argnode.arg)
+    if arginfo.kwarg is not None:
+        names.append(arginfo.kwarg.arg)
+    required = []
+    for name in names:
+        if name != "self" and name != "cls":
+            required.append(name)
+    return required
+
+
+# 检查单个公开函数:必须有文档字符串,且以完整词形式提到每个要求的参数。
+def check_function(func):
+    if func.name.startswith("_"):
+        return
+    doc = ast.get_docstring(func)
+    if doc is None:
+        violations.append(
+            "line " + str(func.lineno) + ': function "' + func.name + '" has no docstring'
+        )
+        return
+    for param in collect_params(func):
+        pattern = r"\b" + re.escape(param) + r"\b"
+        if re.search(pattern, doc) is None:
+            violations.append(
+                "line " + str(func.lineno) + ': function "' + func.name
+                + '" docstring does not mention parameter "' + param + '"'
+            )
+
+
+# scope 为 outer 表示模块体或类体;一旦穿过任何函数定义就变成 func,
+# 其内部的函数、局部类的方法都不再检查;类定义不改变 scope。
+def scan(node, scope):
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if scope == "outer":
+                check_function(child)
+            scan(child, "func")
+        else:
+            scan(child, scope)
+
+
+if len(sys.argv) < 2:
+    print("usage: python check.py <file>", file=sys.stderr)
+    sys.exit(1)
+
+path = sys.argv[1]
+
+try:
+    handle = open(path, "r", encoding="utf-8")
+    source = handle.read()
+    handle.close()
+except (OSError, ValueError) as err:
+    print("cannot read file: " + str(err), file=sys.stderr)
+    sys.exit(1)
+
+try:
+    tree = ast.parse(source)
+except (SyntaxError, ValueError) as err:
+    print("cannot parse file: " + str(err), file=sys.stderr)
+    sys.exit(1)
+
+scan(tree, "outer")
+
+if len(violations) > 0:
+    for msg in violations:
+        print(msg)
+    sys.exit(1)
+
+sys.exit(0)
+```

@@ -1,0 +1,29 @@
+```python
+import sys
+import re
+
+def check_file_length(filename):
+    try:
+        with open(filename, 'r', encoding='utf-8') as file:
+            lines = file.readlines()
+    except OSError as e:
+        print(f"Error opening file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    violations = []
+    for i, line in enumerate(lines, start=1):
+        # 去掉行尾换行符（包括 \r\n 中的 \r）
+        stripped_line = line.rstrip('\r\n')
+        if len(stripped_line) > 100:
+            violations.append(f"Line {i}: {len(stripped_line)} characters (exceeds 100)")
+
+    if violations:
+        for violation in violations:
+            print(violation, file=sys.stderr)
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+filename = sys.argv[1]
+check_file_length(filename)
+```

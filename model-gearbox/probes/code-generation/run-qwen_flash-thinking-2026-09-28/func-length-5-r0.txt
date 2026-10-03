@@ -1,0 +1,38 @@
+```python
+import ast
+import sys
+
+def main():
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    
+    filename = sys.argv[1]
+    
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except Exception:
+        sys.exit(1)
+    
+    try:
+        tree = ast.parse(content, filename=filename)
+    except SyntaxError:
+        sys.exit(1)
+    
+    violations = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+            length = node.end_lineno - node.lineno + 1
+            if length > 40:
+                violations.append((node.lineno, length))
+    
+    if violations:
+        violations.sort()
+        for lineno, length in violations:
+            sys.stderr.write(f"line {lineno}: function has {length} lines (exceeds 40 lines)\n")
+        sys.exit(1)
+    
+    sys.exit(0)
+
+main()
+```

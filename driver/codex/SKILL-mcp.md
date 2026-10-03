@@ -1,6 +1,7 @@
 ---
 name: hopspec-mcp
-description: Drive HopSpec structured execution specs with the hopjit engine via its MCP server (execution runs in-server with its own LLM providers; this shell only starts runs, relays HITL, and reports results). Use only when the user explicitly asks for MCP/standalone execution; the default entry for running specs is $hopspec (reuse mode).
+description: Dispatched by $hop only when the user explicitly asks for MCP/standalone: the spec runs inside the hopjit MCP server process with its own LLM; this shell only starts the run, relays human-in-the-loop stops, and reports results. Everything else goes through $hop.
+user-invocable: false
 ---
 
 %% @trace
@@ -8,7 +9,7 @@ description: Drive HopSpec structured execution specs with the hopjit engine via
 	source: [[codex-driver-carrier]]
 	source_id: hopjit-codex-driver-carrier
 	type: extract
-	last_sync: 2026-08-31T09:51+0800
+	last_sync: 2026-10-01T16:11+0800
 	note: MCP 装配薄壳（Codex 载体）。2026-08-27 四改双名双壳：与复用壳 $hopspec 不同名并存安装（装点 <skills>/hopspec-mcp/）——名字即模式,零判定零装配选择（同名互斥与单壳双段两代形态退役,演进史 design ^anc-driver-codex-standalone-dispatch 四改条款）。四步薄协议正文=同锚契约;凭证经注册块 env_vars 按名透传（干净环境实撞防线）;防双执行=引擎 driver_channel 硬闸。
 %%
 
@@ -18,9 +19,9 @@ description: Drive HopSpec structured execution specs with the hopjit engine via
 
 支持：`run <spec> [params]` · `list [dir]` · `status` · `resume`。
 
-> **防误配**：Codex 的 MCP 工具延迟加载——注册成功的工具也不出现在工具清单里，**看不见≠不存在，直接发起调用**。若 `mcp__hopjit__list_runs` 调用被运行时拒绝（无法解析类错误），说明 server 未注册——提示用户重跑 `hopjit install-skill --mcp --carrier codex`（配置自举+注册一次完成）或检查 `~/.codex/config.toml` 的 `[mcp_servers.hopjit]`（须含 `env_vars` 凭证名透传），**不要**改用 hopjit CLI 驱动（那是 `$hopspec` 复用壳的协议——用户敲的是本壳，静默换协议=绕过用户的模式指定）。
+> **防误配**：Codex 的 MCP 工具延迟加载——注册成功的工具也不出现在工具清单里，**看不见≠不存在，直接发起调用**。若 `mcp__hopjit__list_runs` 调用被运行时拒绝（无法解析类错误），说明 server 未注册——提示用户重跑 `hopjit install-skill --carrier codex`（缺省即注册——配置自举+注册一次完成）或检查 `~/.codex/config.toml` 的 `[mcp_servers.hopjit]`（须含 `env_vars` 凭证名透传），**不要**改用 hopjit CLI 驱动（那是 `$hopspec` 复用壳的协议——用户敲的是本壳，静默换协议=绕过用户的模式指定）。
 >
-> **跨通道防线**：`resume_run`/`stop_run` 返回 `DRIVER_CHANNEL_MISMATCH` = 该 run 由 CLI（复用模式）建立——提示用户用 `$hopspec` 继续那个 run，不要强行重试（双执行是最高危事故，引擎硬闸拒绝即防线生效）。
+> **跨通道防线**：`resume_run`/`stop_run` 返回 `DRIVER_CHANNEL_MISMATCH` = 该 run 由 CLI（复用模式）建立——提示用户对 `$hop` 说"继续那个活"（走复用模式），不要强行重试（双执行是最高危事故，引擎硬闸拒绝即防线生效）。
 
 ## 0. 前置：定位 spec + 组装 params
 

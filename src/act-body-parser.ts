@@ -225,8 +225,16 @@ function findCommentStart(s: string): number {
 // 递归下降 parser
 // ---------------------------------------------------------------------------
 
+// 括号在本行没闭合的定向报错（^anc-step-act-body-one-line,2026-09-23 作者拍板 todo/0102）：hop_python 按行解析,
+// 括号结构内撞到换行=跨行书写或漏写右括号,两种成因同一条文案都指对方向;报出后抛哨兵中止整个解析,
+// 续行在按行解析器眼里都是垃圾,重新同步只能猜,猜出来的连环报错全是噪声（原跨行字典连报五条）。
+// @a: anc-step-act-body-one-line
+const ONE_LINE_ABORT = Symbol('one-line-abort');
+const ONE_LINE_ERR = ' 在本行没有闭合：hop_python 每条语句写在一行内，字典/列表字面量不能跨行，装不下就拆成多个赋值';
+
 class Parser {
   private pos = 0;
+  private brackets: Token[] = [];   // 当前所处括号结构的开记号栈（最内层在栈顶）——进结构压栈、离开出栈（try/finally 防泄漏） // @a: anc-step-act-body-one-line
   constructor(private toks: Token[], private errors: ParseError[]) {}
 
   private comprehensionDepth = 0;   // 推导嵌套深度计数器（^anc-step-act-body-comprehension:嵌套深度≤2,2026-09-03 作者拍板放宽原禁嵌套——进推导+1解析完-1,当前已在第2层还要开新推导即第3层,拒;element 先于 for 解析,其内嵌套由推导完成后回查 exprComprehensionDepth 深度感知补拦)
@@ -235,7 +243,20 @@ class Parser {
   private at(kind: TokKind): boolean { return this.peek().kind === kind; }
   private atKeyword(kw: string): boolean { const t = this.peek(); return t.kind === 'ident' && t.value === kw; }
   private peekAhead(n: number): Token | undefined { return this.toks[this.pos + n]; }
-  private err(msg: string): void { this.errors.push({ kind: 'parse', line: this.peek().line, message: 'act body: ' + msg }); }
+  private err(msg: string): void {
+    // 括号结构内撞换行/输入结束 → 原 msg 是跨行的连带症状,改报一条定向错误并中止解析 // @a: anc-step-act-body-one-line
+    const open = this.brackets[this.brackets.length - 1];
+    if (open && (this.at('newline') || this.at('eof'))) {
+      this.errors.push({ kind: 'parse', line: open.line, message: 'act body: ' + open.value + ONE_LINE_ERR });
+      throw ONE_LINE_ABORT;
+    }
+    this.errors.push({ kind: 'parse', line: this.peek().line, message: 'act body: ' + msg });
+  }
+  /** 在括号结构内解析:压开记号、finally 出栈（^anc-step-act-body-one-line） */
+  private inBracket<T>(open: Token, f: () => T): T {
+    this.brackets.push(open);
+    try { return f(); } finally { this.brackets.pop(); }
+  }
 
   private skipNewlines(): void { while (this.at('newline')) this.next(); }
 
@@ -450,20 +471,24 @@ class Parser {
         // [start:stop] 切片——端点各自可省可负,钳位宽容（^anc-step-act-body-slice,2026-09-05
         // todo/0071:LLM 按 Python 直觉写 l[2:] 是本能,原报文"] 未闭合"不指路烧两轮定位）。
         // @a: anc-step-act-body-slice
-        this.next();
-        let start: ActExpr | undefined;
-        if (!this.at('colon')) {
-          start = this.parseExpr();
-          if (this.at('rbracket')) { this.next(); e = { type: 'index', object: e, index: start }; continue; }
-        }
-        if (!this.at('colon')) { this.err('] 未闭合'); break; }
-        this.next();   // 吃切片 ':'
-        let stop: ActExpr | undefined;
-        if (!this.at('rbracket') && !this.at('colon')) stop = this.parseExpr();
-        if (this.at('colon')) { this.err('步长切片（l[::2] 三段形态）不支持——反转 l[::-1] 用 reversed(l)；隔位取用推导式 [l[i] for i in range(0, len(l), 2)]'); break; }
-        if (!this.at('rbracket')) { this.err('] 未闭合（切片）'); break; }
-        this.next();
-        e = { type: 'slice', object: e, ...(start ? { start } : {}), ...(stop ? { stop } : {}) };
+        const obj = e;
+        const r = this.inBracket(this.next(), (): ActExpr | null => {
+          let start: ActExpr | undefined;
+          if (!this.at('colon')) {
+            start = this.parseExpr();
+            if (this.at('rbracket')) { this.next(); return { type: 'index', object: obj, index: start }; }
+          }
+          if (!this.at('colon')) { this.err('] 未闭合'); return null; }
+          this.next();   // 吃切片 ':'
+          let stop: ActExpr | undefined;
+          if (!this.at('rbracket') && !this.at('colon')) stop = this.parseExpr();
+          if (this.at('colon')) { this.err('步长切片（l[::2] 三段形态）不支持——反转 l[::-1] 用 reversed(l)；隔位取用推导式 [l[i] for i in range(0, len(l), 2)]'); return null; }
+          if (!this.at('rbracket')) { this.err('] 未闭合（切片）'); return null; }
+          this.next();
+          return { type: 'slice', object: obj, ...(start ? { start } : {}), ...(stop ? { stop } : {}) };
+        });
+        if (!r) break;
+        e = r;
       } else if (this.at('lparen')) {
         // 调用：e 必须是 var（callee 名）。field 链上的调用是 Python 惯性错误
         // （os.listdir(x) / s.strip()），定向报错指对方向，防 agent 盲目重试。
@@ -486,7 +511,9 @@ class Parser {
     return e;
   }
   private parseCallArgs(callee: string): CallExpr {
-    this.next(); // (
+    return this.inBracket(this.next(), () => this.parseCallArgsInner(callee));   // ( 压栈（^anc-step-act-body-one-line）
+  }
+  private parseCallArgsInner(callee: string): CallExpr {
     const args: CallArg[] = [];
     if (!this.at('rparen')) {
       for (;;) {
@@ -526,10 +553,28 @@ class Parser {
       this.next(); return { type: 'literal', value: t.value === 'True', literal_kind: 'bool' };
     }
     if (t.kind === 'ident' && !KEYWORDS.has(t.value)) { this.next(); return { type: 'var', name: t.value }; }
-    if (t.kind === 'lparen') { this.next(); const e = this.parseExpr(); if (this.at('rparen')) this.next(); else this.err(') 未闭合'); return e; }
+    if (t.kind === 'lparen') {
+      return this.inBracket(this.next(), () => { const e = this.parseExpr(); if (this.at('rparen')) this.next(); else this.err(') 未闭合'); return e; });
+    }
     // 列表字面量 [1, "a", x]（Python 对齐 2026-08-10）——lbracket 在 primary 位即字面量（postfix 位才是下标）
-    if (t.kind === 'lbracket') {
+    if (t.kind === 'lbracket') return this.inBracket(this.next(), () => this.parseListLiteral());
+    // 对象字面量 {"k": v} / {key_var: v}——键=表达式,Python 同义（2026-08-20 作者定『与 python
+    // 一致』:字面量键最常用,裸名=变量引用〔未定义 B4 静态拦并指路〕,计算键合法;求值 str 归一）。
+    // @a: anc-step-act-body-dict-key
+    if (t.kind === 'lbrace') return this.inBracket(this.next(), () => this.parseDictLiteral());
+    // f-string f"x={v}"——原文按 {expr} 切分，插值段经 parseExpression 子解析
+    if (t.kind === 'fstring') {
       this.next();
+      return this.parseFString(t.value, t.line);
+    }
+    this.err(`非法表达式起始: ${t.value || t.kind}`);
+    this.next();
+    return { type: 'literal', value: '', literal_kind: 'string' }; // 占位，错误已记
+  }
+
+  // 列表字面量/列表推导（开 [ 已吃并压栈）
+  private parseListLiteral(): ActExpr {
+    {
       const elements: ActExpr[] = [];
       if (!this.at('rbracket')) {
         elements.push(this.parseExpr());
@@ -554,10 +599,11 @@ class Parser {
           } finally {
             this.comprehensionDepth--;
           }
-          if (this.at('rbracket')) this.next(); else this.err('] 未闭合（列表推导）');
           // element 先于 for 解析,其内嵌套不经在场计数器——回查子树推导深度:外围层数(comprehensionDepth,
           // 此刻已减回=包住本推导的层数)+本推导 1 层+element 内深度 >2 即第 3 层,拒。
+          // 须在吃 ] 之前报:吃完 ] 当前记号就是行末换行,而本层括号仍在栈上,err 会误判成"括号跨行"（^anc-step-act-body-one-line）。
           if (this.comprehensionDepth + 1 + exprComprehensionDepth(elements[0]) > 2) this.err(COMPREHENSION_DEPTH_ERR);
+          if (this.at('rbracket')) this.next(); else this.err('] 未闭合（列表推导）');
           return { type: 'comprehension', element: elements[0], itemVar: it.value, source, ...(filter ? { filter } : {}) };
         }
         while (this.at('comma')) { this.next(); if (this.at('rbracket')) break; elements.push(this.parseExpr()); }
@@ -565,11 +611,11 @@ class Parser {
       if (this.at('rbracket')) this.next(); else this.err('] 未闭合（列表字面量）');
       return { type: 'list_literal', elements };
     }
-    // 对象字面量 {"k": v} / {key_var: v}——键=表达式,Python 同义（2026-08-20 作者定『与 python
-    // 一致』:字面量键最常用,裸名=变量引用〔未定义 B4 静态拦并指路〕,计算键合法;求值 str 归一）。
-    // @a: anc-step-act-body-dict-key
-    if (t.kind === 'lbrace') {
-      this.next();
+  }
+
+  // 对象字面量（开 { 已吃并压栈） // @a: anc-step-act-body-dict-key
+  private parseDictLiteral(): ActExpr {
+    {
       const entries: Array<{ key: ActExpr; value: ActExpr }> = [];
       if (!this.at('rbrace')) {
         for (;;) {
@@ -583,14 +629,6 @@ class Parser {
       if (this.at('rbrace')) this.next(); else this.err('} 未闭合（对象字面量）');
       return { type: 'dict_literal', entries };
     }
-    // f-string f"x={v}"——原文按 {expr} 切分，插值段经 parseExpression 子解析
-    if (t.kind === 'fstring') {
-      this.next();
-      return this.parseFString(t.value, t.line);
-    }
-    this.err(`非法表达式起始: ${t.value || t.kind}`);
-    this.next();
-    return { type: 'literal', value: '', literal_kind: 'string' }; // 占位，错误已记
   }
 
   // f-string 原文切分：{expr} 为插值（{{/}} 转义为字面花括号），文本段做标准转义
@@ -646,7 +684,9 @@ export function parseActBody(
   const toks = tokenize(bodyLines, baseLine, errors);
   if (!toks) return null;
   const parser = new Parser(toks, errors);
-  const statements = parser.parseProgram();
+  let statements: ActStatement[];
+  try { statements = parser.parseProgram(); }
+  catch (e) { if (e === ONE_LINE_ABORT) return null; throw e; }   // 括号跨行定向报错已写入 errors（^anc-step-act-body-one-line）
   if (errors.length > before) return null; // 有解析错误则不产出 body
   return { statements, source_location: { line_start: baseLine, line_end: baseLine + bodyLines.length } };
 }
@@ -667,7 +707,9 @@ export function parseExpression(exprText: string, errors: ParseError[]): ActExpr
   const before = errors.length;
   const p = new Parser(toks, errors);
   // Parser 私有方法经内部出口调用（同文件内 friend 访问）
-  const expr = (p as unknown as { parseExpr(): ActExpr }).parseExpr();
+  let expr: ActExpr;
+  try { expr = (p as unknown as { parseExpr(): ActExpr }).parseExpr(); }
+  catch (e) { if (e === ONE_LINE_ABORT) return null; throw e; }   // 同上,case 条件宿主同款（^anc-step-act-body-one-line）
   // 表达式后必须只剩换行/EOF——尾随内容（如 `x == 1 extra`）= 非法
   const rest = (p as unknown as { peek(): Token }).peek();
   if (rest.kind !== 'newline' && rest.kind !== 'eof') {

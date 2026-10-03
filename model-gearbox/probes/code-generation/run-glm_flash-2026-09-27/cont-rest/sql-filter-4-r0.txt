@@ -1,0 +1,16 @@
+```sql
+SELECT id, customer_id, amount
+FROM orders
+WHERE status = 'paid'
+  AND amount IS NOT NULL
+  AND amount >= 100
+  AND created_at >= '2026-03-01 00:00:00'
+  AND created_at <= '2026-03-31 23:59:59'
+ORDER BY amount DESC, id DESC;
+```
+
+要点说明:
+- `status = 'paid'`:SQLite 默认 BINARY 排序规则,`=` 是区分大小写和空格的精确匹配,`'PAID'`、`'paid '` 都不会命中;`status` 为 NULL 也自然被排除。
+- `amount >= 100` 本身就会排除 NULL(NULL 参与比较结果为 NULL,不满足 WHERE),显式加 `amount IS NOT NULL` 只是更清晰。
+- 日期用字符串比较:由于 `created_at` 固定为 `'YYYY-MM-DD HH:MM:SS'` 格式,字典序与时间序一致,闭区间 `[2026-03-01 00:00:00, 2026-03-31 23:59:59]` 恰好覆盖 3 月 31 日全天。
+- 排序:`amount DESC, id DESC`,amount 相同时新订单(id 更大)在前;无命中时返回空结果集。

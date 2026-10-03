@@ -1,0 +1,100 @@
+# glm-5.3-flash 能力档案（字段契约见 ../README.md;判据方法论见 docs/tutorials/D12）
+# ⚠ 本档案测的是 glm-5.3-flash × 智谱 open.bigmodel.cn/api/anthropic 端点这个组合。端点协议面实测见 maintainers/模型端点票.md。
+# ⚠ 本端点思考**恒开、关不掉**(发 thinking disabled 直接报 400)。下面所有数字都是思考开档量的,
+#   不能与 qwen-flash 档案(思考关档)的数字直接比高低——两家差距里有多少是思考带来的,这轮没法拆开。
+# ⚠ 引擎要关思考时(思考烧穿记名册、步骤 @thinking off、路由规则关思考、act/commit 缺省关)原本会对本端点发 disabled 被 400,
+#   已由 todo/0118 修掉(commit ecf042af):provider 配 thinking_disable_unsupported: true 后,引擎改发 output_config effort low("尽量少想")。
+# 测试时该端点尚未接进真配置,探针经临时配置(service_id=glm_flash,配 thinking: enabled)跑,见 todo/plan-flash双端点变速箱测评.md;
+#   之后已按作者同意接进 ~/.hopjit/config.yaml(thinking: enabled + thinking_disable_unsupported: true)。
+model: glm-5.3-flash          # 响应体 model 字段实测值(各族 summary 的 model_from_response 均为 glm-5.3-flash)
+provider_ref: glm_flash       # 参考接入写法见 maintainers/模型端点票.md「接入参考」节;密钥变量 GLM_KEY(只在交互式 zsh 里有)
+endpoint_note: https://open.bigmodel.cn/api/anthropic;思考恒开;tool_choice 强制调工具被无视(照常回文字——引擎不发 tool_choice,不受影响)
+context_window: 1030553       # 端点实测(run-context-window,2026-09-28):收下 1030553 输入 token,估算 105 万时 400 拒收("[1261][prompt is too long]"),约 103 万。
+  # 收下的四发(14 万/25 万/50 万/103 万)全部答对开头的暗号——窗口名义与实用一致。超窗时端点报错拒收(不静默截断);
+  #   另有请求体大小上限 50MB(超了回 413,与 token 窗口是两道闸)。表=../probes/context-window/endpoint-context-windows.yaml
+max_output_tokens: 131072     # 端点请求上限:max_tokens 超过 131072 报 400。实际写出量:数数任务两发自然写完 10417、11483 token,
+                              #   数得更长模型会自己拒写,真实写出上限量不出来(run-output-cap,表 ../probes/output-cap/endpoint-output-caps.yaml)
+measured: 2026-09-27          # 探针产物目录名里的日期是 UTC 日期,部分显示为 2026-09-26;宏观任务实跑 2026-09-27/28(宏观任务验收与成绩 flash 双端点矩阵)
+latency_note: 思考恒开且想得久——非流式长生成单发很慢:G2 40 要点档每发约 3 分钟,80 要点档每发约 8 分钟;act_free 单发最慢 160 秒,有一发撞 5 分钟超时。
+  node 内建 fetch 缺省只等响应头 300 秒,直连探针第一、二次跑长档全部被客户端自己掐断(UND_ERR_HEADERS_TIMEOUT),
+  第三次把等待放到 30 分钟才量出来。引擎同病:引擎给 SDK 设的非流式长超时(design ^anc-exec-nonstreaming-timeout)同样被 300 秒先掐断,
+  且会当网络错误重试 6 次后报"网络中断"——已由 todo/0117 修掉(commit d36803b0,引擎用 undici 放宽等待时限)
+
+dims:
+  check_judge: checklist-only      # P1 三层实测(run-judge-granularity,n=6,思考开,产物 ../probes/judge-granularity/run-glm_flash-2026-09-27/):
+    # L2 按清单核验满分——好卷 6/6 判过、坏卷 6/6 判不过、零表内矛盾、漏项定位 6/6。L3 单点核验 12/12(好坏两臂全对)。
+    # L1 开放式核验出现跨轮相反判向(agent 人工比对):同一份好卷 6 轮里 4 轮判过、2 轮判不过。
+    #   判不过的第 3、6 轮主意见是"P5 缺'健康成年人→多数人'的桥接前提"(第 3 轮另加"P3 缺'残留影响睡眠'的桥接前提");
+    #   判过的第 2 轮明说"P5 前提含 FDA 建议及四杯含量假设,核查路径完整"——对 P5 的要求与第 6 轮直接相反。
+    #   按 judge-granularity/README 判据(n≥3 轮内出现相反指令即排除 open-ok),不到 open-ok。
+    #   对照 deepseek 同一份卷六轮恒判不过、意见同方向(open-ok)。派活口径:把关步给清单式判据。
+  reasoning_complexity: strong-mid          # 双任务阶梯(run-reasoning-complexity,思考开,90% 线 20 发确认):
+    # 直接推理(乘法)最大 N≥12——测程顶(N2~N12 爬梯全 5/5,N12 确认 20/20);
+    # 迭代推理(除法 2N÷N 取 2N+1 位有效数字)最大 N=5(N5 确认 19/20;N6 确认 13/20 不达线,失手是算错不是空答或截断)。
+    # 对照:deepseek 乘≥12/除≥8(strong-mid)、qwen-flash 思考关 乘 7/除 5、27b 乘 3/除 2。
+    #   乘法与 deepseek 同在测程顶;迭代除法比 deepseek 早坍塌,与 qwen-flash 思考关档同一位置——长依赖链是它的边界。
+  task_complexity: strong               # G2 单发裸提取曲线(run-task-complexity,n=6,max_tokens 65536,思考开):见下方 extract_scaling。
+    # 测程内无坍塌点:18 要点以内全 6/6,40 要点 5/6(唯一一败=真漏一点 pt17),80 要点 6/6(每发写出 15~19KB)。
+    # 与 deepseek 64K 档案预算重测同档(XL 6/6、XXL 5/6);qwen-flash 思考关在 18~40 要点之间坍塌。
+    # 代价是慢:80 要点档每发约 8 分钟(见 latency_note)。只有裸单发曲线,引擎内真实任务没跑过。
+  planning_decompose: mid          # G3 分解与规划:没有专用探针(双考场方案待实装),与另三家同一取证口径——看 hb2 构建卷(incident 语料,n=1,2026-09-28):
+    # 拆解走通、交付 spec 15.2KB 零 error 零 warning(27b 12.2KB、deepseek 基线 11.5KB),SEV 表与模板都内联进了步骤;
+    # 但结构逻辑有真缺陷要靠外部意见纠正:终审抓出 2 处(步骤 5.2 判据让 new 模式永远判不过、步骤 6.1 让 new 模式用复盘覆盖状态通报),
+    # 合理关又打回 3 条接线缺口(分诊结论、缓解记录没接上,步骤 3 缺仅 new 模式守卫)。deepseek 同语料修检 1 轮过,所以不定 strong。
+  tool_use: strong                 # 格点探针(见下方 act_free 段)与宏观任务实跑(2026-09-27/28,宏观任务验收与成绩 flash 矩阵)两个来源。
+    # 格点探针:需要工具的非零工具格共 72 发全部一发用对;不需要工具的 15 格 90 发全过,零乱调工具。
+    # 宏观任务实跑坐实了长工具循环里也肯调工具:fact check S 档 14 个核查点全部真检索(每点 2—6 次)、
+    #   M 档 43 个核查点全部真检索(每点 2—10 次);deep research 整次 117 次检索;
+    #   hb2 构建的定向修错步真改了文件、两处意见都修对(草稿修改时间晚于意见提交)。
+    #   对照 qwen-flash 同格:核查点检索步零调用 S 6/14、M 17/32,dr 整次只真搜 6 次,hb2 修错步两轮零工具谎报"修了 N 处"。
+    # 宏观任务里暴露的伤不在调工具,在交付:fact check M 档汇总报告缺证据清单一节、全文 0 个网址(检索做了、没写进报告)。
+    # 代价是慢和贵:dr 184.9 万 tokens / 85.9 分钟,fact check S 83.1 万 / 53.8 分钟、M 累计 226 万,hb2 累计 334.2 万。
+  structured_delivery: strong      # G5 双指标(run-structured-delivery,n=6):六档全 6/6(平坦/混型/对象列表/三层嵌套/yaml 结构值/混排),
+    # 零皮错零围栏。qwen-flash 栽跟头的"六字段混合类型含多行文本"那档它也 6/6。容错后=与裸皮同档。
+  code_generation: {python: strong, sql: strong}   # G6 代码生成(Python 与 SQL 各三档,n=6,隐藏测试判分,自愈回路最多 2 轮;max_tokens 65536——32768 预算首轮就有发次被思考烧光出空正文,那次作废不入账)。
+    # Python(规范条款→校验脚本,引擎同款语法沙箱内执行):一次写对 简单/普通/复杂=5/6·4/6·5/6,自愈后三档全 6/6。
+    #   一次写对的 4 发失手全是输出截断:思考把 65536 全部烧光、正文为空(stop_reason=max_tokens),第 2 轮都交出正确代码——凡交出了脚本的,隐藏测试全对。
+    #   41 轮提交(含 SQL)零沙箱拒绝、零崩溃。对照 deepseek 同形态(失手全是截断),qwen-flash 18 发首轮全被沙箱拒。
+    # SQL(取数需求→SQLite 查询,结果集全等判分):一次写对 6/6·5/6·6/6,自愈后三档全 6/6;普通档那 1 发是逻辑错(公开样例就没过,隐藏测试挂在一对多扇出与孤儿行两份数据上),第 2 轮按公开样例的报文改对。
+    # 适配:Python 与 SQL 都可当生成主力;代码生成步输出预算至少给 65536,且要配重试——思考恒开关不掉,Python 首轮 18 发里有 4 发把预算烧光。
+    # 产物分三段(同一目录 run-glm_flash-2026-09-27/):首跑=docstring-args 6 发 + func-length 第 1—5 发(func-length 第 6 发端点挂住 30 分钟没回,进程退出);
+    #   cont-func-length-shot6/=func-length 补第 6 发(一次写对);cont-rest/=line-length 与三道 SQL 各 6 发。
+  feedback_correction: strong      # P3 修订落实。库内仪器 run-revision-ab(2026-09-28,n=6,产物 ../probes/extract-scaling/run-revision-ab-glm_flash-2026-09-28/):
+    # 标准态 6/6、短卷 6/6(思考恒开,标准态六发共 208 秒、短卷共 547 秒)。真实任务(n=1 定性)同向:
+    # hb2 终审两处定向意见都真改文件、都改对;合理关打回的 3 条接线缺口全部修齐,第二轮零实质缺陷。
+    # G6 自愈回路里 SQL 普通档按公开样例报文一轮改对;Python 截断发次第 2 轮都交出正确代码。
+  domain_knowledge: untested        # G7 领域知识充分度:探针未建
+  knowledge_acquisition: untested-positive-signals  # G8 渐进知识获取:四环观测口径还没成文,与另三家同一口径记"初步正向"——
+    # fact check S/M 每个核查点都真检索(每点 2—10 次),deep research 117 次检索且把"计划募资 60 亿"与"按发行价算的 61.19 亿"辨成不同口径。
+
+act_free:                          # run-act-free-stability 全 30 格 × n=6=180 发,真引擎,临时配置 thinking: enabled。曲线账=../probes/act-free-stability/run-glm_flash-2026-09-26/
+  reliability_curve:
+    noise_only: { short: {t0: 1.0, t1: 1.0, t3: 1.0, t5: 1.0, t10: 1.0}, mid: {t0: 1.0, t1: 1.0, t3: 1.0, t5: 1.0, t10: 1.0}, long: {t0: 1.0, t1: 1.0, t3: 1.0, t5: 1.0, t10: 1.0}, n: 6 }
+    tool_required: { short: {t1: 1.0, t3: 1.0, t5: 1.0, t10: 1.0}, mid: {t1: 1.0, t3: 1.0, t5: 1.0, t10: 1.0}, long: {t1: 1.0, t3: 1.0, t5: 1.0, t10: 1.0}, n: 6 }
+    zero_tool_control: { short: 0.0, mid: 0.0, long: 0.0, n: 6 }   # 0 工具×需要工具=设计内必死对照格(没有工具读不了文件)。
+      # 实测行为:18 发里 12 发编数字交卷(342/243/412/128 这类),5 发步骤失败,1 发撞 5 分钟超时;没有一发如实说"做不到"
+  rating: le10-tools               # 测程顶:工具数 ≤10 的格全部 1.00。对照 27b 同仪器 full-tolerance、qwen-flash le0-tools(零星不读就编)
+subtask_free: untested
+
+extract_scaling:                   # G2 单发裸测曲线(run-task-complexity,n=6,max_tokens 65536,思考开;产物 ../probes/extract-scaling/run-glm_flash-2026-09-27/)
+  # 切块尺寸标定(run-chunk-calibration,XL 语料 40 点答案键,每档 2 发,2026-09-28,产物 ../probes/chunk-calibration/run-glm_flash-2026-09-28/):
+  #   整篇与块 8/16/32 行各 2 发全部 40/40;块 8 行 3 路并发单份 100/100/97.5,并集 100%——与 deepseek 同档,整篇直做即可,不需要切块
+  xs_2pts_bare: { pass: '6/6', n: 6 }
+  s_4pts_bare: { pass: '6/6', n: 6 }
+  m_9pts_bare: { pass: '6/6', n: 6 }
+  l_18pts_bare: { pass: '6/6', n: 6 }
+  xl_40pts_bare: { pass: '5/6', n: 6 }    # 唯一一败=漏 pt17
+  xxl_80pts_bare: { pass: '6/6', n: 6 }   # 测程顶,未坍塌;每发约 8 分钟
+
+adapt:
+  max_inline_tools: null           # 不收窄:测程内(≤10 件)全 1.00
+  thinking: enabled                # 必须显式配 enabled:端点关不掉思考,引擎对 act/commit 步的缺省 disabled 发过去会 400。
+    # 临时配置配 enabled 后引擎冒烟与 act_free 180 发零 400(hoplog 记 thinking: enabled:budget=32768)。
+    # 还要配 thinking_disable_unsupported: true(todo/0118):引擎要关思考时改发 effort low,不再发 disabled。
+  build_target_profile: null       # 没做构建卷
+  step_notes: 按现有数据的派活口径——提取类步骤 80 个要点以内可单发,但单发慢(80 点约 8 分钟);把关步用清单式判据,不派开放式核验;
+    act free 步工具数 10 件以内放心派,0 工具却要读文件的步骤会编答案(不会如实说做不到);
+    代码生成步输出预算给到 65536 并配重试(思考偶尔把预算烧光、正文为空);
+    检索步与修错步可以派(宏观任务里真搜、真改文件),但慢且贵,预算按 fact check S 档 80 万级、dr 近 200 万级立;
+    汇总报告类步骤要在后面机械核对证据清单与网址在场(fact check M 档报告漏了整节证据);
+    原先接入引擎的两道坎(todo/0117 客户端 300 秒掐断、todo/0118 关思考报 400)都已修掉

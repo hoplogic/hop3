@@ -80,6 +80,23 @@ export function validateSpec(ast: SpecAST, docRefCtx?: DocRefCheckCtx, fragmentO
     const fullwidth = /[：（），；]/.test(o.text) ? '——行内有全角标点,疑似该用半角（: ( ) , ;）' : '';
     errors.push({ kind: 'validate', rule: 'W1', severity: 'warn', message: `${o.section} 段第 ${o.line} 行不合本段文法,已被忽略: '${o.text}'${fullwidth}` });
   }
+  // W2 HopSchema 名/类型分隔符仍用冒号（^anc-rule-schema-sep-dual,todo/0109 第 1 步——作者定
+  // "% 是正式 hopschema 语法,: 将成为 deprecated"）：整份 spec 只出一条汇总告警（存量 spec 动辄
+  // 几十行冒号,逐行出会淹没其它真告警）;报文用第一条记录的真实名字与类型拼出具体改法,并给迁移命令。
+  // warn 不 error:存量 spec 不许一夜失效;作者定 2026-09-27"1.0 再报错"——1.0 之前只告警照常加载,
+  // 1.0 起升 error 拒载（todo/0109 第 5 步,决策存档 todo/decision/20260927-冒号弃用时间表.md）。
+  // @a: anc-rule-schema-sep-dual
+  {
+    const seps = ast.header.colon_separators ?? [];
+    if (seps.length > 0) {
+      const r = seps[0];
+      const lineList = seps.slice(0, 10).map(x => x.line).join('、') + (seps.length > 10 ? ' 行等' : ' 行');
+      errors.push({ kind: 'validate', rule: 'W2', severity: 'warn', message:
+        `HopSchema 的名/类型分隔符 ':' 已废弃，正式写法是 ' % '。本文件有 ${seps.length} 行仍在用冒号（第 ${lineList}）。` +
+        `改法：把 \`${r.name}: ${r.type}\` 写成 \`${r.name} % ${r.type}\`，其余各行同样只换名字和类型之间的那个冒号；` +
+        `也可以运行 \`hopjit schema-sep <spec 文件>\` 一键迁移（会先备份原件）。1.0 起冒号写法将报错、spec 拒绝加载。` });
+    }
+  }
   structuralRules(effectiveAst, errors);
   controlFlowRules(effectiveAst, errors);
   variableRules(effectiveAst, errors, !!fragmentOpts);
@@ -1601,7 +1618,7 @@ function checkB10ReadAbsolutePath(call: CallExpr, step: StepNode, errors: Valida
   if (v.type === 'call' && (v as CallExpr).callee === 'work_zone_path') return;   // 包裹豁免
   if (b10LeftmostAbsoluteLiteral(v)) {
     errors.push(ve('B10', 'error',
-      `文件工具路径一律 workspace 相对（沙箱禁绝对路径）——"${call.callee}" 的 path 写相对路径,实例涂鸦区用 work_zone_path() 取路径（step "${step.step_id}"）`,
+      `文件工具路径写 workspace 相对路径（规约里写死的绝对路径绑定了某台机器的目录布局,换机即失效）——"${call.callee}" 的 path 写相对路径,实例涂鸦区用 work_zone_path() 取路径（step "${step.step_id}"）`,
       step.step_id, step.source_location?.line_start));
   }
 }
@@ -2272,8 +2289,17 @@ function checkValue(type: string, value: unknown, typeDecls?: TypeDecl[]): strin
   if (type === 'yaml') {
     if (value !== null && typeof value === 'object') return null;   // 结构（对象/列表）即合格
     if (typeof value === 'string') {
-      return parseYamlStructure(value) !== undefined ? null
-        : '期望 yaml（结构化数据:对象/列表），实际是散文文本——直接返回结构本身（YAML/JSON 均可,不要说明散文）';
+      if (parseYamlStructure(value) !== undefined) return null;
+      // 解析失败与真散文分开报（^anc-exec-output-inline-colon-repair 反馈半边）// @a: anc-exec-output-inline-colon-repair
+      const fail = yamlParseFailure(value);
+      if (fail) {
+        const shown = fail.text.length > 120 ? fail.text.slice(0, 120) + '…' : fail.text;
+        return `期望 yaml（结构化数据:对象/列表），第 ${fail.line} 行 YAML 解析失败（该行:${shown}）——`
+          + '常见原因:不加引号的值里含英文冒号加空格（整值加双引号,或改用全角冒号）;'
+          + '不加引号的值以反引号、@ 或 % 开头（整值加双引号）;值以引号开头却没把整值包住。'
+          + '只修这一行,其余内容不必改';
+      }
+      return '期望 yaml（结构化数据:对象/列表），实际是散文文本——直接返回结构本身（YAML/JSON 均可,不要说明散文）';
     }
     return '期望 yaml（结构化数据:对象/列表），实际是标量';
   }
@@ -2535,11 +2561,11 @@ export function recoverOutputValues(
     let s = v.trim();
     const fence = s.match(/^```[a-zA-Z]*\s*\n([\s\S]*?)\n?\s*```$/);
     if (fence) s = fence[1];
-    // ② YAML 解析（失败先试引号前缀行修复 ^anc-exec-output-quoted-prefix-repair,再试散文前置
-    // 截断〔壳 8〕,全炸=真散文放弃）
+    // ② YAML 解析（失败先试引号前缀行修复 ^anc-exec-output-quoted-prefix-repair 与裸冒号修复,再试散文前置
+    // 截断〔壳 8〕,全炸=真散文放弃）// @a: anc-exec-output-inline-colon-repair
     let parsed: unknown;
     try { parsed = yamlLoad(s); } catch {
-      const repaired = repairQuotedPrefixScalars(s);
+      const repaired = repairYamlScalars(s);
       let ok = false;
       if (repaired !== s) {
         try { parsed = yamlLoad(repaired); ok = true; } catch { /* 落壳 8 */ }
@@ -2715,6 +2741,65 @@ export function repairQuotedPrefixScalars(text: string): string {
   return changed ? lines.join('\n') : text;
 }
 
+/** 不加引号的值炸 YAML 的两种形态修复:①值里含英文冒号加空格——`说明: 模式（new: 新事故, update: …）`;
+ * ②值以反引号/@/% 开头（YAML 保留字符与指令起始符）。两种都炸 YAML（"bad indentation of a mapping entry"）。只修解析器报错的那一行（块式标量里合法的
+ * "冒号加空格"不碰）,整值重包成带双引号字符串,重解析;报错换到另一行同形态行接着修,同行
+ * 二次报错或非此形态即停。不增删行。hb2 qwen-flash 头部契约门 4/7 实撞。
+ * 见 design ^anc-exec-output-inline-colon-repair。// @a: anc-exec-output-inline-colon-repair */
+export function repairInlineColonScalars(text: string): string {
+  const lines = text.split('\n');
+  const fixed = new Set<number>();
+  for (let round = 0; round < 32; round++) {
+    let n: number;
+    try { yamlLoad(lines.join('\n')); break; } catch (e) {
+      const line = (e as { mark?: { line?: number } }).mark?.line;
+      if (typeof line !== 'number' || fixed.has(line) || line >= lines.length) break;
+      n = line;
+    }
+    // 键:首字符不是空白/冒号/引号/井号/横杠（排除 `- : :` 这类残行被误认成键）;值两种命中:
+    // ①不以引号、YAML 结构起始符或冒号开头,且含英文冒号加空格;②以反引号/@/% 开头（保留字符与
+    // 指令起始符,不加引号无合法读法——ppt qwen-flash `content_points: \`专名\`。…` 实撞）
+    const colon = lines[n].match(/^(\s*(?:- )?[^\s:"'#-][^:\n]*:\s+)([^"'[{|>&*!%@`#:\s].*)$/);
+    const reserved = lines[n].match(/^(\s*(?:- )?[^\s:"'#-][^:\n]*:\s+)([`@%].*)$/);
+    const m = colon && /: /.test(colon[2]) ? colon : reserved;
+    if (!m) break;
+    // 续行并入:键值行已有行内值,下面缩进深于键起始列的连续非空行只能是这个值的续行（YAML 折成一个
+    // 空格接上）——只给首行加引号会把续行孤立成下一处报错（ppt qwen-flash 第四跑实撞）
+    const keyCol = m[1].match(/^\s*(?:- )?/)![0].length;
+    let value = m[2].trimEnd();
+    for (let j = n + 1; j < lines.length; j++) {
+      if (!lines[j].trim() || lines[j].match(/^\s*/)![0].length <= keyCol) break;
+      value += ' ' + lines[j].trim();
+      lines[j] = '';
+    }
+    lines[n] = m[1] + JSON.stringify(value);
+    fixed.add(n);
+  }
+  return fixed.size ? lines.join('\n') : text;
+}
+
+/** 六处解析点共用的串联修复（清单见 design ^anc-exec-output-inline-colon-repair）:引号前缀全行扫描 →
+ * 裸冒号与保留字符开头按报错行逐行修。无命中返回原文本引用。
+ * // @a: anc-exec-output-inline-colon-repair */
+export function repairYamlScalars(text: string): string {
+  return repairInlineColonScalars(repairQuotedPrefixScalars(text));
+}
+
+/** yaml 解析失败的诊断——取修复后文本上的报错行号与该行原文,供 yaml 型校验反馈点名出错行
+ * （旧口径解析失败一律报"散文",模型对着误诊改形态,同一行冒号三轮不改）。解析成功返回 undefined。
+ * // @a: anc-exec-output-inline-colon-repair */
+function yamlParseFailure(s: string): { line: number; text: string } | undefined {
+  let t = s.trim();
+  const fence = t.match(/^```[a-zA-Z]*\s*\n([\s\S]*?)\n?\s*```$/);
+  if (fence) t = fence[1];
+  const repaired = repairYamlScalars(t);
+  try { yamlLoad(repaired); return undefined; } catch (e) {
+    const line = (e as { mark?: { line?: number } }).mark?.line;
+    if (typeof line !== 'number') return undefined;
+    return { line: line + 1, text: repaired.split('\n')[line] ?? '' };
+  }
+}
+
 /** yaml 型字符串 → 结构（对象/列表）。剥围栏（复用恢复阶梯同款容忍）→ yamlLoad → 仅结构采用。
  * 解不出结构（parse 失败/解出标量——纯散文 yamlLoad 得字符串）返回 undefined。
  * checkValue 与 coerceOutputValues 共用同一判据面。// @a: anc-type-yaml-structured */
@@ -2724,8 +2809,9 @@ function parseYamlStructure(s: string): unknown {
   if (fence) t = fence[1];
   let parsed: unknown;
   try { parsed = yamlLoad(t); } catch {
-    // 引号前缀行修复重试（^anc-exec-output-quoted-prefix-repair）——修复无命中或仍炸才判真散文
-    const repaired = repairQuotedPrefixScalars(t);
+    // 引号前缀行修复 + 裸冒号修复重试（^anc-exec-output-quoted-prefix-repair /
+    // ^anc-exec-output-inline-colon-repair）——修复无命中或仍炸才判不合格
+    const repaired = repairYamlScalars(t);
     if (repaired === t) return undefined;
     try { parsed = yamlLoad(repaired); } catch { return undefined; }
   }

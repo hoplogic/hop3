@@ -1,0 +1,63 @@
+下面是校验脚本。几个关键设计点:
+
+- **UTF-8、按字符数**:用 `open(path, 'r', encoding='utf-8')` 以文本模式读入,`len()` 作用于 `str` 时按码点计数,一个汉字就是 1;
+- **换行不计入**:文本模式的通用换行翻译会在读取时把 `\r\n` 和孤立 `\r` 统一变成 `\n`,因此按 `'\n'` 切分后,行内容里不可能残留行尾换行符;文件末尾若有换行,`split` 会多出一个空的尾部片段,它长度为 0 永远不会违规,恰好也覆盖了"空文件合规";末行没有换行符时该行会被正常切出并检查;
+- **阈值判定**:只有 `len(text) > 100` 才算违规,恰好 100 合规;
+- **退出码**:有违规时逐条打印 `行号 + 实际长度 + 原因` 并 `sys.exit(1)`;合规时无输出、`sys.exit(0)`;打不开文件或内容不是合法 UTF-8 属于运行错误,写到 `sys.stderr` 并以 2 退出(与"违规"的 1 区分);
+- **沙箱合规**:只 `import sys`;只用允许的内置名(`len` `str` `print` `open` `enumerate`)与允许的属性/方法(`sys.argv/sys.stderr/sys.exit`、文件对象的 `read/close`、字符串的 `split`);异常只用 `OSError`/`ValueError`;无下划线开头的名字,无内置名/模块名重绑定,主逻辑在模块顶层;脚本自身每行也不超过 100 字符。
+
+```python
+import sys
+
+# Rule: every line of the text file must be at most 100 characters long.
+# - Length counts characters, not bytes (len() on str counts code points).
+# - A trailing newline is not counted; the \r of a Windows \r\n pair is
+#   not counted either (text mode with universal newlines translates
+#   \r\n and lone \r to \n while reading, so lines never contain them).
+# - The last line is checked even without a trailing newline.
+# - Exactly 100 characters is compliant, 101 is a violation; an empty
+#   file is compliant.
+
+limit = 100
+
+if len(sys.argv) < 2:
+    print("usage: python line_length_check.py <file>", file=sys.stderr)
+    sys.exit(2)
+
+path = sys.argv[1]
+
+try:
+    handle = open(path, 'r', encoding='utf-8')
+except OSError:
+    print("error: cannot open file: " + path, file=sys.stderr)
+    sys.exit(2)
+
+try:
+    content = handle.read()
+except ValueError:
+    # UnicodeDecodeError is a subclass of ValueError.
+    print("error: file is not valid UTF-8 text: " + path, file=sys.stderr)
+    handle.close()
+    sys.exit(2)
+
+handle.close()
+
+# After universal-newline translation no newline character can appear
+# inside a line, so splitting on "\n" yields the lines.  If the file ends
+# with a newline, split() produces one extra empty trailing piece; an
+# empty piece has length 0 and can never violate the limit, so no special
+# case is needed.  An empty file yields [''] and is compliant as required.
+lines = content.split('\n')
+
+badCount = 0
+for idx, text in enumerate(lines):
+    lineNo = idx + 1
+    if len(text) > limit:
+        badCount = badCount + 1
+        print("line " + str(lineNo) + ": length " + str(len(text)) + " exceeds limit 100")
+
+if badCount > 0:
+    sys.exit(1)
+
+sys.exit(0)
+```

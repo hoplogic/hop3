@@ -1,7 +1,7 @@
 ---
 name: hopspec
-description: 驱动 HopJIT 引擎执行 HopSpec 规约（复用模式——CC 自身当推理 LLM，hopjit CLI 管理执行状态和流控，零 API key）。跑 spec 的缺省入口；仅当用户明说走 MCP/standalone 时才用 /hopspec-mcp。
-user_invocable: true
+description: 跑一份已经写好的 HopSpec 文件（复用模式——本对话当推理 LLM，hopjit CLI 管执行状态，零 API key）：参数确认、介入点问人、终态按契约呈现。由 /hop 分派调用，用户不直接调；现场的活不写 spec，走 /hop 主路。
+user-invocable: false
 ---
 
 %% @trace
@@ -9,7 +9,7 @@ user_invocable: true
 	source: [[HopSpec V3配套HopJIT运行时能力]]
 	source_id: hopjit-runtime
 	type: intent
-	last_sync: 2026-08-31T14:32+0800
+	last_sync: 2026-10-01T15:45+0800
 	note: 复用模式 CC 驱动指令（源）。本 driver/ 目录是复用模式驱动指令的归属处，Codex 等其他 runtime 载体将来并列于此。部署副本=.claude/skills/hopspec/SKILL.md（开发期软链到本源，改源即生效）。节奏归引擎/caller 介入点契约见 source 的 ^anc-exec-engine-driver-roles / ^anc-exec-mode-invariants。2026-07-04 顶层驱动改造：主 agent 只编排介入点，执行段外包给 driver subagent（隔离主上下文，见 [[reuse-mode-prompt-flow]]）。同日精简：subagent 模板 + 公共执行规则 + spec 发现前置外置 driver/references/（driver-subagent / parallel-worker / step-execution-rules / discovery），主体只留主 agent 编排 + 子命令表（303→181 行；消 list 与 §0 的 recent-dirs 重复）。同日 e2e 实测通过 + 修临时文件散落：driver/worker @file 临时文件改写 scratch_dir（随 .hopstate 隔离/清理），不再落项目根裸名污染 git。再修主 agent 抢跑：主 agent 全程不碰执行链（不自己 run/submit 执行步），run 也交首个 subagent（否则 advance 抢记首步 start → hoplog 重复块）；主 agent 只 §0 前置 + 起 subagent + 处理介入点。2026-07-07 e2e 复跑（ppt-html work_zone 验证）暴露两处并固化：① for-each worker itemVar 通道简化——从"driver 手工从响应提取 params_for_child 拼 --params 透传"改为"引擎 fan-out 按 cid 落盘 + worker init 自动回填"（driver 零参与，parallel-worker.md 去掉 --params，见 design ^anc-exec-parallel-foreach-worker）；② doc-ref 工作目录——doc-ref 按 CLI 进程 cwd 解析且 subagent Bash 命令间重置 cwd，故 worker/driver subagent 每条 node 命令前置 `cd <VAULT> &&` 锁 cwd（唯一允许的链式，driver-subagent/parallel-worker/step-execution-rules 同步）。2026-07-08 fan-out 调度代码化：满额窗口/补位/命令拼装从 skill NL 移进无状态 CLI 顾问（fanout-plan/fanout-next），主 agent 退为句柄执行器（起 subagent+收通知，照 CLI 给的 launch_command 原样执行、零调度计算）。载体决策依实测：专职调度 subagent 因"idle 即完成"跨窗口丢早批通知不可行，只有主 agent 稳定持句柄（design ^anc-exec-parallel-fanout-advisor）。结构性消除忘 --params/漏 cd/串台/重复派发。parallel-worker.md 改写为调顾问+照做。2026-08-27 四改双名双壳（作者定'skill 简单点直接指定,不要 NL LLM 装配'——同日推翻三改单壳）：本壳回归纯复用,MCP 薄协议独立为 /hopspec-mcp（hopspec-skill-mcp.md,不同名并存安装）——名字即模式,零判定零配置零分发;driver_mode 配置与 hopjit driver-mode 命令随之退役;防双执行=引擎 driver_channel 硬闸（与壳形态无关,保留;design codex-driver-carrier ^anc-driver-codex-standalone-dispatch 四改条款 / exec-engine ^anc-exec-driver-channel）
 %%
 

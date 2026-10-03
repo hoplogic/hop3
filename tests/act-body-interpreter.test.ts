@@ -1,6 +1,6 @@
 // @module: act-body ^anc-struct-act-body
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { BodyInterpreter, evalExprSync } from '../src/act-body-interpreter.js';
@@ -807,6 +807,70 @@ describe('序列切片求值', () => {
   });
 });
 
+// 字符串单下标（^anc-step-act-body-str-index,2026-09-23 作者拍板 todo/0102——`strip(l)[0] in "123456789"`
+// validate 全绿运行必死:单下标只认列表/对象,字符串走计算异常;切片早已字符串同语义,单下标是漏网面）
+// @v: anc-step-act-body-str-index
+describe('字符串单下标', () => {
+  const runW = async (src: string, inputs: Record<string, unknown>) => {
+    const warnLog: string[] = [];
+    const interp = new BodyInterpreter({ inputs, toolProvider: mockProvider(), allowCommit: false, toolCallLog: [], warnLog });
+    const r = await interp.run(body(src), OUT('x'));
+    return { x: r.x, warnLog };
+  };
+  it('正例①：字面量字符串取首字符 "abc"[0] → "a"（修前:计算异常 None）', async () => {
+    const r = await runW('x = "abc"[0]', {});
+    expect(r.x).toBe('a');
+    expect(r.warnLog).toHaveLength(0);
+  });
+  it('正例②：负数下标从末尾数 s[-1] → "c"、中文字符按字取 s[1]', async () => {
+    expect((await runW('x = s[-1]', { s: 'abc' })).x).toBe('c');
+    expect((await runW('x = s[1]', { s: '甲乙丙' })).x).toBe('乙');
+  });
+  it('正例③：越界得 None 不炸（正越界 s[5]、负越界 s[-9]）——与列表单下标同款宽容', async () => {
+    const a = await runW('x = s[5]', { s: 'abc' });
+    expect(a.x).toBeUndefined();
+    expect(a.warnLog).toHaveLength(0);
+    const b = await runW('x = s[-9]', { s: 'abc' });
+    expect(b.x).toBeUndefined();
+    expect(b.warnLog).toHaveLength(0);
+  });
+  it('反例④：非整数下标 s["a"] → None + warn"非整数"（与列表同款计算异常）', async () => {
+    const r = await runW('x = s["a"]', { s: 'abc' });
+    expect(r.x).toBeNull();
+    expect(r.warnLog.some(w => w.includes('非整数'))).toBe(true);
+  });
+  it('正例⑤：同步求值器（case 条件路径）strip(l)[0] in "123456789" 按首字符判（修前:静默 undefined 恒不命中）', () => {
+    const cond = (l: string) => {
+      const errs: ParseError[] = [];
+      const e = parseExpression('strip(l)[0] in "123456789"', errs);
+      expect(errs).toHaveLength(0);
+      const warns: string[] = [];
+      const v = evalExprSync(e!, n => (n === 'l' ? l : undefined), m => warns.push(m));
+      expect(warns).toHaveLength(0);
+      return v;
+    };
+    expect(cond(' 3.x')).toBe(true);
+    expect(cond('a')).toBe(false);
+  });
+  it('反例⑥：字符串放开不殃及其他类型——数字上取下标仍是计算异常（异步 None+warn,同步 undefined+warn）', async () => {
+    const r = await runW('x = n[0]', { n: 5 });
+    expect(r.x).toBeNull();
+    expect(r.warnLog.some(w => w.includes('取下标'))).toBe(true);
+    const errs: ParseError[] = [];
+    const e = parseExpression('n[0]', errs);
+    const warns: string[] = [];
+    expect(evalExprSync(e!, () => 5, m => warns.push(m))).toBeUndefined();
+    expect(warns.some(w => w.includes('取下标'))).toBe(true);
+  });
+  it('正例：同步路径 None 上取下标保持静默 undefined（case 条件 x[0] == "a" 且 x 未赋值 → 不命中,不改成分支失败）', () => {
+    const errs: ParseError[] = [];
+    const e = parseExpression('x[0]', errs);
+    const warns: string[] = [];
+    expect(evalExprSync(e!, () => undefined, m => warns.push(m))).toBeUndefined();
+    expect(warns).toHaveLength(0);
+  });
+});
+
 // 存量缺口补钉（2026-08-10 作者核查：实测通过但零测试的能力——通过是巧合不是承诺）
 // @v: anc-exec-act-body-interp
 describe('存量能力补钉', () => {
@@ -1321,4 +1385,141 @@ describe('runWhitelistedCommand wrapperArgv', () => {
       expect(r.stdout.trim()).toBe('plain');
     }
   });
+});
+
+// hopbuild2 split-structure 3.2 切片 body 与 1.3 语法关同一分段口径（设计 hopbuild2.md D76③ 分段口径句,
+// 2026-09-29 qwen-flash 真机实撞:占位行 ⟦范围: L29-L55, L58-L65⟧ / ⟦范围: L69, L72-L89⟧ 过了 1.3,3.2 只按 + 切,
+// int("55, ") 求值失败,split-node 重试三轮同因烧尽）。直接取盘上 body 执行,不复写一份。 // @v: anc-build-main-flow
+describe('hopbuild2 split-structure 3.2 切片分段口径', () => {
+  const ss = readFileSync(join(import.meta.dirname, '..', 'skills', 'hopbuild2', 'split-structure.md'), 'utf-8');
+  const bodyOf = (heading: string) => {
+    const sec = ss.slice(ss.indexOf(heading));
+    const fence = sec.slice(sec.indexOf('> ```hop_python') + '> ```hop_python'.length);
+    return fence.slice(0, fence.indexOf('> ```')).split('\n').filter(l => l.startsWith('>')).map(l => l.replace(/^> ?/, '')).join('\n');
+  };
+  const src32 = bodyOf('#### 3.2. [act]');
+  const src13 = bodyOf('#### 1.3. [check]');
+  const nodeSource = Array.from({ length: 12 }, (_, i) => `L${i + 1}: 第${i + 1}行`).join('\n');
+  // 1.3 的"小节点禁再拆"判据要求原文不少于 800 字才许留占位——语法关用例的原文行加长到够线
+  const longSource = Array.from({ length: 12 }, (_, i) => `L${i + 1}: 第${i + 1}行 ${'业务原文'.repeat(20)}`).join('\n');
+  async function syntaxGate(rng: string) {
+    const r = await run(src13, {
+      syntax_result: '{"errors":[],"warnings":[]}',
+      skeleton: `1. [reason] 待展开——子任务 ⟦范围: ${rng}⟧\n  + → out_a % text  # a`,
+      node_source: longSource, depth: 1, max_depth: 3,
+    }, OUT('syntax_ok', 'syntax_note'));
+    return { ok: r.syntax_ok as boolean, note: String(r.syntax_note) };
+  }
+
+  it('正例：1.3 语法关对逗号/顿号分段与单行号放行（与 3.2 同一分段口径）', async () => {
+    for (const rng of ['L2-L3 + L5-L5 + L9-L10', 'L2-L3, L5, L9-L10', 'L2-L3、L5，L9-L10']) {
+      const g = await syntaxGate(rng);
+      expect(g.note).toBe('');
+      expect(g.ok).toBe(true);
+    }
+  });
+
+  it('反例：1.3 语法关对缺 L 前缀的段与越界行号照拒,报文点名坏段', async () => {
+    const bad = await syntaxGate('L2-L3, 5');
+    expect(bad.ok).toBe(false);
+    expect(bad.note).toContain('格式坏的行号段');
+    const oob = await syntaxGate('L2-L3, L9-L99');
+    expect(oob.ok).toBe(false);
+    expect(oob.note).toContain('越界行号段');
+    expect(oob.note).toContain('L9-L99');
+  });
+  async function slice(rng: string) {
+    const r = await run(src32, {
+      skeleton: '1. [reason] 待展开——子任务 ⟦范围: x⟧\n  + → out_a % text  # a',
+      node_source: nodeSource,
+      header_final: { inputs: [{ name: 'doc', type: 'text', 说明: '文档' }] },
+      parent_vars: [], sub: `1 | 子任务 | ${rng}`, depth: 1, iteration: 1,
+    }, OUT('sub_source', 'sub_context', 'sub_vars', 'sub_depth', 'sub_iteration'));
+    return String(r.sub_source);
+  }
+
+  it('正例：逗号/顿号分段与单行号都切得动,结果与 + 形态一致', async () => {
+    const plus = await slice('L2-L3 + L5-L5 + L9-L10');
+    expect(plus.split('\n').map(l => l.split(':')[0])).toEqual(['L2', 'L3', 'L5', 'L9', 'L10']);
+    expect(await slice('L2-L3, L5, L9-L10')).toBe(plus);
+    expect(await slice('L2-L3、L5，L9-L10')).toBe(plus);
+  });
+
+  it('反例：段外的行不进切片（归一不能把相邻段连成一片）', async () => {
+    const s = await slice('L2-L3, L9');
+    expect(s).not.toContain('L4:');
+    expect(s).not.toContain('L8:');
+    expect(s).not.toContain('L10:');
+  });
+});
+
+// hopbuild2 主流程 2.4 构建基准拼接:输入文件自身机械排除（设计 hopbuild2.md D103,hopissues 0110——
+// 真机实撞:执行者把 skill-source.md 自己登记成流程性附属,2.4 照单拼接,source.md 里本体出现两份,
+// 全局行号与覆盖对账整体错位）。三份 spec（母本 + 两份 profile 变体）的 2.4 直接取盘上 body 执行,不复写一份。 // @v: anc-build-main-flow
+describe('hopbuild2 主流程 2.4 输入文件自身不重复并入构建基准', () => {
+  const variants = ['spec.md', 'spec.qwen-flash.md', 'spec.qwen3.8-27b.md'];
+  function body24(file: string): string {
+    const s = readFileSync(join(import.meta.dirname, '..', 'skills', 'hopbuild2', file), 'utf-8');
+    const sec = s.slice(s.indexOf('#### 2.4. [act]'));
+    const fence = sec.slice(sec.indexOf('> ```hop_python') + '> ```hop_python'.length);
+    return fence.slice(0, fence.indexOf('> ```')).split('\n').filter(l => l.startsWith('>')).map(l => l.replace(/^> ?/, '')).join('\n');
+  }
+  const skillPath = 'repo/commands/demo/skill-source.md';
+  const files: Record<string, string> = {
+    [skillPath]: '本体第一行\n本体第二行',
+    'repo/commands/demo/steps.md': '附属流程第一行',
+    'repo/commands/demo/glossary.md': '术语表',
+  };
+  async function run24(file: string, ledger: Array<{ path: string; 定性: string }>) {
+    const written: Record<string, string> = {};
+    const provider = mockProvider({
+      tools: [tool('read'), tool('write')],
+      exec: (name, args) => {
+        if (name === 'read') {
+          const p = String(args.path);
+          return p in files ? { result: files[p], success: true } : { result: `no such file: ${p}`, success: false };
+        }
+        if (name === 'write') { written[String(args.path)] = String(args.content); return { result: 'ok', success: true }; }
+        return { result: `${name}-result`, success: true };
+      },
+    });
+    const interp = new BodyInterpreter({
+      inputs: { skill_path: skillPath, raw_body: files[skillPath], aux_ledger: ledger },
+      toolProvider: provider, allowCommit: false, workZone: '/wz/inst-d103/work_zone', toolCallLog: [],
+    });
+    const r = await interp.run(body(body24(file)), [
+      { name: 'skill_content', type: 'text', description: '' },
+      { name: 'ref_assets', type: '[line]', description: '' },
+    ] as OutputDecl[]);
+    return { r, source: written['/wz/inst-d103/work_zone/source.md'] ?? '' };
+  }
+  const count = (hay: string, needle: string) => hay.split(needle).length - 1;
+
+  for (const v of variants) {
+    it(`正例（${v}）：台账把输入文件自身登记成流程性（短路径与完整路径两种写法）→ 本体只出现一份,其余附属照常并入`, async () => {
+      for (const selfPath of ['skill-source.md', skillPath]) {
+        const { r, source } = await run24(v, [
+          { path: selfPath, 定性: '流程性' },
+          { path: 'steps.md', 定性: '流程性' },
+          { path: selfPath, 定性: '参考性' },
+          { path: 'glossary.md', 定性: '参考性' },
+        ]);
+        expect(count(source, '本体第一行')).toBe(1);
+        expect(count(source, '附属流程第一行')).toBe(1);
+        expect(source).not.toContain(`: ${skillPath} >>>>>`);
+        expect(r.ref_assets).toEqual(['repo/commands/demo/glossary.md']);
+        expect(String(r.skill_content).split('\n').length).toBe(source.split('\n').length);
+      }
+    });
+
+    it(`对照（${v}）：台账里没有自引用 → 拼接与参考清单照旧,不误删同目录的其他附属`, async () => {
+      const { r, source } = await run24(v, [
+        { path: 'steps.md', 定性: '混合' },
+        { path: 'glossary.md', 定性: '参考性' },
+      ]);
+      expect(source.startsWith('本体第一行\n本体第二行')).toBe(true);
+      expect(source).toContain('附属文件(混合,并入构建基准): repo/commands/demo/steps.md');
+      expect(r.ref_assets).toEqual(['repo/commands/demo/glossary.md']);
+    });
+  }
 });

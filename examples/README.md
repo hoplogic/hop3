@@ -15,10 +15,12 @@
 | `coffee-week.md` + `coffee-sales.json` | 咖啡店周报 | e2e 主场景同款；hop_python 纯计算 + reason 判断 + subtask 核验 |
 | `data-quality.md` + `demo-data.json` | 数据质量修复 | 入门四件之一（随 npm 包）；subtask + check final + adaptive |
 | `doc-review.md` | 文档评审 | 入门四件之一（随 npm 包） |
-| `hop-fact-check.md` + `fact-check-sample.md` | 事实核查完整版（sample=示范输入，埋了待抓的推理跳跃） | for-each 并行 + collect 子句 + branch 两路分流 + 行号分析物溯源 + 补搜纪律 + 双自查回路（两类缺失验收） |
-| `hop-fact-check.qwen3.8-27b.md` | 上行的模型变体（目标 profile=qwen3.8-27b,check_judge: closed-questions-only——头部注记含源母本/降档动作;母本改动后须重新生成） | check 步微判定展开范本：开放式验收拆成"机械分组 act → 逐行封闭小题 loop → 机械汇总 check final"（弱模型判官只答原子 yes/no,门槛与汇总归程序——判官摇摆无处发生） |
+| `hop-fact-check.md` + `fact-check-sample.md` | 事实核查完整版（sample=示范输入，埋了待抓的推理跳跃） | for-each 并行 + collect 子句 + branch 两路分流 + 行号分析物溯源 + 补搜纪律 + 依据按页面标题重搜核验（查不到对应网页的依据剔除并在报告标出）+ 双自查回路（两类缺失验收） |
+| `hop-fact-check.qwen3.8-27b.md` | 上行的模型变体（目标 profile=qwen3.8-27b,check_judge: closed-questions-only——头部注记含源母本/降档动作;母本改动后须重新生成） | check 步微判定展开范本：开放式验收拆成"机械分组 act → 逐行封闭小题 loop → 机械汇总 check final"（弱模型判官只答原子 yes/no,门槛与汇总归程序——判官摇摆无处发生）；依据核验随母本同步 |
+| `hop-fact-check.qwen-flash.md` | 事实核查的模型变体（目标 profile=qwen-flash——头部注记含源母本/降档动作;母本改动后须重新生成） | 检索与核验机械化范本：模型只拟检索词，程序逐条调 web_search 并给结果编号，模型只按编号挑依据打可信度，程序按编号照抄标题/URL（模型碰不到 URL，编造与"按标题重搜"误剔同时消失，核验步撤掉）+ 核查点字段机械照抄 + 报告机械段照 27b 变体 |
 | `fact-check-demo.md` | 事实核查演示版（--demo 附装为 `demo-fact-check`；随 npm 包） | 完整版的适度简化：只核一级事实（可直接查证的断言），无推演审查/自查回路 |
-| `hop-deep-research/`（spec + sample） | 主题深度研究（sample=模糊问题，触发 scope gate）。hop- 前缀区隔 Claude Code 内置同名 workflow /deep-research | scope gate 澄清分流 + 子问题外延检查 + 双语 fan-out 检索 + 本地材料对照（local_materials）+ 对抗式验证（独立二源/换语言圈/enum 四态）+ 机械完备性核对 + 对照评估节 + ask/commit 落盘交付 |
+| `hop-deep-research/`（spec + sample） | 主题深度研究（sample=模糊问题，触发 scope gate）。hop- 前缀区隔 Claude Code 内置同名 workflow /deep-research | scope gate 澄清分流 + 子问题外延检查 + 双语 fan-out 检索 + 本地材料对照（local_materials）+ 对抗式验证（独立二源/换语言圈/enum 四态/交叉来源按页面标题重搜核验）+ 机械完备性核对 + 对照评估节 + ask/commit 落盘交付 |
+| `hop-deep-research/hop-deep-research.qwen-flash.md` | 主题深度研究的模型变体（目标 profile=qwen-flash——头部注记含源母本/降档动作;母本改动后须重新生成） | 检索机械化（模型拟词、程序检索编号、模型按编号挑、程序照抄 URL）+ 撤抓取腿（claim 取自检索摘要与本地材料,本地材料程序直读并单独一步提取）+ 交叉核对先判"是否同一口径",口径不同的"被反驳"由程序降为部分成立 + 报告机械段按 verdict 分节 |
 | `contract-review/`（3 spec + 各自 params） | 合同评审：路由 + NDA triage + DPA review | call 编排（标题映射路由）+ 确定性 triage（hop_python 读 playbook 阈值零 LLM）+ 注入隔离（untrusted 正文只进 reason）+ destination/signing gate |
 | `mutation-verify/`（spec + sample params） | 变异核证：worktree 隔离逐点位改坏代码验证测试真能变红（no_pin=行为面无测试锁定的缺口产出） | subprocess.run 白名单命令行（git/npx/ln 全走 act body 引擎直执零 Bash）+ worktree 建弃 act 可逆物理兑现 + loop for-each 四拍记录 + 说明与 body 一致条款示范 |
 | `standard-decompose-codify/`（spec + sample） | 标准拆解与代码化：把标准/规范文档拆成条款清单，逐条判可码性（可码/需人裁/纯散文），可码的生成可执行校验并跑通验证，不可码如实留人，交付条款→产物映射表（覆盖率可核） | 3 档可码性判定（唯一正确答案/语义审计/行为纪律）+ loop for-each 逐条 + subtask retry 可逆试错（跑不通降档不硬码）+ check final 如实记录核 + confirm 闸整体一次验收 + commit 幂等写盘 |
@@ -32,7 +34,7 @@
 |------|---------|------|
 | `syntax/code-review.md` | 线性 reason/act | 最简范本：act 取 diff → reason 分析 → act 组装报告 |
 | `syntax/act-body.md` | act 结构化 body（hop_python） | 报销单核算：金额账引擎算零 LLM——赋值 + 内置函数 + 无推理 if 分支 |
-| `syntax/confirm-commit.md` | 探索提交分离（confirm/commit） | reason 方案 → confirm 人审 → commit 不可逆（幂等设计） |
+| `syntax/confirm-commit.md` | 探索-核验-提交（act/confirm/commit——关键步骤用 confirm 人审充当核验段） | reason 方案 → confirm 人审 → commit 不可逆（幂等设计） |
 | `syntax/adaptive-replan.md` | subtask retry + adaptive | check final 不过 → adaptive 重规划 children |
 | `syntax/parallel-aggregate.md` | parallel 并行 + 聚合 | 三维度打包一个并行活 → 聚合 → check 验证 |
 | `syntax/sibling-parallel.md` | 兄弟并发 | 两个独立 subtask 各标 parallel，父容器边界收齐（教程 05 写法二的可跑样例） |

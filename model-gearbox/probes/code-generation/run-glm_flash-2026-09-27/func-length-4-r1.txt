@@ -1,0 +1,75 @@
+```python
+# 函数长度合规检查脚本
+# 规则:每个函数(普通函数、async 函数、类里的方法)从 def 所在行到
+# 函数体最后一行,含首尾两行,长度不得超过 40 行;装饰器行不计入;
+# 嵌套函数各自单独计算,外层函数的长度包含内层函数所占的行。
+# 用法:python check.py <目标文件>
+# 退出码:0 合规 / 1 有违规或文件不可读、无法解析 / 2 缺少命令行参数
+
+import ast
+import sys
+
+MAX_LINES = 40
+
+if len(sys.argv) < 2:
+    print("usage: python check.py <python 源文件>", file=sys.stderr)
+    sys.exit(2)
+
+path = sys.argv[1]
+
+# 以 UTF-8 读入文件内容
+try:
+    fobj = open(path, "r", encoding="utf-8")
+except OSError as exc:
+    print("error: 无法打开文件: " + str(exc), file=sys.stderr)
+    sys.exit(1)
+
+try:
+    source = fobj.read()
+    fobj.close()
+except (OSError, ValueError) as exc:
+    print("error: 无法读取文件内容: " + str(exc), file=sys.stderr)
+    sys.exit(1)
+
+# 容忍文件开头可能存在的 UTF-8 BOM,避免解析失败
+source = source.lstrip("\ufeff")
+
+# 解析成语法树
+try:
+    tree = ast.parse(source)
+except (SyntaxError, ValueError) as exc:
+    print("error: 不是合法的 Python 代码: " + str(exc), file=sys.stderr)
+    sys.exit(1)
+
+# 遍历所有函数定义节点:
+# - ast.walk 递归遍历整棵树,天然覆盖类里的方法与嵌套函数;
+# - node.lineno 是 def 关键字所在行,装饰器位于其上方,因此不计入;
+# - node.end_lineno 是函数体最后一行,长度 = end_lineno - lineno + 1;
+# - 外层函数的 end_lineno 已包含内层函数占用的行,内层函数又被
+#   单独访问、单独计算,符合规范要求。
+findings = []
+for node in ast.walk(tree):
+    if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+        def_line = node.lineno
+        end_line = node.end_lineno
+        length = end_line - def_line + 1
+        if length > MAX_LINES:
+            kind = "函数"
+            if isinstance(node, ast.AsyncFunctionDef):
+                kind = "async 函数"
+            msg = ("line " + str(def_line) + ": " + kind + " '" + node.name
+                   + "' 长度为 " + str(length) + " 行(def 位于第 "
+                   + str(def_line) + " 行,函数体最后一行为第 " + str(end_line)
+                   + " 行),超过 " + str(MAX_LINES) + " 行上限")
+            findings.append((def_line, msg))
+
+findings.sort()
+
+if findings:
+    for item in findings:
+        print(item[1])
+    print("共发现 " + str(len(findings)) + " 个函数超过 " + str(MAX_LINES) + " 行上限")
+    sys.exit(1)
+
+sys.exit(0)
+```

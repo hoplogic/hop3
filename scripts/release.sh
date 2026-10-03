@@ -163,7 +163,7 @@ if [ -z "$RESUME" ]; then
   STEP="步骤4b-tarball资产核对"
   echo "④b tarball 资产核对（快照区打包,缺一即停——0.1.5 实坑：发版早于资产入库）..."
   PACKLIST=$(in_wt npm pack --dry-run 2>&1)
-  for MUST in "driver/hopspec-skill.md" "examples/coffee-week.md" "coffee-sales.json" "examples/data-quality.md" "demo-data.json" "examples/e2e-failure/e2e-adaptive.md" "scripts/pysb/pysb_check.py"; do
+  for MUST in "driver/hopspec-skill.md" "examples/coffee-week.md" "coffee-sales.json" "examples/data-quality.md" "demo-data.json" "examples/e2e-failure/e2e-adaptive.md" "scripts/pysb/pysb_check.py" "docs/concepts/HopSpec V3语法参考.md" "docs/tutorials/00-新人导读.md" "docs/concepts/HopSop标准作业流程.md"; do   # @a: anc-release-tarball-self-contained —— 末三条:npm 包文档发布件在场（prepack 清洗后进包）
     echo "$PACKLIST" | grep -q "$MUST" || { echo "❌ tarball 缺 $MUST"; exit 1; }
   done
   echo "   tarball 内容 OK"

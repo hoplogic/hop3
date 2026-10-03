@@ -1,7 +1,7 @@
 // @module: act-body ^anc-struct-act-body
 import { describe, it, expect } from 'vitest';
 import { parseSpec } from '../src/parser.js';
-import { parseActBody, serializeActBody, exprChildren, exprMapChildren, exprHasCall } from '../src/act-body-parser.js';
+import { parseActBody, parseExpression, serializeActBody, exprChildren, exprMapChildren, exprHasCall } from '../src/act-body-parser.js';
 import type { ParseError } from '../src/errors.js';
 import type { ActStep, CommitStep, AssignStmt, IfStmt, CallStmt, BinaryExpr, CallExpr } from '../src/ast-types.js';
 
@@ -478,5 +478,55 @@ describe('禁循环早拦对字符串字面量豁免(0079)', () => {
   });
   it('反例：字符串含 while 且真有推导外语句级 for 混排 → 照拦（掩串不放跑真循环——for 早于 [ 不是推导）', () => {
     expect(parseOne('zs = for i in "wait while ok"').some(e => e.message.includes('禁止循环语句'))).toBe(true);
+  });
+});
+
+// 括号跨行定向报错（^anc-step-act-body-one-line,2026-09-23 作者拍板 todo/0102——跨行字典原连环报五条
+// "非法表达式起始: newline / 对象字面量键后期望 : / } 未闭合 / 语句后期望换行 / 非法语句起始: indent",写的人读不出是不许跨行）
+// @v: anc-step-act-body-one-line
+describe('括号跨行定向报错', () => {
+  const parseLines = (lines: string[]) => { const e: ParseError[] = []; const b = parseActBody(lines, 1, e); return { b, errors: e }; };
+  const expectOneLine = (lines: string[], opener: string, line: number) => {
+    const { b, errors } = parseLines(lines);
+    expect(b).toBeNull();
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toContain('一行');
+    expect(errors[0].message).toContain('拆成多个赋值');
+    expect(errors[0].message).toContain(`${opener} 在本行没有闭合`);
+    expect(errors[0].line).toBe(line);
+  };
+  it('反例⑦：跨行字典只报一条定向错误（行号=左花括号所在行）', () => {
+    expectOneLine(['y = 1', 'x = {', '  "a": s,', '  "b": 1', '}'], '{', 2);
+  });
+  it('反例⑧：跨行列表只报一条定向错误（含元素写一半换行的形态）', () => {
+    expectOneLine(['xs = [', '  1,', '  2', ']'], '[', 1);
+    expectOneLine(['xs = [1,', '  2]'], '[', 1);
+  });
+  it('反例⑨：跨行调用参数只报一条定向错误', () => {
+    expectOneLine(['y = f(', '  a)'], '(', 1);
+    expectOneLine(['y = join(xs,', '  ",")'], '(', 1);
+  });
+  it('反例：嵌套时指最内层未闭合括号（列表里的字典跨行 → 指 {）', () => {
+    expectOneLine(['xs = [{', '  "a": 1}]'], '{', 1);
+  });
+  it('正例⑩：单行字典/列表/调用/下标/切片/括号分组零报错（不误伤）', () => {
+    for (const src of ['x = {"a": s, "b": [1, 2]}', 'xs = [1, 2, f(a, b)]', 'y = join(xs, ",")', 'z = xs[0] + s[1:]', 'w = (a + b) * 2']) {
+      expect(parseLines([src]).errors, src).toHaveLength(0);
+    }
+  });
+  it('反例⑪：单行漏写右括号同走定向文案（hop_python 里一行结束时括号没闭合只有跨行与漏写两种原因）', () => {
+    expectOneLine(['xs = [1, 2'], '[', 1);
+    expectOneLine(['y = f(a'], '(', 1);
+  });
+  it('正例：括号内部不在换行处的错误照报原文案（步长切片报错不被定向文案吞掉）', () => {
+    const { errors } = parseLines(['x = l[::2]']);
+    expect(errors[0].message).toContain('步长切片');
+    expect(errors[0].message).not.toContain('一行');
+  });
+  it('正例：case 条件宿主同款——parseExpression 漏写右括号报定向文案且只一条', () => {
+    const errs: ParseError[] = [];
+    expect(parseExpression('len(items > 0', errs)).toBeNull();
+    expect(errs).toHaveLength(1);
+    expect(errs[0].message).toContain('( 在本行没有闭合');
   });
 });

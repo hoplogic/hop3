@@ -1,0 +1,51 @@
+```sql
+WITH daily_logins AS (
+    SELECT user_id, login_date
+    FROM logins
+    GROUP BY user_id, login_date
+),
+ranked_dates AS (
+    SELECT 
+        user_id,
+        login_date,
+        ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY login_date) as rn
+    FROM daily_logins
+),
+date_diffs AS (
+    SELECT 
+        user_id,
+        login_date,
+        julianday(login_date) - julianday(LAG(login_date) OVER (PARTITION BY user_id ORDER BY login_date)) as day_diff
+    FROM ranked_dates
+),
+streak_groups AS (
+    SELECT 
+        user_id,
+        login_date,
+        SUM(CASE WHEN day_diff = 1 THEN 0 ELSE 1 END) OVER (PARTITION BY user_id ORDER BY login_date) as streak_group
+    FROM date_diffs
+),
+streak_lengths AS (
+    SELECT 
+        user_id,
+        MIN(login_date) as streak_start,
+        COUNT(*) as streak_length
+    FROM streak_groups
+    GROUP BY user_id, streak_group
+),
+max_streaks AS (
+    SELECT 
+        user_id,
+        MAX(streak_length) as longest_streak,
+        MIN(CASE WHEN streak_length = MAX(streak_length) OVER (PARTITION BY user_id) THEN streak_start END) as streak_start
+    FROM streak_lengths
+    GROUP BY user_id
+)
+SELECT 
+    user_id,
+    longest_streak,
+    streak_start
+FROM max_streaks
+WHERE longest_streak >= 3
+ORDER BY longest_streak DESC, user_id ASC;
+```

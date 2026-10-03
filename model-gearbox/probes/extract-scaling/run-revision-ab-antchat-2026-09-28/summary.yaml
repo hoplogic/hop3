@@ -1,0 +1,169 @@
+probe: run-revision-ab
+service: antchat
+model_from_response:
+  - Ling-3.0-Flash
+date: '2026-09-28'
+thinking: default
+max_tokens: 65536
+'n': 6
+说明: 同一份上一版 points + 同一份两条打回意见,两臂只差引擎修订档(standard=标准态全量修订 prompt,short=修订短 prompt)。四关:形态/意见一(补每杯毫克数与四杯总量)/意见二(行号改成 L2/L2/L3/L4)/基准保留;pass=四关全过。prose_before_key 只记不扣(引擎允许键行前写思考)
+arms:
+  standard:
+    revision_short: false
+    prompt_chars: 14645
+    pass: 6/6
+    form: 6/6
+    comment1_value_added: 6/6
+    comment2_line_refs_fixed: 6/6
+    baseline_kept: 6/6
+    prose_before_key: 0/6
+    shots:
+      - shot: 1
+        pass: true
+        form: true
+        comment1: true
+        comment2: true
+        baseline: true
+        prose_before_key: false
+        notes: []
+        stop_reason: end_turn
+        seconds: 1
+        quotes_kept: true
+      - shot: 2
+        pass: true
+        form: true
+        comment1: true
+        comment2: true
+        baseline: true
+        prose_before_key: false
+        notes: []
+        stop_reason: end_turn
+        seconds: 1
+        quotes_kept: true
+      - shot: 3
+        pass: true
+        form: true
+        comment1: true
+        comment2: true
+        baseline: true
+        prose_before_key: false
+        notes: []
+        stop_reason: end_turn
+        seconds: 1
+        quotes_kept: true
+      - shot: 4
+        pass: true
+        form: true
+        comment1: true
+        comment2: true
+        baseline: true
+        prose_before_key: false
+        notes: []
+        stop_reason: end_turn
+        seconds: 1
+        quotes_kept: true
+      - shot: 5
+        pass: true
+        form: true
+        comment1: true
+        comment2: true
+        baseline: true
+        prose_before_key: false
+        notes: []
+        stop_reason: end_turn
+        seconds: 1
+        quotes_kept: true
+      - shot: 6
+        pass: true
+        form: true
+        comment1: true
+        comment2: true
+        baseline: true
+        prose_before_key: false
+        notes: []
+        stop_reason: end_turn
+        seconds: 1
+        quotes_kept: true
+    quotes_type_kept: 6/6
+  short:
+    revision_short: true
+    prompt_chars: 3469
+    pass: 3/6
+    form: 5/6
+    comment1_value_added: 5/6
+    comment2_line_refs_fixed: 5/6
+    baseline_kept: 3/6
+    prose_before_key: 0/6
+    shots:
+      - shot: 1
+        pass: false
+        form: true
+        comment1: true
+        comment2: true
+        baseline: false
+        prose_before_key: false
+        notes:
+          - '未点名处被改动: P2.quote,P3.quote'
+        stop_reason: end_turn
+        seconds: 1
+        quotes_kept: false
+      - shot: 2
+        pass: true
+        form: true
+        comment1: true
+        comment2: true
+        baseline: true
+        prose_before_key: false
+        notes: []
+        stop_reason: end_turn
+        seconds: 1
+        quotes_kept: true
+      - shot: 3
+        pass: true
+        form: true
+        comment1: true
+        comment2: true
+        baseline: true
+        prose_before_key: false
+        notes: []
+        stop_reason: end_turn
+        seconds: 1
+        quotes_kept: true
+      - shot: 4
+        pass: true
+        form: true
+        comment1: true
+        comment2: true
+        baseline: true
+        prose_before_key: false
+        notes: []
+        stop_reason: end_turn
+        seconds: 1
+        quotes_kept: true
+      - shot: 5
+        pass: false
+        form: false
+        comment1: false
+        comment2: false
+        baseline: false
+        prose_before_key: false
+        notes:
+          - '形态不合: 5 个元素,id=////'
+          - '行号未改对: P2 应 L2 实 undefined,P3 应 L2 实 undefined,P4 应 L3 实 undefined,P5 应 L4 实 undefined'
+          - '未点名处被改动: P1 缺失,P2 缺失,P3 缺失,P4 缺失,P5 缺失'
+        stop_reason: end_turn
+        seconds: 1
+        quotes_kept: false
+      - shot: 6
+        pass: false
+        form: true
+        comment1: true
+        comment2: true
+        baseline: false
+        prose_before_key: false
+        notes:
+          - '未点名处被改动: P2.quote,P3.quote'
+        stop_reason: end_turn
+        seconds: 1
+        quotes_kept: false
+    quotes_type_kept: 3/6

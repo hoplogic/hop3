@@ -1,0 +1,8 @@
+Q1: yes（P1 的 line_ref=L1 且 quote 摘自 L1，覆盖“全球每天消费约 30 亿杯咖啡”）
+Q2: yes（L2 的两个内容均有 line_ref=L2 的点覆盖：P2 覆盖半衰期约 5 小时，P3 覆盖下午摄入影响夜间睡眠）
+Q3: yes（P4 的 line_ref=L3 且 quote 摘自 L3，覆盖 FDA 400 毫克建议）
+Q4: yes（P5 的 line_ref=L4 且 quote 摘自 L4，覆盖“四杯以内对多数人安全”）
+Q5: yes（P3 的 premises 写明“① 咖啡因的半衰期约为 5 小时”，P5 的 premises 写明两条具体前提，均非空且非仅编号）
+Q6: yes（P1–P5 的 quote 均与对应行 L1–L4 原文一致，可逐字找到）
+extract_ok: true
+extract_gap: |

@@ -38,10 +38,30 @@ const BUDGET_DEFAULT: BudgetConfig = { total: 10000 };
  * （2026-09-18 review 抓两处硬编码:dispatcher 侧改文案则短卷摘取静默失效）。 */
 // @a: anc-exec-revision-short-weak
 export const SCHEMA_KICK_MARKER = '[上次输出未通过校验，请修正后重新输出]';
+/** 空响应重发提醒——生产侧 dispatcher 空响应重发口追加进 instruction,消费侧
+ * stepDescriptionIsChinese 判描述语言时从它截断（引擎文案不算步骤描述）。两侧同源共享本常量。 */
+// @a: anc-exec-format-example-structural
+export const EMPTY_RETRY_NOTE = '[上一次响应为空——请完整产出声明的输出,不要返回空内容]';
+/** 本步描述文字是否含中文（^anc-exec-format-example-structural "半角冒号提示"段）：summary +
+ * instruction,instruction 先截掉引擎追加的 schema 反馈段与空响应提醒段——那是引擎的中文文案,
+ * 算进去英文步骤一到重试轮就会冒出半角提示。判据=含 CJK 统一汉字;不看项目 language 键。 */
+// @a: anc-exec-format-example-structural
+export function stepDescriptionIsChinese(summary: string | undefined, instruction: string): boolean {
+  let own = instruction;
+  for (const marker of [SCHEMA_KICK_MARKER, EMPTY_RETRY_NOTE]) {
+    const at = own.indexOf(marker);
+    if (at >= 0) own = own.slice(0, at);
+  }
+  return /[一-鿿]/.test(`${summary ?? ''}\n${own}`);
+}
+const HALFWIDTH_COLON_NOTE = '\n- 键名后的冒号用半角 `:`,不要写成中文全角 `：`。';
 /** 正文疑似工具调用附加提示的标记行——生产侧 dispatcher SCHEMA 重做与耗尽两处追加,消费侧
  * buildRetryFeedback 按它切开失败原因（标记前套形态指引原句,标记起整段追加在末尾）。两侧同源共享本常量。
  * 权威 [[step-dispatcher#^anc-exec-text-toolcall-hint]] // @a: anc-exec-text-toolcall-hint */
 export const TEXT_TOOLCALL_HINT_MARKER = '[引擎附加提示：你上一次的正文里像是写了一次工具调用]';
+/** 执行证据机核拒收文案的开头——dispatcher 抛错时引用,buildRetryFeedback 靠它认出机核拒收、不套形态指引。
+ * 两侧同源共享本常量。权威 [[prompt-assembler#^anc-exec-l2c-retry-feedback]] // @a: anc-exec-l2c-retry-feedback */
+export const ACT_EVIDENCE_GATE_PREFIX = 'SCHEMA_MISMATCH: 带着修复反馈重做本步却一次工具都没调';
 const RETRY_BASE_INLINE_CHARS = 500;  // 打回轮基准 inline 小档（作者定 2026-08-31 先 2000 再压 500'太多了'——L5 是修正指令区,基准淹没意见即本末倒置;超阈走卸载路径+节选）// @a: anc-exec-l2c-retry-feedback
 const L5_FEEDBACK_WARN_CHARS = 8000;   // dr16 实测工单 max 3101——余量 2.6 倍,响了先看判定器是否啰嗦
 // L5 上游反馈跨层拼接累积保护线（尾部截留——防深递归逐层拼接无界增长，非单份工单预算;
@@ -153,7 +173,7 @@ export class PromptAssembler { // @a: anc-exec-prompt-assembly, anc-struct-promp
       if (cleanedA.length) taskCtx += `Constraints（全程红线，你的产出不得违反）:\n${cleanedA.map(c => `- ${c}`).join('\n')}\n`;
     }
     if (header.types?.length) taskCtx += `Types:\n${header.types.map(t => indentBlock(formatTypeDecl(t), 2)).join('\n')}\n`;   // indentBlock 垫全部行——模板前缀只垫首行,多行 TypeDecl 塌层实撞 // @a: anc-type-type-decl
-    if (header.outputs?.length) taskCtx += `Outputs（整个规约最终交付物，非你本步输出——你的输出声明在 L4）: ${header.outputs.map(o => `${o.name}: ${o.type}`).join(', ')}\n`;
+    if (header.outputs?.length) taskCtx += `Outputs（整个规约最终交付物，非你本步输出——你的输出声明在 L4）: ${header.outputs.map(o => `${o.name}${HOPSCHEMA_SEP}${o.type}`).join(', ')}\n`;
     const parentId = getParentStepId(step.step_id);
     if (parentId) {
       const parent = this.findStepById(parentId, spec);
@@ -425,7 +445,7 @@ export class PromptAssembler { // @a: anc-exec-prompt-assembly, anc-struct-promp
       const wzRel = wzAbs && wsAbs && (wzAbs === wsAbs || wzAbs.startsWith(wsSep))
         ? wzAbs.slice(wsAbs.length).replace(/^[\/\\]/, '') : '';
       const toolDefs = this.engine.getToolDefs?.();
-      ctx.tool_manifest = buildToolManifest(step as ActStep, toolDefs, { stepType: step.step_type, workZoneRel: wzRel, retryRound: !!ctx.retry_feedback });   // retryRound=前导句重试轮分道信号（^anc-exec-act-evidence-gate 随批半件） // @a: anc-exec-act-evidence-gate
+      ctx.tool_manifest = buildToolManifest(step as ActStep, toolDefs, { stepType: step.step_type, workZoneRel: wzRel, retryRound: !!ctx.retry_feedback && step.step_type !== 'reason' });   // retryRound=前导句重试轮分道信号（^anc-exec-act-evidence-gate 随批半件;reason 步不进机核,不渲染追加句） // @a: anc-exec-act-evidence-gate
       // Bash 纪律句条件化信号（^anc-exec-l0-worldview-impl 第 6 条,todo/0110 候选 A）:注册面
       // 缺席=复用模式,执行者是自带 Bash 的 caller agent,纪律句是真纪律;注册面在场=standalone,
       // 工具面上没有任何"自由写命令行"的件（run_script 也不算——命令行由引擎拼）。
@@ -462,7 +482,7 @@ export class PromptAssembler { // @a: anc-exec-prompt-assembly, anc-struct-promp
       const outer = /^（外围容器 \S+ 第 \d+ 次:([\s\S]*)）$/.exec(p);
       const core = outer ? outer[1] : p.replace(/^第 \d+ 次:/, '');
       const x = unwrapExhausted(core);
-      if (!x) return stripLedger(core);
+      if (!x) return execFailureLine(core)?.head ?? stripLedger(core);
       return x.last?.startsWith('CHECK_FAILED') ? stripLedger(x.last) : exhaustedLine(x);
     });
     const exhausted = unwrapExhausted(fb.reason);
@@ -485,6 +505,10 @@ export class PromptAssembler { // @a: anc-exec-prompt-assembly, anc-struct-promp
       if (exhausted.last?.startsWith('CHECK_FAILED')) return priorBlock.trimEnd();
       return `${priorBlock}上一轮这一段没做成：${exhaustedLine(exhausted)}，整段已从头重做。`;
     }
+    // 执行过程类失败（工具次数用完/原地打转/机核拒收/客户端等待超时）说实话给对路做法,不套形态指引——产出根本没交成
+    // 或拒收理由与形态无关,"重点检查形态"会把执行者往错的方向引（T9 sdc×qwen27 r5 实撞）。
+    const execLine = execFailureLine(fb.reason);
+    if (execLine) return `${priorBlock}${execLine.head}${execLine.advice ? `\n${execLine.advice}` : ''}`;
     if (!fb.reason.startsWith('CHECK_FAILED')) {
       // 失败原因带"正文疑似工具调用"附加提示时按标记切开:标记前的原因照旧套形态指引原句,
       // 提示整段追加在末尾;无标记时逐字不变。// @a: anc-exec-text-toolcall-hint
@@ -599,7 +623,7 @@ export class PromptAssembler { // @a: anc-exec-prompt-assembly, anc-struct-promp
       ctx += `Types:\n${header.types.map(t => indentBlock(formatTypeDecl(t), 2)).join('\n')}\n`;   // 同上 // @a: anc-type-type-decl
     }
     if (!lean && header.outputs?.length) {
-      ctx += `Outputs（整个规约最终交付物，非你本步输出——你的输出声明在 L4）: ${header.outputs.map(o => `${o.name}: ${o.type}`).join(', ')}\n`;
+      ctx += `Outputs（整个规约最终交付物，非你本步输出——你的输出声明在 L4）: ${header.outputs.map(o => `${o.name}${HOPSCHEMA_SEP}${o.type}`).join(', ')}\n`;
     }
 
     // worker 子实例：显式承载子任务目标契约(让 worker 明白自己要交付什么)
@@ -608,7 +632,7 @@ export class PromptAssembler { // @a: anc-exec-prompt-assembly, anc-struct-promp
     if (subtreeRoot) {
       const rootNode = this.findStepById(subtreeRoot, spec);
       if (rootNode) {
-        const deliverables = rootNode.outputs?.map(o => `${o.name}: ${o.type}`).join(', ') ?? '';
+        const deliverables = rootNode.outputs?.map(o => `${o.name}${HOPSCHEMA_SEP}${o.type}`).join(', ') ?? '';
         ctx += `\n[你的子任务] ${rootNode.summary}\n`;
         if (deliverables) ctx += `交付输出: ${deliverables}\n`;
       }
@@ -1001,7 +1025,7 @@ export class PromptAssembler { // @a: anc-exec-prompt-assembly, anc-struct-promp
     let ctx = `Goal: ${header.goal ?? ''}\n`;
     ctx += `Subtask: ${subtask.summary}\n`;
     if (subtask.outputs?.length) {
-      ctx += `Required outputs: ${subtask.outputs.map(o => `${o.name}: ${o.type}`).join(', ')}\n`;
+      ctx += `Required outputs: ${subtask.outputs.map(o => `${o.name}${HOPSCHEMA_SEP}${o.type}`).join(', ')}\n`;
       // 输出涉自定义类型时附字段级定义闭包（0017 同族十六审补——replan 生成的新步骤要产出
       // 这些输出,没见过定义同样只能猜;闭包与 mismatch 反馈同一收集器）。
       const involved = collectTypeDeclClosure(subtask.outputs.map(o => o.type), header.types);
@@ -1143,6 +1167,39 @@ export class PromptAssembler { // @a: anc-exec-prompt-assembly, anc-struct-promp
     };
     return search(spec.steps ?? []);
   }
+}
+
+/** 执行过程类失败的实话句（prompt-assembler ^anc-exec-l2c-retry-feedback 材料段"执行过程类失败"条）:
+ * head=一句实话(历史行只用它),advice=当前原因才追加的做法。不是这四类返回 undefined。 */
+// @a: anc-exec-l2c-retry-feedback
+export function execFailureLine(reason: string): { head: string; advice?: string } | undefined {
+  if (reason.startsWith('MAX_TOOL_ITERATIONS:')) {
+    const n = /（(\d+) 轮/.exec(reason)?.[1];
+    return {
+      head: `上一轮没做完：本步的工具调用次数用完了${n ? `（上限 ${n} 次）` : ''}，还没交出产出就被中止了——这不是产出形态的问题。`,
+      advice: [
+        '本轮这样做：',
+        '1. 重做不会清掉上一轮写下的文件——先查看已有的文件，在上面接着改，不要从头重写；',
+        '2. 省着用工具调用，先想清楚要做哪几步再动手，同一个文件不要反复改写；',
+        '3. 实在做不完，就按本步说明里允许的降级方式交产出：产出照输出声明完整交，写明哪里没做完、为什么；如果这一轮决定不再调用任何工具，另起一行顶格写 `no_change: 原因`（不写这一行，零工具的重做轮会被拒收）。',
+      ].join('\n'),
+    };
+  }
+  if (reason.startsWith('TOOL_LOOP_REPEAT:')) {
+    return { head: `上一轮被中止：${reason}。这不是产出形态的问题——同样的调用结果不会变，本轮换一种做法。` };
+  }
+  if (reason.startsWith(ACT_EVIDENCE_GATE_PREFIX)) {
+    return { head: `上一轮交的产出被拒收：${reason}` };
+  }
+  // 客户端等待超时（v0.28.0,来源 step-dispatcher ^anc-exec-api-retry "客户端等待超时"条,todo/0117）:
+  // 产出没交上来;执行者能影响的只有自己的产出长度,原文里给操作者的调参建议它做不了,不照搬成做法。
+  if (reason.startsWith('CLIENT_TIMEOUT:')) {
+    return {
+      head: `上一轮没做完：等模型回复超过了引擎给这次请求的等待上限，被中止了——这不是产出形态的问题：${reason}`,
+      advice: '本轮尽量精简产出、少绕弯子，把篇幅用在输出声明要求的内容上。',
+    };
+  }
+  return undefined;
 }
 
 /** 解析内层重试烧尽上浮的原因 `subtask '<id>' retry exhausted（最后一次失败：<原文>）`（可逐层嵌套）,
@@ -1699,7 +1756,9 @@ export function renderPromptParts(ctx: AssembledContext, stepType?: string): Pro
     const structuralNote = ctx.output_schema.some((o: OutputDecl) => isStructuralOutputType(String(o.type)))
       ? '\n- 结构型字段（声明为 yaml/列表/复合类型的）的值直接写缩进的 YAML 结构（对象/列表）,不要用 | 把结构包成字符串。' : '';
     const deliverNote = ctx.tool_manifest ? '\n- 产出直接写在这里交付；只有超过约 5000 字才值得先用 write 写文件暂存。' : '';
-    l5.push(`**交付格式**（直接输出 YAML,不要代码围栏包裹）：\n（这里可以写你的思考…思考文字不会进产出,机器从键行开始收）\n\n${exampleLines}\n\n- 字段名、类型、数量恰如上方"本步要产出"清单——不得多也不得少。\n- 键与键连续排列,之间不夹散文——夹了会被当成上一个键的值或解析失败。${structuralNote}${deliverNote}`);
+    // 半角冒号提示只给中文描述的步骤（作者拍 2026-09-28;解析侧对偶 ^anc-exec-output-fullwidth-key-colon）
+    const colonNote = stepDescriptionIsChinese(ctx.node_decl?.summary, ctx.instruction) ? HALFWIDTH_COLON_NOTE : '';
+    l5.push(`**交付格式**（直接输出 YAML,不要代码围栏包裹）：\n（这里可以写你的思考…思考文字不会进产出,机器从键行开始收）\n\n${exampleLines}\n\n- 字段名、类型、数量恰如上方"本步要产出"清单——不得多也不得少。\n- 键与键连续排列,之间不夹散文——夹了会被当成上一个键的值或解析失败。${colonNote}${structuralNote}${deliverNote}`);
   }
   volatile_.push(l5.join('\n\n'));
 
@@ -1793,7 +1852,8 @@ function renderRevisionShortParts(ctx: AssembledContext): PromptParts {
       const scalar = !isStructuralOutputType(String(o.type)) && !['text', 'markdown', 'prompt', 'HopSpec'].includes(String(o.type));
       return renderOutputExampleLine(o, scalar ? '修订后的值' : '修订后的完整值');
     }).join('\n');
-    parts.push(`**交付格式**：\n${exampleLines}`);
+    const colonNote = stepDescriptionIsChinese(ctx.node_decl?.summary, ctx.instruction) ? HALFWIDTH_COLON_NOTE : '';   // 与标准态同一判据
+    parts.push(`**交付格式**：\n${exampleLines}${colonNote}`);
   }
   // ⑦ schema 行内反馈（例外保真②——SCHEMA_MISMATCH 重做走 instruction 追加通道,
   // 短档撤 instruction 本体但把校验反馈段单独摘出保留,否则短档轮内 schema 纠错信息蒸发）
@@ -2005,7 +2065,7 @@ function renderInputEntries(inputs: Record<string, unknown>, meta?: Record<strin
     // 块内整块都是值零转义零歧义;单行 = 值只留给数字/布尔等天然无歧义标量）。
     if (typeof v === 'string') {
       // 长值=头行尾接 =| 值块直接缩进其下（2026-08-31 作者两连定形——先抓"围栏丑用 yaml
-      // 缩进",再给终形 `- 报告: markdown =|`:= 与短值赋值同一符号,=| 即"赋的是下方多行块",
+      // 缩进",再给终形 `- 报告 % markdown =|`:= 与短值赋值同一符号,=| 即"赋的是下方多行块",
       // 比另起 值:| 行少一层;体量并入头行省一行）。// @a: anc-exec-inputs-render
       head[0] += ` =|（${v.length} 字符）${notePart}`;
       head.push(indentBlock(v, 4));
@@ -2071,7 +2131,7 @@ export function buildToolManifest(
   if (defs?.length) {
     // 供给三面之路径写域+词表教学（^anc-exec-tool-manifest-supply——0056 实撞:写域闸正确但
     // prompt 零 work_zone 供给,LLM 写文件恒撞 WORK_ZONE_ONLY 烧满 20 轮;首轮猜绝对路径同族）。
-    lines.push('路径纪律：路径一律相对 workspace 写，禁绝对路径、禁 ..。');
+    lines.push('路径纪律：路径写 workspace 相对路径（落在 workspace 内的绝对路径同样认，workspace 外的绝对路径会被拒），禁 ..。');   // hopissues/0112 起判落点不判写法
     if (supply?.stepType === 'commit') {
       lines.push('交付写盘步骤：workspace 内可写（.hopstate 除外）。');
     } else if (supply?.workZoneRel) {
@@ -2080,9 +2140,10 @@ export function buildToolManifest(
     lines.push('调用方式：这些工具已注册进你的调用面——直接按 tool_use 协议发起调用（工具名+参数 JSON 对象），结果会注回给你，然后继续；不要把调用写成文本或代码块。**使用纪律：任务不需要工具时严格禁止调用**——本步输入材料已给齐的，直接产出，一次工具都不要碰；探查环境、核实目录、确认文件在不在，全部不是本步任务，调了就是违规。');
     // 重试轮分道（^anc-exec-act-evidence-gate 随批半件——上句"严格禁止调用"在修错场景方向反了:
     // 给"读完工单直接编完成"递合法出口。首轮原句不动〔闲置工具面是行为吸引子,P2 正确防线〕）。
+    // 同句教 no_change 旁路出口（todo/0111——教禁令处同时教合法出口,正确的降档产出一次即过）。
     // @a: anc-exec-act-evidence-gate
     if (supply?.retryRound) {
-      lines.push('**但本轮带着修复反馈**——反馈要求修改盘面的，必须真调工具落实；禁止只在产出里声称已修（引擎会机械核对本步工具调用记录，零调用却声称完成会被当场拒收重做）。');
+      lines.push('**但本轮带着修复反馈**——反馈要求修改盘面的，必须真调工具落实；禁止只在产出里声称已修（引擎会机械核对本步工具调用记录，零调用却声称完成会被当场拒收重做）。确实无需修改或做不到的，产出照本步输出声明完整交，另起一行顶格写 `no_change: 原因` 如实声明未做修改（这一行不占产出的位置，也不能代替产出）。');
     }
     // 工具故障出口教学（^anc-exec-tool-failure-report 配套面——教出口必教下文,与 lack_of_info
     // 教学同族;承接面=reason+无 body act,commit 不设〔作者定"commit必须通过body"——body 通道
@@ -2101,7 +2162,9 @@ export function buildToolManifest(
       const params = Object.entries(props)
         .map(([k, v]) => `${k}: ${v.type ?? 'any'}${required.has(k) ? '' : '（可省）'}${v.description ? `  # ${v.description}` : ''}`);
       const note = noteOf(t.name);
-      lines.push(`- ${t.name}：${t.description}${note ? `（本步用途：${note}）` : ''}`);
+      // 外挂件描述已并入注册面 notes、常多行——续行缩进 4 格与参数/返回行对齐,顶格会被读成另一件工具
+      // （^anc-exec-tool-manifest-supply 第 1 面描述行条款,todo/0122）。// @a: anc-exec-tool-manifest-supply
+      lines.push(`- ${t.name}：${t.description.replace(/\n/g, '\n    ')}${note ? `（本步用途：${note}）` : ''}`);
       for (const pl of params) lines.push(`    参数 ${pl}`);
       // 供给三面之输出形状——内置件 returns 人读描述;无声明如实标注不编造（declared-or-flagged 同族）
       lines.push(`    返回: ${t.returns ?? '未声明形状'}`);
@@ -2163,10 +2226,10 @@ HopSpec 是把任务写成编号步骤树的规约，由 HopJIT 引擎逐步驱�
 bool / int / float（数字只有这两种，与 Python 一致）/ line（单行文本）/ text（多行纯文本）/ markdown（Markdown 文档）/ yaml（结构化数据）/ prompt（给 LLM 的指令文本）；方括号包原子=列表（如 [int]、[line]）；字段名后不写类型、下一层缩进展开=复合结构。带 (非空) 标注的 line（如 line(非空)）要求你给出非空内容——答得出就给实际内容,确实答不出（材料里没有/查不到）就如实按失败上报,不要交空串或占位字样充数。
 
 看两个例子就够。只声明形状（输出声明长这样——告诉你要产出什么）：
-- 结论: text  # 一句话判断
+- 结论 % text  # 一句话判断
 - 明细:  # 复合结构：字段下一层缩进展开
-  - 项目名: line  # 单行文本
-  - 金额列表: [int]  # 方括号=列表，元素都是 int
+  - 项目名 % line  # 单行文本
+  - 金额列表 % [int]  # 方括号=列表，元素都是 int
 
 带实际值（输入材料长这样——名字与类型之间用 % 分隔；数字/布尔等简单值直接写在 = 后面；字符串值一律用 =|，值在下方缩进块里，规则同 YAML 块标量 |：缩进范围即值的边界，退出缩进即结束，内容原样不转义、整块都是值。行内"两个空格+# "之后是字段说明（元信息），永远不是值的一部分）：
 - 目标 % int = 26000  # 本周目标

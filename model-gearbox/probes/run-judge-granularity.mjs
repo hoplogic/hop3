@@ -60,6 +60,7 @@ async function call(prompt) {
     body: JSON.stringify({ model: provider.model, max_tokens: 16384, ...(THINKING === 'on' ? { thinking: { type: 'enabled', budget_tokens: 8192 } } : {}), messages: [{ role: 'user', content: prompt }] }),   // 16384:探针判定不该被输出预算截穿(deepseek L1 实撞:thinking 烧满 4096 正文零字节——空响应是烧穿症状不是判定产出,预算不足会把 G4 弱区误记成 P1 形态)
   });
   const body = await r.json();
+  if (!r.ok) throw new Error(`端点报错 HTTP ${r.status}——这是环境故障(欠费/限流/服务端错),不是能力读数,探针中止不计分: ${JSON.stringify(body).slice(0, 300)}`);
   const text = (body.content ?? []).filter(b => b.type === 'text').map(b => b.text).join('');
   // 空正文如实携形态注记(thinking 烧穿/截断与"判定产出"必须可区分——空文件无法验尸)
   const note = !text && body.stop_reason === 'max_tokens' ? `(空正文:stop_reason=max_tokens,thinking 烧穿形态——本发不是判定产出,是 G4 稳定性症状;usage=${JSON.stringify(body.usage)})` : '';

@@ -1,0 +1,21 @@
+members:
+- name: 张伟
+  role: 后端
+  years: 8
+  active: true
+- name: 李娜
+  role: 前端
+  years: 5
+  active: true
+- name: 刘强
+  role: 测试
+  years: 3
+  active: false
+- name: 陈静
+  role: 运维
+  years: 6
+  active: true
+- name: 赵磊
+  role: 数据
+  years: 4
+  active: false

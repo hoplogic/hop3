@@ -57,10 +57,10 @@ HopAnt 是 Spec 的运行基座：
 struct: HopAnt
   Id: cyant
   Fields:
-    - knowledge: KnowledgeLayer    # 知识检索能力
-    - capability: CapabilityLayer  # 工具与执行环境
-    - data: DataLayer              # 数据访问
-    - identity: IdentityLayer      # 身份与权限
+    - knowledge % KnowledgeLayer    # 知识检索能力
+    - capability % CapabilityLayer  # 工具与执行环境
+    - data % DataLayer              # 数据访问
+    - identity % IdentityLayer      # 身份与权限
   Specs:
     - run_spec    # 通过 ExecutionEngine 执行 HopSpec
     - introspect  # 返回自身能力摘要（可用工具/知识域/权限范围）
@@ -76,17 +76,17 @@ Id: run_spec
 Goal: 在当前 HopAnt 实例的能力和权限上下文中执行指定 Spec，支持 HITL 挂起/恢复
 
 Inputs:
-- spec_id: line            # 要执行的 Spec 标识
-- inputs: yaml             # Spec 的输入参数
-- execution_id: line       # 恢复执行时传入（首次执行为空）
-- options: yaml            # 执行选项（超时/重试/日志级别，可选）
+- spec_id % line            # 要执行的 Spec 标识
+- inputs % yaml             # Spec 的输入参数
+- execution_id % line       # 恢复执行时传入（首次执行为空）
+- options % yaml            # 执行选项（超时/重试/日志级别，可选）
 
 Outputs:
-- execution_id: line       # 本次执行标识（用于恢复）
-- status: enum(completed, waiting_human, failed, timeout)
-- result: yaml             # completed 时：Spec 执行结果（Outputs 的值）
-- checkpoint: yaml         # waiting_human 时：当前步骤、等待的 check 内容、已有上下文
-- trace: yaml              # 执行轨迹摘要（步骤序列/耗时/工具调用记录）
+- execution_id % line       # 本次执行标识（用于恢复）
+- status % enum(completed, waiting_human, failed, timeout)
+- result % yaml             # completed 时：Spec 执行结果（Outputs 的值）
+- checkpoint % yaml         # waiting_human 时：当前步骤、等待的 check 内容、已有上下文
+- trace % yaml              # 执行轨迹摘要（步骤序列/耗时/工具调用记录）
 
 Constraints:
 - Spec 必须已注册或可解析
@@ -103,13 +103,13 @@ Id: introspect
 Goal: 返回当前 HopAnt 实例的能力摘要，供其他 HopAnt 发现和选择协作对象
 
 Inputs:
-- scope: enum(all, knowledge, capability, data, identity)  # 查询范围（默认 all）
+- scope % enum(all, knowledge, capability, data, identity)  # 查询范围（默认 all）
 
 Outputs:
-- specs: [line]            # 可执行的 Spec 列表
-- tools: [line]            # 可用工具列表
-- knowledge_domains: [line] # 知识域标识列表
-- permissions: yaml        # 权限摘要
+- specs % [line]            # 可执行的 Spec 列表
+- tools % [line]            # 可用工具列表
+- knowledge_domains % [line] # 知识域标识列表
+- permissions % yaml        # 权限摘要
 
 Constraints:
 - 只返回当前身份有权查看的信息
@@ -159,16 +159,16 @@ Goal: 根据查询从已注册知识源中检索相关片段
 
 Types:
   KnowledgeFragment:
-    - source_id: line              # 来自哪个知识源
-    - content: text                # 片段内容
-    - relevance: enum(high, medium, low)  # 相关度
+    - source_id % line              # 来自哪个知识源
+    - content % text                # 片段内容
+    - relevance % enum(high, medium, low)  # 相关度
 
 Inputs:
-- query: text              # 检索查询
-- max_results: int      # 最大返回条数（默认 10）
+- query % text              # 检索查询
+- max_results % int      # 最大返回条数（默认 10）
 
 Outputs:
-- fragments: [KnowledgeFragment]   # 检索结果列表
+- fragments % [KnowledgeFragment]   # 检索结果列表
 
 Constraints:
 - 按相关度降序排列
@@ -182,11 +182,11 @@ struct: KnowledgeLayer
   Id: knowledge-layer
   Types:
     KnowledgeSource:
-      - id: line                     # 知识源标识
-      - type: enum(file_glob, grep, rag)  # v1 三种知识源类型
-      - config: yaml                 # 类型相关配置（路径/endpoint/索引名）
+      - id % line                     # 知识源标识
+      - type % enum(file_glob, grep, rag)  # v1 三种知识源类型
+      - config % yaml                 # 类型相关配置（路径/endpoint/索引名）
   Fields:
-    - sources: [KnowledgeSource]   # 已注册的知识源
+    - sources % [KnowledgeSource]   # 已注册的知识源
   Specs:
     - retrieve     # impl trait
 ```
@@ -205,12 +205,12 @@ Id: execute_tool
 Goal: 在沙箱约束内执行指定工具
 
 Inputs:
-- tool_name: line          # 工具名称
-- tool_args: yaml          # 工具参数
+- tool_name % line          # 工具名称
+- tool_args % yaml          # 工具参数
 
 Outputs:
-- result: text             # 执行结果
-- success: bool            # 是否成功
+- result % text             # 执行结果
+- success % bool            # 是否成功
 
 Constraints:
 - 工具必须在已注册列表中
@@ -224,10 +224,10 @@ Constraints:
 struct: CapabilityLayer
   Id: capability-layer
   Fields:
-    - tools: [ToolDef]             # 可用工具注册表（待细化）
-    - sandbox: SandboxConfig       # 沙箱配置（由宿主环境注入，见下）
-    - api_clients: [ApiClient]     # LLM 和外部 API 客户端（待细化）
-    - resource_limits: yaml        # 资源限制（token 预算/工具调用上限/超时）
+    - tools % [ToolDef]             # 可用工具注册表（待细化）
+    - sandbox % SandboxConfig       # 沙箱配置（由宿主环境注入，见下）
+    - api_clients % [ApiClient]     # LLM 和外部 API 客户端（待细化）
+    - resource_limits % yaml        # 资源限制（token 预算/工具调用上限/超时）
   Specs:
     - execute_tool    # impl trait
     - list_tools      # 返回当前可用工具及其 schema
@@ -274,12 +274,12 @@ Id: query_data
 Goal: 从已注册数据源执行结构化查询
 
 Inputs:
-- source_id: line          # 目标数据源
-- query: text              # 查询表达式（SQL / 文件路径 / API 请求）
+- source_id % line          # 目标数据源
+- query % text              # 查询表达式（SQL / 文件路径 / API 请求）
 
 Outputs:
-- rows: yaml               # 查询结果
-- row_count: int        # 结果行数
+- rows % yaml               # 查询结果
+- row_count % int        # 结果行数
 
 Constraints:
 - 只读操作，不修改数据源
@@ -292,9 +292,9 @@ Constraints:
 struct: DataLayer
   Id: data-layer
   Fields:
-    - connections: [DataSource]    # 数据源注册（待细化）
-    - schema_cache: yaml           # 已知数据结构缓存（待细化）
-    - state_dir: line              # .hopstate/ 路径
+    - connections % [DataSource]    # 数据源注册（待细化）
+    - schema_cache % yaml           # 已知数据结构缓存（待细化）
+    - state_dir % line              # .hopstate/ 路径
   Specs:
     - query_data   # impl trait
     - persist      # 持久化执行产物（超越 vars.json 的 KV）
@@ -313,10 +313,10 @@ Id: get_credential
 Goal: 按服务标识获取身份凭证（API key、ak/sk、token 等）
 
 Inputs:
-- service_id: line         # 目标服务标识（'tavily' / 'openai' / 'anthropic' 等）
+- service_id % line         # 目标服务标识（'tavily' / 'openai' / 'anthropic' 等）
 
 Outputs:
-- credential: yaml         # 凭证信息（type + values）
+- credential % yaml         # 凭证信息（type + values）
 
 Constraints:
 - 凭证不可日志明文输出
@@ -329,8 +329,8 @@ Constraints:
 struct: IdentityLayer
   Id: identity-layer
   Fields:
-    - credentials: yaml            # 服务凭证注册表（service_id → Credential）
-    - llm: ModelEngine             # LLM 绑定配置 ^anc-config-model-engine
+    - credentials % yaml            # 服务凭证注册表（service_id → Credential）
+    - llm % ModelEngine             # LLM 绑定配置 ^anc-config-model-engine
   Specs:
     - get_credential  # impl trait：按 service_id 查找凭证
     - list_services  # 列出已注册的可用服务
@@ -342,14 +342,14 @@ struct: IdentityLayer
 
 ```
 - ModelEngine:  # LLM 多模型绑定配置
-  - default_service: line  # 默认 LLM 服务标识（如 'anthropic'）
-  - default_model: line  # 默认模型（如 'claude-sonnet-4-6'）
-  - routing_rules: [ModelRoute]  # 按步骤类型/标注路由到不同模型
+  - default_service % line  # 默认 LLM 服务标识（如 'anthropic'）
+  - default_model % line  # 默认模型（如 'claude-sonnet-4-6'）
+  - routing_rules % [ModelRoute]  # 按步骤类型/标注路由到不同模型
 
 - ModelRoute:  # 模型路由规则
-  - match: line  # 匹配条件：step_type 值（reason/check/act）
-  - service: line  # 目标服务标识
-  - model: line  # 目标模型名
+  - match % line  # 匹配条件：step_type 值（reason/check/act）
+  - service % line  # 目标服务标识
+  - model % line  # 目标模型名
 ```
 
 **路由优先级**（从高到低）： ^anc-exec-model-routing

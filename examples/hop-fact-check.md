@@ -16,46 +16,53 @@
 
 类型:
 - CheckPoint:  # 一个待核查点
-  - id: line  # 点编号（P1/P2…）
-  - type: line  # fact（事实点）或 inference（推演点）
-  - line_ref: line  # 断言在带行号分析物中的位置（如 L23 或 L23-L25）——照抄行号前缀，不自数
-  - quote: text  # 断言的原文片段摘抄（一两句为限）——与 line_ref 互相印证，报告离开原文也可读
-  - claim: text  # 待核查的断言，从 quote 提炼成中性、可独立检索的一句话——掐掉口语和修辞（"根本不算事"没法搜），补全省略的主语宾语（脱离上下文单看也知道在说什么）；后续搜索关键词、报告表格都用它。与 quote 的分工见步骤 2.3 示例
-  - premises: text  # 推演点专用；fact 点留空。该结论依赖的事实前提，每个前提把内容写全、不能只写编号——完整正反示例见步骤 2.3
+  - id % line  # 点编号（P1/P2…）
+  - type % line  # fact（事实点）或 inference（推演点）
+  - line_ref % line  # 断言在带行号分析物中的位置（如 L23 或 L23-L25）——照抄行号前缀，不自数
+  - quote % text  # 断言的原文片段摘抄（一两句为限）——与 line_ref 互相印证，报告离开原文也可读
+  - claim % text  # 待核查的断言，从 quote 提炼成中性、可独立检索的一句话——掐掉口语和修辞（"根本不算事"没法搜），补全省略的主语宾语（脱离上下文单看也知道在说什么）；后续搜索关键词、报告表格都用它。与 quote 的分工见步骤 2.3 示例
+  - premises % text  # 推演点专用；fact 点留空。该结论依赖的事实前提，每个前提把内容写全、不能只写编号——完整正反示例见步骤 2.3
 
 - Evidence:  # 一条外部依据（检索步的产出单元——来源可信度在检索时当场标，判定步直接消费等级）
-  - source: line  # 来源名称——网站/机构/媒体名（从检索结果条目的 hostname/标题取，如 "FDA 官网"/"新华网"/"百度百科"）
-  - url: line  # 来源链接——照抄检索结果条目的 URL，禁编造禁凭记忆补
-  - tier: enum(authoritative,reliable,questionable)  # 来源可信度——看到条目当场按域名/机构身份标：官网/政府/学术库/一手统计 authoritative；主流媒体/行业权威二手 reliable；自媒体/百科/匿名/立场性 questionable。词表与 examples/hop-deep-research 选源 tier 同一套——改一处须同步改彼处
-  - summary: text  # 该来源说了什么（与断言/前提的关系：支持什么、反驳什么、口径差异在哪）
-  - about: text  # 本条依据针对的对象——事实点路径留空；前提溯源路径写对应前提的凝练（一条依据挂一个前提）
+  - source % line  # 来源名称——网站/机构/媒体名（从检索结果条目的 hostname/标题取，如 "FDA 官网"/"新华网"/"百度百科"）
+  - title % line  # 页面标题——照抄检索结果条目的 title 原文，一字不改。它是核验凭据：后面的步骤会拿这个标题重新检索，核对 url 是否出现在结果里，对不上的条目会被剔除
+  - url % line  # 来源链接——照抄检索结果条目的 URL，禁编造禁凭记忆补
+  - tier % enum(authoritative,reliable,questionable)  # 来源可信度——看到条目当场按域名/机构身份标：官网/政府/学术库/一手统计 authoritative；主流媒体/行业权威二手 reliable；自媒体/百科/匿名/立场性 questionable。词表与 examples/hop-deep-research 选源 tier 同一套——改一处须同步改彼处
+  - summary % text  # 该来源说了什么（与断言/前提的关系：支持什么、反驳什么、口径差异在哪）
+  - about % text  # 本条依据针对的对象——事实点路径留空；前提溯源路径写对应前提的凝练（一条依据挂一个前提）
+
+- EvidenceCheck:  # 一条依据的核验结果（按标题重搜核对 URL 的机械产出）
+  - ev % Evidence  # 被核验的依据条目（原样带着，核验通过的条目从这里取回）
+  - ok % bool  # 核验是否通过：用该条标题重新检索，结果里出现了该条的 URL
+  - note % line  # 核验说明：通过时是"标题重搜命中"，不通过时说明原因（重搜两次结果里都没有这个 URL，或条目缺标题/缺 URL）
 
 - CheckResult:  # 单点核查结论（4.1 各 worker 的统一产出结构——等级字段 enum 引擎强制校验，写错级别当场打回）
-  - id: line  # 对应 CheckPoint.id（照抄）
-  - line_ref: line  # 照抄本点字段——汇总表"位置"列直取
-  - claim: text  # 照抄本点断言（报告表格直取，免回查）
-  - verdict: enum(supported,partially_supported,refuted,no_evidence)  # 依据对断言的支持关系：支持/部分支持/反驳/无依据。推演点此字段装前提整体判定。词表与 examples/hop-deep-research VerifyResult.verdict 同一套——改一处须同步改彼处
-  - credibility: enum(authoritative,reliable,questionable,not_found)  # 事实点=断言可信度（取最强支持来源等级）；推演点=前提整体可信度
-  - validity: line  # 推演点专用：推理有效性 sound/mostly/leap/invalid + 谬误类型；fact 点留空
-  - evidence_summary: text  # 依据摘要：逐条 来源标题+URL+一句话说明（URL 取自检索结果，禁编造）；与来源矛盾时在此写明
-  - conclusion: text  # 综合结论一句话（存疑/成立/不成立及原因）
+  - id % line  # 对应 CheckPoint.id（照抄）
+  - line_ref % line  # 照抄本点字段——汇总表"位置"列直取
+  - claim % text  # 照抄本点断言（报告表格直取，免回查）
+  - verdict % enum(supported,partially_supported,refuted,no_evidence)  # 依据对断言的支持关系：支持/部分支持/反驳/无依据。推演点此字段装前提整体判定。词表与 examples/hop-deep-research VerifyResult.verdict 同一套——改一处须同步改彼处
+  - credibility % enum(authoritative,reliable,questionable,not_found)  # 事实点=断言可信度（取最强支持来源等级）；推演点=前提整体可信度
+  - validity % line  # 推演点专用：推理有效性 sound/mostly/leap/invalid + 谬误类型；fact 点留空
+  - evidence_summary % text  # 依据摘要：逐条 来源标题+URL+一句话说明（URL 取自检索结果，禁编造）；与来源矛盾时在此写明
+  - conclusion % text  # 综合结论一句话（存疑/成立/不成立及原因）
+  - rejected % text  # 核验未通过、已被剔除的依据——照抄评估步输入里的剔除清单（evidence_rejected / premise_rejected），一字不改；没有剔除时留空。报告据此标出"检索步交了查不到出处的依据"
 
 Tools:
-- web_search(query) -> result: yaml  # 网页检索：查询词→结果页清单（每条含标题/URL/摘要）
-  - query: text  # 检索查询词
+- web_search(query) -> result % yaml  # 网页检索：查询词→结果页清单（每条含标题/URL/摘要）
+  - query % text  # 检索查询词
 
 输入:
-- doc_path: line  # 待核查文档路径（.md 或纯文本）——**相对工作目录**（standalone 沙箱拒绝绝对路径;文件须在运行工作区内或先拷入）
+- doc_path % line  # 待核查文档路径（.md 或纯文本）——**相对工作目录**,或落在工作目录内的绝对路径（standalone 沙箱拒绝工作目录外的绝对路径;文件须在运行工作区内或先拷入）
 
 输出:
-- points: [CheckPoint]  # 核查点清单（2.4 完备性闸验收后的定稿——确认停点已撤,速览呈现代之,作者定 2026-08-27）
-- factcheck_report: markdown  # 核查报告（逐点：类型/依据/来源/可信度或有效性判定）
+- points % [CheckPoint]  # 核查点清单（2.4 完备性闸验收后的定稿——确认停点已撤,速览呈现代之,作者定 2026-08-27）
+- factcheck_report % markdown  # 核查报告（逐点：类型/依据/来源/可信度或有效性判定）
 
 ## 步骤
 
 ### 1. [探索] 初始化完备性反馈通道
-+ → extract_gap: text  # 提取完备性反馈：空=首轮/已完备，非空=上轮漏项清单（重提取据此补）
-+ → report_gap: text  # 汇总完备性反馈：空=首轮/已完备，非空=上轮遗漏清单（重汇据此补）
++ → extract_gap % text  # 提取完备性反馈：空=首轮/已完备，非空=上轮漏项清单（重提取据此补）
++ → report_gap % text  # 汇总完备性反馈：空=首轮/已完备，非空=上轮遗漏清单（重汇据此补）
 
 > ```hop_python
 > extract_gap = ""
@@ -66,15 +73,15 @@ Tools:
 
 ### 2. [子任务 重试=2] 提取核查点并验收完备性
 - ← doc_path
-+ → points: [CheckPoint]  # 提取的核查点清单（每元素 CheckPoint 六字段：id/type/line_ref/quote/claim/premises）
++ → points % [CheckPoint]  # 提取的核查点清单（每元素 CheckPoint 六字段：id/type/line_ref/quote/claim/premises）
 
 先读文档，穷举提取两类核查点，再自查完备性——漏项则据 extract_gap 反馈定向重提（引擎 retry 上限即轮数上限：首轮 + 2 次重试）。
 
 #### 2.1. [探索] 读取文档并生成带行号分析物
 - ← doc_path
-+ → doc_content: text  # 带行号的文档全文（每行前缀 L<行号>: ——提取与核查全程用这份，点位引用照抄行号即可）
-+ → doc_len: int  # 原文字数（供长度闸判定，不含行号前缀）
-+ → numbered_path: line  # 带行号分析物的落盘路径（work_zone 内——报告读者对着此文件核行号）
++ → doc_content % text  # 带行号的文档全文（每行前缀 L<行号>: ——提取与核查全程用这份，点位引用照抄行号即可）
++ → doc_len % int  # 原文字数（供长度闸判定，不含行号前缀）
++ → numbered_path % line  # 带行号分析物的落盘路径（work_zone 内——报告读者对着此文件核行号）
 
 > ```hop_python
 > raw = read(path: doc_path)
@@ -91,8 +98,8 @@ Tools:
 
 #### 2.2. [检查] 文档长度闸
 - ← doc_len
-+ → len_ok: bool  # 判定槽：≤30000 字才放行提取
-+ → len_msg: text  # 说明槽：超长时的分拆指引
++ → len_ok % bool  # 判定槽：≤30000 字才放行提取
++ → len_msg % text  # 说明槽：超长时的分拆指引
 
 > ```hop_python
 > len_ok = doc_len <= 30000
@@ -103,7 +110,7 @@ Tools:
 
 #### 2.3. [推理] 提取事实点与推演点
 - ← doc_content, points, extract_gap
-+ → points: [CheckPoint]  # 核查点清单（数组，每元素 CheckPoint 结构）
++ → points % [CheckPoint]  # 核查点清单（数组，每元素 CheckPoint 结构）
 
 通读文档，穷举两类点，逐条编号（P1/P2…）：
 - **事实点**（type=fact）：可独立查证的客观断言——具体数据、发生的事件、时间节点、直接引述、明确的因果陈述。claim 写断言凝练，premises 留空。
@@ -146,8 +153,8 @@ L24: 所以说，只要别超过四杯，谁喝都放心。
 
 #### 2.4. [检查 终检] 验收提取完备性
 - ← doc_content, points
-+ → extract_ok: bool  # 判定槽：提取是否完备
-+ → extract_gap: text  # 说明槽：漏项清单（通过时置空）
++ → extract_ok % bool  # 判定槽：提取是否完备
++ → extract_gap % text  # 说明槽：漏项清单（通过时置空）
 
 逐段扫 doc_content，核对 points 是否穷尽——是否有可查证断言未列为 fact、有结论/预测/评价未列为 inference、有断言被误分类、推演点前提缺失。每轮对着当前 points 独立重判，不参考上轮判词——输入里不给 extract_gap 是刻意的：判官读到自己上轮写的判词会照抄交卷，已改对的产出被原判词二次打回（真机实撞：三轮判词逐字节相同，修订全部落实仍烧尽）。
 
@@ -157,7 +164,7 @@ L24: 所以说，只要别超过四杯，谁喝都放心。
 
 ### 3. [探索] 生成核查点速览与统计
 - ← points
-+ → points_digest: text  # 速览：首行统计值（总数/事实/推演），后接每点一行（编号｜类型｜行号｜断言）——供 driver 展示给用户过目（信息性呈现，不阻塞执行；用户看到不对可随时中止 run）
++ → points_digest % text  # 速览：首行统计值（总数/事实/推演），后接每点一行（编号｜类型｜行号｜断言）——供 driver 展示给用户过目（信息性呈现，不阻塞执行；用户看到不对可随时中止 run）
 
 > ```hop_python
 > n_fact = count([p for p in points if p['type'] == 'fact'])
@@ -169,61 +176,150 @@ L24: 所以说，只要别超过四杯，谁喝都放心。
 机械拼速览零 LLM。设计取舍（2026-08-27 作者定"这一波让人审意义不大，先给人看一下列表和统计值就行"）：不设确认停点——提取质量已有 2.4 完备性闸把关，人工逐点确认的边际价值低而中断成本高（run 挂起等人）；速览给人**知情**而非**审批**，看到跑偏随时中止即可。
 
 ### 4. [循环 遍历 point 于 points, 收集 check_item 入 check_result] 逐点并行核查
-+ → check_result: [CheckResult]  # 各点核查结论（collect 显式收集 check_item；并行乱序，条目自含 id 可归位）
++ → check_result % [CheckResult]  # 各点核查结论（collect 显式收集 check_item；并行乱序，条目自含 id 可归位）
 
 对每个核查点独立核查，按类型分流（事实点/推演点核查路径不同），结果收集为列表。
 
 #### 4.1. [子任务 重试=5 并行] 核查单个点
 - ← point
-+ → check_item: CheckResult  # 该点的核查结论（结构化，字段见 Types）
++ → check_item % CheckResult  # 该点的核查结论（结构化，字段见 Types）
 
 按 point.type 分流：事实点走"搜索→来源打标"，推演点走"前提溯源→推理审查"。
 
 ##### 4.1.1. [分支] 按点类型分流核查
 - ← point
-+ → check_item: CheckResult
++ → check_item % CheckResult
 
 ###### 4.1.1.1. [条件] 事实点核查 (point.type == "fact")
-+ → check_item: CheckResult
++ → check_item % CheckResult
 
 ####### 4.1.1.1.1. [探索 开放] 搜索外部依据
 - ← point
-+ → evidence: [Evidence]  # 依据清单（每条自带来源名+URL——下游按来源身份打可信度标，无 URL 的条目不收）
++ → evidence % [Evidence]  # 依据清单（每条自带来源名+页面标题+URL——下游按来源身份打可信度标，无 URL 的条目不收）
 - 工具: web_search  # 就 point.claim 检索外部依据
 
-用 web_search 工具就 point.claim 检索至少 2 个关键词组合（每组一次调用,关键词提炼归你裁量——实体+关系词,去疑问语气;首选能命中官方/学术来源的词形,如机构名+数据名）。从返回的结果页清单**择优收集**：每条填一个 Evidence（source/url 照抄结果条目、tier 当场按域名/机构身份标、summary 该来源说了什么、about 留空）。**择优纪律**：同一信息点有 authoritative/reliable 来源就不收 questionable 重复条目；仅当高等级来源覆盖不到该断言（或与断言相关的只有低等级来源）时才收 questionable 兜底——低等级来源不是垃圾，是"仅此一家"时的如实记录。首轮全是低等级时补一次定向检索（限定官方域名/换机构名词形）再收。只收检索结果里真实存在的条目；确实搜不到则输出空列表 []，不编造。
+web_search 是真实可用的工具：调用后引擎会把真实检索结果返回给你，不是模拟。先调用它，拿到结果再写产出。
 
-####### 4.1.1.1.2. [探索 开放] 评估依据并对来源可信度打标
-- ← point, evidence
-+ → check_item: CheckResult  # 本点核查结论（id/line_ref/claim 照抄 point 对应字段）
+用 web_search 工具就 point.claim 检索至少 2 个关键词组合（每组一次调用,关键词提炼归你裁量——实体+关系词,去疑问语气;首选能命中官方/学术来源的词形,如机构名+数据名）。从返回的结果页清单**择优收集**：每条填一个 Evidence（title/url 照抄同一个结果条目的标题和链接、source 取该条目的网站或机构名、tier 当场按域名/机构身份标、summary 该来源说了什么、about 留空）。**择优纪律**：同一信息点有 authoritative/reliable 来源就不收 questionable 重复条目；仅当高等级来源覆盖不到该断言（或与断言相关的只有低等级来源）时才收 questionable 兜底——低等级来源不是垃圾，是"仅此一家"时的如实记录。首轮全是低等级时补一次定向检索（限定官方域名/换机构名词形）再收。
 
-据 evidence 判定该事实点，逐字段填 CheckResult（id/line_ref/claim 照抄 point 对应字段）：
+**证据必须是你本步真查到的，后面会逐条核验**：每条依据的 title 和 url 都要照抄你这一步 web_search 返回结果里的同一个条目——这两项就是你交出的查证凭据。下一步会拿每条的 title 重新检索，核对 url 是否出现在检索结果里；对不上的条目会被剔除，并在核查报告里标为"核验未通过"。凭记忆写出的网址、自己拼出来的链接、改写过的标题，都会在核验中被查出来，剔除后这个点只会落到"无依据"。确实搜不到就输出空列表 []——如实的空列表比编造的依据有用。
+
+####### 4.1.1.1.2. [循环 遍历 ev 于 evidence, 收集 ev_check 入 evidence_checks] 逐条按标题重搜核验依据
++ → evidence_checks % [EvidenceCheck]  # 每条依据的核验结果（与 evidence 一一对应）
+
+对上一步交出的每条依据做一次机械核验：拿它的页面标题重新检索，看它的 URL 在不在结果里。evidence 为空列表时本循环零轮，直接往下走。
+
+######## 4.1.1.1.2.1. [探索] 按标题重搜核对 URL
+- ← ev
++ → ev_check % EvidenceCheck  # 本条依据的核验结果
+
+> ```hop_python
+> title = strip(str(get(ev, "title", "") or ""))
+> target = lower(replace(replace(replace(strip(str(get(ev, "url", "") or "")), "https://", ""), "http://", ""), "www.", ""))
+> if endswith(target, "/"):
+>     target = target[:-1]
+> hit = False
+> if title and target:
+>     r = web_search(query: title)
+>     hit = target in lower(str(r))
+>     if not hit:
+>         host = split(target, "/")[0]
+>         r2 = web_search(query: f"{title} {host}")
+>         hit = target in lower(str(r2))
+> note = "标题重搜命中" if hit else ("按标题重搜两次，结果里都没有这个 URL" if title and target else "条目缺标题或缺 URL，无法核验")
+> ev_check = {"ev": ev, "ok": hit, "note": note}
+> ```
+
+纯机械核验（引擎直执，零 LLM）：先把这条依据的 URL 规范一下（去掉 `https://`、`http://`、`www.` 前缀和末尾斜杠，转小写——同一网页的这几种写法算同一个），然后用它的 title 原文调一次 web_search，看返回的结果文本里有没有这个 URL（整段结果转成小写文本后查子串——不依赖检索服务返回的字段结构，换检索服务照样能用）。第一次没命中，再用"标题 + 网站域名"搜第二次（标题太常见时第一次可能被别的站挤掉）。两次都没有 → 核验不通过；条目缺标题或缺 URL → 直接不通过（没有凭据就无从核验）。每条最多调两次 web_search。检索服务本身出错（网络断、限流）时本步失败，由外层按事实点的重试（4.1 的 retry）整点重做，不把服务故障误记成"编造"。
+
+####### 4.1.1.1.3. [探索] 剔除核验未通过的依据
+- ← evidence_checks
++ → evidence % [Evidence]  # 核验通过的依据（覆盖上游同名变量——下游只看得到通过核验的条目）
++ → evidence_rejected % text  # 核验未通过被剔除的依据，每条一行"URL（标题：…）：原因"；全部通过时为空串
+
+> ```hop_python
+> evidence = [c["ev"] for c in evidence_checks if c["ok"]]
+> evidence_rejected = join([str(get(c["ev"], "url", "")) + "（标题：" + str(get(c["ev"], "title", "")) + "）：" + c["note"] for c in evidence_checks if not c["ok"]], "\n")
+> ```
+
+纯机械过滤（引擎直执，零 LLM）：只把核验通过的条目留在 evidence 里交给评估步；没通过的条目逐条写进 evidence_rejected，评估步把它们写进本点结论，报告里标出。
+
+####### 4.1.1.1.4. [探索 开放] 评估依据并对来源可信度打标
+- ← point, evidence, evidence_rejected
++ → check_item % CheckResult  # 本点核查结论（id/line_ref/claim 照抄 point 对应字段）
+
+evidence 里的条目都已通过"按标题重搜核对 URL"的核验；evidence_rejected 是核验没通过、已被剔除的条目（非空说明检索步交了查不到出处的依据）。据 evidence 判定该事实点，逐字段填 CheckResult（id/line_ref/claim 照抄 point 对应字段）：
 - verdict：依据对断言的支持关系——全面支持 supported；仅部分口径/部分来源支持 partially_supported；依据与断言相反 refuted；无可用依据 no_evidence。
 - credibility：断言可信度=**支持本断言各条中最强的 tier**（等级检索时已标好，直接取——发现某条 tier 明显标错可纠正并在 evidence_summary 注明）；evidence 为空列表 → not_found。
 - evidence_summary：从 evidence 逐条转录"source+url+summary"（URL 照抄 Evidence 条目，禁另行编造）；refuted 时在此写明矛盾所在。
 - conclusion：一句话综合（如"成立，权威口径一致"/"存疑：与 ICO 官方口径矛盾"）。validity 留空。
+- rejected：照抄 evidence_rejected，一字不改（空串就留空）。被剔除的条目不参与判定，也不转录进 evidence_summary。
 
-**信源不足时可补搜**（触发从手头 evidence 自判：各来源口径打架，或支撑关键断言的条目全是 questionable）。补搜怎么搜：
+**信源不足时可补搜**（触发从手头 evidence 自判：各来源口径打架，或支撑关键断言的条目全是 questionable；evidence 因剔除变空也算信源不足）。补搜怎么搜：
 - **查询词冲着能解决问题的信源构造**：几个来源数据打架时，直接搜发布这个数据的权威机构（如 "ICO 咖啡消费量 2023 统计"——拿一手数据判谁对谁错）；手头只有自媒体、百科这类低等级来源时，把断言里的口语说法换成正式名称再搜一次——比如断言说"咖啡因摄入上限"，就搜 "FDA 咖啡因 每日建议摄入量"：机构的官方名、报告的正式标题、领域的标准术语，都比口语词更容易命中官网和学术库；
 - **每个缺口至多 2 次调用**：第一次不中，第二次换信源方向（换机构名/换语种——中文断言可搜英文原始机构），仍不中就接受现状定级，不无底洞；
-- **补搜所得怎么收**：每条按 Evidence 的填法收——source/url 照抄检索结果条目（禁编造）、tier 当场按域名/机构身份标（口径见 Evidence 类型的 tier 注释）、已有高等级命中就不再收低等级重复条目；收好的条目转录进 evidence_summary（source+url+summary），据合并后的全部依据定级。
+- **补搜所得怎么收**：每条按 Evidence 的填法收——title/url 照抄同一个检索结果条目（禁编造，这两项和检索步一样是查证凭据）、tier 当场按域名/机构身份标（口径见 Evidence 类型的 tier 注释）、已有高等级命中就不再收低等级重复条目；收好的条目转录进 evidence_summary（source+url+summary），据合并后的全部依据定级。
 补搜不是必经步骤，依据已充分时直接判。
 
 ###### 4.1.1.2. [条件] 推演点核查 (point.type == "inference")
-+ → check_item: CheckResult
++ → check_item % CheckResult
 
 ####### 4.1.1.2.1. [探索 开放] 前提溯源搜索
 - ← point
-+ → premise_evidence: [Evidence]  # 各前提的依据清单（每条自带来源名+URL，about=挂靠的前提——下游按来源身份判前提可信度）
++ → premise_evidence % [Evidence]  # 各前提的依据清单（每条自带来源名+页面标题+URL，about=挂靠的前提——下游按来源身份判前提可信度）
 - 工具: web_search  # 逐个前提检索依据来源
 
-就 point.premises（该推演依赖的事实前提）用 web_search 工具逐个前提检索，**每条依据填一个 Evidence**：about=该依据对应的前提凝练（一条挂一个前提）、source/url 照抄结果条目（禁编造）、tier 当场按域名/机构身份标、summary=该来源对此前提说了什么。**择优纪律**：优先收 authoritative/reliable，questionable 仅作"高等级覆盖不到"时的兜底（低等级来源不是垃圾，是"仅此一家"时的如实记录）；首轮全低等级补一次定向检索（限定官方域名/换机构名词形）。某前提确实搜不到依据就不为它产条目（下游按"该前提零条目"判 not_found）。不核查推理本身，只核前提真假。
+web_search 是真实可用的工具：调用后引擎会把真实检索结果返回给你，不是模拟。先调用它，拿到结果再写产出。
 
-####### 4.1.1.2.2. [探索 开放] 推理审查与二维判定
-- ← point, premise_evidence
-+ → check_item: CheckResult  # 二维判定装入结构（verdict/credibility=前提维,validity=推理维）
+就 point.premises（该推演依赖的事实前提）用 web_search 工具逐个前提检索，**每条依据填一个 Evidence**：about=该依据对应的前提凝练（一条挂一个前提）、title/url 照抄同一个结果条目的标题和链接、source 取该条目的网站或机构名、tier 当场按域名/机构身份标、summary=该来源对此前提说了什么。**择优纪律**：优先收 authoritative/reliable，questionable 仅作"高等级覆盖不到"时的兜底（低等级来源不是垃圾，是"仅此一家"时的如实记录）；首轮全低等级补一次定向检索（限定官方域名/换机构名词形）。某前提确实搜不到依据就不为它产条目（下游按"该前提零条目"判 not_found）。不核查推理本身，只核前提真假。
 
-二维评估该推演点，逐字段填 CheckResult（id/line_ref/claim 照抄 point 对应字段）：
+**证据必须是你本步真查到的，后面会逐条核验**：每条依据的 title 和 url 都要照抄你这一步 web_search 返回结果里的同一个条目——这两项就是你交出的查证凭据。下一步会拿每条的 title 重新检索，核对 url 是否出现在检索结果里；对不上的条目会被剔除，并在核查报告里标为"核验未通过"。凭记忆写出的网址、自己拼出来的链接、改写过的标题，都会在核验中被查出来，剔除后对应前提只会落到"无依据"。确实搜不到就不产条目——如实的空缺比编造的依据有用。
+
+####### 4.1.1.2.2. [循环 遍历 ev 于 premise_evidence, 收集 ev_check 入 premise_checks] 逐条按标题重搜核验前提依据
++ → premise_checks % [EvidenceCheck]  # 每条前提依据的核验结果（与 premise_evidence 一一对应）
+
+与事实点路径的 4.1.1.1.2 同一套机械核验：拿每条依据的页面标题重新检索，看它的 URL 在不在结果里。premise_evidence 为空列表时本循环零轮。
+
+######## 4.1.1.2.2.1. [探索] 按标题重搜核对 URL
+- ← ev
++ → ev_check % EvidenceCheck  # 本条依据的核验结果
+
+> ```hop_python
+> title = strip(str(get(ev, "title", "") or ""))
+> target = lower(replace(replace(replace(strip(str(get(ev, "url", "") or "")), "https://", ""), "http://", ""), "www.", ""))
+> if endswith(target, "/"):
+>     target = target[:-1]
+> hit = False
+> if title and target:
+>     r = web_search(query: title)
+>     hit = target in lower(str(r))
+>     if not hit:
+>         host = split(target, "/")[0]
+>         r2 = web_search(query: f"{title} {host}")
+>         hit = target in lower(str(r2))
+> note = "标题重搜命中" if hit else ("按标题重搜两次，结果里都没有这个 URL" if title and target else "条目缺标题或缺 URL，无法核验")
+> ev_check = {"ev": ev, "ok": hit, "note": note}
+> ```
+
+纯机械核验（引擎直执，零 LLM），做法与 4.1.1.1.2.1 完全相同：URL 去掉 `https://`、`http://`、`www.` 前缀和末尾斜杠并转小写，用 title 原文检索一次，结果文本里查这个 URL；没命中再用"标题 + 网站域名"检索第二次。两次都没有、或条目缺标题/缺 URL → 不通过。检索服务本身出错时本步失败，由 4.1 的重试整点重做，不误记成"编造"。
+
+####### 4.1.1.2.3. [探索] 剔除核验未通过的前提依据
+- ← premise_checks
++ → premise_evidence % [Evidence]  # 核验通过的前提依据（覆盖上游同名变量——下游只看得到通过核验的条目）
++ → premise_rejected % text  # 核验未通过被剔除的依据，每条一行"URL（标题：…）：原因"；全部通过时为空串
+
+> ```hop_python
+> premise_evidence = [c["ev"] for c in premise_checks if c["ok"]]
+> premise_rejected = join([str(get(c["ev"], "url", "")) + "（标题：" + str(get(c["ev"], "title", "")) + "）：" + c["note"] for c in premise_checks if not c["ok"]], "\n")
+> ```
+
+纯机械过滤（引擎直执，零 LLM）：只把核验通过的条目留在 premise_evidence 里交给评估步；没通过的条目逐条写进 premise_rejected。
+
+####### 4.1.1.2.4. [探索 开放] 推理审查与二维判定
+- ← point, premise_evidence, premise_rejected
++ → check_item % CheckResult  # 二维判定装入结构（verdict/credibility=前提维,validity=推理维）
+
+premise_evidence 里的条目都已通过"按标题重搜核对 URL"的核验；premise_rejected 是核验没通过、已被剔除的条目。二维评估该推演点，逐字段填 CheckResult（id/line_ref/claim 照抄 point 对应字段）：
 - **维度一·前提**：按 about 把 premise_evidence 分组到各前提，逐前提取其条目中最强的 tier（等级检索时已标好；标错可纠正并注明），零条目的前提计 not_found；verdict 装前提整体被支持的程度（supported/partially_supported/refuted/no_evidence），credibility 装各前提的最强等级中最弱的一档（前提链的强度由最弱前提决定）。
 - **维度二·推理（validity 字段）**：**假设前提全为真**（前提真假归维度一，这里只审"推得出推不出"），按下面方法审查：
   1. **摆链**：把推理写成"前提 → (隐含假设) → 结论"的显式链条——隐含假设是文档没写但结论成立所必需的命题（如"健康成人的上限适用于所有人"），**每个隐含假设都是链上一环，须逐个挖出摆上台面**；
@@ -236,39 +332,42 @@ L24: 所以说，只要别超过四杯，谁喝都放心。
   4. validity 字段格式：`等级：谬误类型清单`（如 "leap：范围偷换（健康成人→所有人）+程度拔高（无害→有益）"）；sound/mostly 也要写一句链条摘要（审过的凭据，不是空标）。
 - evidence_summary：从 premise_evidence 逐前提转录"前提｜source+url+summary"（URL 照抄条目，禁另行编造）。
 - conclusion：按二维组合下结论——前提可信 × sound → 成立；前提真 × leap/invalid → 存疑（指出跳在哪）；前提不成立 → 不成立。
+- rejected：照抄 premise_rejected，一字不改（空串就留空）。被剔除的条目不参与判定，也不转录进 evidence_summary。
 
 **信源不足时可补搜**（触发：某前提零条目，或仅有低等级来源、不足以判该前提真假）。补搜怎么搜：
 - **查询词从前提文本提炼**：取前提里的实体+数据/关系词（premises 已自含前提原文，直接用它组词，去疑问语气）；首选官方词形——前提提到机构就搜"机构名+数据项"，提到研究结论就搜学术术语/报告名；
 - **每前提至多 2 次调用**：第一次不中，第二次换方向（换机构名/换语种搜原始出处），仍不中就让该前提维持 not_found，不无底洞；
-- **补搜所得怎么收**：每条按 Evidence 的填法收——source/url 照抄检索结果条目（禁编造）、tier 当场按域名/机构身份标（口径见 Evidence 类型的 tier 注释）、about 挂上该前提、已有高等级命中就不再收低等级重复条目；转录进 evidence_summary（前提｜source+url+summary）后再判维度一。
+- **补搜所得怎么收**：每条按 Evidence 的填法收——title/url 照抄同一个检索结果条目（禁编造，这两项和检索步一样是查证凭据）、tier 当场按域名/机构身份标（口径见 Evidence 类型的 tier 注释）、about 挂上该前提、已有高等级命中就不再收低等级重复条目；转录进 evidence_summary（前提｜source+url+summary）后再判维度一。
 推理审查（维度二）不需要信源——它是"假设前提为真"的纯逻辑审查，补搜别花在这。
 
 ### 5. [子任务 重试=2] 汇聚核查报告并验收完备性
 - ← check_result, points
-+ → factcheck_report: markdown  # 核查报告
++ → factcheck_report % markdown  # 核查报告
 
 汇聚所有核查结论成报告，再自查完备性——漏点/漏结论则据 report_gap 反馈定向重汇（引擎 retry 上限即轮数上限：首轮 + 2 次重试）。
 
 #### 5.1. [推理] 汇聚核查报告
 - ← check_result, points, factcheck_report, report_gap, numbered_path
-+ → factcheck_report: markdown  # 核查报告
++ → factcheck_report % markdown  # 核查报告
 
 不做新核查。汇总 check_result 列表全部结论，生成 Markdown 报告。**排版铁律：表格单元格只放短值（编号/行号/等级词/十来个字的短语），成句的解释一律放散文或列表——一格塞三行长句的表没人读得动。结论先行：读者最关心"哪里有问题"，问题放最前，依据明细放最后**。四节结构：
 
-- ① **总评与问题清单**（开门见山）：先一段总评散文（整体可靠性、几个点成立、几个点有问题；有未能核查点时注明覆盖率）。接着按严重度降序逐条列问题点（questionable/not_found/refuted/leap/invalid 的点），每条一个小标题 `P编号（行号）——问题定性`，下面两三句散文：原文断言是什么、问题在哪、关键依据一句（含来源名）。没问题点就写"未发现问题"。
+- ① **总评与问题清单**（开门见山）：先一段总评散文（整体可靠性、几个点成立、几个点有问题；有未能核查点时注明覆盖率；有依据因核验未通过被剔除时，注明共剔除几条、涉及哪几个点）。接着按严重度降序逐条列问题点（questionable/not_found/refuted/leap/invalid 的点），每条一个小标题 `P编号（行号）——问题定性`，下面两三句散文：原文断言是什么、问题在哪、关键依据一句（含来源名）。没问题点就写"未发现问题"。
 - ② **全点判定一览**：一张紧凑表 `| 编号 | 行号 | 断言 | 判定 | 等级 |`——断言超过 30 字截断加省略号（全文在③和行号对照文件里）；判定=verdict 中文短词（成立/部分成立/不成立/无依据）；等级=事实点填 credibility、推演点填 validity 的等级词。每格一行内读完，不放解释。
-- ③ **依据明细**：每点一个小节（`### P编号 断言全文`），先一行判定结论（verdict+等级+conclusion），推演点加一行推理链摘要（validity 内容）；然后依据逐条列表，每条一行 `- 来源名（tier）：一句话说了什么 — URL`。这一节是查证入口，读者按需翻，不追求短。
+- ③ **依据明细**：每点一个小节（`### P编号 断言全文`），先一行判定结论（verdict+等级+conclusion），推演点加一行推理链摘要（validity 内容）；然后依据逐条列表，每条一行 `- 来源名（tier）：一句话说了什么 — URL`。该点 rejected 字段非空时，依据列表后加一行"**核验未通过、已剔除的依据**："并把 rejected 逐行照抄成列表——这些是检索步交出、但按标题重搜找不到对应网页的条目，读者据此知道哪些"出处"是查不到的。这一节是查证入口，读者按需翻，不追求短。
 - ④ **未能核查的点**（仅在有时）：points 里有、check_result 里没有对应结论的点（并行核查重试耗尽的失败点）——逐个列编号+断言+"核查未完成"。**如实交代即算完备**，不猜测其结论。
 
 报告头注明"行号对照文件：{numbered_path}"。
+
+**点的编号以 points 里实际出现的为准**：提取时可能跳号（如 P81 之后直接是 P83），跳过的编号背后没有点——既不是漏提取也不是核查失败，不要为它造行、不要列进④。总评与②表里的总数、事实点数、推演点数都照 points 实数统计，不按最大编号推算。
 
 **首轮**（factcheck_report 为 None、report_gap 空）= 全新汇聚；**重试轮**（factcheck_report 是上轮产物、report_gap 非空）= 在上轮报告基础上按 report_gap 补齐（补漏点、修错列），已对内容原样保留不推翻。
 
 #### 5.2. [探索] 机械核对存在性与降级项
 - ← points, check_result, factcheck_report
-+ → missing_in_report: text  # 有核查结论但报告漏汇的点编号（真漏汇——重汇能修）
-+ → unchecked_ids: text  # 无核查结论的点编号（核查失败——重汇不可能补出结论,只能如实交代）
-+ → flagged_items: text  # 被降级/存疑的结论清单（供后继 LLM 审合理性）
++ → missing_in_report % text  # 有核查结论但报告漏汇的点编号（真漏汇——重汇能修）
++ → unchecked_ids % text  # 无核查结论的点编号（核查失败——重汇不可能补出结论,只能如实交代）
++ → flagged_items % text  # 被降级/存疑的结论清单（供后继 LLM 审合理性）
 
 > ```hop_python
 > all_ids = [p["id"] for p in points]
@@ -283,7 +382,7 @@ L24: 所以说，只要别超过四杯，谁喝都放心。
 
 #### 5.3. [推理] 审查降级项的合理性
 - ← flagged_items, check_result, points
-+ → downgrade_review: text  # 逐个降级项的合理性复核结论
++ → downgrade_review % text  # 逐个降级项的合理性复核结论
 
 逐一审查 flagged_items 里每个被降级/存疑的结论（每行=编号+verdict/credibility/validity+结论；需看完整依据时按编号回 check_result 取该条 evidence_summary）——降级是否合理：
 - 判断降级判定站得住吗（如标 not_found 是否确实搜过、标 questionable 的来源是否真属立场性、判 leap 的推理跳转是否确有其事）。
@@ -293,10 +392,10 @@ L24: 所以说，只要别超过四杯，谁喝都放心。
 
 #### 5.4. [检查 终检] 验收汇总完备性
 - ← missing_in_report, unchecked_ids, downgrade_review, factcheck_report, points
-+ → report_ok: bool  # 判定槽：汇总是否完备
-+ → report_gap: text  # 说明槽：遗漏清单（通过时置空）
++ → report_ok % bool  # 判定槽：汇总是否完备
++ → report_gap % text  # 说明槽：遗漏清单（通过时置空）
 
-综合判定报告完备性（两类缺失 doctrine 与 examples/hop-deep-research 10.2 是同一条规矩的两处落点——改这边须同步看彼处）：① **missing_in_report 必须为空**（有结论却漏汇=真漏，重汇可修）；② **unchecked_ids 非空时报告须有"未能核查的点"节且逐个列出**（如实交代即完备——不要求变出不存在的结论）；③ downgrade_review 中标为"误判/过苛"的降级项须已在报告体现（未体现=汇总失真）；④ 概览统计数与表格实际条数一致；⑤ 所有问题点都进了问题清单。
+综合判定报告完备性（两类缺失 doctrine 与 examples/hop-deep-research 10.2 是同一条规矩的两处落点——改这边须同步看彼处）：① **missing_in_report 必须为空**（有结论却漏汇=真漏，重汇可修）；② **unchecked_ids 非空时报告须有"未能核查的点"节且逐个列出**（如实交代即完备——不要求变出不存在的结论）；③ downgrade_review 中标为"误判/过苛"的降级项须已在报告体现（未体现=汇总失真）；④ 概览统计数与表格实际条数一致，且都等于 points 的实际条数；报告里出现的每个点编号都能在 points 里找到——编号跳号处造出的行（points 里没有这个编号）是凭空多出的点，算失真；⑤ 所有问题点都进了问题清单。
 
 全部满足 → report_ok=true、report_gap=""；否则 → report_ok=false，report_gap 逐条列出缺项（漏汇编号/未交代的失败点/失真项，触发 subtask retry，5.1 据 report_gap 补齐重汇）。每轮对着当前报告独立重判，不参考上轮判词——输入里不给 report_gap 与 2.4 同一条规矩（判官读到自己上轮判词会照抄交卷）。打回门槛也同 2.4：只有上列①-⑤的实质缺失才打回且一次列全，行文措辞、排版形态的裁量偏好不是打回理由。
 

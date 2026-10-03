@@ -1,0 +1,66 @@
+思考过程：
+1. 需要修正P5的前提②，补充具体数值：一杯标准咖啡的咖啡因含量
+2. 需要修正P2、P3、P4、P5的line_ref，根据原文行号重新分配
+3. P1的line_ref是正确的(L1)，保持不变
+
+根据原文：
+- L1: 全球每天消费约 30 亿杯咖啡。
+- L2: 咖啡因的半衰期约为 5 小时，因此下午晚些时候摄入会影响夜间睡眠质量。
+- L3: 美国 FDA 建议健康成年人每日咖啡因摄入不超过 400 毫克。
+- L4: 这说明每天四杯以内的标准咖啡对多数人是安全的。
+
+所以：
+- P1: L1 ✓
+- P2: 应为L2（咖啡因半衰期）
+- P3: 应为L2（影响睡眠质量）
+- P4: 应为L3（FDA建议）
+- P5: 应为L4（四杯咖啡安全性）
+
+对于P5的前提②，需要添加一杯标准咖啡含多少咖啡因的具体数值。一般认为一杯标准咖啡(8盎司)含约95-100毫克咖啡因。
+
+points:
+  - id: P1
+    type: fact
+    line_ref: L1
+    quote: 全球每天消费约 30 亿杯咖啡
+    claim: 全球每天消费约 30 亿杯咖啡
+    premises: ''
+    source_credibility: questionable
+    evidence: 'https://www.statista.com/statistics/677434/global-coffee-consumption/'
+    inference_validity: not_applicable
+  - id: P2
+    type: fact
+    line_ref: L2
+    quote: 咖啡因的半衰期约为 5 小时
+    claim: 咖啡因的半衰期约为 5 小时
+    premises: ''
+    source_credibility: authoritative
+    evidence: 'https://pubmed.ncbi.nlm.nih.gov/2721520/'
+    inference_validity: not_applicable
+  - id: P3
+    type: inference
+    line_ref: L2
+    quote: 因此下午晚些时候摄入会影响夜间睡眠质量
+    claim: 下午晚些时候摄入咖啡因会影响夜间睡眠质量
+    premises: '① 咖啡因半衰期约 5 小时（即 P2）'
+    source_credibility: reliable
+    evidence: 'https://www.sleepfoundation.org/articles/how-much-caffeine-before-bed'
+    inference_validity: mostly
+  - id: P4
+    type: fact
+    line_ref: L3
+    quote: 美国 FDA 建议健康成年人每日咖啡因摄入不超过 400 毫克
+    claim: 美国 FDA 建议健康成年人每日咖啡因摄入不超过 400 毫克
+    premises: ''
+    source_credibility: authoritative
+    evidence: 'https://www.fda.gov/consumers/consumer-updates/cafeteria-style-how-much-caffeine-too-much'
+    inference_validity: not_applicable
+  - id: P5
+    type: inference
+    line_ref: L4
+    quote: 这说明每天四杯以内的标准咖啡对多数人是安全的
+    claim: 每天四杯以内的标准咖啡对多数人是安全的
+    premises: '① FDA 建议每日上限 400 毫克（即 P4）；② 一杯标准咖啡含约 95-100 毫克咖啡因，四杯总量约 380-400 毫克，在安全范围内'
+    source_credibility: reliable
+    evidence: 'https://www.ncausa.org/About-Coffee/Coffee-Around-the-World/How-Much-Caffeine-is-in-My-Cup-of-Coffee'
+    inference_validity: mostly

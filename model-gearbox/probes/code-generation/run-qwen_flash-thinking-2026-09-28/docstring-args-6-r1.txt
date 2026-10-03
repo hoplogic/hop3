@@ -1,0 +1,64 @@
+```python
+import ast
+import re
+import sys
+
+if len(sys.argv) < 2:
+    sys.exit(1)
+filename = sys.argv[1]
+try:
+    with open(filename, 'r', encoding='utf-8') as f:
+        source = f.read()
+except Exception:
+    sys.exit(1)
+
+try:
+    tree = ast.parse(source, filename=filename)
+except SyntaxError:
+    print("Syntax error in the file.", file=sys.stderr)
+    sys.exit(1)
+
+errors = []
+stack = [(tree, None)]
+while stack:
+    node, parent = stack.pop()
+    if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+        if parent is not None and isinstance(parent, ast.FunctionDef):
+            continue
+        if node.name.startswith('_'):
+            continue
+        
+        doc = ast.get_docstring(node)
+        if doc is None:
+            errors.append("Line %d: No docstring." % node.lineno)
+        else:
+            params = []
+            args = node.args
+            for arg in args.args:
+                if arg.arg not in ['self', 'cls']:
+                    params.append(arg.arg)
+            if args.vararg:
+                if args.vararg.arg not in ['self', 'cls']:
+                    params.append(args.vararg.arg)
+            for arg in args.kwonlyargs:
+                if arg.arg not in ['self', 'cls']:
+                    params.append(arg.arg)
+            if args.kwarg:
+                if args.kwarg.arg not in ['self', 'cls']:
+                    params.append(args.kwarg.arg)
+            
+            for param in params:
+                pattern = r'\b' + re.escape(param) + r'\b'
+                if not re.search(pattern, doc):
+                    errors.append("Line %d: Missing parameter %s in docstring." % (node.lineno, param))
+    
+    for child in ast.iter_child_nodes(node):
+        stack.append((child, node))
+
+if errors:
+    for error in errors:
+        print(error, file=sys.stderr)
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

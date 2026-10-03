@@ -3,10 +3,10 @@ Id: e2e-call-parent
 Goal: call 一个必失败的子 spec——验证子实例 failed 经 --failure-child 机器通道回报、CalleeFailure 内核原封到父终态
 
 ## Inputs
-- raw_value: text  # 传给子 spec 的销售值（e2e 传 "not-a-number"）
+- raw_value % text  # 传给子 spec 的销售值（e2e 传 "not-a-number"）
 
 ## Outputs
-- clean_value: int  # 规整结果（必然缺席——子必失败）
+- clean_value % int  # 规整结果（必然缺席——子必失败）
 
 ## Steps
 1. [call e2e-call-child(raw_value)] 调用销售数据规整子流程

@@ -3,13 +3,13 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-07-02T11:43+0800
+	last_sync: 2026-09-27T20:38+0800
 	note: shared-errors 模块设计——ErrorCode 错误码 + SpecError/ParseError/ValidationError 错误类型契约。2026-07-02 从 shared-types.md 抽出(被 parser/validator/engine/cli 多方调,应独立模块独立文档)。
 %%
 
 # shared-errors 模块设计
 
-> **模块版本**：shared-errors `v0.4.0`（2026-09-06。0.x 未承诺稳定；错误类型是 parser/validator/engine/cli 多方共用契约，破坏性变更须概念层决策）。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
+> **模块版本**：shared-errors `v0.5.0`（2026-09-26。本版=ErrorCode 加 STATE_STALE（todo/0114）。0.x 未承诺稳定；错误类型是 parser/validator/engine/cli 多方共用契约，破坏性变更须概念层决策）。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
 
 错误码枚举 + 错误类型契约（`errors.ts`）。被 parser/validator（产出 ParseError/ValidationError）、engine/dispatcher/cli（消费 ErrorCode 程序化决策）多方依赖。
 
@@ -56,6 +56,7 @@
 | `STEP_TIMEOUT` | 致命错误（不可重试） | 单步执行超时（ResourceLimits.timeout_seconds），不可重试但可触发 subtask retry |
 | `CORRUPT_STATE_FILE` | 致命错误（不可重试） | 状态文件损坏/版本不符（join 读子实例时校验）——语义收纯（2026-09-01）：实例目录在而文件缺/坏才是它,目录整个不存在归 INSTANCE_NOT_FOUND |
 | `INSTANCE_NOT_FOUND` | 致命错误（不可重试） | 显式 --instance 的实例目录在 state_dir 下不存在（典型=实例号手抄错——报文列真实存在的实例号指路,契约 [[hop-cli#^anc-cli-instance-resolve]]） |
+| `STATE_STALE` | 致命错误（不可重试） | 写 state.json 前回读发现盘上写入序号比本进程内存里的大——同一实例目录已被另一个进程推进过,本进程的账过时,拒绝覆盖（以 `STATE_STALE:` 前缀字符串抛出;MCP resume_run/stop_run 预检命中返回结构化错误 code=STATE_STALE）。不可重试:重试同一份过时的账只会再被拒,正路是丢弃本进程的账从盘上重新加载。权威 [[exec-engine#^anc-exec-state-seq-guard]] |
 | `PARSE_ERROR` | 可重试错误 | replan markdown 解析失败 |
 | `VALIDATION_ERROR` | 可重试错误 | replan 验证失败 |
 | `IO_ERROR` | 可重试错误 | 文件系统错误（含 iCloud EPERM） |
@@ -80,19 +81,19 @@ SpecError = ParseError | ValidationError（二选一联合）。
 struct: ParseError
   Id: parse-error
   Fields:
-    - kind: line     # 恒为 'parse'
-    - line: number   # markdown 行号定位
-    - message: line  # 错误说明
+    - kind % line     # 恒为 'parse'
+    - line % number   # markdown 行号定位
+    - message % line  # 错误说明
 
 struct: ValidationError
   Id: validation-error
   Fields:
-    - kind: line      # 恒为 'validate'
-    - rule: line      # 验证规则 ID（S1-S12/C1-C7/V1-V7/P1-P9，共 35 条），必填
-    - severity: line  # 枚举 error/warn/info——error 阻塞级、warn 建议级、info 提示性
-    - step_id: line   # 可选。违规步骤
-    - line: number    # 可选。行号
-    - message: line   # 违规说明
+    - kind % line      # 恒为 'validate'
+    - rule % line      # 验证规则 ID（S1-S12/C1-C7/V1-V7/P1-P9，共 35 条），必填
+    - severity % line  # 枚举 error/warn/info——error 阻塞级、warn 建议级、info 提示性
+    - step_id % line   # 可选。违规步骤
+    - line % number    # 可选。行号
+    - message % line   # 违规说明
 ```
 
 （TS 形态是代码层投影，在 src/errors.ts——设计以本 HopType 为准。）

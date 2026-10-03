@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]], [[reuse-mode-prompt-flow]], [[parallel-execution]], [[hop-cli]]
 	source_id: hopjit-design, hopjit-reuse-mode-prompt-flow, hopjit-parallel-execution, hopjit-hop-cli
 	type: extend
-	last_sync: 2026-08-27T12:13+0800
+	last_sync: 2026-09-27T20:38+0800
 	note: Codex 复用模式 driver carrier 正式设计：优先按 main/segment-driver/parallel-worker 三主体拆分，以 spawn 直发结果决定 delegated/inline（2026-08-08 废 nonce probe——任务即握手+产物侧首步心跳）；定义 action envelope、规则一致性、批式 fan-out 与安装布局。
 %%
 
@@ -125,7 +125,7 @@ Main 禁止：
 - **description 分工=裸说时的缺省**：用户不敲斜杠命令、裸说"跑这个 spec"时,载体按 description 挑 skill——复用壳 description 写明"缺省用这个",MCP 壳写明"仅当用户明说走 MCP/standalone 时用"——裸说恒落复用,等价缺省 reuse（作者拍板不变）。这是仅存的 NL 参与面,且只在用户自己不指定时兜底;
 - **三改的配置半边退役**：`driver_mode` 配置字段与 `hopjit driver-mode` 命令删除（唯一消费方是单壳 §0.5 分发,双名下无消费方=死机制,0.x 干净删——`^anc-cli-driver-mode` 锚废止）;"按项目设缺省"能力随之消失（作者确认可弃——敲命令名比记配置优先级直观）。
   - **引擎侧双执行硬闸保留**（run 落账 `driver_channel: cli|mcp`,跨通道驱动响亮拒,权威 [[exec-engine#^anc-exec-driver-channel]]）——它与壳形态无关,双壳并存下防串台更需要它;两壳各留一行**跨通道报错指路**（收到 DRIVER_CHANNEL_MISMATCH=该 run 属另一形态,指路对应命令,不强行重试）;
-  - `install-skill` 恒装两壳,`--mcp` 语义不变（配置自举+注册 server,非模式选定）。
+  - `install-skill` 恒装两壳;配置自举+注册 server 自 2026-10-01 起缺省即做（`--mcp` 留兼容别名,非模式选定）。
 
 **历史（2026-08-27 三改,当日退役,背景保留）**：配置声明（driver_mode: reuse|mcp 两级合并）+ CLI 顾问（hopjit driver-mode 机械读出）+ 单壳双协议段（§0.5 照答案分发）。判定下沉方向正确（NL 零推断由四改继承）,但引入了配置字段、CLI 命令、双段壳三件机制去承载一个"用户敲个名字就能表达"的决定——四改用命名消解了整条判定链。
 
@@ -150,10 +150,10 @@ Main 禁止：
 Id: codex_standalone_protocol
 Goal: hopjit MCP 工具面可见时,main 以纯工具调用驱动一次 HopSpec 执行到终态——零 hopjit CLI、零 subagent
 Inputs:
-- mcp_registered: bool    # hopjit MCP server 已注册——判定动作=list_runs 试调用成功（只读零状态零费用;
+- mcp_registered % bool    # hopjit MCP server 已注册——判定动作=list_runs 试调用成功（只读零状态零费用;
                           # 不是目视工具面——Codex 延迟加载下注册了也不可见,见上节实撞）
 Outputs:
-- terminal: line          # completed | failed（YAML 终态块呈现）
+- terminal % line          # completed | failed（YAML 终态块呈现）
 Constraints:
 - mcp_registered 即选定 standalone,本次 run/resume 全程锁定——不判 spawn、不读配置文件、不切换执行体
   （注册=用户显式 opt-in+费用授权;运行时环境判定越少,路径越确定）
@@ -347,7 +347,9 @@ Codex 对现有 fanout 顾问的消费契约定义在 [[parallel-execution#^anc-
 ```text
 driver/codex/
 ├── SKILL.md              ← hopspec main orchestrator（--mcp 时装 SKILL-mcp.md 变体）
-├── hop-skill.md          ← $hop 随手命令（2026-08-26 新增——单文件无 agents/references）
+├── hop-skill.md          ← $hop 随手命令（2026-08-26 新增;2026-10-01 加 hop-references/hop-ops.md 运维按需件）
+├── hop-references/
+│   └── hop-ops.md        ← 装到 hop/references/（三载体各一份同文）
 ├── agents/
 │   └── segment-driver.md
 └── references/
@@ -369,13 +371,15 @@ driver/codex/
     ├── discovery.md
     └── execution-rules.md
 ~/.codex/skills/hop/
-└── SKILL.md              ← driver/codex/hop-skill.md 拷入（同 CC 的 hop 装配形态:单文件+版本戳）
+├── SKILL.md              ← driver/codex/hop-skill.md 拷入（同 CC 的 hop 装配形态+版本戳）
+└── references/
+    └── hop-ops.md        ← driver/codex/hop-references/hop-ops.md（运维规则按需读,^anc-cli-hop-dispatch）
 ```
 
-**hop 件条款（2026-08-26 作者定"补"）**：`$hop` 与 `$hopspec` 分工同 CC 载体（成品 spec 用 hopspec、日常活用 hop）。
+**hop 件条款（2026-08-26 作者定"补";2026-10-01 分派制后 hopspec 降为 hop 的内部件）**：`$hop` 是唯一用户入口,成品 spec 也从它进（按 hopspec 协议跑）——同 CC 载体 [[hop-cli#^anc-cli-hop-dispatch]]。
 
 - 驱动件是 CC 版 `driver/hop-skill.md` 的 Codex 适配（同语义分载体——协议 token 与 CC 版对齐，载体差异仅三处：触发形态 `$hop`、问人走对话直接问答〔规约 C9 同款〕、2b 外包按 spawn 能力降级〔无 spawn 则全自驱，无 INLINE_FALLBACK 仪式——/hop 本就缺省自驱，外包只是可选优化〕）；
-- 单文件自足，不引用 hopspec 的 agents/references。
+- 不引用 hopspec 的 agents/references;自带 `references/hop-ops.md` 一件（运维场景按需读,其他活不读）。
 
 带 `--demo` 时额外安装（**demo 恒项目级**——2026-08-27 作者定"只有 demo 是项目级":演示材料跟项目走,落 cwd 的 `.agents/skills/`,不随正式件进用户级）：
 

@@ -1,0 +1,32 @@
+```sql
+WITH region_customers AS (
+    SELECT region, COUNT(*) AS customer_count
+    FROM customers
+    GROUP BY region
+),
+paid_orders AS (
+    SELECT c.region AS region,
+           o.id AS order_id,
+           COALESCE(o.amount, 0) AS paid_amount
+    FROM orders o
+    JOIN customers c
+      ON c.id = o.customer_id
+    WHERE o.status = 'paid'
+),
+region_paid AS (
+    SELECT region,
+           COUNT(order_id) AS paid_order_count,
+           SUM(paid_amount) AS paid_amount
+    FROM paid_orders
+    GROUP BY region
+)
+SELECT rc.region,
+       rc.customer_count,
+       COALESCE(rp.paid_order_count, 0) AS paid_order_count,
+       COALESCE(rp.paid_amount, 0) AS paid_amount
+FROM region_customers rc
+LEFT JOIN region_paid rp
+  ON rp.region = rc.region
+ORDER BY COALESCE(rp.paid_amount, 0) DESC,
+         rc.region ASC;
+```

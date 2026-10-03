@@ -1,0 +1,63 @@
+```python
+import ast
+import re
+import sys
+
+if len(sys.argv) < 2:
+    sys.exit(1)
+
+filename = sys.argv[1]
+
+try:
+    with open(filename, 'r', encoding='utf-8') as f:
+        content = f.read()
+except Exception:
+    sys.exit(1)
+
+try:
+    module = ast.parse(content, filename=filename)
+except SyntaxError:
+    sys.exit(1)
+
+violations = []
+check_nodes = []
+
+for node in module.body:
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not node.name.startswith('_'):
+        check_nodes.append(node)
+    elif isinstance(node, ast.ClassDef):
+        for method in node.body:
+            if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and not method.name.startswith('_'):
+                check_nodes.append(method)
+
+for node in check_nodes:
+    docstr = ast.get_docstring(node)
+    if docstr is None:
+        violations.append((node.lineno, "missing docstring"))
+        continue
+    
+    param_names = []
+    args = node.args
+    for arg in args.args:
+        param_names.append(arg.arg)
+    if args.vararg:
+        param_names.append(args.vararg.arg)
+    for arg in args.kwonlyargs:
+        param_names.append(arg.arg)
+    if args.kwarg:
+        param_names.append(args.kwarg.arg)
+    
+    param_names = [p for p in param_names if p not in ('self', 'cls')]
+    
+    for p in param_names:
+        pattern = r'\b' + re.escape(p) + r'\b'
+        if not re.search(pattern, docstr):
+            violations.append((node.lineno, f"docstring missing mention of parameter '{p}'"))
+
+if violations:
+    for line_num, reason in violations:
+        print(f"Line {line_num}: {reason}")
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

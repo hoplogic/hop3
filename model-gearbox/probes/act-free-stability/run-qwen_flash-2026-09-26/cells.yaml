@@ -1,0 +1,662 @@
+service: qwen_flash
+cells:
+  - cell: short:0:noise_only
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 3878
+        secs: 5
+      - verdict: pass
+        tokens: 4434
+        secs: 10
+      - verdict: pass
+        tokens: 4680
+        secs: 10
+      - verdict: pass
+        tokens: 4445
+        secs: 10
+      - verdict: pass
+        tokens: 4388
+        secs: 10
+      - verdict: pass
+        tokens: 4622
+        secs: 10
+  - cell: short:0:tool_required
+    rate: 0
+    'n': 6
+    results:
+      - verdict: wrong(123≠137)
+        tokens: 6648
+        secs: 25
+      - verdict: wrong(100≠137)
+        tokens: 16687
+        secs: 85
+      - verdict: wrong(-1≠137)
+        tokens: 10534
+        secs: 50
+      - verdict: wrong(-1≠137)
+        tokens: 14092
+        secs: 70
+      - verdict: wrong(200≠137)
+        tokens: 6877
+        secs: 30
+      - verdict: wrong(123≠137)
+        tokens: 14775
+        secs: 75
+  - cell: short:1:noise_only
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 4226
+        secs: 5
+      - verdict: pass
+        tokens: 4249
+        secs: 5
+      - verdict: pass
+        tokens: 4905
+        secs: 10
+      - verdict: pass
+        tokens: 4343
+        secs: 5
+      - verdict: pass
+        tokens: 4874
+        secs: 10
+      - verdict: pass
+        tokens: 4872
+        secs: 10
+  - cell: short:1:tool_required
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 4537
+        secs: 10
+      - verdict: pass
+        tokens: 3960
+        secs: 10
+      - verdict: pass
+        tokens: 5072
+        secs: 15
+      - verdict: pass
+        tokens: 5283
+        secs: 15
+      - verdict: pass
+        tokens: 5869
+        secs: 20
+      - verdict: pass
+        tokens: 4583
+        secs: 15
+  - cell: short:3:noise_only
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 4573
+        secs: 5
+      - verdict: pass
+        tokens: 5185
+        secs: 10
+      - verdict: pass
+        tokens: 4984
+        secs: 10
+      - verdict: pass
+        tokens: 4426
+        secs: 5
+      - verdict: pass
+        tokens: 4526
+        secs: 5
+      - verdict: pass
+        tokens: 4507
+        secs: 5
+  - cell: short:3:tool_required
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 5196
+        secs: 15
+      - verdict: pass
+        tokens: 4884
+        secs: 15
+      - verdict: pass
+        tokens: 4740
+        secs: 10
+      - verdict: pass
+        tokens: 5514
+        secs: 15
+      - verdict: pass
+        tokens: 5286
+        secs: 15
+      - verdict: pass
+        tokens: 5532
+        secs: 15
+  - cell: short:5:noise_only
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 4719
+        secs: 5
+      - verdict: pass
+        tokens: 4688
+        secs: 5
+      - verdict: pass
+        tokens: 5293
+        secs: 10
+      - verdict: pass
+        tokens: 4726
+        secs: 5
+      - verdict: pass
+        tokens: 4712
+        secs: 5
+      - verdict: pass
+        tokens: 4644
+        secs: 5
+  - cell: short:5:tool_required
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 5355
+        secs: 15
+      - verdict: pass
+        tokens: 5038
+        secs: 10
+      - verdict: pass
+        tokens: 5318
+        secs: 15
+      - verdict: pass
+        tokens: 5233
+        secs: 15
+      - verdict: pass
+        tokens: 5057
+        secs: 10
+      - verdict: pass
+        tokens: 5583
+        secs: 15
+  - cell: short:10:noise_only
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 5824
+        secs: 5
+      - verdict: pass
+        tokens: 6449
+        secs: 10
+      - verdict: pass
+        tokens: 5837
+        secs: 5
+      - verdict: pass
+        tokens: 6318
+        secs: 10
+      - verdict: pass
+        tokens: 6571
+        secs: 10
+      - verdict: pass
+        tokens: 5871
+        secs: 5
+  - cell: short:10:tool_required
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 6846
+        secs: 15
+      - verdict: pass
+        tokens: 6493
+        secs: 15
+      - verdict: pass
+        tokens: 6483
+        secs: 15
+      - verdict: pass
+        tokens: 6876
+        secs: 15
+      - verdict: pass
+        tokens: 6107
+        secs: 10
+      - verdict: pass
+        tokens: 6508
+        secs: 15
+  - cell: mid:0:noise_only
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 6764
+        secs: 10
+      - verdict: pass
+        tokens: 6038
+        secs: 5
+      - verdict: pass
+        tokens: 6179
+        secs: 5
+      - verdict: pass
+        tokens: 6392
+        secs: 10
+      - verdict: pass
+        tokens: 5975
+        secs: 5
+      - verdict: pass
+        tokens: 6550
+        secs: 10
+  - cell: mid:0:tool_required
+    rate: 0
+    'n': 6
+    results:
+      - verdict: failed()
+        tokens: null
+        secs: 40
+      - verdict: wrong(123≠291)
+        tokens: 13085
+        secs: 65
+      - verdict: failed()
+        tokens: null
+        secs: 70
+      - verdict: failed()
+        tokens: null
+        secs: 60
+      - verdict: wrong(150≠291)
+        tokens: 6380
+        secs: 25
+      - verdict: wrong(500≠291)
+        tokens: 7622
+        secs: 35
+  - cell: mid:1:noise_only
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 6718
+        secs: 10
+      - verdict: pass
+        tokens: 6420
+        secs: 5
+      - verdict: pass
+        tokens: 22343
+        secs: 115
+      - verdict: pass
+        tokens: 6792
+        secs: 10
+      - verdict: pass
+        tokens: 22343
+        secs: 115
+      - verdict: pass
+        tokens: 6446
+        secs: 5
+  - cell: mid:1:tool_required
+    rate: 0.8333333333333334
+    'n': 6
+    results:
+      - verdict: wrong(5678≠291)
+        tokens: 3566
+        secs: 5
+      - verdict: pass
+        tokens: 5162
+        secs: 15
+      - verdict: pass
+        tokens: 4573
+        secs: 15
+      - verdict: pass
+        tokens: 4895
+        secs: 15
+      - verdict: pass
+        tokens: 5269
+        secs: 15
+      - verdict: pass
+        tokens: 5426
+        secs: 20
+  - cell: mid:3:noise_only
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 6923
+        secs: 10
+      - verdict: pass
+        tokens: 6871
+        secs: 5
+      - verdict: pass
+        tokens: 6830
+        secs: 5
+      - verdict: pass
+        tokens: 6882
+        secs: 5
+      - verdict: pass
+        tokens: 6801
+        secs: 5
+      - verdict: pass
+        tokens: 6653
+        secs: 5
+  - cell: mid:3:tool_required
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 4753
+        secs: 10
+      - verdict: pass
+        tokens: 5272
+        secs: 15
+      - verdict: pass
+        tokens: 5304
+        secs: 15
+      - verdict: pass
+        tokens: 4764
+        secs: 10
+      - verdict: pass
+        tokens: 5206
+        secs: 15
+      - verdict: pass
+        tokens: 5464
+        secs: 15
+  - cell: mid:5:noise_only
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 6911
+        secs: 5
+      - verdict: pass
+        tokens: 7071
+        secs: 5
+      - verdict: pass
+        tokens: 8231
+        secs: 15
+      - verdict: pass
+        tokens: 6974
+        secs: 5
+      - verdict: pass
+        tokens: 7493
+        secs: 10
+      - verdict: pass
+        tokens: 7103
+        secs: 5
+  - cell: mid:5:tool_required
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 4981
+        secs: 10
+      - verdict: pass
+        tokens: 21783
+        secs: 130
+      - verdict: pass
+        tokens: 5137
+        secs: 15
+      - verdict: pass
+        tokens: 5564
+        secs: 15
+      - verdict: pass
+        tokens: 5085
+        secs: 15
+      - verdict: pass
+        tokens: 5018
+        secs: 10
+  - cell: mid:10:noise_only
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 8174
+        secs: 5
+      - verdict: pass
+        tokens: 7939
+        secs: 5
+      - verdict: pass
+        tokens: 23954
+        secs: 120
+      - verdict: pass
+        tokens: 8070
+        secs: 5
+      - verdict: pass
+        tokens: 7985
+        secs: 5
+      - verdict: pass
+        tokens: 8025
+        secs: 5
+  - cell: mid:10:tool_required
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 7081
+        secs: 20
+      - verdict: pass
+        tokens: 6418
+        secs: 15
+      - verdict: pass
+        tokens: 7417
+        secs: 20
+      - verdict: pass
+        tokens: 6513
+        secs: 15
+      - verdict: pass
+        tokens: 6795
+        secs: 15
+      - verdict: pass
+        tokens: 6501
+        secs: 15
+  - cell: long:0:noise_only
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 9346
+        secs: 10
+      - verdict: pass
+        tokens: 9179
+        secs: 10
+      - verdict: pass
+        tokens: 8999
+        secs: 5
+      - verdict: pass
+        tokens: 9010
+        secs: 5
+      - verdict: pass
+        tokens: 9362
+        secs: 10
+      - verdict: pass
+        tokens: 8974
+        secs: 5
+  - cell: long:0:tool_required
+    rate: 0
+    'n': 6
+    results:
+      - verdict: wrong(0≠358)
+        tokens: 20274
+        secs: 110
+      - verdict: wrong(123≠358)
+        tokens: 17305
+        secs: 95
+      - verdict: failed()
+        tokens: null
+        secs: 70
+      - verdict: wrong(123≠358)
+        tokens: 10250
+        secs: 45
+      - verdict: wrong(500≠358)
+        tokens: 6226
+        secs: 25
+      - verdict: wrong(100≠358)
+        tokens: 12805
+        secs: 65
+  - cell: long:1:noise_only
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 9389
+        secs: 5
+      - verdict: pass
+        tokens: 9382
+        secs: 5
+      - verdict: pass
+        tokens: 9338
+        secs: 5
+      - verdict: pass
+        tokens: 9308
+        secs: 5
+      - verdict: pass
+        tokens: 9481
+        secs: 10
+      - verdict: pass
+        tokens: 9387
+        secs: 5
+  - cell: long:1:tool_required
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 5446
+        secs: 20
+      - verdict: pass
+        tokens: 4796
+        secs: 15
+      - verdict: pass
+        tokens: 20637
+        secs: 130
+      - verdict: pass
+        tokens: 7573
+        secs: 260
+      - verdict: pass
+        tokens: 4906
+        secs: 15
+      - verdict: pass
+        tokens: 4786
+        secs: 15
+  - cell: long:3:noise_only
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 9529
+        secs: 5
+      - verdict: pass
+        tokens: 9570
+        secs: 5
+      - verdict: pass
+        tokens: 9794
+        secs: 10
+      - verdict: pass
+        tokens: 9631
+        secs: 5
+      - verdict: pass
+        tokens: 9658
+        secs: 5
+      - verdict: pass
+        tokens: 9930
+        secs: 10
+  - cell: long:3:tool_required
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 5151
+        secs: 15
+      - verdict: pass
+        tokens: 5130
+        secs: 15
+      - verdict: pass
+        tokens: 4886
+        secs: 15
+      - verdict: pass
+        tokens: 4986
+        secs: 15
+      - verdict: pass
+        tokens: 5146
+        secs: 15
+      - verdict: pass
+        tokens: 5289
+        secs: 15
+  - cell: long:5:noise_only
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 10045
+        secs: 10
+      - verdict: pass
+        tokens: 10061
+        secs: 10
+      - verdict: pass
+        tokens: 9865
+        secs: 5
+      - verdict: pass
+        tokens: 9763
+        secs: 5
+      - verdict: pass
+        tokens: 9922
+        secs: 5
+      - verdict: pass
+        tokens: 9812
+        secs: 5
+  - cell: long:5:tool_required
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 4875
+        secs: 10
+      - verdict: pass
+        tokens: 5039
+        secs: 15
+      - verdict: pass
+        tokens: 4821
+        secs: 10
+      - verdict: pass
+        tokens: 5185
+        secs: 15
+      - verdict: pass
+        tokens: 4886
+        secs: 10
+      - verdict: pass
+        tokens: 5202
+        secs: 15
+  - cell: long:10:noise_only
+    rate: 1
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 11031
+        secs: 5
+      - verdict: pass
+        tokens: 11120
+        secs: 10
+      - verdict: pass
+        tokens: 10964
+        secs: 5
+      - verdict: pass
+        tokens: 10956
+        secs: 5
+      - verdict: pass
+        tokens: 10888
+        secs: 5
+      - verdict: pass
+        tokens: 10955
+        secs: 5
+  - cell: long:10:tool_required
+    rate: 0.8333333333333334
+    'n': 6
+    results:
+      - verdict: pass
+        tokens: 6620
+        secs: 15
+      - verdict: pass
+        tokens: 7116
+        secs: 20
+      - verdict: pass
+        tokens: 6287
+        secs: 15
+      - verdict: pass
+        tokens: 5959
+        secs: 10
+      - verdict: pass
+        tokens: 6554
+        secs: 15
+      - verdict: wrong(123≠358)
+        tokens: 5758
+        secs: 10

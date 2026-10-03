@@ -3,10 +3,9 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 // @module: persistence ^anc-provider-persistence
 import { writeFileSync, renameSync, mkdirSync, readFileSync, existsSync, openSync, fsyncSync, closeSync, mkdtempSync } from 'node:fs';
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { join, dirname, basename } from 'node:path';
 import { tmpdir } from 'node:os';
-import { realpathSync } from 'node:fs';
-import { registerWorkZoneRoot } from './tools.js';
 import type { SpecAST } from './ast-types.js';
 import type { PersistenceProvider } from './provider-types.js';
 import type { StateFile, VarsFile, EngineSnapshot } from './runtime-types.js';
@@ -65,9 +64,51 @@ export function writeVars(dir: string, vars: VarsFile): void {
   writeAtomic(join(dir, 'vars.json'), JSON.stringify(vars, null, 2));
 }
 
-/** 将运行时 AST 快照原子写入实例目录下的 `spec.json`（随 replan 演化需重写）。见 [[persistence#^anc-provider-persistence]] */
+// 实例目录上溯到本 run 顶层实例目录：子实例目录恒为 <父实例目录>/parallel|calls/<cid>/（exec-engine ^anc-exec-work-zone
+// 目录不变量）,上一级有 state.json 才算父（防 --state-dir 自己叫 calls 误认）。getWorkZoneRoots 与 spec 真身定位共用。
+// @a: anc-provider-spec-content-addressed
+function parentInstanceDir(dir: string): string | null {
+  const kind = basename(dirname(dir));
+  const parent = dirname(dirname(dir));
+  if ((kind !== 'parallel' && kind !== 'calls') || parent === dir || !existsSync(join(parent, 'state.json'))) return null;
+  return parent;
+}
+/** 实例目录上溯到本 run 顶层实例目录（自身即顶层时返回自身）——spec 真身 specs/ 的定位基准,与 getWorkZoneRoots 同判据。见 [[persistence#^anc-provider-spec-content-addressed]] */
+export function findRunRoot(instanceDir: string): string {
+  let dir = instanceDir;
+  for (;;) {
+    const parent = parentInstanceDir(dir);
+    if (!parent) return dir;
+    dir = parent;
+  }
+}
+
+// spec 快照内容寻址（todo/0130,承接 hopissues/0115——hopkb 单批 2309 份 spec.json 1.62G 只有 3 种内容）：
+// 真身按 sha256 在 run 根 specs/ 存一份（无缩进,机器账）,实例目录 spec.json 只存引用;两层幂等——同内容不重写真身,
+// 同 sha 不重写引用。replan 改 AST 即新 sha 新真身,旧真身留作版本史。见 [[persistence#^anc-provider-spec-content-addressed]]
+// @a: anc-provider-spec-content-addressed
+interface SpecRef { format_version: 1; $spec_ref: string }
+const SPEC_TEXT_CACHE = new Map<string, string>();   // sha → 序列化串（进程内;返回值每次独立 parse,不共享可变对象）
+/** 落运行时 AST 快照——内容寻址：真身按 sha256 存 run 根 specs/ 一份（已在则不写）,实例目录 spec.json 存引用（同 sha 不重写）。见 [[persistence#^anc-provider-spec-content-addressed]] */
 export function writeSpec(dir: string, spec: object): void {
-  writeAtomic(join(dir, 'spec.json'), JSON.stringify(spec, null, 2));
+  const body = JSON.stringify(spec);
+  const sha = createHash('sha256').update(body).digest('hex');
+  const root = findRunRoot(dir);
+  const target = join(root, 'specs', `${sha}.json`);
+  if (!existsSync(target)) {
+    mkdirSync(join(root, 'specs'), { recursive: true, mode: 0o700 });
+    writeAtomic(target, body);
+  }
+  SPEC_TEXT_CACHE.set(sha, body);
+  const refPath = join(dir, 'spec.json');
+  if (existsSync(refPath)) {
+    try {
+      const cur = JSON.parse(readFileSync(refPath, 'utf-8')) as Partial<SpecRef>;
+      if (cur && cur.$spec_ref === sha) return;   // 同 sha 引用已在,零重写
+    } catch { /* 坏文件或旧内联形态,下面覆盖成引用 */ }
+  }
+  const ref: SpecRef = { format_version: 1, $spec_ref: sha };
+  writeAtomic(refPath, JSON.stringify(ref));
 }
 
 // 状态文件读取健壮性校验：format_version 必须 === 1 + 关键字段存在。
@@ -99,6 +140,19 @@ function parseChecked<T>(filePath: string, requiredKeys: string | string[], allo
 /** 读取并校验实例目录下的 `state.json`（format_version + step_states 校验）。见 [[persistence#^anc-provider-persistence]] */
 export function readState(dir: string): StateFile {
   return parseChecked<StateFile>(join(dir, 'state.json'), 'step_states');
+}
+
+/** 只读 state.json 的写入序号与最后写入者。文件不在、读不出、解析失败、字段缺席都返回 seq 0,不抛——
+ * 判定只关心"盘上有没有更新的账",读不出的文件本来就会被这次写盘修好。见 [[exec-engine#^anc-exec-state-seq-guard]] */
+export function readStateSeq(dir: string): { seq: number; last_writer?: { pid: number; at: string } } { // @a: anc-exec-state-seq-guard
+  try {
+    const raw = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf-8')) as Partial<StateFile>;
+    const seq = typeof raw.state_seq === 'number' && Number.isFinite(raw.state_seq) ? raw.state_seq : 0;
+    const lw = raw.last_writer;
+    return lw && typeof lw.pid === 'number' && typeof lw.at === 'string' ? { seq, last_writer: lw } : { seq };
+  } catch {
+    return { seq: 0 };
+  }
 }
 
 /** 读取并校验实例目录下的 `vars.json`（format_version 1|2 + variables/scopes 二者其一校验）。见 [[persistence#^anc-provider-persistence]] */
@@ -133,7 +187,22 @@ export function readSpec(dir: string): object {
   if (typeof obj !== 'object' || obj === null) {
     throw new Error(`CORRUPT_STATE_FILE: ${filePath} 顶层非对象`);
   }
-  return obj;
+  // 引用形态（内容寻址,^anc-provider-spec-content-addressed）→ 取 run 根 specs/ 真身;无 $spec_ref=旧内联形态原样返回
+  // @a: anc-provider-spec-content-addressed
+  const ref = (obj as Partial<SpecRef>).$spec_ref;
+  if (typeof ref !== 'string') return obj;
+  const cached = SPEC_TEXT_CACHE.get(ref);
+  if (cached !== undefined) return JSON.parse(cached) as object;
+  const target = join(findRunRoot(dir), 'specs', `${ref}.json`);
+  let body: string;
+  try { body = readFileSync(target, 'utf-8'); }
+  catch (e) { throw new Error(`CORRUPT_STATE_FILE: ${filePath} 引用的 spec 真身 ${target} 不可读 (${e instanceof Error ? e.message : String(e)})`); }
+  let parsed: unknown;
+  try { parsed = JSON.parse(body); }
+  catch { throw new Error(`CORRUPT_STATE_FILE: ${filePath} 引用的 spec 真身 ${target} 非合法 JSON`); }
+  if (typeof parsed !== 'object' || parsed === null) throw new Error(`CORRUPT_STATE_FILE: ${filePath} 引用的 spec 真身 ${target} 顶层非对象`);
+  SPEC_TEXT_CACHE.set(ref, body);
+  return parsed;
 }
 
 /** 判断实例目录下是否已存在 `state.json`（cli 定位实例是否有状态）。见 [[persistence#^anc-provider-persistence]] */
@@ -164,24 +233,34 @@ export class FilePersistence implements PersistenceProvider { // @a: anc-provide
   // 返回 work_zone 工作区绝对路径,NextResponse 五形态都携带此路径。// @a: anc-exec-work-zone
   getWorkZone(): string {
     if (!this.instanceDir) throw new Error('FilePersistence.getWorkZone before init');
-    const wz = join(this.instanceDir, 'work_zone');
-    // 注册真实根进写域判定面（0066——state-dir 名不含 .hopstate 字面时字面支不中;发出侧即事实源。
-    // 原始形态与 realpath 形态都注册:resolvePath 拿 work_zone_path() 原始产物判、validateFileAccess
-    // 拿 resolveReal 后的判——两消费点各吃一种形态,只注册一种另一点失配（probe 重放实抓:只注册
-    // realpath 时 /tmp 原始形态在 resolvePath 处照拒）。目录未建时 realpath 炸则只注册原始形态。// @a: anc-exec-work-zone
-    registerWorkZoneRoot(wz);
-    try { registerWorkZoneRoot(realpathSync(wz)); } catch { /* 目录未建,原始形态已注册 */ }
-    return wz;
+    return join(this.instanceDir, 'work_zone');
+  }
+
+  // 本实例 work_zone + 全部祖先实例的 work_zone（自身首位）。祖先按实例目录布局上溯:子实例目录恒为
+  // <父实例目录>/parallel|calls/<cid>/（^anc-exec-work-zone 目录路径编码 child 身份）,上一级有 state.json
+  // 才算祖先——防 `--state-dir calls` 这类碰巧同名的顶层目录把上一级误当父实例。登记本身归 engine
+  // （persistence 不知道 tools）。见 [[tools/file-tools#^anc-exec-work-zone-registry]] // @a: anc-exec-work-zone-registry
+  getWorkZoneRoots(): string[] {
+    if (!this.instanceDir) throw new Error('FilePersistence.getWorkZoneRoots before init');
+    // 逐级上溯——每级用 parentInstanceDir 判"上一级是不是父实例"(与 findRunRoot 同一判据)
+    const roots = [join(this.instanceDir, 'work_zone')];
+    let dir = this.instanceDir;
+    for (;;) {
+      const parent = parentInstanceDir(dir);
+      if (!parent) break;
+      dir = parent;
+      roots.push(join(dir, 'work_zone'));
+    }
+    return roots;
   }
 
   saveSnapshot(snapshot: EngineSnapshot): void {
     if (!this.instanceDir) throw new Error('FilePersistence.saveSnapshot before init');
     writeVars(this.instanceDir, snapshot.vars);
     writeState(this.instanceDir, snapshot.state);
-    // spec.json 是运行时 AST 快照,随 replan 演化必须重写——否则跨进程 load 丢失 replan
-    // 的新 children(此前真实 bug)。见 design/exec-engine.md ^anc-exec-state-persistence。
-    // v1 每次 saveSnapshot 都写(整树序列化,spec 通常不大;正确性优先、不漏写);
-    // v2 可优化为脏标记(仅 replan 改 AST 时写)。// @a: anc-exec-state-persistence
+    // spec.json 是运行时 AST 快照,随 replan 演化必须反映新树——否则跨进程 load 丢失 replan
+    // 的新 children(此前真实 bug)。每步都调 writeSpec 不漏写;writeSpec 内按内容哈希去重,AST 没变一个字节
+    // 都不重写,变了落新真身(^anc-provider-spec-content-addressed,todo/0130 取代 v1 恒整份重写)。// @a: anc-exec-state-persistence
     writeSpec(this.instanceDir, snapshot.spec);
   }
 
@@ -239,12 +318,13 @@ export class MemoryPersistence implements PersistenceProvider {
   getWorkZone(): string {
     if (!this.workZoneDir) {
       this.workZoneDir = mkdtempSync(join(tmpdir(), 'hopjit-workzone-'));
-      // 同注册（0066——mkdtemp 返回的已是真实路径;字面支已罩 hopjit-workzone-*,注册罩 realpath 差异面）。// @a: anc-exec-work-zone
-      registerWorkZoneRoot(this.workZoneDir);
       // vars/ 同建（与 FilePersistence.init 对称——deflate $file 写点在 vars/ 下,
       // 缺目录则大输入组装 ENOENT,BUG-F 实撞）。// @a: anc-exec-work-zone, anc-exec-deflate
       mkdirSync(join(this.workZoneDir, 'vars'), { recursive: true, mode: 0o700 });
     }
     return this.workZoneDir;
   }
+
+  // 内存形态无祖先布局,集合就是自己的 tmpdir 根。// @a: anc-exec-work-zone-registry
+  getWorkZoneRoots(): string[] { return [this.getWorkZone()]; }
 }

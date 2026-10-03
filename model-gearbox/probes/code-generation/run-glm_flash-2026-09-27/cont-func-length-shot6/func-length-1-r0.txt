@@ -1,0 +1,58 @@
+```python
+import ast
+import sys
+
+if len(sys.argv) < 2:
+    print("缺少待检查文件路径", file=sys.stderr)
+    sys.exit(1)
+
+path = sys.argv[1]
+
+try:
+    file_obj = open(path, "r", encoding="utf-8")
+    try:
+        source_text = file_obj.read()
+    finally:
+        file_obj.close()
+except OSError:
+    print("无法读取文件: " + path, file=sys.stderr)
+    sys.exit(1)
+except ValueError:
+    print("文件不是有效的 UTF-8 文本: " + path, file=sys.stderr)
+    sys.exit(1)
+
+source_text = source_text.removeprefix("\ufeff")
+
+try:
+    tree = ast.parse(source_text)
+except SyntaxError:
+    print("文件存在语法错误，无法检查: " + path, file=sys.stderr)
+    sys.exit(1)
+except ValueError:
+    print("文件内容无法解析: " + path, file=sys.stderr)
+    sys.exit(1)
+
+violations = []
+
+for node in ast.walk(tree):
+    if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+        start_line = int(node.lineno)
+        end_line = int(node.end_lineno)
+        func_len = end_line - start_line + 1
+
+        if func_len > 40:
+            violations.append((start_line, node.name, func_len))
+
+violations.sort()
+
+for item in violations:
+    line_no = item[0]
+    func_name = item[1]
+    func_len = item[2]
+    print("第 " + str(line_no) + " 行: 函数 '" + func_name + "' 长度 " + str(func_len) + " 行，超过上限 40 行")
+
+if len(violations) > 0:
+    sys.exit(1)
+
+sys.exit(0)
+```

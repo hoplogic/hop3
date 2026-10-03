@@ -431,7 +431,21 @@ def scan_traceability(project, src_dir, test_dir):
         # `// @module: <模块名> ^anc-struct-x`（见规范「模块归属标注」表），不是 @a:。
         # 用 @a: 判据校验它们必然找不到 → 假报缺失。模块归属另有 scan_module 维度专管。
         markers = (marker, "@module:") if target.startswith("anc-struct-") else (marker,)
-        found = any(any(mk in ln for mk in markers) and target in ln for ln in flines)
+        # 整词判（^anc-meta-card-ref-owner 2026-09-30 补——子串包含让 anc-x 被 anc-x-y 的标注行误命中,
+        # 卡指向已删标注仍 valid;todo/0125 条目 6 实撞）：取标注段按逗号切、每段首词与 target 全等。
+        def _tagged(ln):
+            for mk in markers:
+                if mk not in ln:
+                    continue
+                if mk == "@module:":
+                    # 模块归属行形如 `// @module: <模块名> ^anc-struct-x`——锚在 ^ 后,不是逗号段首词
+                    mm = re.search(r'@module:\s*\S+\s+\^(anc-[a-z][a-z0-9-]*)', ln)
+                    if mm and mm.group(1) == target:
+                        return True
+                elif target in parse_anchor_ids(ln.split(mk, 1)[1]):
+                    return True
+            return False
+        found = any(_tagged(ln) for ln in flines)
         ref["valid"] = found
         if not found:
             has_marker = any(marker in ln for ln in flines)

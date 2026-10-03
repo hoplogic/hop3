@@ -12,24 +12,24 @@ Constraints:
 
 Types:
 - MutationPoint:  # 一个变异点位
-  - file: line       # 仓库相对路径(要改坏的文件)
-  - old_text: text   # 原文片段(精确匹配,唯一命中)
-  - new_text: text   # 改坏后的片段
-  - test_file: line  # 目标测试文件(仓库相对路径)
-  - expect_red: line # 期望变红的测试名片段(记录用,判定看整文件红绿)
+  - file % line       # 仓库相对路径(要改坏的文件)
+  - old_text % text   # 原文片段(精确匹配,唯一命中)
+  - new_text % text   # 改坏后的片段
+  - test_file % line  # 目标测试文件(仓库相对路径)
+  - expect_red % line # 期望变红的测试名片段(记录用,判定看整文件红绿)
 
 Inputs:
-- repo_dir: line       # 被核证仓库的绝对路径
-- base_commit: line    # 基线 commit(worktree 检出的起点;不可用当前已检出的分支名——git 会拒)
-- points: [MutationPoint]  # 变异点位清单(选点是人/主对话的裁量,本 spec 只管机械执行)
+- repo_dir % line       # 被核证仓库的绝对路径
+- base_commit % line    # 基线 commit(worktree 检出的起点;不可用当前已检出的分支名——git 会拒)
+- points % [MutationPoint]  # 变异点位清单(选点是人/主对话的裁量,本 spec 只管机械执行)
 
 Outputs:
-- 核证报告: yaml  # 逐点位:{file, expect_red, 判定: pinned|no_pin|baseline_dirty, 四拍}
+- 核证报告 % yaml  # 逐点位:{file, expect_red, 判定: pinned|no_pin|baseline_dirty, 四拍}
 
 ## Steps
 1. [act] 建隔离区并准备测试环境
   - ← repo_dir, base_commit
-  + → wt_dir: line  # worktree 绝对路径(后续步骤全在此目录内操作)
+  + → wt_dir % line  # worktree 绝对路径(后续步骤全在此目录内操作)
 > 在本实例涂鸦区建 worktree(从 base_commit 检出,detached 形态),把主仓库的 node_modules 软链进来(测试要依赖,软链零拷贝——ln 不在白名单,软链经白名单 uv 承载 python os.symlink 等价落地)。两步任一失败(returncode 非 0)即用必炸类型转换如实报错,不带病下行——worktree/软链失败静默继续会让后续每个点位在坏现场上空转。主工作区从此步起零接触。
 > ```hop_python
 > wt_dir = work_zone_path("wt")
@@ -43,15 +43,15 @@ Outputs:
 
 2. [loop for-each point in points, collect 点位记录 into 点位记录集] 逐点位核证
   - ← points, wt_dir
-  + → 点位记录集: [yaml]  # 每点位 {file, expect_red, 判定, 基线, 变异后, 恢复后porcelain}
+  + → 点位记录集 % [yaml]  # 每点位 {file, expect_red, 判定, 基线, 变异后, 恢复后porcelain}
 
   2.1. [subtask] 单点位四拍
     - ← point, wt_dir
-    + → 点位记录: yaml
+    + → 点位记录 % yaml
 
     2.1.1. [act] 基线:先跑一次目标测试记录红绿
       - ← point, wt_dir
-      + → 基线态: yaml  # {returncode}
+      + → 基线态 % yaml  # {returncode}
 > 变异前先在 worktree 里跑一次目标测试文件,只记退出码(输出体不留——判定只看红绿)——基线就有红的点位,后面"变异后红"说明不了任何事。
 > ```hop_python
 > rb = subprocess.run(["npx", "vitest", "run", point.test_file], cwd=wt_dir, timeout=600)
@@ -60,7 +60,7 @@ Outputs:
 
     2.1.2. [act] 注入变异并重跑
       - ← point, wt_dir, 基线态
-      + → 变异态: yaml  # {returncode, applied: bool}
+      + → 变异态 % yaml  # {returncode, applied: bool}
 > 读点位文件,把 old_text 精确替换为 new_text(改坏代码),写回,再跑同一测试文件记退出码。old_text 在文件里找不到时 applied=false 不空跑测试。
 > ```hop_python
 > src_text = read(path: wt_dir + "/" + point.file)
@@ -76,7 +76,7 @@ Outputs:
 
     2.1.3. [act] 恢复并判定
       - ← point, wt_dir, 基线态, 变异态
-      + → 点位记录: yaml
+      + → 点位记录 % yaml
 > 单文件 git checkout 恢复该文件,复核 porcelain 干净。然后按三态判定:基线非绿=baseline_dirty(判读作废);基线绿且变异后红=pinned(测试真锁着这个行为);基线绿且变异后仍绿=no_pin(缺口——改坏了没人知道)。old_text 未命中=point_invalid。
 > ```hop_python
 > rr = subprocess.run(["git", "checkout", "--", point.file], cwd=wt_dir, timeout=30)
@@ -94,11 +94,11 @@ Outputs:
 
 3. [subtask] 弃区收口与验收
   - ← 点位记录集, wt_dir, repo_dir, points
-  + → 核证报告: yaml
+  + → 核证报告 % yaml
 
   3.1. [act] 弃隔离区并组装报告
     - ← 点位记录集, wt_dir, repo_dir
-    + → 核证报告: yaml
+    + → 核证报告 % yaml
 > 强制移除 worktree(变异不保留,弃区即回滚——路径用步骤 1 产的同一变量,不手打),然后把点位记录集原样组装成报告。
 > ```hop_python
 > rd = subprocess.run(["git", "worktree", "remove", "--force", wt_dir], cwd=repo_dir, timeout=30)
@@ -107,8 +107,8 @@ Outputs:
 
   3.2. [check final] 核证完备验收
     - ← 核证报告, points
-    + → ok: bool  # 判定
-    + → note: text  # 缺口
+    + → ok % bool  # 判定
+    + → note % text  # 缺口
 > 四条确定性布尔核对由 body 引擎直执(零 LLM):①报告点位数=输入点位数(不许静默漏点);②每点位四拍在场(基线/变异后/判定/恢复后porcelain 四键都在);③恢复后 porcelain 全部为空串(现场干净);④弃区 returncode=0。任一不满足 ok=false,note 列出缺项。
 > ```hop_python
 > recs = 核证报告["点位"]

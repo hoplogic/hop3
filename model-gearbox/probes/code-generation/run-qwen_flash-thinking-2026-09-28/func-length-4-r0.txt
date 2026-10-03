@@ -1,0 +1,33 @@
+```python
+import ast
+import sys
+
+if len(sys.argv) != 2:
+    sys.exit(1)
+
+file_path = sys.argv[1]
+try:
+    with open(file_path, 'r', encoding='utf-8') as f:
+        code = f.read()
+except:
+    sys.exit(1)
+
+try:
+    tree = ast.parse(code)
+except:
+    sys.exit(1)
+
+violations = []
+for node in ast.walk(tree):
+    if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+        length = node.end_lineno - node.lineno + 1
+        if length > 40:
+            violations.append((node.lineno, node.name, length))
+
+if violations:
+    for line, name, length in violations:
+        sys.stderr.write("Line {0}: function '{1}' has length {2} (exceeds 40)\n".format(line, name, length))
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

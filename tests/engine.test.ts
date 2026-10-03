@@ -1,7 +1,7 @@
 // @module: exec-engine ^anc-struct-exec-engine
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { ExecutionEngine, splitInstanceDir, classifyFailReason } from '../src/engine.js';
-import { formatPromptText, TEXT_TOOLCALL_HINT_MARKER } from '../src/prompt.js';
+import { formatPromptText, TEXT_TOOLCALL_HINT_MARKER, ACT_EVIDENCE_GATE_PREFIX } from '../src/prompt.js';
 import { subtreeContainsPausePoint } from '../src/engine-traverse.js';
 import { VariableStore } from '../src/ast-runtime.js';
 import type { HostConfig } from '../src/provider-types.js';
@@ -4438,22 +4438,28 @@ Test adaptive replan
     }
   });
 
-  // 缺省日志 debug 级 + call 子实例级别继承（2026-08-23 作者定"把缺省日志全部调成 debug 级"——
-  // 两撞:standalone info 黑箱/dr9 走查被 info 级 200 字截断制造观测幻象〔skeleton 真值 7 步日志
-  // 显示 2 步,闸门被误判失灵〕;子实例原不继承,顶层 debug 递归全 info——构建主体恰是黑箱）
+  // 缺省日志 info 级（2026-09-30 todo/0127 作者定——对外分发防塞爆硬盘,prompt+response 占字节 65%;
+  // 2026-08-23 曾定 debug,前提"个人开发体积可承受"已变）+ call 子实例级别继承
   // @v: anc-obs-log-levels
-  it('正例：不传 logLevel → hoplog 缺省 debug（main.yaml 头 level: debug）', () => {
+  it('正例：不传 logLevel → hoplog 缺省 info（main.yaml 头 level: info）', () => {
     const dir = mkdtempSync(join(tmpdir(), 'log-default-'));
     const engine = new ExecutionEngine();
     engine.initExecution('# T\nId: t\n## Goal\ng\n## Outputs\n- o: text  # x\n## Steps\n1. [reason] r\n  + → o: text  # x\n', MINIMAL_HOST_CONFIG, { logDir: dir });
+    expect(readFileSync(join(engine.getHopLog()!.getRunDir(), 'main.yaml'), 'utf-8')).toMatch(/^level: info$/m);
+  });
+
+  it('正例：显式升级 debug 生效（排障通道不被缺省覆盖）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'log-explicit-dbg-'));
+    const engine = new ExecutionEngine();
+    engine.initExecution('# T\nId: t\n## Goal\ng\n## Outputs\n- o: text  # x\n## Steps\n1. [reason] r\n  + → o: text  # x\n', MINIMAL_HOST_CONFIG, { logDir: dir, logLevel: 'debug' });
     expect(readFileSync(join(engine.getHopLog()!.getRunDir(), 'main.yaml'), 'utf-8')).toMatch(/^level: debug$/m);
   });
 
-  it('反例：显式降级 info 仍生效（降级通道不被缺省覆盖）', () => {
+  it('反例：显式降级 warn 仍生效（降级通道不被缺省覆盖）', () => {
     const dir = mkdtempSync(join(tmpdir(), 'log-explicit-'));
     const engine = new ExecutionEngine();
-    engine.initExecution('# T\nId: t\n## Goal\ng\n## Outputs\n- o: text  # x\n## Steps\n1. [reason] r\n  + → o: text  # x\n', MINIMAL_HOST_CONFIG, { logDir: dir, logLevel: 'info' });
-    expect(readFileSync(join(engine.getHopLog()!.getRunDir(), 'main.yaml'), 'utf-8')).toMatch(/^level: info$/m);
+    engine.initExecution('# T\nId: t\n## Goal\ng\n## Outputs\n- o: text  # x\n## Steps\n1. [reason] r\n  + → o: text  # x\n', MINIMAL_HOST_CONFIG, { logDir: dir, logLevel: 'warn' });
+    expect(readFileSync(join(engine.getHopLog()!.getRunDir(), 'main.yaml'), 'utf-8')).toMatch(/^level: warn$/m);
   });
 
   // L2c 有界累计史（2026-08-23 升级——多约束节点每攻只见最后一条失败,修东墙拆西墙打地鼠:
@@ -5660,6 +5666,7 @@ describe('ErrorCode enum completeness', () => {
       'CONTEXT_OVERFLOW', 'MISSING_INPUT', 'MAX_TOOL_ITERATIONS',
       'BUDGET_EXCEEDED', 'COMMIT_REQUIRED', 'STEP_TIMEOUT',
       'REPLAN_LIMIT_EXCEEDED', 'REPLAN_DUPLICATE', 'CORRUPT_STATE_FILE',
+      'STATE_STALE',
     ];
     for (const code of fatal) {
       expect(ErrorCode).toHaveProperty(code);
@@ -8608,6 +8615,57 @@ G
       ExecutionEngine.setEngineToolProviderFactory((hc) => new CompositeToolProvider(hc));
     }
   });
+
+  // work_zone 登记路由（^anc-exec-work-zone-registry）：复用模式 body 直执走 engine lazy 自建的 engineToolProvider,
+  // 登记必须推到它——review 面三 m4（删掉对 engineToolProvider 的推送）曾全绿,本钉封该半边。
+  // @v: anc-exec-work-zone-registry
+  it('正例：act body write(path: work_zone_path(...)) 经 engineToolProvider 直执落盘——登记已推到 lazy 自建的提供者', async () => {
+    const ws = realpathSync(mkdtempSync(join(tmpdir(), 'direct-wz-')));
+    const SPEC = `# WZ
+## Goal
+G
+## Steps
+1. [subtask] 组
+  + → ok: bool
+  1.1. [act] 写涂鸦区
+    + → note: text
+    > \`\`\`hop_python
+    > r = write(path: work_zone_path("t.txt"), content: "wz")
+    > note = "ok"
+    > \`\`\`
+  1.2. [check final] 验
+    - ← note
+    + → ok: bool
+    + → why: text
+    > 恒过
+`;
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC, mkConfig(ws), { stateDir: join(ws, '.hopstate') });
+    expect(init.status).toBe('ok');
+    const r = await engine.advanceToCaller();
+    expect(r.status).toBe('step_ready');
+    if (r.status !== 'step_ready') return;
+    expect(r.step_id).toBe('1.2');   // 1.1 直执成功才走到 1.2;登记缺席则 write 拒→1.1 失败
+    expect(readFileSync(join(engine.getWorkZone(), 't.txt'), 'utf-8')).toBe('wz');
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  // "每次 getWorkZone 都推、不缓存"（设计 HopSop 步 3）——提供者可能在 engine 生命周期中途才接上
+  // （dispatcher 的 setToolDefsSource 在 initExecution 之后）。review 面三 m10（加"已登记"缓存只推一次）曾全绿。
+  // @v: anc-exec-work-zone-registry
+  it('正例：先 getWorkZone 再 setToolDefsSource 再 getWorkZone——后接上的提供者也收到登记（不缓存已登记）', () => {
+    const ws = realpathSync(mkdtempSync(join(tmpdir(), 'wz-late-')));
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(`# L\n## Goal\nG\n## Steps\n1. [act] a\n  + → x: text\n  > \`\`\`hop_python\n  > x = "1"\n  > \`\`\`\n`, mkConfig(ws), { stateDir: join(ws, '.hopstate') });
+    expect(init.status).toBe('ok');
+    const wz = engine.getWorkZone();   // 第一次:此时还没有 toolDefsSource
+    const got: string[] = [];
+    engine.setToolDefsSource({ list: () => [], execute: async () => ({ result: '', success: true }), registerWorkZoneRoot: (r: string) => { got.push(r); } });
+    expect(got).toEqual([]);
+    engine.getWorkZone();   // 第二次:后接上的提供者必须收到
+    expect(got).toContain(wz);
+    rmSync(ws, { recursive: true, force: true });
+  });
 });
 
 // 注册件直执（0076,2026-09-06 作者拍"你不要等着这个坑把人坑了再填吧"——复用模式直执面接入
@@ -10881,6 +10939,62 @@ g
     const r2 = e2.nextStep();
     if (r2.status !== 'step_ready') throw new Error('expected step_ready');
     expect(r2.context.retry_feedback).toBe(`你上一轮的产出导致后续机械步骤处理失败（引擎错误：${base}）。\n这通常说明产出的形态不符合输出声明——请严格按 L4 输出声明的名字与类型产出：声明什么类型就直接给什么类型的值，不要包裹在字符串/JSON/代码围栏里，不要在值外再套变量名键。内容本身可能没有问题，重点检查形态。`);
+  });
+
+  // @v: anc-exec-l2c-retry-feedback —— 执行过程类失败不套形态指引（T9 sdc×qwen27 r5 实撞:
+  // 工具次数用完后重做轮被说"重点检查形态",诚实降档产出没写 no_change 被机核拒收,再一轮只交 no_change 判死）
+  const fbAfter = (...reasons: string[]) => {
+    const e = new ExecutionEngine();
+    e.initExecution(SPEC2, MINIMAL_HOST_CONFIG);
+    e.nextStep();
+    let r: ReturnType<ExecutionEngine['nextStep']> | undefined;
+    for (const reason of reasons) { e.failStep('1.1', reason); r = e.nextStep(); }
+    if (r?.status !== 'step_ready') throw new Error('expected step_ready');
+    return r.context.retry_feedback as string;
+  };
+  const MAX_ITER = 'MAX_TOOL_ITERATIONS: exceeded tool use iteration limit（20 轮;明细已落 HopLog tool 块）';
+  it('正例：工具次数用完 → 说实话(上限 20 次)+接着改文件/省着用/降级交带 no_change;反例:不出现形态指引', () => {
+    const fb = fbAfter(MAX_ITER);
+    expect(fb).toContain('本步的工具调用次数用完了（上限 20 次），还没交出产出就被中止了——这不是产出形态的问题。');
+    expect(fb).toContain('先查看已有的文件，在上面接着改');
+    expect(fb).toContain('另起一行顶格写 `no_change: 原因`');
+    expect(fb).not.toContain('重点检查形态');
+    expect(fb).not.toContain('机械步骤处理失败');
+    // 上限数取不到 → 省掉括号
+    expect(fbAfter('MAX_TOOL_ITERATIONS: exceeded')).toContain('本步的工具调用次数用完了，还没交出产出');
+  });
+  it('正例：原地打转与机核拒收各给实话句;反例:两者都不套形态指引', () => {
+    // 原地打转属步级瞬态:首撞免扣预算重跑不留反馈,同步骤二撞才走正常重试留反馈——故连撞两次
+    const LOOP = 'TOOL_LOOP_REPEAT: 工具调用 "read" 以完全相同的参数连续重复 3 次';
+    const loop = fbAfter(LOOP, LOOP);
+    expect(loop).toContain('上一轮被中止：TOOL_LOOP_REPEAT: 工具调用 "read"');
+    expect(loop).toContain('本轮换一种做法');
+    expect(loop).not.toContain('重点检查形态');
+    const gate = fbAfter(`${ACT_EVIDENCE_GATE_PREFIX}——要么真调工具修改盘面`);
+    expect(gate.startsWith(`上一轮交的产出被拒收：${ACT_EVIDENCE_GATE_PREFIX}`)).toBe(true);
+    expect(gate).not.toContain('重点检查形态');
+    // 反例:别的 SCHEMA_MISMATCH（真形态问题）照旧走形态指引
+    expect(fbAfter('SCHEMA_MISMATCH: 字段 "v" 缺失')).toContain('重点检查形态');
+  });
+  it('正例：历史行里的工具次数用完只列实话首句,不列原始错误码也不带做法', () => {
+    const fb = fbAfter(MAX_ITER, `${ACT_EVIDENCE_GATE_PREFIX}——要么真调工具`);
+    const history = fb.slice(0, fb.indexOf('上一轮交的产出被拒收'));
+    expect(history).toContain('- 上一轮没做完：本步的工具调用次数用完了（上限 20 次）');
+    expect(history).not.toContain('MAX_TOOL_ITERATIONS');
+    expect(history).not.toContain('本轮这样做');
+  });
+  // 客户端等待超时（prompt-assembler v0.28.0,todo/0117）:产出没交上来,不套形态指引也不当网络中断
+  it('正例：客户端等待超时 → 实话句带原文+精简产出做法;反例:不出现形态指引与"网络中断"句;历史行只留首句', () => {
+    const CT = 'CLIENT_TIMEOUT: 客户端等待超过 16 分钟仍没收到模型的完整回复，按等待上限中止（原文: Request timed out.）';
+    const fb = fbAfter(CT);
+    expect(fb).toContain(`上一轮没做完：等模型回复超过了引擎给这次请求的等待上限，被中止了——这不是产出形态的问题：${CT}`);
+    expect(fb).toContain('本轮尽量精简产出、少绕弯子');
+    expect(fb).not.toContain('重点检查形态');
+    expect(fb).not.toContain('网络中断未完成');
+    const hist = fbAfter(CT, 'SCHEMA_MISMATCH: 字段 "v" 缺失');
+    const head = hist.slice(0, hist.indexOf('你上一轮的产出'));
+    expect(head).toContain('- 上一轮没做完：等模型回复超过了引擎给这次请求的等待上限');
+    expect(head).not.toContain('本轮尽量精简产出');
   });
 });
 
@@ -14772,5 +14886,184 @@ Config:
     const msg = (init as { errors: { message: string }[] }).errors[0].message;
     expect(msg).toContain('engine_min_version: 99.0.0');
     expect(msg).not.toContain('requires_commands');
+  });
+});
+
+// state.json 写入序号核对（todo/0114——同一实例目录被两个进程推进,内存里的账过时的那个写盘前被拦）。
+// 两个 ExecutionEngine.load 出来的对象模拟两个进程各自的内存账。
+// @v: anc-exec-state-seq-guard
+describe('state.json 写入序号核对（跨进程过时覆盖拦截）', () => {
+  const SEQ_SPEC = `# Seq
+Id: t-seq
+## Goal
+g
+## Steps
+1. [act] 第一步
+  + → a: text  # 产出一
+2. [act] 第二步
+  - ← a
+  + → b: text  # 产出二
+3. [act] 第三步
+  - ← b
+  + → c: text  # 产出三
+`;
+  function freshInstance(): { instDir: string; engine: ExecutionEngine } {
+    const stateDir = join(mkdtempSync(join(tmpdir(), 'seq-guard-')), '.hopstate');
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SEQ_SPEC, MINIMAL_HOST_CONFIG, { stateDir });
+    expect(init.status).toBe('ok');
+    return { instDir: join(stateDir, (init as { instance_id: string }).instance_id), engine };
+  }
+  const readSt = (d: string) => JSON.parse(readFileSync(join(d, 'state.json'), 'utf-8'));
+
+  it('反例：A 推进写盘后,B（旧账）写盘抛 STATE_STALE,盘上 state.json 与 vars.json 逐字节不变', () => {
+    const { instDir } = freshInstance();
+    const a = ExecutionEngine.load(instDir);
+    const b = ExecutionEngine.load(instDir);
+    const na = a.nextStep();
+    expect(na.status).toBe('step_ready');
+    expect(a.completeStep('1', { a: 'A的产出' }).status).toBe('ok');
+    const stateBefore = readFileSync(join(instDir, 'state.json'));
+    const varsBefore = readFileSync(join(instDir, 'vars.json'));
+    const diskSeq = readSt(instDir).state_seq as number;
+    expect(diskSeq).toBeGreaterThan(b.getStateSeq());
+    let msg = '';
+    try { b.nextStep(); } catch (err) { msg = (err as Error).message; }
+    expect(msg).toBe(`STATE_STALE: 盘上 state.json 已被另一个进程（pid ${process.pid}，写于 ${readSt(instDir).last_writer.at}）推进到序号 ${diskSeq}，本进程内存里的账还停在序号 ${b.getStateSeq()}——拒绝覆盖。请丢弃本进程的账，从盘上重新加载后再继续（MCP：再调一次 resume_run 会从快照恢复；CLI：重新执行命令）`);
+    expect(readFileSync(join(instDir, 'state.json')).equals(stateBefore)).toBe(true);
+    expect(readFileSync(join(instDir, 'vars.json')).equals(varsBefore)).toBe(true);
+    // 从盘上重新加载的新对象不再过时,可照常推进
+    const c = ExecutionEngine.load(instDir);
+    expect(c.getStateSeq()).toBe(diskSeq);
+    expect(() => c.nextStep()).not.toThrow();
+  });
+
+  it('反例：B 的工具日志写盘路径（submitToolResult）同样抛 STATE_STALE,不被吞', () => {
+    const { instDir } = freshInstance();
+    const a = ExecutionEngine.load(instDir);
+    const b = ExecutionEngine.load(instDir);
+    a.nextStep();
+    const before = readFileSync(join(instDir, 'state.json'));
+    expect(() => b.submitToolResult('1', { result: 'x', success: true })).toThrow(/^STATE_STALE: /);
+    expect(readFileSync(join(instDir, 'state.json')).equals(before)).toBe(true);
+  });
+
+  it('正例：单引擎连续推进,序号逐次加一,last_writer.pid 等于本进程 pid', () => {
+    const { instDir, engine } = freshInstance();
+    const s0 = readSt(instDir);
+    expect(s0.state_seq).toBe(engine.getStateSeq());
+    expect(s0.last_writer.pid).toBe(process.pid);
+    expect(Number.isNaN(Date.parse(s0.last_writer.at))).toBe(false);
+    const seqs: number[] = [s0.state_seq];
+    for (const [id, out] of [['1', { a: 'x' }], ['2', { b: 'y' }]] as const) {
+      const before = engine.getStateSeq();
+      engine.nextStep();
+      expect(engine.getStateSeq()).toBe(before + 1);   // nextStep 写一次盘
+      expect(readSt(instDir).state_seq).toBe(before + 1);
+      engine.completeStep(id, out);
+      expect(engine.getStateSeq()).toBe(before + 2);   // completeStep 再写一次
+      expect(readSt(instDir).state_seq).toBe(before + 2);
+      seqs.push(readSt(instDir).state_seq);
+    }
+    expect(seqs).toEqual([seqs[0], seqs[0] + 2, seqs[0] + 4]);
+    expect(readSt(instDir).last_writer.pid).toBe(process.pid);
+  });
+
+  it('正例：旧快照（删掉 state_seq 与 last_writer）加载后照常推进,写盘后序号为 1', () => {
+    const { instDir } = freshInstance();
+    const st = readSt(instDir);
+    delete st.state_seq;
+    delete st.last_writer;
+    writeFileSync(join(instDir, 'state.json'), JSON.stringify(st, null, 2));
+    const e = ExecutionEngine.load(instDir);
+    expect(e.getStateSeq()).toBe(0);
+    expect(e.nextStep().status).toBe('step_ready');
+    expect(readSt(instDir).state_seq).toBe(1);
+    expect(readSt(instDir).last_writer.pid).toBe(process.pid);
+  });
+
+  it('正例：无实例目录（MemoryPersistence）不核对,照常推进', () => {
+    const e = new ExecutionEngine();
+    expect(e.initExecution(SEQ_SPEC, MINIMAL_HOST_CONFIG).status).toBe('ok');
+    expect(() => e.assertStateFresh()).not.toThrow();
+    expect(e.nextStep().status).toBe('step_ready');
+  });
+});
+
+// @v: anc-exec-command-primitive —— 复用模式消化路径的白名单并集（0132 review 面三变异 f：engine.ts 注入点改回不并,全量 3596 绿——零保护）
+describe('复用模式 body 白名单并集（卡上《已批准命令》）', () => {
+  const SPEC = (approved: string, cmd: string) => `# T
+Id: t-union-reuse
+## Goal
+g
+## Outputs
+- out: text  # o
+## 已批准命令
+${approved}
+## Steps
+1. [act] 跑命令
+  + → out: text  # o
+> 执行
+> \`\`\`hop_python
+> r = subprocess.run(["${cmd}", "from-card-reuse"])
+> out = r.stdout
+> \`\`\`
+`;
+  const hostEmpty = () => ({ ...MINIMAL_HOST_CONFIG, sandbox: { ...(MINIMAL_HOST_CONFIG as any).sandbox, runtime: { available: [] } } } as any);
+
+  it('正例：hopjit.yaml 白名单空 + 卡上批 echo → 复用模式消化 body 的 subprocess.run(["echo"]) 真跑通（变异 f 重放:engine.ts 注入点不并即红）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'union-reuse-'));
+    const e = new ExecutionEngine();
+    const init = e.initExecution(SPEC('- echo', 'echo'), hostEmpty(), { stateDir: dir });
+    expect(init.status).toBe('ok');
+    const adv = await e.advanceToCaller() as any;
+    expect(['completed', 'step_ready']).toContain(adv.status);
+    expect(String(e.getVariableStore().read('out', 'root'))).toContain('from-card-reuse');
+  });
+
+  it('反例：卡上只批 echo,body 跑 ls → 拒（并的是命令名,不是放开全部）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'union-reuse-neg-'));
+    const e = new ExecutionEngine();
+    e.initExecution(SPEC('- echo', 'ls'), hostEmpty(), { stateDir: dir });
+    const adv = await e.advanceToCaller() as any;
+    expect(adv.status).not.toBe('completed');
+    expect(String(e.getVariableStore().read('out', 'root') ?? '')).not.toContain('from-card-reuse');
+  });
+});
+
+// @v: anc-exec-requires-commands-gate, anc-exec-command-primitive —— 预检闸吃并集（0132 review 面二 G1 探针 Q：卡批 echo+声明 echo+宿主空 → 曾 INIT_FAILED 教人改 hopjit.yaml,与"同一张卡不写两遍"矛盾）
+describe('requires_commands 预检闸吃《已批准命令》并集', () => {
+  const SPEC = (approved: string, req: string) => `# RC2
+Id: rc2
+## Goal
+g
+Config:
+  requires_commands: [${req}]
+## 已批准命令
+${approved}
+## Outputs
+- r: text  # r
+## Steps
+1. [act free] 干
+  + → r: text  # r
+`;
+  const HOST_EMPTY: HostConfig = {
+    workspace_dir: '/tmp/test',
+    sandbox: { filesystem: { workspace_dir: '.', read_access: { allowed: ['.'], denied: [], confirm_required: [] } }, network: { trusted_hosts: [] }, runtime: { available: [] } },
+    api_key: 'test-key',
+  };
+
+  it('正例：宿主白名单空 + 卡上批 echo + requires_commands: [echo] → 起跑不拦（变异重放:engine.ts 预检改回只看宿主即红）', () => {
+    const init = new ExecutionEngine().initExecution(SPEC('- echo', 'echo'), HOST_EMPTY);
+    expect(init.status).toBe('ok');
+  });
+
+  it('反例：卡上只批 echo,requires_commands 声明 ls → INIT_FAILED 且报文两处修法并列（hopjit.yaml 或卡上加行）', () => {
+    const init = new ExecutionEngine().initExecution(SPEC('- echo', 'ls'), HOST_EMPTY);
+    expect(init.status).toBe('error');
+    const msg = (init as { errors: { message: string }[] }).errors[0].message;
+    expect(msg).toContain('缺少: ls');
+    expect(msg).toContain('hopjit.yaml 的 commands');
+    expect(msg).toContain('## 已批准命令');
   });
 });

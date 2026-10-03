@@ -107,10 +107,11 @@ process.chdir(work);
 const stateDir = join(work, '.hopstate');
 console.log(`═══ hopbuild 自跑 e2e（样本=${CASE_ID};超时 ${timeoutMin}min;工作区 ${work}）═══`);
 
-// skill_path 用相对路径（run 组合根 cwd=work——沙箱 write 拒绝绝对路径:v3.5.0 轮实撞,步骤6 commit body
-// 以 skill_path 算交付路径,绝对形态被工具面拦）
+// skill_path 用相对路径（run 组合根 cwd=work;hopbuild2 步骤 1 的路径形态闸拒一切 / 开头的路径——spec 取不到
+// workspace 根,判不了绝对路径在内在外。历史:v3.5.0 轮时工具面拒一切绝对路径,2026-09-30 起只拒 workspace 外,hopissues/0112）
 // max_depth 恒传（D75 产物嵌套深度闸——spec.md Inputs 新必填,顶层闸 INIT_FAILED 拒缺参;缺省档 3）
-const r0 = await core.startRun(join(work, 'spec.md'), { input_skill_path: 'skills/sample/SKILL.md', max_depth: 3 }, stateDir);
+// target_profile 恒传空串（D103/hopissues 0109——顶层 Inputs 全部必填,省略即 INIT_FAILED;空串=通用形态）
+const r0 = await core.startRun(join(work, 'spec.md'), { input_skill_path: 'skills/sample/SKILL.md', max_depth: 3, target_profile: '' }, stateDir);
 if (r0.error) { console.error('startRun 拒:', JSON.stringify(r0.error)); process.exit(1); }
 const runId = r0.run_id;
 
@@ -118,7 +119,7 @@ let answered = 0;
 const MAX_ANSWERS = 8;   // 回路轮上限（对齐门/忠实门 fail 会重呈审——同 step 重答同款;超限=流程异常死循环）
 // 按 step_id 映射（二十四审——按次数索引脆弱:4.3 对齐门 fail 回 4.1 后 4.2 二轮 paused 会吃掉终审答）
 const ANSWER_BY_STEP = {
-  '1.1': () => ({ value: 'skills/sample/SKILL.md' }), // skill_path 确认（相对路径——沙箱语义;D72② 步骤1改 subtask,ask 落 1.1）
+  '1.2.2.1': () => ({ value: 'skills/sample/SKILL.md' }), // skill_path 问人（相对路径——沙箱语义;D103 起已给且在场的路径直接采用不停此处,本键只在样本缺席时兜底）
   '4.4': () => ({ value: '' }),                          // hopbuild2 对齐门呈审 → 通过
   '5.1.3.1.6.3': () => ({ value: 'accept' }),            // 修检额度烧尽问人（D68/D69 三选一,快乐路径不触发;触发即选接受现状——守卫跑通优先,不选 continue 防自测无限续圈）
   '5.1.5': () => ({ value: '' }),                        // hopbuild2 终审 → 放行（D70 后步号:意见轮循环内）

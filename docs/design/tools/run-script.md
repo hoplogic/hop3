@@ -17,7 +17,7 @@ tools 模块的第三个内置工具组（前两组=[[file-tools|文件/目录�
 
 ## 缘起：教学与供给对不上，规约要的能力这个环境给不了 ^anc-exec-run-script-why
 
-**实撞（2026-09-21，完工测试清单 T9，立卡 todo/0110，severity high）**：`standard-decompose-codify` 规约的步 5.1.1 正文写着"实跑验证（用执行环境 shell 跑生成的校验脚本）"，而 standalone 装配给 `[act free]` 步的工具面只有十一个纯文件读写工具，**没有任何一件能让一个进程跑起来**。三家模型跑同一份规约、同一个环境，各死一种死法：
+**实撞（2026-09-21，宏观任务验收与成绩 T9，立卡 todo/0110，severity high）**：`standard-decompose-codify` 规约的步 5.1.1 正文写着"实跑验证（用执行环境 shell 跑生成的校验脚本）"，而 standalone 装配给 `[act free]` 步的工具面只有十一个纯文件读写工具，**没有任何一件能让一个进程跑起来**。三家模型跑同一份规约、同一个环境，各死一种死法：
 
 - **qwen3.8-27b**：全程零协议违规，写出的 Python 校验脚本捞到观测目录实跑完全正确——它唯一缺的是一个按回车的地方。于是它把"本该被执行的 runner 脚本"换了十三个名字写了十三遍（内容一直在演进，是真的在搜索解空间，不是机械复读），二十轮工具上限烧尽，4.5 万 tokens。
 - **Ling-3.0-Flash**：直接幻觉出一个 `bash` 工具，把调用写成消息文本发了九轮（引擎的工具派发看不见这种文本，落到产出收割被判 SCHEMA_MISMATCH），5.9 万 tokens，40 秒死。
@@ -74,7 +74,7 @@ Constraints:
 
 - 超时恒 60 秒,不给 timeout 参数（与 subprocess.run 缺省同值）;超时报文指路"收窄脚本工作量"
 - 输出上限 64KB/流,**撞顶=工具失败带指路,不截断**（截断的 stdout 喂下游=静默数据缺角,比响亮失败更危险——与 subprocess.run 同哲学;限额从 body 面的 10MB 收到 64KB 的理由见下"输出限额"）
-- 脚本路径走 read 同款三级读权限链（denied → confirm_required → allowed）,workspace 相对,work_zone 绝对路径豁免——"能执行"的前提是"能读到"
+- 脚本路径走 read 同款解析与三级读权限链（denied → confirm_required → allowed）：workspace 相对路径、落在 workspace 内的绝对路径、work_zone 绝对路径三种形态可用（[[file-tools#^anc-exec-tool-path-resolve]]）——"能执行"的前提是"能读到"
 - 命令执行原语（白名单核/hopjit 恒拒/spawn/失败三类指路）与 hop_python 的 subprocess.run **共用一份实现**,不自造第二套（^anc-exec-command-primitive）
 - **`.py` 脚本一律先过 Python 语法沙箱**（2026-09-23 起,契约 [[../py-sandbox]]）:审的字节就是跑的字节(执行私有副本)、`python3 -I -B` 启动、系统沙箱在场即套上;审查被拒=success:false 带逐行拒绝报文,脚本不执行;没有关掉审查的开关
 ```
@@ -87,7 +87,7 @@ Constraints:
 
 ## 类型约定（HopType，字段逐条）
 
-- `path: string`（必填）——要执行的脚本文件路径。装的是**路径**不是脚本内容；workspace 相对形态，work_zone 绝对路径豁免（与 read 同）。扩展名决定解释器，所以 `.py` 后缀不是装饰，是语义的一部分；
+- `path: string`（必填）——要执行的脚本文件路径。装的是**路径**不是脚本内容；workspace 相对形态；落在 workspace 内的绝对路径与 work_zone 绝对路径同样可用（与 read 同一套解析）。扩展名决定解释器，所以 `.py` 后缀不是装饰，是语义的一部分；
 - `args: array`（可选，缺省空）——传给脚本的命令行参数，**字符串列表**（每项一个参数，不是一整串待拆的命令行）。引擎拼出的实际 argv = `[解释器, path, ...args]`。列表里的元素非字符串时按 `String(v)` 归一；
 - 返回：JSON 文本 `{"returncode": <int>, "stdout": <text>, "stderr": <text>, "defense": <text>}`（形态与 listdir/exists 的 JSON 文本同款，消费侧 `parse_json` 取用）。四个字段恒在场；`defense` 是本次执行实际获得的防护等级——`syntax+os-sandbox`（语法沙箱审过 + 系统沙箱套上）或 `syntax-only`（系统沙箱缺席，只有语法层单层防护），取值权威 [[../py-sandbox#^anc-pysb-exec]]；
 - 审查被拒时返回 `success: false`，`result` 是拒绝报文文本（逐条写明第几行、哪个名字、为什么被拒、替代写法，末行附可用模块符号全列），不是 JSON；

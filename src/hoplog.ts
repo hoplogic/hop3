@@ -2,8 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 // @module: hoplog ^anc-obs-hoplog
-import { mkdirSync, appendFileSync, readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, appendFileSync, readFileSync, existsSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { join, basename, dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
 // 三级日志：debug ⊇ info ⊇ warn。审计性字段无视级别始终记录。
@@ -96,7 +96,7 @@ export interface StepMeta {
   // formatPromptText 渲染件,意图层记录与实发内容分叉,假 prompt 骗过十几轮走查）。
   // response = LLM 原始回复全文（解析前 text content,DEBT-09:每轮尝试独立落账丢弃轮保痕）。
   // @a: anc-obs-llm-response, anc-obs-record-at-boundary
-  llm?: { model?: string; max_tokens?: number; thinking?: string; input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null; ctx_input_total?: number; prompt?: string; response?: string };   // cache 两字段:缓存观测（openai 协议 null 如实记）;max_tokens=当次请求实发上限（发送口抄实际参数,^anc-exec-output-budget 观测条）;thinking=当次实发思考参数摘要（'disabled'/'enabled:budget=N'/缺席记 'absent'——0100 五级链落地后恒显式,probe 核参数的唯一通道:响应 usage 不含思考开关,0100 真机 probe 实撞观测缺口后补）;ctx_input_total=当次输入体量三项合计（^anc-exec-ctx-watermark,0095——缓存命中会掩住真实体量）// @a: anc-exec-cache-control, anc-exec-output-budget, anc-exec-ctx-watermark
+  llm?: { model?: string; max_tokens?: number; thinking?: string; input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null; ctx_input_total?: number; prompt?: string; response?: string };   // cache 两字段:缓存观测（openai 协议 null 如实记）;max_tokens=当次请求实发上限（发送口抄实际参数,^anc-exec-output-budget 观测条）;thinking=当次实发思考参数摘要（'disabled'/'enabled:budget=N'/'effort:low'〔思考关不掉的端点把关思考改发 output_config effort,^anc-exec-thinking-disable-unsupported〕/缺席记 'absent'——0100 五级链落地后恒显式,probe 核参数的唯一通道:响应 usage 不含思考开关,0100 真机 probe 实撞观测缺口后补）;ctx_input_total=当次输入体量三项合计（^anc-exec-ctx-watermark,0095——缓存命中会掩住真实体量）// @a: anc-exec-cache-control, anc-exec-output-budget, anc-exec-ctx-watermark
   tokens_used?: number;
   // adaptive 三段流水线中间产物（生成侧留痕——离线审核候选文件时对照"当时怎么想的"）。
   // 见 step-dispatcher ^anc-exec-adaptive-pipeline。// @a: anc-exec-adaptive-pipeline
@@ -111,10 +111,40 @@ export interface HopLogOptions {
   specId: string;
   logDir: string;
   level?: LogLevel;
+  // 日志根目录允许保留的 run 目录数上限（含本次）,缺省 3——新建本 run 目录前删多出的最老 run。
+  // 见 [[spec-observability#^anc-obs-log-retention]] // @a: anc-obs-log-retention
+  maxRuns?: number;
   title: string;
   goal: string;
   inputs?: Record<string, unknown>;
   traceId?: string;  // 跨 run 关联:worker 子实例继承父 trace_id
+}
+
+/** 日志保留上限缺省值——日志根目录最多留 3 个 run 目录（含本次）,作者定（todo/0127）。见 [[spec-observability#^anc-obs-log-retention]] */
+export const DEFAULT_MAX_RUNS = 3;   // @a: anc-obs-log-retention
+// run 目录名形态 <spec_id>-<YYYYMMDD>T<HHMMSS>-<hex4>——末段时间戳可直接字典序排,不依赖 mtime（resume 续写会刷新 mtime）
+const RUN_DIR_RE = /-(\d{8}T\d{6}-[0-9a-f]{4})$/;   // @a: anc-obs-log-retention
+
+/** 日志保留上限清理：日志根目录下 run 目录超过 keep 个即从最老删起（整目录;构造器传 maxRuns-1,建完本次恰 maxRuns 个）。子实例日志嵌在父 run 目录的
+ * parallel|calls/<cid>/ 下,不是根目录,对它空转。删除失败只 warn 不抛——日志是核验通道不是执行前提。
+ * 返回删掉的目录名清单（测试判据）。见 [[spec-observability#^anc-obs-log-retention]] // @a: anc-obs-log-retention */
+export function pruneRunDirs(logDir: string, keep: number): string[] {
+  if (!Number.isInteger(keep) || keep < 0) throw new Error(`保留数须为非负整数（实际: ${String(keep)}）`);
+  // 子实例 logDir 恒为 <父 run>/parallel|calls/<cid>/log——上溯两级判（^anc-obs-parallel-child-satellite 卫星布局）
+  const kindDir = basename(dirname(dirname(logDir)));
+  if (kindDir === 'parallel' || kindDir === 'calls') return [];
+  if (!existsSync(logDir)) return [];
+  const runs = readdirSync(logDir)
+    .filter(n => RUN_DIR_RE.test(n))
+    .filter(n => { try { return statSync(join(logDir, n)).isDirectory(); } catch { return false; } })
+    .sort((a, b) => (RUN_DIR_RE.exec(a)![1] < RUN_DIR_RE.exec(b)![1] ? -1 : 1));
+  const removed: string[] = [];
+  while (runs.length > keep) {
+    const victim = runs.shift()!;
+    try { rmSync(join(logDir, victim), { recursive: true, force: true }); removed.push(victim); }
+    catch (e) { process.stderr.write(`[hoplog] 清理旧 run 目录失败（不阻塞本次运行）: ${victim}: ${e instanceof Error ? e.message : String(e)}\n`); }
+  }
+  return removed;
 }
 
 // 审计性字段 key 集合——写入时无视日志级别
@@ -126,6 +156,19 @@ const FLOW_FIELDS = new Set<string>(['knowledge', 'doc_refs', 'retry', 'retry_fe
 type _MetaFieldsCovered = Exclude<keyof StepMeta, 'tool' | 'commit_audit' | 'hitl' | 'callee_spec_id' | 'submit_rejected' | 'knowledge' | 'doc_refs' | 'retry' | 'retry_feedback' | 'taken' | 'condition' | 'llm' | 'tokens_used' | 'replan_pipeline'>;
 const _metaFieldsCovered: _MetaFieldsCovered extends never ? true : never = true;
 void _metaFieldsCovered;
+
+/** hopjit-mcp run_approved_command 一次执行的账（^anc-obs-command-block）：argv 逐项、cwd 绝对路径、returncode、
+ * 耗时毫秒、stdout/stderr 原始字节数、回给调用方时是否截过、调用方自报的步骤号（可缺,只供人对账）。 */
+export interface CommandRecord { // @a: anc-obs-command-block
+  argv: string[];
+  cwd: string;
+  returncode: number;
+  duration_ms: number;
+  stdout_bytes: number;
+  stderr_bytes: number;
+  truncated: { stdout: boolean; stderr: boolean };
+  caller_step?: string;
+}
 
 /**
  * HopLog 执行轨迹日志——唯一信息源是 main.yaml 文件本身。
@@ -154,7 +197,11 @@ export class HopLog { // @a: anc-obs-hoplog, anc-obs-execution-log-absorption
   private resumedWritten = new Set<string>();
 
   constructor(options: HopLogOptions) {
-    this.level = options.level ?? 'debug';   // 缺省 debug（2026-08-23 作者定'把缺省日志全部调成 debug 级'——日志是核验通道缺省即全息;两撞:standalone info 黑箱/走查被 200 字截断误导。降级走显式配置） // @a: anc-obs-log-levels
+    this.level = options.level ?? 'info';   // 缺省 info（2026-09-30 todo/0127 作者定——对外分发防塞爆硬盘,prompt+response 占字节 65%;2026-08-23 曾定 debug,前提'个人开发体积可承受'已变。排障显式 debug） // @a: anc-obs-log-levels
+    // 建目录前先清理:保留最新 maxRuns-1 个再加本次,建完恰 maxRuns 个 // @a: anc-obs-log-retention
+    const maxRuns = options.maxRuns ?? DEFAULT_MAX_RUNS;
+    if (!Number.isInteger(maxRuns) || maxRuns < 1) throw new Error(`max_runs 须为正整数（实际: ${String(options.maxRuns)}）`);
+    pruneRunDirs(options.logDir, maxRuns - 1);
     const runId = generateRunId();
     this.runDir = join(options.logDir, `${options.specId}-${runId}`); // @a: anc-obs-file-layout
     mkdirSync(this.runDir, { recursive: true });
@@ -437,6 +484,18 @@ export class HopLog { // @a: anc-obs-hoplog, anc-obs-execution-log-absorption
   // @a: anc-exec-thinking-exhausted
   recordRuminationSuspect(where: string, outputTokens: number | string, content: string): void {
     this.append(`rumination_suspect:\n  where: ${toYaml(where, 1)}\n  output_tokens: ${toYaml(outputTokens, 1)}\n  content: ${toYaml(sanitizeFull(content), 1)}\n`);   // outputTokens 同过 toYaml——'?' 回退值裸插会写出 YAML 保留指示符破坏整档(review C1-1 探针实证)
+  }
+
+  /** hopjit-mcp `run_approved_command` 在本 run 上下文里执行一条已批准命令的账——文档级顶层 `command:` 块
+   * （^anc-obs-command-block,todo/0132）。跨进程经 HopLog.resume 续写:先冲顶层 resume marker 再落块,
+   * 不破已有 step 块。审计性——无视日志级别恒写（人不再逐条点批准,改为事后可查,hopissues/0114 期望第 4 条）;
+   * stdout/stderr 正文不入账（体量不定,只记字节数与截断标记）。 */
+  // @a: anc-obs-command-block
+  recordCommand(rec: CommandRecord): void {
+    this.flushTopLevelResume();
+    const body = { at: timestamp(), argv: rec.argv, cwd: rec.cwd, returncode: rec.returncode, duration_ms: rec.duration_ms,
+      stdout_bytes: rec.stdout_bytes, stderr_bytes: rec.stderr_bytes, truncated: rec.truncated, ...(rec.caller_step ? { caller_step: rec.caller_step } : {}) };
+    this.append(`command:\n${toYaml(body, 1)}\n`);
   }
 
   // stepId 非空 → step 级告警（warn 作该 step 块字段，过 guardOrphan 守卫）。

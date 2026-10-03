@@ -1,0 +1,93 @@
+service: antchat
+rating: le10-tools
+cells:
+  - cell: short:0:noise_only
+    rate: 1
+    'n': 6
+  - cell: short:0:tool_required
+    rate: 0
+    'n': 6
+  - cell: short:1:noise_only
+    rate: 1
+    'n': 6
+  - cell: short:1:tool_required
+    rate: 1
+    'n': 6
+  - cell: short:3:noise_only
+    rate: 1
+    'n': 6
+  - cell: short:3:tool_required
+    rate: 1
+    'n': 6
+  - cell: short:5:noise_only
+    rate: 1
+    'n': 6
+  - cell: short:5:tool_required
+    rate: 1
+    'n': 6
+  - cell: short:10:noise_only
+    rate: 1
+    'n': 6
+  - cell: short:10:tool_required
+    rate: 1
+    'n': 6
+  - cell: mid:0:noise_only
+    rate: 1
+    'n': 6
+  - cell: mid:0:tool_required
+    rate: 0
+    'n': 6
+  - cell: mid:1:noise_only
+    rate: 1
+    'n': 6
+  - cell: mid:1:tool_required
+    rate: 1
+    'n': 6
+  - cell: mid:3:noise_only
+    rate: 1
+    'n': 6
+  - cell: mid:3:tool_required
+    rate: 1
+    'n': 6
+  - cell: mid:5:noise_only
+    rate: 1
+    'n': 6
+  - cell: mid:5:tool_required
+    rate: 1
+    'n': 6
+  - cell: mid:10:noise_only
+    rate: 1
+    'n': 6
+  - cell: mid:10:tool_required
+    rate: 1
+    'n': 6
+  - cell: long:0:noise_only
+    rate: 1
+    'n': 6
+  - cell: long:0:tool_required
+    rate: 0
+    'n': 6
+  - cell: long:1:noise_only
+    rate: 1
+    'n': 6
+  - cell: long:1:tool_required
+    rate: 1
+    'n': 6
+  - cell: long:3:noise_only
+    rate: 1
+    'n': 6
+  - cell: long:3:tool_required
+    rate: 1
+    'n': 6
+  - cell: long:5:noise_only
+    rate: 1
+    'n': 6
+  - cell: long:5:tool_required
+    rate: 1
+    'n': 6
+  - cell: long:10:noise_only
+    rate: 1
+    'n': 6
+  - cell: long:10:tool_required
+    rate: 1
+    'n': 6

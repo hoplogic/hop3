@@ -17,26 +17,26 @@
 Id: spec-id
 Goal: 一句话目标
 Inputs:
-- name: type  # 一句话说明
+- name % type  # 一句话说明
 Outputs:
-- name: type  # 一句话说明
+- name % type  # 一句话说明
 ## Steps
 1. [reason] 一句话任务描述
   - ← 输入变量
-  + → 输出变量: type  # 首现标类型 + 一句话说明
+  + → 输出变量 % type  # 首现标类型 + 一句话说明
   > 执行说明
 2. [subtask retry=3] 干一段活、验收达标后提交（探索-验收-提交事务）
-  + → 交付物: type  # 本段活的产出
+  + → 交付物 % type  # 本段活的产出
   2.1. [act] 探索段：干活（可安全重做）
     - ← 输入变量
-    + → 交付物: type  # 产出
+    + → 交付物 % type  # 产出
   2.2. [check final] 验收门：判交付物达标与否
     - ← 交付物
-    + → ok: bool  # 判定槽
-    + → fail_note: text  # 说明槽（不达标的缺口）
+    + → ok % bool  # 判定槽
+    + → fail_note % text  # 说明槽（不达标的缺口）
   2.3. [commit] 提交段：不可逆动作（发送/落盘）,只在验收通过后执行
     - ← 交付物
-    + → done_mark: line  # 提交回执
+    + → done_mark % line  # 提交回执
     > ```hop_python
     > write(path: "deliver.md", content: 交付物)
     > done_mark = "已交付"
@@ -51,7 +51,7 @@ Outputs:
 - **提交后不再重试**：commit 一旦被执行,所处 subtask 便停止 retry（再失败直接判败,不重跑）——引擎自动避免不可逆动作重复提交,作者不用写任何防重逻辑。
 
 - **步骤类型面**：`reason`（LLM 分析判断）/ `act`（确定性执行:取数/计算/落盘,可安全重做）/ `commit`（不可逆动作:发送/支付/删除）/ `check`（验收判定,固定产出一个 bool 判定值+一个 text 说明）/ `confirm`（人工审批）/ `ask`（向人收集数据）——这六种是**可执行叶子**;`subtask`（一段活的事务容器,可带 retry=N 失败重跑）/ `branch`+`case`（条件分流）/ `loop`（遍历列表）——这三族是**结构容器**;`call`（调用另一份 spec,如函数调用）/ `exit`（当场结束返回）。
-- **数据流经声明传递**：每步用 `- ← 变量名` 声明消费哪些上游产出,用 `+ → 变量名: 类型  # 说明` 声明产出什么——引擎按声明喂数据、按声明收产出,没声明的变量步骤看不见。
+- **数据流经声明传递**：每步用 `- ← 变量名` 声明消费哪些上游产出,用 `+ → 变量名 % 类型  # 说明` 声明产出什么——引擎按声明喂数据、按声明收产出,没声明的变量步骤看不见。
 - **两类步骤的执行面**：LLM 步（reason/check 等）由引擎组装上下文调 LLM;机械步（act/commit/check 带 `hop_python` 代码 body 的）由引擎**直接执行代码,零 LLM**——纯机械动作写成 body 就把不确定性彻底赶出执行期。
 - **你产出的 fragment 去哪**：你交付的步骤片段会被机械拼装进一份完整 spec,最终由引擎执行——所以片段必须是合法 HopSpec 语法（有机械 validate 把关）,且语义要与原文等价（有语义 check 把关）。
 
@@ -132,13 +132,13 @@ mixed 产物二轮进构建器时,你（split-node）收到的 `node_source` 是
 
 ```
 N. [subtask retry=K] <这段活的目标>
-  + → <交付变量>: <type>  # 交付物
+  + → <交付变量> % <type>  # 交付物
   N.1. [act/reason] <干活>          ← 探索段（可多步:取数/加工/分析,均可安全重做）
-    + → <交付变量>: <type>  # 产出
+    + → <交付变量> % <type>  # 产出
   N.2. [check final] <验收判据>     ← 验收门（判据来自原文的"必须/确保/达标"句）
     - ← <交付变量>
-    + → ok: bool  # 判定槽
-    + → note: text  # 说明槽（不过时的缺口——引擎注入重跑轮定向修正）
+    + → ok % bool  # 判定槽
+    + → note % text  # 说明槽（不过时的缺口——引擎注入重跑轮定向修正）
   N.3. [commit] <提交动作>          ← 提交段（原文有不可逆动作才有本段;没有就到 N.2 为止）
     - ← <交付变量>
 ```
@@ -169,6 +169,17 @@ N. [subtask retry=K] <这段活的目标>
 - **交互闸门**：原文中"执行到这里必须停下来等真人表态才能继续"的点。表态分两种——**给值**（人提供或修正数据）落 `ask`,**放行**（人批准或否决既定方案）落 `confirm`。交互闸门是原文作者刻意设的控制点,**必须逐个落成 ask/confirm 步骤**,落成 reason 就是把"问人"偷换成"机器替人答"——语义蒸发里最重的一种（忠实关必打回）。识别时注意原文的间接写法,实例：①"把数据给店主过目确认,目标可当场改"——直白闸门,ask;②"用 AskUserQuestion 确认风险点与评审模式"——借工具名指代问人,照样是闸门,ask（工具名是原文语境的实现细节,产物里落 ask 步骤即可,不引用该工具名）;③"人工确认模式下,对焦决策须逐条经用户确认后才记录"——模式条款里藏的闸门,confirm;④"分析文档特征,确定定位类型"——纯分析没有人参与,reason,不是闸门（不要把所有"确认/确定"字面都当闸门——主语是执行者自己的判断就是 reason）;
 - **require_human 修饰（ask/confirm 通用）**：交互对象是真人、不许 LLM 代答 → 加 `require_human`（原文语境是给真人用的 skill 就加,如 `[ask present_inputs=data require_human] 与用户确认数据`、`[confirm require_human] 请人批准部署清单`）;
 - **present_inputs 修饰（ask 专属——confirm 不收,写上即属性总闸 parse 拒〔实撞:构建产物给 confirm 带它,重试七次才过〕）**：原文要求"给人过目/呈给用户看后再定"→ ask 步加 `present_inputs=<要呈的变量>`（引擎强制呈全才能答——不加则驱动方可缩略,人没看清就拍板;多变量逗号紧连**不带空格**:`present_inputs=data,target`——带空格即属性解析炸）;**present_inputs 里的每个变量必须同时声明进该步的 `- ←` 输入**——呈现给人的值是从输入取的,没 ← 声明引擎手里无值可呈,校验 P14 必拒（实撞:兜底成文写 `[ask present_inputs=doc_type_proposal]` 但 ← 没引它,三轮同败同一条 P14——呈现的往往是"本步要人确认的新值",直觉上想不到要先 ← 引入,所以专门立此条:先 ←,再呈）。**confirm 要呈材料给人看不用这个属性**——confirm 停驻时引擎把它 `- ←` 声明的输入值完整呈给人（超长自动走文件卸载）,把要呈的内容声明成输入即可（大材料前置机械 act 读入文本变量再 ← 引入——"备料/提交分离"节的呈清单人批形态就是这个写法）;
+- **ask 与 confirm 的输出形态是定死的，写错 validate 当场拒**：ask 收的是人给的值，所以**必须至少声明一个 `+ →` 输出**装这个值（P13），类型按值的形态写——人从几个模式里挑一个就写 `enum(…)`，人写一段话就写 `text`；confirm 是放行闸门，**输出恰好是一个 `bool`**（批=true），要人挑选或填写数据的一律用 ask，不用 confirm（P12）。"原文没指定才问"这类条件闸门，外面套一个 case，条件就是那个输入判空；ask 产出的变量**沿用那个输入的名字和类型**（同名就是同一个变量，类型必须一致——header 里 mode 是 `enum(new,update,postmortem)`，ask 就产出同名同类型的 mode，后续步骤不管走哪条路都接 mode）：
+
+  ```
+  1. [branch] 模式没指定时问人
+    1.1. [case(not mode)] 没指定模式
+      1.1.1. [ask require_human] 询问事故当前处在哪个阶段
+        - ← incident_description
+        + → mode % enum(new,update,postmortem)  # 人选定的模式
+  ```
+
+  写错的样子与后果：`[reason] 识别事件响应模式` 让模型自己猜模式——问人的闸门被偷换成机器替人答，忠实关必打回；`[ask] 询问模式` 下面不写 `+ →`——P13 拒；`[confirm] 确认模式` 配 `+ → mode % enum(…)`——P12 拒；
 - **ask 是"呈现+收值"一体的单步**：原文"把 X 给人过目确认（可当场改）"就是一个 ask——present_inputs 呈 X,产出=确认（或修改）后的值,不拆成"展示步+确认步"复合序（呈现是 ask 的自带面,不是独立动作）;
 - **完成检查点一律翻成 check**：原文"完成检查点：…未完成→不得进入下一步"这类字样,是流程闸门——必须落成 check 步骤（产出 ok 判定位,判 false 时靠所在 subtask 的重试语义阻断后续）。把它写成 reason "产出检查记录"是丢闸门：记录没有判定位、也阻断不了控制流,后续步骤照走,"不得进入"成了空话（忠实关必打回。真机实撞:同一份原文两个节点,一个正确落 check final、另一个降级成 reason 被打回——这不是难点是漂移,照本条直译即可）;
 - **一步一动作数的是执行动作,不是产出个数**：一次推理给多个结论（"判断达标没有,并给两三条建议"）是**一个 reason 步多个 `+ →` 产出**——判断与建议出自同一次对照分析,拆开反而断料;
@@ -181,22 +192,22 @@ target_profile 指向核验弱档模型（能力档案 check_judge 为单点核�
 ```
 N. [act] 机械归组
   - ← <判定对象清单>, <对照基准>
-  + → <作业单>: [<作业单元类型>]  # 每单元一件:对象+该对象的对照材料
+  + → <作业单> % [<作业单元类型>]  # 每单元一件:对象+该对象的对照材料
   > hop_python body 按机械键（行号/编号/类别）把判定对象分组——建框架归程序,零 LLM。
 
 N+1. [loop for-each job in <作业单>, collect <单元结论> into <结论清单>] 逐单元微判定
   N+1.1. [subtask parallel] 判定单个单元
     N+1.1.1. [reason] 单元封闭判定
       - ← job
-      + → <单元结论>: <结论类型>  # 自含单元 id（并行乱序靠 id 归位）
+      + → <单元结论> % <结论类型>  # 自含单元 id（并行乱序靠 id 归位）
       > 只回答一个封闭问题（yes/no + 缺口内容）。判定对象内含多个并列断言时,
       > 用显式核销:先逐条列出断言,每条写"断言 → 覆盖它的条目或'无'",再给结论
       > ——隐式的整体比对在多断言并列时会失焦漏判。禁止评价之外的任何内容。
 
 N+2. [check final] 机械汇总验收
   - ← <结论清单>, <作业单>
-  + → ok: bool
-  + → note: text
+  + → ok % bool
+  + → note % text
   > hop_python body:全单元通过才 true,缺口清单机械拼装——汇总与门槛归程序,
   > 判官摇摆无处发生。可加假阴性兜底:结论报"缺 X"而 X（归一化后）逐字就在该
   > 单元对照材料里,是机器可裁决的自相矛盾,机械改判不算缺口。
@@ -211,21 +222,21 @@ N+2. [check final] 机械汇总验收
 ```
 1. [reason] 判定工单类型与处理要点
   - ← ticket
-  + → ticket_kind: enum(refund, complaint, other)  # 工单类型
+  + → ticket_kind % enum(refund, complaint, other)  # 工单类型
 2. [branch] 按工单类型分流处理
-  + → result: yaml  # 处置结果（统一接口——各 case 同名赋值,下游只认这一个名字）
+  + → result % yaml  # 处置结果（统一接口——各 case 同名赋值,下游只认这一个名字）
   2.1. [case(ticket_kind == "refund")] 退款处理
     2.1.1. [reason] 核算应退金额并生成退款单
       - ← ticket
-      + → result: yaml  # 退款单
+      + → result % yaml  # 退款单
   2.2. [case(ticket_kind == "complaint")] 投诉处理
     2.2.1. [reason] 起草安抚回复
       - ← ticket
-      + → result: yaml  # 回复文案
+      + → result % yaml  # 回复文案
   2.3. [case(else)] 其他转人工
     2.3.1. [act] 组装转人工工单
       - ← ticket
-      + → result: yaml  # 转人工记录
+      + → result % yaml  # 转人工记录
       > ```hop_python
       > result = {"action": "escalate", "ticket": ticket}
       > ```
@@ -239,7 +250,7 @@ N+2. [check final] 机械汇总验收
 
 **循环的判定一句话：重复的模式都是循环,全部纳入 loop 分拆**。（"做X并核验,不合格才重做"的失败重试形态不用在这里操心——判定序里顺序判在前,它已经被切成干活段+验收段收编走了,轮到循环判时见到的重复都是真循环。）两种成文形态：
 
-- **逐条处理（loop for-each）**：有一批同类条目、每条走同一套处理。列表在两处找——原文语义（"每封邮件/逐个文件"）,或 **header inputs 的 `[T]` 列表型输入**：原文说"按 X 生成/处理各部分"而 X 声明为列表型（如 `content_outline: [yaml]` 每页一条）时,"逐项"语义已在输入契约里,判定只扫原文找"每个/逐个"字样会漏掉它（实撞:ppt 大纲逐页生成被判"无现成列表来源"）;
+- **逐条处理（loop for-each）**：有一批同类条目、每条走同一套处理。列表在两处找——原文语义（"每封邮件/逐个文件"）,或 **header inputs 的 `[T]` 列表型输入**：原文说"按 X 生成/处理各部分"而 X 声明为列表型（如 `content_outline % [yaml]` 每页一条）时,"逐项"语义已在输入契约里,判定只扫原文找"每个/逐个"字样会漏掉它（实撞:ppt 大纲逐页生成被判"无现成列表来源"）;
 - **重复推进（loop max=N + break）**：流程本身要求做多轮,直到某个条件满足或到轮数上限——"分轮评审直到无新发现""持续监控直到风险降级或满 5 轮""迭代改进最多三轮"。骨架形态:`[loop max=N] 描述` + 体内干活步骤 + `[check]` 判继续条件 + 条件满足支路 `[break]`。轮数上限原文没给就按最合理推演暂定并记 log_notes。
 
 
@@ -256,18 +267,18 @@ N+2. [check final] 机械汇总验收
 
 ```
 1. [loop for-each email in unread_emails, collect judged into judged_list] 逐封判定紧急性
-  + → judged_list: [yaml]  # 逐轮槽值列表（未命中轮为 null）
+  + → judged_list % [yaml]  # 逐轮槽值列表（未命中轮为 null）
   1.1. [reason] 判断本封是否紧急
     - ← email
-    + → is_urgent: bool  # 判定
+    + → is_urgent % bool  # 判定
   1.2. [branch] 紧急的计入汇总
     1.2.1. [case(is_urgent)] 计入
       1.2.1.1. [act] 收集本项
         - ← email
-        + → judged: yaml  # collect 单项槽（命中才赋值）
+        + → judged % yaml  # collect 单项槽（命中才赋值）
 2. [act] 滤出命中项
   - ← judged_list
-  + → urgent_emails: [yaml]  # 紧急邮件列表
+  + → urgent_emails % [yaml]  # 紧急邮件列表
   > ```hop_python
   > urgent_emails = [x for x in judged_list if x]
   > ```
@@ -319,9 +330,11 @@ reviewer_reports = {"status": "launched", "plan": round_plan}
 - **不给整个流程套大事务壳**：subtask 只包"产出+达标"段（探索范式的事务语义——check 不过重跑那一段）;把全流程包进一个 `[subtask retry=N]` 是冗余嵌套（任何一环出错整个流程从头重跑,交互步也重问——顶层平铺就是主干形态）;
 - **子片段只覆盖本节点范围**：父层骨架已有的步骤（验收/存档/返回）不在子片段里重写——sub_source 只含本子节点那段原文,照它成文;越范围重写=拼装后步骤双份;
 - **变量选真名**：上游变量从 parent_context 的可用变量清单里选,清单外的名字不许引（header_final.inputs 除外）——凭任务描述造名=跨节点断链;
-- **内置类型名是全局保留字,不得作变量名**：`prompt`/`text`/`yaml`/`line`/`markdown`/`bool`/`int`/`float`/`number` 这些类型词不能用来命名变量——`+ → prompt: text` 必被机械核拒（V2:类型词与变量在部分语法位同槽,静默错读）。要装提示词内容就叫 `prompt_text`/`agent_prompt`,装正文就叫 `body_text`——名字里带类型词没问题,整个名字恰好是类型词才违规（实撞:审查员模板节点声明 `+ → prompt: text`,V2 拒后改名重过,白烧一轮）;
+- **你手上的构建材料不是产物里的变量**：node_source、split_plan、parent_context、node_task 这些是你（构建器）这一步的输入，产物 spec 执行时根本没有这些变量——骨架步骤写 `- ← node_source` 必被 V1 拒"未定义变量"（实跑记录：五个步骤全写了 `- ← node_source`，整份骨架被拒）。原文里的材料（分级表、模板、判据清单）同样不是变量：不要写 `- ← severity_table` 去引一张表，而是把表的内容整段写进消费它那一步的 `> ` 执行说明里（见"交付前自查"的材料落地条）。产物步骤的 `- ←` 只能写 header_final.inputs 里的名字、parent_vars 清单里的名字、或本骨架前面步骤 `+ →` 产出的名字;
+- **变量名不得与枚举成员同名**：header 里某个输入声明为 `enum(new,update,postmortem)`，那 `new`、`update`、`postmortem` 就不能再拿来当变量名（V2 拒——条件表达式里的裸字要靠它们不重名来区分是枚举值还是变量）。事后分析文档的产出叫 `postmortem_doc`，不叫 `postmortem`;
+- **内置类型名是全局保留字,不得作变量名**：`prompt`/`text`/`yaml`/`line`/`markdown`/`bool`/`int`/`float`/`number` 这些类型词不能用来命名变量——`+ → prompt % text` 必被机械核拒（V2:类型词与变量在部分语法位同槽,静默错读）。要装提示词内容就叫 `prompt_text`/`agent_prompt`,装正文就叫 `body_text`——名字里带类型词没问题,整个名字恰好是类型词才违规（实撞:审查员模板节点声明 `+ → prompt % text`,V2 拒后改名重过,白烧一轮）;
 - **交付变量是产出不是输入**：头部 Outputs 里声明的交付变量（最终要交付的名字）,在步骤里用 `+ →` 产出它,**不要写进 `- ←`**——它还没被造出来,当输入引用必报"未定义变量"（真机实撞:深层骨架把顶层交付名写进 ←,三轮重试同错耗尽）;
-- **parent_context 双侧同一格式**（产出侧组装=消费侧解读）：第一段=本层骨架全文;第二段=可用变量清单,按行 `名字: 类型  # 说明`（本层各步 `+ →` 全列,含 header_final.inputs）——组装 sub_context 时照此格式,子调用才解读得动;
+- **parent_context 双侧同一格式**（产出侧组装=消费侧解读）：第一段=本层骨架全文;第二段=可用变量清单,按行 `名字 % 类型  # 说明`（本层各步 `+ →` 全列,含 header_final.inputs）——组装 sub_context 时照此格式,子调用才解读得动;
 - **新输出必带说明**：每个 `+ →` 首现带 `# 一句话说明`——名字+说明是写给后继执行 LLM 的接口文档;
 - **带 body 的步骤,body 必须给每个 `+ →` 赋值**（声明两个产出就赋两行;装不下就把多余产出挪成独立步骤——漏赋的产出运行期为空,下游断料）;
 - **每步 `- ←` 只吃它真消费的变量**（步骤"解析 X"就 ← X 的来源变量——接错料执行 LLM 对着无关输入干活,产出必跑偏）;
@@ -346,7 +359,7 @@ hop_python 是 act/commit/check 步骤 body 的语言——受限 Python 子集,
 - **列表与聚合**：`len(x)` / `count(xs)` / `sorted(xs)` / `reversed(xs)` / `range(n)` / `any(xs)` / `all(xs)` / `sum(xs)` / `min(...)` / `max(...)`;
 - **字典**：`keys(d)` / `values(d)` / `get(d, k, 默认值?)`;
 - **数值与转换**：`int(x)` / `float(x)` / `str(x)` / `bool(x)` / `round(x, n?)` / `abs(x)`;
-- **解析与路径**：`parse_json(s)`（JSON 文本转结构,配合 LLM 产出的文本解析）/ `work_zone_path("文件名")`（引擎涂鸦区绝对路径,中间产物一律放这——**不写相对路径 `work_zone/…`**,会落到用户工作区且父目录缺失即炸）/ `now()` / `today()`。**workspace 持久路径一律相对写法,不以 `/` 开头**——原文里 `/名字/` 式的"库根"记号（如 `/DocReviewers/领域/`）翻译时去掉前导斜杠写 `DocReviewers/领域/`：以 `/` 开头是系统绝对路径,工具面直接拒（实撞:构建产物照抄原文 21 处 `/DocReviewers/...`,首次真机 makedirs 一击即拒）。
+- **解析与路径**：`parse_json(s)`（JSON 文本转结构,配合 LLM 产出的文本解析）/ `work_zone_path("文件名")`（引擎涂鸦区绝对路径,中间产物一律放这——**不写相对路径 `work_zone/…`**,会落到用户工作区且父目录缺失即炸）/ `now()` / `today()`。**workspace 持久路径一律相对写法,不以 `/` 开头**——原文里 `/名字/` 式的"库根"记号（如 `/DocReviewers/领域/`）翻译时去掉前导斜杠写 `DocReviewers/领域/`：`/DocReviewers/...` 这种以斜杠开头的写法指向系统根下的目录,落在 workspace 外,工具面会拒（实撞:构建产物照抄原文 21 处 `/DocReviewers/...`,首次真机 makedirs 一击即拒）。
 
 ### subprocess.run（命令行调用——原文里的 shell 命令翻译到这,别落 free 别漏译）
 
@@ -377,7 +390,7 @@ hits = r.stdout
 
 **备料/提交分离（命令定不死时的正形）**：不可逆动作的具体命令要看现场（哪台机器/哪些盘/删什么留什么）时,不把整摊活裸落一个 [act free] 再用散文嘱咐「须由 commit 承载」——那样的产物真跑到不可逆处必被引擎拦死（运行期到步展开禁 commit,散文里的提交语义没有任何步骤能合法执行它;实撞:沙箱部署语料的铲除路线整条锁死）。正形三步,裁量全部发生在前两步：
 
-1. `[act free]` **只读发现与备料**——探索现场,生成精确执行清单文件（哪台机器/什么命令/什么顺序/保留项,具体到可机械执行）与证据,写 work_zone;交付 `manifest_path: line`（**大产物走文件不走变量**——清单/证据这类体量件恒落盘,变量只传路径,与修错步 draft_path 同轴）;
+1. `[act free]` **只读发现与备料**——探索现场,生成精确执行清单文件（哪台机器/什么命令/什么顺序/保留项,具体到可机械执行）与证据,写 work_zone;交付 `manifest_path % line`（**大产物走文件不走变量**——清单/证据这类体量件恒落盘,变量只传路径,与修错步 draft_path 同轴）;
 2. **呈清单人批两步**：先一个机械 act 读清单入文本变量（`manifest_text = read(path: manifest_path)`——confirm 呈现材料的正道是把内容声明成输入:confirm 停驻时引擎把它 `- ←` 的输入值完整呈给人,超长自动走文件卸载;`present_inputs` 属性是 ask 专属,confirm 不收）,再 `[confirm]` 消费 manifest_text 请人批——原文里「对精确清单明确授权」这类句子翻译时直接落这一步,语义天然同构;
 3. `[commit]` **按人批清单执行**——body 生成期定死为代码,清单是人批过的**数据**——执行期零裁量。**执行形态按清单条目数是否生成期已知分两种**（hop_python 没有循环语句,写不出"对动态长度清单逐条 run"）：条目数与形态生成期已知（如恒三条:停服务/删目录/清账）→ 逐条 `subprocess.run` 逐拍判 returncode;**条目数看现场**（备料时才知道删几台机器几块盘）→ 备料步把清单直接落成**可执行脚本**（如 manifest.sh,每行一条命令,`set -e` 逐条失败即停）,confirm 呈脚本内容人批,commit body **消费批过的文本本体而非只拿路径**（`- ← manifest_text`,body 先 `write(path: work_zone_path("approved.sh"), content: manifest_text)` 再 `subprocess.run(["bash", ...])` 执行刚写的这份——执行物即人批内容,"清单是人批过的数据"是血缘事实不是修辞,批完到执行之间盘上原文件被外部改动的窗口整个消失）,判整体退出码——单调执行不是偷懒是文法内的正形。两种形态失败都写进产出值（模板 D 的三件纪律全部适用）。
 
@@ -474,7 +487,7 @@ write(path: target_path, content: tpl2)
 ```
 N. [类型 修饰] 一句话任务描述
   - ← var                        # 输入:只写变量名
-  + → var: type  # 一句话说明    # 输出:首现必标类型+说明
+  + → var % type  # 一句话说明    # 输出:首现必标类型+说明
   - 工具: 工具名  # 本步用它做什么   # 工具授权:仅 [act free] 步需要,见下条
   > 执行说明
 ```
@@ -488,11 +501,11 @@ N. [类型 修饰] 一句话任务描述
 ```
 27. [loop for-each item in launch_items, collect receipt into receipts] 逐个派发
   - ← launch_items, doc_text
-  + → receipts: [line]
+  + → receipts % [line]
   27.1. [act] 拆本轮材料为平变量
     - ← item
-    + → cur_prompt: text  # 指令
-    + → cur_dir: line  # 目录
+    + → cur_prompt % text  # 指令
+    + → cur_dir % line  # 目录
     > ```hop_python
     > cur_prompt = get(item, "reviewer_prompt", "")
     > cur_dir = get(item, "report_dir", "")
@@ -508,7 +521,7 @@ N. [类型 修饰] 一句话任务描述
 ```
 N. [act] 描述
   - ← x
-  + → y: text  # 说明
+  + → y % text  # 说明
   > ```hop_python
   > y = strip(x)
   > ```
@@ -534,8 +547,8 @@ check 步骤必须恰好声明两个输出：**一个 bool 型**（判定槽—�
 ```
 3. [check] 核类型声明合法
   - ← header_text
-  + → types_ok: bool  # 判定槽:类型面是否全过
-  + → types_note: text  # 说明槽:不过时逐条列问题
+  + → types_ok % bool  # 判定槽:类型面是否全过
+  + → types_note % text  # 说明槽:不过时逐条列问题
 ```
 
 反例与后果：声明三个输出、或两个都是 text、或漏了说明槽——validate 当场报 P11 error"must declare exactly two outputs: one bool + one text"。**不是**"名字必须叫 ok/note"——那是本速查旧版教错的地方,名字随便起,类型对就行。
@@ -567,4 +580,4 @@ check 步骤必须恰好声明两个输出：**一个 bool 型**（判定槽—�
 ### 类型面与文件头行格式
 
 - 可用类型：`bool`/`int`/`float`/`line`（单行文本——路径、名字、一句话;number 已除名,数字只有 int/float）/`text`（多行文本）/`markdown`/`yaml`（结构化数据——对象、列表套对象,不是文本）/`[T]`（列表,如 `[line]`/`[yaml]`）/`enum(a,b,c)`（枚举,答案只能是列出的值之一）/`line(非空)`（带非空约束的单行文本——该槽产出必须非空,空串被引擎打回;必须有值的槽才标,业务上可缺的槽用裸 `line` 并在 # 注释写明缺席约定,如「无 → 空串」）。**不自造具名复合类型**（如 `ReviewReport`）——结构化数据一律用 yaml 或 [yaml];
-- 文件头 Inputs/Outputs 每行格式 `- 名字: 类型  # 一句话说明`——说明前必须有 `#`。写错的样子:`- doc_path: line 待评审文档路径`（漏 `#`）——"待评审文档路径"被当成类型的一部分,声明失效,引用它的步骤全文 V1 报错。
+- 文件头 Inputs/Outputs 每行格式 `- 名字 % 类型  # 一句话说明`——说明前必须有 `#`。写错的样子:`- doc_path % line 待评审文档路径`（漏 `#`）——"待评审文档路径"被当成类型的一部分,声明失效,引用它的步骤全文 V1 报错。

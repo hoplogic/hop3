@@ -3,7 +3,7 @@
 	source: [[../design/obsidian-plugin]]
 	source_id: hopjit-obsidian-plugin
 	type: compact
-	last_sync: 2026-08-30T15:28+0800
+	last_sync: 2026-10-01T16:01+0800
 	note: D 系列 8——Obsidian 可视化插件安装与使用：为什么需要（markdown 6 级标题上限截断深层步骤）→ 三步装进 vault → 三能力速览 → 更新/卸载与常见问题。安装命令权威 editors/obsidian/README,设计权威 design/obsidian-plugin
 %%
 
@@ -68,7 +68,7 @@ npm run uninstall-vault -- <vault路径>   # 卸载（只删本插件目录，�
 
 ## 边界（它不做什么）
 
-不做 validate 诊断（那需要引擎逻辑，违零依赖原则——留给将来的 LSP 形态）、不做补全、不做执行发起。**看得清**是它的全部职责；要跑 spec 还是 `/hopspec run`（教程 01）。
+不做 validate 诊断（那需要引擎逻辑，违零依赖原则——留给将来的 LSP 形态）、不做补全、不做执行发起。**看得清**是它的全部职责；要跑 spec 还是对 `/hop` 说（教程 01）。
 
 ## 下一步
 

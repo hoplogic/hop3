@@ -1,0 +1,112 @@
+实现思路(与沙箱约束对齐):
+
+- 用 `ast.parse` 解析源码,再用 `ast.walk` + `ast.iter_child_nodes` 建立"子节点 → 父节点"映射;对每个函数沿父链向上找,只要出现过 `FunctionDef`/`AsyncFunctionDef` 祖先,就说明它定义在函数体内(嵌套函数、局部类的方法),不检查;否则(模块顶层、类体内、类里嵌套的类里)都检查。规范里唯一排除的就是"函数体内部",所以包在 `if`/`try` 里的模块级定义仍按顶层处理。
+- 用 `ast.get_docstring` 取文档字符串——它恰好实现了"函数体第一条语句是字符串字面量才算"的语义,后面的字符串不算。
+- 参数按 `posonlyargs`、`args`、`vararg`、`kwonlyargs`、`kwarg` 全量收集,去掉名叫 `self`/`cls` 的;用 `\b` + `re.escape` 做大小写敏感的整词匹配("recounting"/"counter" 不算,"count."/"`count`"/"(count)" 算)。
+- 函数名以下划线开头直接跳过;无文档字符串、或漏提任一参数都记一条违规,按行号排序打印后 `sys.exit(1)`,否则 `sys.exit(0)`;空文件没有函数,自然退出 0。文件打不开或解析失败时打印错误并退出 1。全程只用允许的 import 形式、符号、内置名和属性方法,无下划线开头的名字。
+
+```python
+import ast
+import re
+import sys
+
+
+def collectRequiredParams(funcNode):
+    argSpec = funcNode.args
+    paramNames = []
+    for argNode in argSpec.posonlyargs:
+        paramNames.append(argNode.arg)
+    for argNode in argSpec.args:
+        paramNames.append(argNode.arg)
+    if argSpec.vararg is not None:
+        paramNames.append(argSpec.vararg.arg)
+    for argNode in argSpec.kwonlyargs:
+        paramNames.append(argNode.arg)
+    if argSpec.kwarg is not None:
+        paramNames.append(argSpec.kwarg.arg)
+    required = []
+    for paramName in paramNames:
+        if paramName == "self" or paramName == "cls":
+            continue
+        required.append(paramName)
+    return required
+
+
+def checkFunction(funcNode, violations):
+    funcName = funcNode.name
+    if funcName.startswith("_"):
+        return
+    docText = ast.get_docstring(funcNode)
+    if docText is None:
+        violations.append((funcNode.lineno, "function '" + funcName + "' has no docstring"))
+        return
+    missing = []
+    for paramName in collectRequiredParams(funcNode):
+        wordPattern = "\\b" + re.escape(paramName) + "\\b"
+        if re.search(wordPattern, docText) is None:
+            missing.append(paramName)
+    if len(missing) == 0:
+        return
+    quotedNames = []
+    for paramName in missing:
+        quotedNames.append("'" + paramName + "'")
+    if len(missing) == 1:
+        reason = "function '" + funcName + "' docstring does not mention parameter " + ", ".join(quotedNames)
+    else:
+        reason = "function '" + funcName + "' docstring does not mention parameters " + ", ".join(quotedNames)
+    violations.append((funcNode.lineno, reason))
+
+
+def hasFunctionAncestor(funcNode, parentOf):
+    currentNode = parentOf.get(funcNode)
+    while currentNode is not None:
+        if isinstance(currentNode, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return True
+        currentNode = parentOf.get(currentNode)
+    return False
+
+
+if len(sys.argv) < 2:
+    print("usage: python checker.py <python-source-file>")
+    sys.exit(1)
+
+filePath = sys.argv[1]
+
+try:
+    fileHandle = open(filePath, "r", encoding="utf-8")
+    sourceText = fileHandle.read()
+    fileHandle.close()
+except Exception:
+    print("error: cannot read file: " + filePath)
+    sys.exit(1)
+
+if sourceText.startswith("\ufeff"):
+    sourceText = sourceText[1:]
+
+try:
+    syntaxTree = ast.parse(sourceText)
+except Exception:
+    print("error: cannot parse file as Python source: " + filePath)
+    sys.exit(1)
+
+parentOf = {}
+functionNodes = []
+for treeNode in ast.walk(syntaxTree):
+    if isinstance(treeNode, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        functionNodes.append(treeNode)
+    for childNode in ast.iter_child_nodes(treeNode):
+        parentOf[childNode] = treeNode
+
+violations = []
+for funcNode in functionNodes:
+    if not hasFunctionAncestor(funcNode, parentOf):
+        checkFunction(funcNode, violations)
+
+violations.sort()
+for lineNo, reasonText in violations:
+    print("line " + str(lineNo) + ": " + reasonText)
+
+if len(violations) > 0:
+    sys.exit(1)
+sys.exit(0)
+```

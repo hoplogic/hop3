@@ -1,6 +1,7 @@
 ---
 name: hopspec-mcp
-description: Drive HopSpec specs via the hopjit MCP server (standalone mode — execution runs in the server process with its own LLM API; this shell only handles start, human-in-the-loop stops, and final output). Use only when the user explicitly asks for MCP/standalone; the default entry for running specs is the hopspec skill (reuse mode, zero API key).
+description: Dispatched by the hop skill only when the user explicitly asks for MCP/standalone: the spec runs inside the hopjit MCP server process with its own LLM; this shell only starts the run, relays human-in-the-loop stops, and reports results. Everything else goes through hop.
+user-invocable: false
 ---
 
 %% @trace
@@ -8,7 +9,7 @@ description: Drive HopSpec specs via the hopjit MCP server (standalone mode — 
 	source: [[opencode-driver-carrier]]
 	source_id: hopjit-opencode-driver-carrier
 	type: extract
-	last_sync: 2026-09-21T22:06+0800
+	last_sync: 2026-10-01T16:11+0800
 	note: opencode MCP 装配薄壳——派生自 driver/hopspec-skill-mcp.md（CC 源）,原语映射:AskUserQuestion→question 工具/后台看护 subagent→opencode subagent 或主对话适度轮询（opencode 无后台任务完成通知机制,轮询间隔放宽）。五 MCP 工具协议与 HITL 纪律与 CC 版逐条同构。
 %%
 
@@ -18,7 +19,7 @@ description: Drive HopSpec specs via the hopjit MCP server (standalone mode — 
 
 > **MCP 工具不可用**：第一排查是 opencode 配置里 `mcp.hopjit.enabled` 是否为 `false`——install-skill 装出的条目**缺省就是 false**（防复用模式下模型误调独立模式工具），让用户把 `~/.config/opencode/opencode.jsonc` 里该值改 `true` 后重启会话。确认从未装过（配置里根本没有 `mcp.hopjit` 条目）才提示跑 `hopjit install-skill --mcp --carrier opencode`（配置自举+注册一次完成）——注意对已有条目重跑此命令无效：检测到条目即跳过，不会把 enabled 翻成 true。**不要**改用 hopjit CLI 驱动（那是 hopspec 复用壳的协议——用户点名的是本壳，静默换协议=绕过用户的模式指定）。
 >
-> **跨通道防线**：`resume_run`/`stop_run` 返回 `DRIVER_CHANNEL_MISMATCH` = 该 run 由 CLI（复用模式）建立——提示用户用 hopspec skill 继续那个 run，不要强行重试（双执行是最高危事故，引擎硬闸拒绝即防线生效）。
+> **跨通道防线**：`resume_run`/`stop_run` 返回 `DRIVER_CHANNEL_MISMATCH` = 该 run 由 CLI（复用模式）建立——提示用户对 hop skill 说"继续那个活"（走复用模式），不要强行重试（双执行是最高危事故，引擎硬闸拒绝即防线生效）。
 
 ## 0. 前置：定位 spec + 组装 params
 

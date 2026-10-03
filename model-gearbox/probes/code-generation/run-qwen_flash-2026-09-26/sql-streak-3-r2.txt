@@ -1,0 +1,58 @@
+```sql
+WITH daily_logins AS (
+  SELECT user_id, login_date
+  FROM logins
+  GROUP BY user_id, login_date
+),
+streak_starts AS (
+  SELECT 
+    user_id,
+    login_date,
+    -- 判断是否为某一段连续登录的开始：前一天没有登录
+    CASE 
+      WHEN LAG(login_date) OVER (PARTITION BY user_id ORDER BY login_date) IS NULL 
+           OR julianday(login_date) - julianday(LAG(login_date) OVER (PARTITION BY user_id ORDER BY login_date)) != 1
+      THEN 1 
+      ELSE 0 
+    END AS is_streak_start
+  FROM daily_logins
+),
+streak_groups AS (
+  SELECT 
+    user_id,
+    login_date,
+    SUM(is_streak_start) AS streak_group_id
+  FROM streak_starts
+  GROUP BY user_id, login_date
+),
+streak_lengths AS (
+  SELECT 
+    user_id,
+    MIN(login_date) AS streak_start,
+    COUNT(*) AS longest_streak
+  FROM streak_groups
+  GROUP BY user_id, streak_group_id
+),
+max_streak_per_user AS (
+  SELECT 
+    user_id,
+    MAX(longest_streak) AS max_streak
+  FROM streak_lengths
+  GROUP BY user_id
+),
+final_streaks AS (
+  SELECT 
+    sl.user_id,
+    sl.longest_streak,
+    sl.streak_start
+  FROM streak_lengths sl
+  JOIN max_streak_per_user ms ON sl.user_id = ms.user_id AND sl.longest_streak = ms.max_streak
+  WHERE sl.longest_streak >= 3
+)
+SELECT 
+  user_id,
+  longest_streak,
+  streak_start
+FROM final_streaks
+ORDER BY longest_streak DESC, user_id ASC;
+```

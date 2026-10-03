@@ -28,9 +28,9 @@ Goal: 汇总营业数据，产出周报     ← 一句话目标（必选）
 Constraints:                    ← 不可违反的约束
 - 统计数字必须来自确定性计算，不得估算
 Inputs:                         ← 运行时要给的参数
-- daily_sales: yaml  # 7 天营业额
+- daily_sales % yaml  # 7 天营业额
 Outputs:                        ← 承诺交付的东西
-- weekly_report: markdown  # 周报
+- weekly_report % markdown  # 周报
 ```
 
 **先读头部再读 Steps**——Goal/Constraints/Outputs 是这份 spec 对你的承诺（改不了、绕不开，引擎会验收），Steps 只是兑现承诺的路径。评估一份别人写的 spec 值不值得用，读完头部就该有答案。
@@ -105,8 +105,8 @@ HopSop 已经能把流程逻辑给人讲清楚，但交给机器执行还缺两�
 ```markdown
 2. [act] 统计一周数字
   - ← daily_sales                 ← 读入：用前面产出的（或 Inputs 里的）
-  + → total: int  # 周营业额   ← 产出：变量名: 类型 # 说明
-  + → best_day: int  # 最好一天
+  + → total % int  # 周营业额   ← 产出：变量名 % 类型 # 说明
+  + → best_day % int  # 最好一天
 ```
 
 规则就两条：**`← x` 的 x 必须在前面出现过**（某步的 `+ →` 或头部 Inputs）；**`+ → y` 产出的 y 后面任何步骤都能用**。顺着箭头就能画出整份 spec 的数据管道——哪步的产出喂给哪步，一目了然。类型除了基础的 `int`/`float`/`text`/`bool`/`yaml`（数字类型与 Python 一致，就整数和浮点两种），还有列表 `[T]` 和头部 `Types:` 自定义的结构。

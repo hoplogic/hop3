@@ -13,7 +13,8 @@ import {
   dfsNextStep, propagateCompletion, finalizeForEachCollect,
   collectDescendants, findNonTerminalBefore,
   type TraversalState, getCollectPairs, getAsyncUnitVars } from './engine-traverse.js';
-import { FilePersistence, MemoryPersistence, writeChildParams, readChildParams, stateExists, readState, readVars, flattenVars, writeAtomic } from './persistence.js';
+import { FilePersistence, MemoryPersistence, writeChildParams, readChildParams, stateExists, readState, readVars, flattenVars, writeAtomic, readStateSeq } from './persistence.js';
+import { unionApprovedCommandNames } from './command-exec.js';
 import { HopLog, timestamp, type LogLevel } from './hoplog.js';
 import { resolveDocRefs, formatDocRefContext, DocRefError } from './doc-ref.js';
 import { getParentStepId, isParallelContainer, getForEach } from './ast-helpers.js';
@@ -90,6 +91,7 @@ export interface EngineOptions {
   persistence?: PersistenceProvider;
   logDir?: string;
   logLevel?: LogLevel;
+  maxRuns?: number;   // 日志保留上限,透传 HopLog（^anc-obs-log-retention） // @a: anc-obs-log-retention
   // Spec Inputs 的实参（init 时注入初始变量；覆盖 Inputs 声明的 default）。
   // 必须在 init 内注入——init 内部 persist 一次，事后从外部 write 不会落盘（跨进程丢失）
   params?: Record<string, unknown>;
@@ -156,6 +158,9 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
   // 驱动通道（双执行硬闸——run 建立时入口写入,推进类入口核对;缺席=旧 run 首个推进入口认领）。
   // @a: anc-exec-driver-channel
   private driverChannel: 'cli' | 'mcp' | null = null;
+  // 本进程内存里的 state.json 写入序号（load 取盘上值,init 取实例目录里现有值,每次写盘加一;
+  // 写盘前盘上比它大=另一个进程推进过,拒绝覆盖）。// @a: anc-exec-state-seq-guard
+  private stateSeq = 0;
   // 复用模式通知渠道（run --notify <渠道> 置值持久;子实例不继承——通知归顶层 run,worker 不发。
   // 存渠道名不存布尔:字段装的是"用哪个渠道"（命名忠实,2026-08-31 作者定渠道随话语走零配置文件）。
   // ^anc-cli-notify-reuse EngineSnapshotNotifyExt） // @a: anc-cli-notify-reuse
@@ -406,12 +411,12 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
           warnings.push({ kind: 'validate', rule: 'CONFIG', severity: 'warn',
             message: `Config.requires_commands 值非字符串列表形态（期望 [命令名, ...]）——按缺席处理零比对` } as ValidationError);
         } else if (reqCmds.length > 0) {
-          const available = hostConfig?.sandbox?.runtime?.available ?? [];
+          const available = unionApprovedCommandNames(hostConfig?.sandbox?.runtime?.available, ast.header.approved_commands) ?? [];   // ∪ 卡上《已批准命令》首项——与 body 运行期注入点同一并集（^anc-exec-command-primitive 并集条;review 抓两闸不齐） // @a: anc-exec-requires-commands-gate, anc-exec-command-primitive
           const missing = (reqCmds as string[]).filter(c => !available.includes(c));
           if (missing.length > 0) {
             return { status: 'error', errors: [{
               kind: 'validate', rule: 'INIT_FAILED', severity: 'error',
-              message: `INIT_FAILED: 本 spec 声明 requires_commands 依赖命令 [${(reqCmds as string[]).join(', ')}],宿主命令白名单缺少: ${missing.join(', ')}。修法:把缺少的命令加进项目根 hopjit.yaml 的 commands: 列表（如 commands:\n  - ${missing[0]}）后重跑（hopissues/0090 指路条款）`,
+              message: `INIT_FAILED: 本 spec 声明 requires_commands 依赖命令 [${(reqCmds as string[]).join(', ')}],宿主命令白名单与本 spec《已批准命令》都缺少: ${missing.join(', ')}。修法:把缺少的命令加进项目根 hopjit.yaml 的 commands: 列表（如 commands:\n  - ${missing[0]}）,或在本 spec 的 \`## 已批准命令\` 段加一行 \`- ${missing[0]}\` 后重跑（hopissues/0090 指路条款）`,
             }] };
           }
         }
@@ -422,7 +427,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
       const missingDecls = ast.header.inputs.filter(d => inputs[d.name] === undefined);
       if (missingDecls.length > 0) {
         const detail = missingDecls
-          .map(d => `${d.name}: ${d.type}${d.description ? `  # ${d.description}` : ''}`)
+          .map(d => `${d.name} % ${d.type}${d.description ? `  # ${d.description}` : ''}`)
           .join('; ');
         return { status: 'error', errors: [{
           kind: 'validate', rule: 'INIT_FAILED', severity: 'error',
@@ -448,6 +453,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
         specId: ast.header.id ?? 'unnamed',
         logDir: options.logDir,
         level: options.logLevel,
+        maxRuns: options.maxRuns,   // @a: anc-obs-log-retention
         title: ast.header.title,
         goal: ast.header.goal ?? '',
         inputs: inputs,
@@ -467,6 +473,8 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     this.persistence.init(this.instanceId, ast);
     if (this.persistence instanceof FilePersistence) {
       this.instanceDir = this.persistence.getInstanceDir();
+      // init 是显式"从头开始":沿用目录里现有序号接着往上加（新目录/净室重建为 0）,自己不撞过时核对。// @a: anc-exec-state-seq-guard
+      if (this.instanceDir) this.stateSeq = readStateSeq(this.instanceDir).seq;
     }
     this.persist();
 
@@ -1711,7 +1719,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
         warnLog: bodyWarnLog,
         hopEnv: this.hostConfig?.hop_env,   // @a: anc-exec-body-hop-env
         timeJournal: (this.timeJournal[result.step_id] ??= []),   // 持久数组——重放取记录值 // @a: anc-exec-time-builtins
-        commandWhitelist: this.hostConfig?.sandbox?.runtime?.available,   // 白名单注入源(缺席=关死) // @a: anc-exec-subprocess-run
+        commandWhitelist: unionApprovedCommandNames(this.hostConfig?.sandbox?.runtime?.available, this.spec?.header.approved_commands),   // 白名单注入源(缺席=关死) ∪ 卡上《已批准命令》命令名（^anc-exec-command-primitive 并集条） // @a: anc-exec-subprocess-run, anc-exec-command-primitive
         cmdJournal: (this.cmdJournal[result.step_id] ??= []),   // 命令结果重放——不重执行(命令不幂等) // @a: anc-exec-subprocess-run
       });
       let outputs: Record<string, unknown>;
@@ -2174,9 +2182,11 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     // parallel/<ci>/log（call→calls/<ci>/log）——缺省会各开顶层 run 目录破坏约定
     //（2026-08-11 真机 audit 实撞：断言找不到 worker 子日志）。
     const parentRunDir = this.hoplog?.getRunDir();
-    // 级别继承：父 debug 时 worker 也 debug——知识注入证据（doc-ref 切片）在 worker prompt，
-    // info 级不入轨则审计核验断链（2026-08-11 真机 audit 二轮实撞）。
-    const levelArg = this.hoplog?.getLevel() === 'debug' ? ' --log-level debug' : '';
+    // 级别继承：worker 恒跟父级别（^anc-obs-log-levels 子实例继承条——2026-08-11 真机 audit 实撞:父 debug 子 info
+    // 断链;原写法只在父 debug 时传参,靠"子缺省=父缺省"巧合成立,缺省改 info 后父 warn 子会回落 info,改为恒传）。
+    // @a: anc-obs-log-levels
+    const lvl = this.hoplog?.getLevel();
+    const levelArg = lvl ? ` --log-level ${lvl}` : '';
     const logArg = (parentRunDir ? ` --log-dir "${join(parentRunDir, kind === 'subtask' ? 'parallel' : 'calls', childInstance, 'log')}"` : '') + levelArg;
     if (kind === 'subtask') {
       // 同 spec 子树收窄 worker：init 沿用 --parallel-parent/--parallel-child 通道（目录 parallel/<ci>/）
@@ -2243,7 +2253,8 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     const paramsArg = this.cmdArgValue('calls', childInstance, 'params.json', JSON.stringify(params));
     // 卫星日志与级别继承同 buildDispatchLaunchCommand（子实例日志归父 run 目录 calls/<ci>/log）
     const parentRunDir = this.hoplog?.getRunDir();
-    const levelArg = this.hoplog?.getLevel() === 'debug' ? ' --log-level debug' : '';
+    const lvl2 = this.hoplog?.getLevel();
+    const levelArg = lvl2 ? ` --log-level ${lvl2}` : '';   // 恒跟父级别（同上）// @a: anc-obs-log-levels
     const logArg = (parentRunDir ? ` --log-dir "${join(parentRunDir, 'calls', childInstance, 'log')}"` : '') + levelArg;
     const base = `node "${this.cliAbsPath}" --json`;
     const childStateDir = join(stateDir, this.instanceId, 'calls');
@@ -3481,7 +3492,24 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
   getInlineLlmContext(): boolean { return this.inlineLlmContext; }
 
   getWorkZone(): string {
-    return this.persistence?.getWorkZone() ?? '';
+    const wz = this.persistence?.getWorkZone() ?? '';
+    if (!wz) return wz;
+    // 登记路由（^anc-exec-work-zone-registry）:把本 run 实例树的 work_zone 根集合推给引擎持有的提供者
+    // 引用——dispatcher 注入的清单料源与复用模式 lazy 自建的直执提供者(可空、可同一)。每次都推:
+    // Set 幂等零代价,而提供者可能在 engine 生命周期中途才接上(dispatcher 构造在 initExecution 之后),
+    // 缓存"已登记"会漏。任何文件工具执行前本方法必已被调过(body 解释器构造/prompt 组装/响应组装三路),
+    // 这是豁免判定成立的不变量。// @a: anc-exec-work-zone-registry
+    const roots = this.persistence?.getWorkZoneRoots?.() ?? [wz];
+    // 读树=顶层实例目录（祖先链末端 work_zone 的父目录）;无实例目录布局（MemoryPersistence tmpdir 单根）时缺席。
+    // 写根=roots[0]（自身）——每次都推,own 随当前执行实例切换（todo/0126 读写分权）。// @a: anc-exec-work-zone-registry
+    const top = roots[roots.length - 1];
+    const tree = this.instanceDir ? dirname(top) : undefined;
+    for (const pv of [this.toolDefsSource, this.engineToolProvider]) {
+      if (!pv) continue;
+      if (pv.registerWorkZoneRoot) for (const r of roots) pv.registerWorkZoneRoot(r);
+      pv.setWorkZoneScope?.({ own: roots[0], ...(tree ? { tree } : {}) });
+    }
+    return wz;
   }
 
   // 直读 step 的 ← inputs 取原始值——绕过 PromptAssembler 截断/deflate,
@@ -3838,7 +3866,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
       this.markSubtaskFailed(subtask, full);
       return;
     }
-    // 步级瞬态:下轮带新反馈输入即变（0037 环二 9 轮修过关实证）// @a: anc-exec-thinking-exhausted // @a: anc-exec-toolloop-repeat-break
+    // 步级瞬态:下轮带新反馈输入即变（0037 环二 9 轮修过关实证）// @a: anc-exec-thinking-exhausted, anc-exec-toolloop-repeat-break
     if (cls.fail_class === 'transient') {
       const truncPrefix = cls.transient_prefix!;
       const waiveKey = `${stepId}|${truncPrefix}`;
@@ -4404,17 +4432,45 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
 
   private persist(): void {
     if (!this.persistence || !this.spec) return;
-    this.persistence.saveSnapshot({
-      spec: this.spec,
-      state: this.buildStateFile(),
-      vars: { format_version: 2, scopes: this.variables.toJSON() },
-    });
+    // 写盘前核对:盘上序号比本进程内存里的大=另一个进程推进过,抛 STATE_STALE,此刻三份文件都还没写。
+    // 核对通过序号加一;写盘失败回退,内存序号与盘上保持一致。// @a: anc-exec-state-seq-guard
+    this.assertStateFresh();
+    const prevSeq = this.stateSeq;
+    this.stateSeq = prevSeq + 1;
+    try {
+      this.persistence.saveSnapshot({
+        spec: this.spec,
+        state: this.buildStateFile(),
+        vars: { format_version: 2, scopes: this.variables.toJSON() },
+      });
+    } catch (err) {
+      this.stateSeq = prevSeq;
+      throw err;
+    }
     this.hoplog?.flush();
   }
 
-  // journal 变更即全量持久化（saveSnapshot 幂等原子写；无 persistence 场景静默跳过——内存模式测试用）
+  // 跨进程过时覆盖拦截（^anc-exec-state-seq-guard）:有实例目录时回读盘上写入序号,比本进程内存里的大
+  // 就抛以 STATE_STALE: 开头的错误（报文点名写入者 pid 与时刻、两个序号、指路重新加载）。
+  // persist 与 MCP resume_run/stop_run 预检共用。无实例目录（MemoryPersistence）直接返回。
+  // @a: anc-exec-state-seq-guard
+  assertStateFresh(): void {
+    if (!this.instanceDir) return;
+    const disk = readStateSeq(this.instanceDir);
+    if (disk.seq <= this.stateSeq) return;
+    const pid = disk.last_writer ? String(disk.last_writer.pid) : '未知';
+    const at = disk.last_writer ? disk.last_writer.at : '未知';
+    throw new Error(`STATE_STALE: 盘上 state.json 已被另一个进程（pid ${pid}，写于 ${at}）推进到序号 ${disk.seq}，本进程内存里的账还停在序号 ${this.stateSeq}——拒绝覆盖。请丢弃本进程的账，从盘上重新加载后再继续（MCP：再调一次 resume_run 会从快照恢复；CLI：重新执行命令）`);
+  }
+  getStateSeq(): number { return this.stateSeq; }
+
+  // journal 变更即全量持久化（saveSnapshot 幂等原子写；无 persistence 场景静默跳过——内存模式测试用）。
+  // STATE_STALE 照样上抛——工具日志路径不许静默绕过跨进程过时核对。// @a: anc-exec-state-seq-guard
   private persistToolJournal(): void {
-    try { this.persist(); } catch { /* 无持久化上下文（纯内存单测）不阻断 */ }
+    try { this.persist(); } catch (err) {
+      if (err instanceof Error && err.message.startsWith('STATE_STALE:')) throw err;
+      /* 无持久化上下文（纯内存单测）不阻断 */
+    }
   }
 
   private buildStateFile(): StateFile {
@@ -4445,6 +4501,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
       ...(this.notifyChannel ? { notify_channel: this.notifyChannel } : {}),   // 复用模式通知渠道跨进程（^anc-cli-notify-reuse——每条 CLI 命令新进程,内存值活不过一条命令） // @a: anc-cli-notify-reuse
       ...(this.upstreamFeedback ? { upstream_feedback: this.upstreamFeedback } : {}),   // 父层修正意见跨进程（D41 复用半边:init 与 advance 是两个进程——同 notify_channel 先例;不落盘则跨进程断链） // @a: anc-exec-l2c-retry-feedback
       ...(this.driverChannel ? { driver_channel: this.driverChannel } : {}),   // 双执行硬闸 // @a: anc-exec-driver-channel
+      state_seq: this.stateSeq, last_writer: { pid: process.pid, at: new Date().toISOString() },   // 跨进程过时覆盖拦截 // @a: anc-exec-state-seq-guard
       ...(this.abortReason ? { abort_reason: this.abortReason } : {}),   // 中止原因入账 // @a: anc-exec-abort
       ...(this.expansionCount > 0 ? { expansion_count: this.expansionCount } : {}),   // 展开总数熔断底账（契约7——不落盘=跨进程熔断空炮）// @a: anc-exec-subtask-free-expand
       // @a: anc-exec-retry-adaptive — 重复 replan 检测跨进程稳定（两模式 replan 都跨进程）
@@ -4534,6 +4591,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     if (stateData.notify_channel) engine.notifyChannel = stateData.notify_channel;   // @a: anc-cli-notify-reuse
     if (stateData.upstream_feedback) engine.upstreamFeedback = stateData.upstream_feedback;   // D41 复用半边跨进程恢复 // @a: anc-exec-l2c-retry-feedback
     if (stateData.driver_channel) engine.driverChannel = stateData.driver_channel;   // @a: anc-exec-driver-channel
+    engine.stateSeq = typeof stateData.state_seq === 'number' ? stateData.state_seq : 0;   // 缺席=旧文件按 0 // @a: anc-exec-state-seq-guard
     if (stateData.abort_reason) engine.abortReason = stateData.abort_reason;   // @a: anc-exec-abort
     if (stateData.expansion_count) engine.expansionCount = stateData.expansion_count;   // @a: anc-exec-subtask-free-expand
     if (stateData.terminal_failure) {

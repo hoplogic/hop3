@@ -1,0 +1,20 @@
+下面这条查询满足全部要求:
+
+- **status 精确匹配**:SQLite 中 TEXT 列默认使用 BINARY 排序规则,`status = 'paid'` 是逐字节比较,`'PAID'`、`'paid '`(带尾随空格)都不会命中;
+- **amount 过滤**:`amount >= 100` 天然排除 NULL(SQLite 中 `NULL >= 100` 结果为 NULL,不会通过 WHERE),再显式加一个 `IS NOT NULL` 使意图更清楚;
+- **时间范围**:由于 `created_at` 是定宽的 `'YYYY-MM-DD HH:MM:SS'` 格式,字典序与时间序完全一致,直接用字符串比较即可精确覆盖 `'2026-03-01 00:00:00'` 到 `'2026-03-31 23:59:59'` 闭区间(3 月 31 日全天都在内,4 月 1 日 00:00:00 会被排除),也避免了 `julianday` 浮点精度问题;
+- **排序**:`ORDER BY amount DESC, id DESC` 实现金额降序、同额时新订单(id 大)在前;
+- 无匹配行时自然返回空结果集。
+
+在样例数据上,id=2(金额不足)、id=3(状态不符)、id=4(2 月)被排除,输出为 `[6,14,500]`、`[5,13,150]`、`[1,10,150]`,与预期一致。
+
+```sql
+SELECT id, customer_id, amount
+FROM orders
+WHERE status = 'paid'
+  AND amount IS NOT NULL
+  AND amount >= 100
+  AND created_at >= '2026-03-01 00:00:00'
+  AND created_at <= '2026-03-31 23:59:59'
+ORDER BY amount DESC, id DESC;
+```

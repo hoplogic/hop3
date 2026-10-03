@@ -1,0 +1,9 @@
+Q1: yes（P1 line_ref 为 L1 且 quote 摘自该行）
+Q2: yes（P2 覆盖半衰期内容，P3 覆盖影响睡眠内容，两者 line_ref 均为 L2）
+Q3: no（清单中无 line_ref 为 L3 的点）
+Q4: yes（P5 line_ref 为 L4 且 quote 摘自该行）
+Q5: yes（P3、P5  premises 均非空且写有具体前提内容）
+Q6: yes（所有点的 quote 均能从对应 line_ref 行中找到）
+extract_ok: false
+extract_gap: |
+  Q3

@@ -1,0 +1,8 @@
+Q1: yes（清单中 P1 的 line_ref 为 L1，quote 完全匹配 L1 内容）
+Q2: yes（清单中 P2 覆盖 L2 的半衰期断言，P3 覆盖影响睡眠质量的断言，两者 line_ref 均为 L2）
+Q3: yes（清单中 P4 的 line_ref 为 L3，quote 完全匹配 L3 内容）
+Q4: yes（清单中 P5 的 line_ref 为 L4，quote 完全匹配 L4 内容）
+Q5: yes（P3 的 premises 为“① 咖啡因的半衰期约为 5 小时”，P5 的 premises 为“① 美国 FDA 建议健康成年人每日咖啡因摄入不超过 400 毫克\n② 四杯以内的标准咖啡含有的咖啡因量不超过 400 毫克”，均非空且内容完整）
+Q6: yes（所有点的 quote 均可在原文对应行中找到完全一致的文本）
+extract_ok: true
+extract_gap: |

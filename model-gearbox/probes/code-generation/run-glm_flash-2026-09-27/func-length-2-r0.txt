@@ -1,0 +1,66 @@
+思路说明:
+
+- 用 `ast.parse` 把源码解析成语法树,再用 `ast.walk` 遍历全部节点。这样模块顶层函数、类中的方法、`async def`、嵌套函数都会被各自独立找到;模块顶层的普通语句不是函数节点,自然不会被检查。
+- 在 Python 3.8+ 中,函数节点的 `lineno` 指向 `def` 关键字所在行(装饰器行不计入),`end_lineno` 是函数体最后一行,所以长度 = `end_lineno - lineno + 1`(含首尾两行,恰好 40 行合规)。外层函数的 `end_lineno` 天然覆盖内层嵌套函数所占的行,符合"外层包含内层、内层另算"的要求。
+- 用 `len(sys.argv)` 守卫后取 `sys.argv[1]`,`open(path, "r", encoding="utf-8")` 读取;读文件失败(`OSError`)、非 UTF-8 内容(`ValueError`)、语法错误(`SyntaxError`)都输出错误信息并退出 1。
+- 无违规静默退出 0;有违规则按 def 行号排序逐条打印"行号 + 原因"后退出 1。
+- 代码中无下划线开头的名字,未重绑定任何内置名/模块名,import 均为 `import 模块名` 形式,符合沙箱约束。
+
+```python
+# 函数长度校验脚本
+# 规范: 每个函数(普通函数 / async 函数 / 类方法 / 嵌套函数)从 def 所在行到
+# 函数体最后一行的行数(含首尾)不得超过 40 行, 恰好 40 行合规; 装饰器行不计入。
+# 用法: python check_func_length.py <待检查文件.py>
+# 结果: 合规退出码 0; 违规时逐条打印违规位置(行号与原因)并退出码 1。
+
+import ast
+import sys
+
+LIMIT = 40
+
+if len(sys.argv) < 2:
+    print("用法: 请在命令行参数中给出待检查文件的路径", file=sys.stderr)
+    sys.exit(1)
+
+path = sys.argv[1]
+
+try:
+    with open(path, "r", encoding="utf-8") as src_file:
+        content = src_file.read()
+except OSError as err:
+    print(f"错误: 无法读取文件 {path}: {err}", file=sys.stderr)
+    sys.exit(1)
+except ValueError as err:
+    print(f"错误: 文件不是有效的 UTF-8 文本: {err}", file=sys.stderr)
+    sys.exit(1)
+
+# 去掉可能存在的 UTF-8 BOM, 避免解析失败
+if content.startswith("\ufeff"):
+    content = content[1:]
+
+try:
+    tree = ast.parse(content)
+except SyntaxError as err:
+    print(f"错误: 文件存在语法错误, 无法解析: {err}", file=sys.stderr)
+    sys.exit(1)
+
+# ast.walk 遍历整棵语法树, 能同时覆盖: 模块顶层函数、类中的方法、
+# 函数内部嵌套的函数, 每个函数节点独立判断一次; 模块顶层的普通语句
+# 不是函数节点, 不会被检查。
+violations = []
+for node in ast.walk(tree):
+    if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+        # Python 3.8+ 中函数节点的 lineno 指向 def 关键字所在行(装饰器行不计入),
+        # end_lineno 是函数体最后一行; 长度 = 末行 - 首行 + 1(含首尾两行)。
+        # 外层函数的 end_lineno 覆盖了内层嵌套函数所占的行, 符合规范要求。
+        func_len = node.end_lineno - node.lineno + 1
+        if func_len > LIMIT:
+            violations.append((node.lineno, node.name, func_len))
+
+if violations:
+    for def_line, func_name, func_len in sorted(violations):
+        print(f'第 {def_line} 行: 函数 "{func_name}" 长度 {func_len} 行, 超过上限 {LIMIT} 行')
+    sys.exit(1)
+
+sys.exit(0)
+```

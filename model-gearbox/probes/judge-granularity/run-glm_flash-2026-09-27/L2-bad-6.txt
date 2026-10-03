@@ -1,0 +1,9 @@
+Q1: yes（P1 的 line_ref 为 L1，quote 即 L1 原句，构成对应点）
+Q2: yes（P2 与 P3 的 line_ref 均为 L2 且 quote 摘自 L2，半衰期由 P2 覆盖、影响睡眠由 P3 覆盖，两个内容均被覆盖）
+Q3: no（清单中没有任何点的 line_ref 为 L3；FDA 400 毫克内容仅出现在 P5 的 premises 中，按定义前提引用不算对应点，L3 断言漏提）
+Q4: yes（P5 的 line_ref 为 L4，quote 即 L4 原句，构成对应点）
+Q5: yes（P3 的 premises 写明"① 咖啡因的半衰期约为 5 小时”，P5 的 premises 写明两条具体前提，均非空且有内容）
+Q6: yes（P1 对应 L1、P2/P3 对应 L2、P5 对应 L4，各 quote 均可在对应行中逐字找到）
+extract_ok: false
+extract_gap: |
+  Q3: L3 的断言（美国 FDA 建议健康成年人每日咖啡因摄入不超过 400 毫克）在清单中没有 line_ref=L3 的对应点；该内容仅作为 P5 的前提出现，按覆盖定义不算提取覆盖，属于漏提。

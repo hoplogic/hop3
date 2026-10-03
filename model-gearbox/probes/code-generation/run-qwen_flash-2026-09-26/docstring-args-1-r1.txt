@@ -1,0 +1,101 @@
+```python
+import ast
+import re
+import json
+import sys
+
+def get_function_params(func_node):
+    """Extract parameter names from function definition, excluding self/cls."""
+    params = []
+    for arg in func_node.args.args:
+        if arg.arg not in ['self', 'cls']:
+            params.append(arg.arg)
+    if func_node.args.vararg:
+        params.append(func_node.args.vararg.arg)
+    for arg in func_node.args.kwonlyargs:
+        if arg.arg not in ['self', 'cls']:
+            params.append(arg.arg)
+    if func_node.args.kwarg:
+        params.append(func_node.args.kwarg.arg)
+    return params
+
+def extract_docstring(node):
+    """Extract docstring if it's the first statement of the function body."""
+    if node.body and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant) and isinstance(node.body[0].value.value, str):
+        return node.body[0].value.value
+    return None
+
+def is_public_function(node):
+    """Check if the function is public (not starting with underscore)."""
+    return not node.name.startswith('_')
+
+def find_all_functions_and_methods(tree):
+    """Find all top-level functions and methods in classes, including nested class methods."""
+    candidates = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+            if is_public_function(node):
+                candidates.append(node)
+        elif isinstance(node, ast.ClassDef):
+            for method in node.body:
+                if isinstance(method, ast.FunctionDef) or isinstance(method, ast.AsyncFunctionDef):
+                    if is_public_function(method):
+                        candidates.append(method)
+    return candidates
+
+def is_word_in_text(text, word):
+    """Check if word appears as a complete word in text (case-sensitive)."""
+    # Use regex to match word boundaries
+    pattern = r'\b' + re.escape(word) + r'\b'
+    return bool(re.search(pattern, text))
+
+def check_file(filepath):
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except OSError as e:
+        print(f"Error reading file {filepath}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not content.strip():
+        sys.exit(0)
+
+    try:
+        tree = ast.parse(content, filename=filepath)
+    except SyntaxError as e:
+        print(f"Syntax error in {filepath}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    violations = []
+
+    functions = find_all_functions_and_methods(tree)
+
+    for func in functions:
+        docstring = extract_docstring(func)
+        if docstring is None:
+            violations.append(f"{func.lineno}: Function '{func.name}' has no docstring.")
+            continue
+
+        params = get_function_params(func)
+        if not params:
+            continue  # No parameters to check
+
+        for param in params:
+            if not is_word_in_text(docstring, param):
+                violations.append(f"{func.lineno}: Docstring for '{func.name}' does not mention parameter '{param}'.")
+
+    if violations:
+        for v in violations:
+            print(v, file=sys.stderr)
+        sys.exit(1)
+
+    sys.exit(0)
+
+# Main execution
+if len(sys.argv) < 2:
+    print("Usage: script.py <file_path>", file=sys.stderr)
+    sys.exit(1)
+    
+filepath = sys.argv[1]
+check_file(filepath)
+```

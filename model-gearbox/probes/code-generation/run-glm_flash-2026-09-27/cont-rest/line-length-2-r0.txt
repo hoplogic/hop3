@@ -1,0 +1,60 @@
+下面是这个校验脚本的设计要点，随后是完整脚本。
+
+**实现思路(对照规则细节)：**
+
+- **按字符计数**：用 `open(path, "r", encoding="utf-8")` 以文本模式读入，`len()` 统计的是 Unicode 码点数，一个汉字算 1 个字符，不按字节算。
+- **换行处理**：文本模式默认的通用换行翻译会把 `\r\n`、`\r` 统一成 `\n`,因此行尾换行符和 Windows 换行里的 `\r` 都不会计入长度;`readlines()` 在最后一行没有换行符结尾时也会原样返回该行，同样参与检查。
+- **边界**：判定用严格大于(`len(line) > 100`),恰好 100 合规；空文件 `readlines()` 结果为空，自然合规。
+- **退出码**：合规退出 0;违规时逐条打印“行号 + 实际长度 + 原因”后退出 1;参数缺失、IO 错误、UTF-8 解码失败则把错误打到 `sys.stderr` 并以 2 退出(与“违规”区分开)。
+- **沙箱约束**：只 `import sys`;只用允许的内置名(`len`、`str`、`print`、`open`、`enumerate`、`OSError`、`ValueError` 等)和允许的属性/方法(`sys.argv`、`sys.exit`、`sys.stderr`、`readlines`、`close`、`replace`、`append`);变量名不撞内置名/模块名，无下划线开头名字，主逻辑在模块顶层，`open` 为直接调用且用读模式。
+
+```python
+import sys
+
+# 规范条款:每行长度(按字符数)不得超过 100;恰好 100 合规,101 违规。
+maxLen = 100
+
+if len(sys.argv) < 2:
+    print("用法:请把待检查文件的路径作为第一个命令行参数传入", file=sys.stderr)
+    sys.exit(2)
+
+path = sys.argv[1]
+
+# 用 UTF-8 文本模式读取:len 按字符(Unicode 码点)计数,汉字算 1 个字符;
+# 默认通用换行翻译会把 \r\n、\r 统一成 \n,行尾换行与 Windows 的 \r 都不计入长度。
+try:
+    handle = open(path, "r", encoding="utf-8")
+    rawLines = handle.readlines()
+    handle.close()
+except OSError as err:
+    print("错误:无法读取文件 " + path + " (" + str(err) + ")", file=sys.stderr)
+    sys.exit(2)
+except ValueError as err:
+    # UTF-8 解码失败(UnicodeDecodeError 是 ValueError 的子类)
+    print("错误:文件内容不是有效的 UTF-8 文本 (" + str(err) + ")", file=sys.stderr)
+    sys.exit(2)
+
+violations = []
+# 通用换行翻译后,每行末尾最多有一个 \n;最后一行没有换行符结尾时
+# readlines 原样返回该行,同样参与检查。空文件 readlines 为空,合规。
+for lineNo, raw in enumerate(rawLines, 1):
+    line = raw.replace("\n", "")
+    if len(line) > maxLen:
+        violations.append(
+            "违规:第 " + str(lineNo) + " 行长度为 " + str(len(line))
+            + " 个字符,超过上限 " + str(maxLen) + " 个字符"
+        )
+
+if violations:
+    for msg in violations:
+        print(msg)
+    sys.exit(1)
+
+# 所有行均不超长(含空文件):合规
+sys.exit(0)
+```
+
+**对公开样例的行为：**
+
+- `line-length_bad.txt`:第 2 行超过 100 个字符,打印 `违规:第 2 行长度为 ... 个字符,超过上限 100 个字符`,退出码 1;
+- `line-length_ok.txt`:两行都很短,无输出,退出码 0。

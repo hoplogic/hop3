@@ -1,0 +1,123 @@
+# 端点输出上限实测表(机读;由 run-output-cap.mjs 生成,重跑覆盖)
+probe: model-gearbox/probes/run-output-cap.mjs
+method: 每端点发 2 次"从 1 数到 count_to,每行一个数"的请求,请求 max_tokens=requested_max_tokens;stop_reason=max_tokens 且 output_tokens < 请求值×0.9 判端点自带上限(各发一致才记值);任一发写满请求值判端点上限不低于请求值;全部自然结束记"至少"
+endpoints:
+  - service_id: deepseek
+    base_url: https://api.deepseek.com/anthropic
+    request_model: deepseek-flash
+    response_model: deepseek-flash
+    measured: '2026-09-26'
+    count_to: 15000
+    requested_max_tokens: 65536
+    verdict: not_reached
+    endpoint_output_cap: null
+    at_least: 47873
+    note: 未触顶:各发 47873/46671 tokens 都自然结束,端点上限至少 47873;要量真上限加大 --count(模型提前停笔或拒写也落这一档,看 attempts 的 last_line)
+    attempts:
+      - stop_reason: end_turn
+        output_tokens: 47873
+        last_line: '15000'
+        seconds: 122
+      - stop_reason: end_turn
+        output_tokens: 46671
+        last_line: '15000'
+        seconds: 115
+  - service_id: antchat
+    base_url: https://antchat.alipay.com/api/anthropic
+    request_model: Ling-3.0-Flash
+    response_model: Ling-3.0-Flash
+    measured: '2026-09-26'
+    count_to: 15000
+    requested_max_tokens: 65536
+    verdict: request_cap
+    endpoint_output_cap: null
+    at_least: 65536
+    note: 至少一发写满了请求的 65536(各发 65536/65536),端点上限不低于请求值;要量真上限加大 --max-tokens
+    attempts:
+      - stop_reason: max_tokens
+        output_tokens: 65536
+        last_line: '1277'
+        seconds: 168
+      - stop_reason: max_tokens
+        output_tokens: 65536
+        last_line: '1277'
+        seconds: 168
+  - service_id: bailian_qwen
+    base_url: https://dashscope.aliyuncs.com/api/v2/apps/claude-code-proxy
+    request_model: qwen3.8-27b
+    response_model: qwen3.8-27b
+    measured: '2026-09-26'
+    count_to: 15000
+    requested_max_tokens: 65536
+    verdict: endpoint_cap
+    endpoint_output_cap: 4096
+    note: 2 发都在 4096 被掐断(请求 65536),端点自带上限,忽略请求 max_tokens
+    attempts:
+      - stop_reason: max_tokens
+        output_tokens: 4096
+        last_line: '104'
+        seconds: 27
+      - stop_reason: max_tokens
+        output_tokens: 4096
+        last_line: '104'
+        seconds: 27
+  - service_id: antchat_qwen
+    base_url: https://antchat.alipay.com/api/anthropic
+    request_model: Qwen3.8-27B
+    response_model: Qwen3.8-27B
+    measured: '2026-09-26'
+    count_to: 3000
+    requested_max_tokens: 65536
+    verdict: not_reached
+    endpoint_output_cap: null
+    at_least: 8893
+    note: 未触顶:各发 7717/8893 tokens 都自然结束,端点上限至少 8893;要量真上限加大 --count(模型提前停笔或拒写也落这一档,看 attempts 的 last_line)
+    attempts:
+      - stop_reason: end_turn
+        output_tokens: 7717
+        last_line: '1765'
+        seconds: 53
+      - stop_reason: end_turn
+        output_tokens: 8893
+        last_line: '2000'
+        seconds: 54
+  - service_id: qwen_flash
+    base_url: https://dashscope.aliyuncs.com/apps/anthropic
+    request_model: qwen-flash
+    response_model: qwen-flash
+    measured: '2026-09-26'
+    count_to: 15000
+    requested_max_tokens: 32768
+    verdict: request_cap
+    endpoint_output_cap: null
+    at_least: 32768
+    note: 至少一发写满了请求的 32768(各发 32768/32768),端点上限不低于请求值;要量真上限加大 --max-tokens
+    attempts:
+      - stop_reason: max_tokens
+        output_tokens: 32768
+        last_line: '6775'
+        seconds: 257
+      - stop_reason: max_tokens
+        output_tokens: 32768
+        last_line: '6775'
+        seconds: 245
+  - service_id: glm_flash
+    base_url: https://open.bigmodel.cn/api/anthropic
+    request_model: glm-5.3-flash
+    response_model: glm-5.3-flash
+    measured: '2026-09-26'
+    count_to: 3000
+    requested_max_tokens: 65536
+    verdict: not_reached
+    endpoint_output_cap: null
+    at_least: 11483
+    note: 未触顶:各发 10417/11483 tokens 都自然结束,端点上限至少 11483;要量真上限加大 --count(模型提前停笔或拒写也落这一档,看 attempts 的 last_line)
+    attempts:
+      - stop_reason: end_turn
+        output_tokens: 10417
+        last_line: '3000'
+        seconds: 126
+      - stop_reason: end_turn
+        output_tokens: 11483
+        last_line: '3000'
+        seconds: 157

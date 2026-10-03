@@ -45,18 +45,19 @@ hoplogic3/
 ├── CLAUDE.md           ← Agent 工程约定（实现链纪律、机检入口、目录说明）
 ├── ARCHITECTURE.md           ← 架构总览（引擎核心 + 双模式驱动适配层）
 ├── TRACEABILITY.md     ← 锚点五层追溯卡片（概念→设计→代码→测试）
-├── maintainers/        ← 涉内部源的维护者文档（RELEASING.md 操作手册 + git-repo-topology.md 四仓规范;目录恒不入公开快照与 npm tarball——顶层白名单默认拒绝,verify 验证不在场）
+├── maintainers/        ← 涉内部源的维护者文档（RELEASING.md 操作手册 + git-repo-topology.md 四仓规范 + 模型端点票.md 候选端点实测账;目录恒不入公开快照与 npm tarball——顶层白名单默认拒绝,verify 验证不在场）
 ├── docs/
 │   ├── WORKAROUNDS.md  ← 外部载体缺陷登记（症状→根因→绕行→撤销条件；换机/升级载体先读）
 │   ├── concepts/       ← 概念层（维护者快照，库内只读）
 │   ├── design/         ← 设计层（本库活文档；rounds/ 存设计草案与提案）
+│   ├── AGENT-GUIDE.md  ← 给 AI coding agent 读的使用说明（装/用/三条边界/怎么报问题/请用户 star——读者是 agent 不是人,README 顶部直链）
 │   └── tutorials/      ← 教程两系列（00 分流页；用户系列 01×2 入口+02-07 主线+08-10 进阶应用〔MCP接入/重规划/hop日常〕；开发者系列 D0-D8：导读/用AI做工程×2/架构/错误模型/HopLog/工具开发/配置/Obsidian可视化）
 ├── audits/             ← 全链审计存档（按跃迁维度：S2D/D2C/C2T/chain/quality，契约见其 README）〔内部开发面——GitHub 快照暂不含,后继开放〕
 ├── driver/             ← ⭐ 驱动载体多态：每个 LLM 载体一套等价驱动指令（见下方专节）
 ├── editors/            ← 编辑器可视化插件（obsidian/——折叠/大纲/落点高亮;独立构建不入引擎包,design/obsidian-plugin.md）
 ├── skills/             ← 分发 skill 聚合（随包出厂装用户 skills 目录;与 driver/ 载体多态正交。hopbuild=NL skill 形态〔2026-08-25 作者定,自举翻案——spec/expand-node 迁 obsolete,与 hopbuild2 构成散文纪律 vs 引擎强制双形态对照〕,hopbuild2=hopspec skill 形态）
 │   ├── hopbuild/       ← 构建器 v1（**NL skill 形态,2026-08-25 自举翻案**——SKILL.md 自足七步流程散文+hopbuild-primer.md 知识附件;spec/expand-node 退役迁 docs/obsolete/hopbuild/;design/hopbuild.md ^anc-build-bootstrap 翻案条）
-│   └── hopbuild2/      ← 构建器 v2 完整 skill 五件套（SKILL.md 壳+spec.md 主流程+split-node 判定器+split-structure 结构执行机+split-patterns 知识库;design/hopbuild2.md ^anc-build-layout2,2026-08-25 作者定构建成完整 skill——install-skill 与 tarball 随 v1 同批分发,触发词 /hopbuild2）
+│   └── hopbuild2/      ← 构建器 v2 完整 skill（母本五件套:SKILL.md 壳+spec.md 主流程+split-node 判定器+split-structure 结构执行机+split-patterns 知识库;另有 hopbuild2-expand.md 二轮展开入口与 spec.qwen3.8-27b.md/spec.qwen-flash.md 两份模型变体;design/hopbuild2.md ^anc-build-layout2,2026-08-25 作者定构建成完整 skill——install-skill 与 tarball 随 v1 同批分发,触发词 /hopbuild2）
 │   ├── hopspec-skill.md    ← CC 载体主驱动（部署副本在用户 .claude/skills/）
 │   ├── hop-skill.md        ← /hop 随手命令（2026-08-26,恒复用模式主对话自驱——todo plan 升格/进展有账/中断可续/主动 replan;与 /hopspec 分工:成品重编排/随手轻自驱）
 │   ├── references/         ← CC 执行细则共享（其中 cli-discovery.md 各载体共用）
@@ -64,8 +65,8 @@ hoplogic3/
 ├── src/                ← HopJIT 引擎（21 个 TS 源文件，@a: 代码锚点；见下方源码层专节）
 ├── tests/              ← vitest 测试（34 个 *.test.ts，@v: 测试锚点）
 ├── examples/           ← 可执行 spec 范本 + doc-ref 知识文档（纯演示）
-├── model-gearbox/      ← 模型变速箱（2026-09-18 作者定纲,比喻经认可升格为目录名——两根变速轴之模型轴;载体轴归 driver/）：profiles/ 机读能力档案（三段:七维粗档/act_free 稳定性数值曲线/适配开关,引擎与 hopbuild2 消费面挂 todo/0095）+ probes/ 度量仪器（协议探针/引擎冒烟/act-free 稳定性阶梯矩阵/七维定性/G6 代码生成 Python 与 SQL 两种语言〔code-generation/,2026-09-23〕——D12 教程四层测试的机械化,教程管方法论本目录管跑法与数据）（度量数据总表.md=三 service 裸能力人读汇总快照〔适配前体检报告〕+适配效果总表.md=变速箱适配后效果评价〔上岗成绩单:每模型×任务的前后对照带代价账,2026-09-21 作者定两表成对〕+适配对象清单.md=库内 skill 适配需求盘点〔逐份判要不要变体/缺什么/优先级,27b 基准档,作者定"看实际的 skill 明确列出来"〕+完工测试清单.md=完工验收台账〔七宏观任务×三模型 21 格销格制,作者定宏观任务面七项〕——权威恒在 profiles/ 机读档案与各跑批账）
-├── scripts/            ← 机检守卫（chain-health / check-* / run-audit）+ audit/ 审计工具链（anchor-audit/test-coverage-audit spec+知识文档+scan/cross_compare+standalone 化五件 prep_env/make_batches/tally_batches/write_artifact/write_batch，2026-08-08 自 examples/ 迁入；+test-coverage-audit 配套 collect_coverage.py 四子命令，2026-09-01 双模式化批新建；见守卫脚本专节）
+├── model-gearbox/      ← 模型变速箱（2026-09-18 作者定纲,比喻经认可升格为目录名——两根变速轴之模型轴;载体轴归 driver/）：profiles/ 机读能力档案（三段:七维粗档/act_free 稳定性数值曲线/适配开关,引擎与 hopbuild2 消费面挂 todo/0095）+ probes/ 度量仪器（协议探针/端点输出上限〔output-cap/,2026-09-26〕/引擎冒烟/act-free 稳定性阶梯矩阵/七维定性/G6 代码生成 Python 与 SQL 两种语言〔code-generation/,2026-09-23〕——D12 教程四层测试的机械化,教程管方法论本目录管跑法与数据）（三份人读文档,文件名序号=流程先后,2026-09-28 作者定改名并合并:1-模型裸能力体检表.md=各 model service 不挂适配时的探针数据汇总〔适配前体检报告,原名度量数据总表〕+2-skill适配需求清单.md=库内 skill 适配需求盘点〔逐份判要不要给弱模型做定制版/缺什么/优先级,27b 基准档,原名适配对象清单〕+3-宏观任务验收与成绩.md=七个宏观任务×各模型的逐格真机验收台账〔第一部分,原名完工测试清单〕与挂上适配后的逐模型效果和代价〔第二部分,原名适配效果总表〕,销格记录居末——权威恒在 profiles/ 机读档案与各跑批账）
+├── scripts/            ← 机检守卫（chain-health / check-* / run-audit）+ build-pkgdocs.mjs 与 pkgdocs-manifest.json（npm 包文档发布件：prepack `--in-place` 清洗用户面文档进包、postpack `--restore` 恢复、`--out <目录>` 不碰源生成供核看,权威 release-engineering ^anc-release-tarball-self-contained,2026-10-02）+ audit/ 审计工具链（anchor-audit/test-coverage-audit spec+知识文档+scan/cross_compare+standalone 化五件 prep_env/make_batches/tally_batches/write_artifact/write_batch，2026-08-08 自 examples/ 迁入；+test-coverage-audit 配套 collect_coverage.py 四子命令，2026-09-01 双模式化批新建；见守卫脚本专节）
 ```
 
 **文档分层与实现链的对应**：`docs/concepts/`＝概念层（S）→ `docs/design/`＝设计层（D）→ `src/`＝代码（C）→ `tests/`＝测试（T）。跨层追溯靠锚点（`^anc-*`/`@a:`/`@v:`），汇总于 TRACEABILITY.md。守卫体系见 [[chain-enforcement]]。
@@ -132,7 +133,7 @@ hoplogic3/
 |---|---|
 | hop-cli | CLI 命令表 + JSON I/O 契约 + install-skill + 状态加载语义（load/recover 分野） |
 | step-dispatcher | 独立模式 StepDispatcher——模型路由、凭证、暂停语义（含 pause-timeout v1 偏差） |
-| mcp-server | standalone 执行的 MCP server 形态——四工具面（start/status/resume/list）、job 式异步、HITL 常驻进程解跨进程死结、key 隔离（2026-08-06 作者拍板 MCP 方案，CLI standalone 缓做） |
+| mcp-server | standalone 执行的 MCP server 形态——六工具面（start/status/resume/list/stop/run_approved_command）、job 式异步、HITL 常驻进程解跨进程死结、key 隔离（2026-08-06 作者拍板 MCP 方案，CLI standalone 缓做） |
 | tool-interface | 工具接口标准与绑定机制（2026-08-12 批次一立卷）——第一层 ToolSpec（name/alias/schema/shape/requires_commit/unwrap）+ tool_servers 注册文法 + 双端校验（shape 异常入 adaptive 阶梯，作者定）+ 第二层绑定两档（in-process 凭审计资格/mcp 最小子集）+ CompositeToolProvider 装配 |
 | tool-channels | 工具调用通道总览（2026-08-12 作者要求成文）——五条物理路径一张表（body 内置/body 非内置双模式/LLM 循环/缺省文件工具）+ requires_commit 横切 + server-side search 等相邻物定界；权威留原锚点 |
 | llm-error-handling | LLM 节点错误处理总览（2026-08-31 作者要求成文）——失败信号六站旅程一张表（截断/解析阶梯/lack_of_info 分流/校验恢复/check 判定/容器升级链）+ lack_of_info 全链契约 + subtask-retry 生命周期与 prompt 供给逐拍对照 + fail_kind 表 + 雷区台账；权威留原锚点 |
@@ -179,6 +180,7 @@ hoplogic3/
 | TRACEABILITY | 锚点五层追溯卡片 ×203 | extend（源=concept-anchor-rules） |
 | maintainers/RELEASING | 维护者操作手册——提交/发版前例行检查与手工验收清单（手册层：每次都用、零叙事、自包含；原理归 chain-enforcement/carrier-live-e2e。2026-09-13 迁入 maintainers/——"手册数 ≥3 迁 docs/manuals/"旧注废止:涉内部源的维护者文档按目录隔离,不按数量） | compact（源=chain-enforcement + carrier-live-e2e） |
 | maintainers/git-repo-topology | 四仓路径规范权威——内网真源/GitHub 快照/两 hopissues 通道的方向与纪律、push 分级、恒不公开清单、远期路标（CLAUDE.md Git 节留摘要指针） | intent（2026-09-13 作者定稿） |
+| maintainers/模型端点票 | 作者给的候选模型端点实测账——每张票的端点地址、密钥环境变量名（不记值）、思考开关行为、工具调用、输出上限、测法与日期；附未配的接入参考与 GLM 思考关不掉和引擎冲突的说明 | 实测记录（2026-09-27） |
 | CLAUDE | Agent 工程约定（本库自足版） | — |
 
 ## audits/ — 全链审计存档〔内部开发面——GitHub 快照暂不含此目录,链接在公开仓不可达;后继开放〕
@@ -303,7 +305,7 @@ hoplogic3/
 | tools.ts | 受控工具 DefaultToolProvider + workspace 路径校验 | tools |
 | provider-types.ts / runtime-types.ts | Provider 接口族 / 运行时共享类型 | shared-providers / shared-types |
 | errors.ts | 错误码与分类 | shared-errors |
-| mcp-server.ts | standalone 执行 MCP server（四工具面/job 异步/HITL 常驻） | mcp-server |
+| mcp-server.ts | standalone 执行 MCP server（六工具面/job 异步/HITL 常驻） | mcp-server |
 | prompt 相关外的工具族五件 tools-composite.ts / tools-registry.ts / tools-notify.ts / tools-mcp-binding.ts / tools-inprocess-binding.ts | 组合 provider 装配/注册表加载（hopjit.yaml tool_servers）/钉钉通知内置件/MCP 绑定/进程内绑定 | tools 族（tools.md 及 tools/ 子目录） |
 | spec-tree-edit.ts | 步骤树编辑核心（insert/replace/renumber 纯函数） | spec-tree-tools |
 | protocol-openai.ts | OpenAI responses 协议适配 | step-dispatcher（协议面） |
@@ -340,6 +342,7 @@ hoplogic3/
 | audit/tally_batches.py | 语义审计汇总统计——读全部批结果做三维计数/通过率/err+warn 明细，围栏与缩进噪声容忍 | anchor-audit spec 步 6.1 |
 | audit/write_artifact.py | 审计产物落盘——report.md 与 semantic_audit_summary.yaml（module_ledger 增量合并，scope 从 modules 推导），白名单脚本自主写盘不经写域闸 | anchor-audit spec 步 4.3/6.2 |
 | audit/collect_coverage.py | 测试覆盖率机械工序四子命令——--detect 检测覆盖率工具（vitest/jest/pytest 三型）/--run 跑覆盖（恒 exit 0，工具退出码进 stdout，超时同路径）/--analyze 解析三份 YAML+mock 预筛/--gaps 低覆盖筛选（阈值参数化） | test-coverage-audit spec 步 1/3.1/3.2/4 |
+| build-pkgdocs.mjs | npm 包文档发布件生成器——按 scripts/pkgdocs-manifest.json 把 35 份用户面文档清洗成去工程链标记的发布件（prepack --in-place 原地替换+备份 / postpack --restore 恢复 / --out 不碰源）,净度不过整次失败;权威 release-engineering ^anc-release-tarball-self-contained | prepack/postpack 自动;guard-scripts 七例 |
 | dev-install.sh | 开发刷装置——重建 dist，并同步刷新 CC + 当前项目 Codex 两套 skill（npm run dev:install） | 手动（用户终端） |
 | release.sh | G5 发版检查单十一步·快照制（npm run release，启动冻结 SNAP 对快照 worktree 跑全程，含 tarball 资产核对与收编三拍；publish/push 不可逆归人跑；行为权威 [[release-engineering]]） | 手动（用户终端） |
 | hoplog-fuzz.mjs | HopLog 写入路径穷举 harness——列全 YAMLL 崩溃点，只暴露不修 | 手动 |

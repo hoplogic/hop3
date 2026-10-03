@@ -1,0 +1,16 @@
+```python
+import sys
+
+file_path = sys.argv[1]
+violation_found = False
+with open(file_path, 'r', encoding='utf-8') as f:
+    for line_num, line in enumerate(f, start=1):
+        if len(line) > 100:
+            print(f"第{line_num}行超过100个字符", file=sys.stderr)
+            violation_found = True
+
+if violation_found:
+    sys.exit(1)
+else:
+    sys.exit(0)
+```

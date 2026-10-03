@@ -1,0 +1,9 @@
+Q1: yes（清单有P1且line_ref为L1）
+Q2: yes（清单有覆盖半衰期的P2和覆盖影响睡眠的P3）
+Q3: no（清单无line_ref为L3的点）
+Q4: yes（清单有P5且line_ref为L4）
+Q5: yes（P3和P5的premises均非空且有内容）
+Q6: yes（所有点的quote均在原文对应行中找到）
+extract_ok: false
+extract_gap: |
+  Q3: L3断言无对应点
