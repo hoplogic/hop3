@@ -103,7 +103,7 @@ hoplogic3/
 | HopSpec-prompt-author | Spec 作者构建速查卡（LLM system prompt 用 compact 版） | compact（源=核心规范） |
 | HopSpec V3语法参考 | 完整语法便查手册（标准语法 + 大纲语法变种），§0 设计理念 | compact（源=核心规范） |
 | HopSpec V3 Prompt组装参考 | 6 层 context 组装机理专题（三层不重叠/大内容卸载/介入请求） | extract（源=核心规范） |
-| HopAnt概念 | HopAnt=Hop 体系的群体智能单元（纵向复用与演进 / 横向分享与协作;落到用户手里是 hop 体系上的 app）：五个关键特性 / 实体=目录、清单即入口 spec 头 / 生命周期六动作（安装·适配·编排·演化·封装·分享,都从 /hop 走）/ 两个部署形态（HopSkill/HopAgent）。引擎侧四维度能力模型 2026-10-06 迁至配套运行时能力文档 | 源 |
+| HopAnt概念 | HopAnt=Hop 体系的群体智能单元（纵向复用与演进 / 横向分享与协作;用户面统一叫"Hop 流程元件",学名 HopAnt〔元蚁〕）：五个关键特性 / 实体=目录、清单即入口 spec 头 / 生命周期六动作（安装·适配·编排·演化·封装·分享,都从 /hop 走）/ 两个部署形态（HopSkill/HopAgent）。引擎侧四维度能力模型 2026-10-06 迁至配套运行时能力文档 | 源 |
 | HopType体系 | 设计层表达语言（2026-10-05 重定）：运行层三件 HopSpec/HopTrait/HopSchema（引擎实装）vs 设计层两件 HopType/HopSop（伪代码）;HopType 聚合形态写法（`HopType:` 块、成员函数签名 + `#` Goal/约束、`self.字段`、体=HopSop）;独立 HopTrait 只给多实现者契约 | 源 |
 | **⚖️ 工程实现链规范** | **元规范，先于其余一切文档**（见上方专节）——四层职责边界、宪法级原则、Agent 作业协议 | **源（全库工程纪律的最高权威，动手前必读）** |
 | **⚖️ 工程实现链-模块规范** | 模块级概念权威（2026-08-08 自元规范收拢）——定义/唯一动机/六条本质要求/内容次序/必备件两组九件/生命周期 | extract（源=工程实现链规范）；module-principles 是其本库操作化 |
@@ -194,14 +194,14 @@ hoplogic3/
 
 > 结构与纪律的权威在 [[docs/design/i18n|design/i18n]]（^anc-i18n-docs-tree 镜像树 + ^anc-i18n-translation-discipline 翻译三纪律）。中文在 docs/ 原位作源,译本此处镜像;每份译本 @trace type: translation 指回中文源,**一致性方向恒为译本追源**;文件名译英文 slug（源-译对应靠 @trace 不靠同名）。滞后与死链机检:`npm run check:i18n`（报告不拦）。第一批（2026-08-15,作者纠偏补 D 系列）: en/README + en/tutorials/00-09（11 份）+ **en/tutorials/D0-D6（7 份）** + en/reference/configuration（slug 见各文件 @trace）。**2026-10-04 todo/0140 批一试跑（引擎派发翻译,hop_tasks/英文文档批一）**: en/README 重刷 + 新译 en/AGENT-GUIDE + en/agent-instructions-template（文件名与源同名——这两份源是给 agent 读的,路径一致便于 next_step 指路）;中英 README 互链落首屏。逐份 L2 表述不重复登记——与中文源逐一对应,见上下各源条目。
 
-## docs/tutorials/ — 新手教程（用户系列 00-10 + 开发者系列 D0-D8）
+## docs/tutorials/ — 新手教程（用户系列 00-11 + 开发者系列 D0-D8）
 
 > 与 USAGE.md 的分工：USAGE 是**命令行手册**（agent 回退与人排查时查,不是教学入口）,教程是**手把手**（带预期输出、常见坑、"接下来会发生什么"）;装和跑的速览在 README。
 > **两个系列，00 分流**（2026-08-11 作者定：两类新人两个系列）。**用户系列**（用它跑任务/写 spec）：双载体入口二选一（01-CC / 01-Codex），02-07 载体中立、编号即顺序——读懂 spec（地基）→ 探索与提交（先讲安全）→ hop_python（agent 代写，人读懂核对）→ 并行（效率）→ 实战组装 → 升级 NL skill；08-10 进阶应用（MCP 接入/重规划/hop 日常）。**生态开发者系列**（动 src/design/driver）：D0 十站主线。
 
 | 教程 | L2 表述 | 派生关系 |
 |---|---|---|
-| **00-新人导读** | 分流页——你是哪类读者：用户走 01-10（附各篇一句话与"读多深"判据），开发者走 D0；判据=改的是 spec 还是 src | extend（源=Doctree） |
+| **00-新人导读** | 分流页——你是哪类读者：用户走 01-11（附各篇一句话与"读多深"判据），开发者走 D0；判据=改的是 spec 还是 src | extend（源=Doctree） |
 | **D0-生态开发者导读** | ⭐ 开发者阅读主线十站——四阶段：定向/顺链读文档/借锚点读代码/第一次改动（Doctree 是地图，它是路线） | extend（源=Doctree） |
 | D1-用AI做工程-从概念到设计 | 开发主线上半场——可行域逐层收窄（概念→架构→模块→设计）/每层人拍板 AI 推演分工表/HOP 三件套表达标准（契约锁承诺+类型锁结构+流程锁逻辑=AI 无处发挥）/锚点=驾驭 AI 的缰绳 | compact（源=工程实现链规范） |
 | D2-用AI做工程-AIcoding与验收 | 开发主线下半场——行为宪法四条（AI 的硬边界）/派活话术钩纪律/两句标准话术经 /hop 承载（账与续/把关不可跳/独立核验/沉淀复用）/一次改动八步节奏/人的验收=查链不逐行读码/三类失效病理学 | compact（源=工程实现链规范） |
@@ -212,6 +212,7 @@ hoplogic3/
 | 08-接入MCP服务 | 用户进阶——配置 tool_servers 节注册两形态（云端 http/本地 stdio）/body 按名调用（spec 零感知）/六条保护性规矩（白名单/凭证不落盘/requires_commit 声明侧权威/执行主权单向/故障=步骤失败零新通道/调用名全局唯一） | compact（源=tool-interface ^anc-config-tool-registry） |
 | 09-有序思考与subtaskfree | 用户进阶——还没想清楚的活交给引擎：为什么有的活写不出完整步骤/[subtask free] 一行契约零子步/到步展开时发生什么（initial_plan 非失败+expansion_context 带真材料）/两条纪律引擎强制（必含 check 禁 commit）/展开预算续批问人/与重规划的分界表（原 09 replan 教学压缩为一节,例子与自跑指引保留指路） | compact（源=概念层有序思考与渐进固化+核心规范 ^anc-step-subtask-free;失败全景归 D5） |
 | 10-钉钉通知 | 用户日常应用——钉钉通知教学：一次性备凭证（建机器人/环境变量/最小活实测）/三种通知时刻（✅ 终态 ❌ 失败 ⏸️ 停点等人）/三条规则（点名渠道才推手机·一次一说跟着活走零全局开关·通知失败不影响干活）/边界（只发不收/限流/敏感信息/MCP 独立模式差异） | compact（源=hop-cli ^anc-cli-notify-reuse + mcp-server ^anc-mcp-notify-hook;2026-08-31 复用模式挂点收官后按终形重建,前身随 hopjit notify 命令退役删除） |
+| 11-流程元件HopAnt-装跑总结分享 | 用户日常应用——Hop 流程元件（HopAnt）全生命周期：盘上布局与两级位置（项目级 hop_tasks/ants/ 先于用户级 ~/.hopjit/ants/）/跑现成的与三种适配状态/安装别人的（缺省用户级·撞 id 整单拒·bootstrap 先 dry-run）/call 组合与起跑依赖核/总结/分享（四道核对·归属标识首次问·凭证扫描三档与免责）/升级（现为卸载加重装）与卸载/演化（规划中,如实标注） | compact（源=HopAnt概念;事实对照 hopant 设计与 driver hop-skill 分派、总结、分享三节） |
 | 04-日常活交给hop | 用户日常应用——/hop 教学（/hop 是 HopSpec 的总入口,本篇讲主路：把现场的活升格为引擎管护的执行;现成 spec / 构建修订 / 安装维护 / 接续从同一入口分派）/六动作用法/一次完整体验/任务卡=计划+语境同体（内容章节缺省供给）/subtask free 到步展开/阅卷外移为什么/接续免斜杠+裸"继续"先确认/收活三态/总结成 HopAnt 与复用（查现货有提示,"直接开"跳查;2026-10-10 提纯→总结）/真实例:工程链实现与review两句话术走 /hop | compact（源=driver/hop-skill.md;协议权威在 driver 件） |
 | D7-开发自己的工具 | 工具作者篇——**已就绪工具面清单**（PDF/OCR/检索/浏览器四件+四条实撞接入经验+端到端样例指路,2026-08-26 批）/两档选型表（in-process 零序列化无隔离 vs MCP 进程隔离任意语言）/in-process 五分钟上手（word-stats 模板+责任书三条）/MCP server 路线要点（最小子集/annotations 不被信/错误报文写人话）/测试三层 | compact（源=tool-interface 绑定契约） |
 | D8-模型与工具配置 | 配置心法版——配置地图（系统级/项目级/spec/步骤四层什么住哪）/按 step_type 分档省成本（act 轻档 check 换家 replan 最强）/逐键继承+偏好语义（spec 引用环境没有不炸,链尾必有归宿）/env: 节三硬规则/三个常见配方 | compact（源=reference/配置参考） |

@@ -459,6 +459,9 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
   // 累计 token 消耗——Dispatcher 累计后经 setCumulativeTokens 同步,随快照落盘,resume 回填。
   // 预算护栏不被进程重启绕过。见 design/step-dispatcher.md ^anc-exec-cost-guardrails。// @a: anc-exec-cost-guardrails
   private cumulativeTokens = 0;
+  // 独立模式 web_search 探测结果表（service_id → 模式）——Dispatcher 探测后写入,随快照落盘,恢复回填。
+  // 见 design/step-dispatcher.md ^anc-exec-protocol-adapter web_search 请求时探测条款。// @a: anc-exec-protocol-adapter
+  private webSearchModes: Record<string, 'native' | 'client' | 'none'> = {};
   private adaptiveNeededSubtask: string | null = null;
   // proactive 编辑独立计数（熔断分池,^anc-exec-replan-proactive 第4条——不占 adaptive 3 次救命额度）
   private proactiveReplanCounters = new Map<string, number>();
@@ -894,6 +897,9 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
   // Dispatcher 每次 API 调用后同步累计值（引擎负责落盘,resume 时 Dispatcher 经 getCumulativeTokens 回填）
   setCumulativeTokens(total: number): void { this.cumulativeTokens = total; }
   getCumulativeTokens(): number { return this.cumulativeTokens; }
+  // web_search 探测结果表读写（Dispatcher 定模式后写一条,引擎随下次 persist 落盘）// @a: anc-exec-protocol-adapter
+  getWebSearchMode(serviceId: string): 'native' | 'client' | 'none' | undefined { return this.webSearchModes[serviceId]; }
+  setWebSearchMode(serviceId: string, mode: 'native' | 'client' | 'none'): void { this.webSearchModes[serviceId] = mode; }
   getSpecPath(): string | null { return this.specPath; }
   /** load 恢复的 hop_env 表（host_context 持久化——含原 run params 覆盖与 ask 回填,比配置重合成新）。
    * server 重启恢复时组合根据此合并,见 mcp-server restoreRun。// @a: anc-config-hop-env */
@@ -5484,6 +5490,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
       ...(this.lastReplanChildren.size ? { last_replan_children: Object.fromEntries(this.lastReplanChildren) } : {}),
       // @a: anc-exec-cost-guardrails — 预算护栏不被进程重启绕过
       ...(this.cumulativeTokens > 0 ? { cumulative_tokens: this.cumulativeTokens } : {}),
+      ...(Object.keys(this.webSearchModes).length ? { web_search_modes: { ...this.webSearchModes } } : {}),   // 探测结果随快照,恢复不重探 // @a: anc-exec-protocol-adapter
       ...(this.canFanout ? { can_fanout: true } : {}),
       ...(Object.keys(this.toolJournal).length ? { tool_journal: this.toolJournal } : {}),
       ...(Object.keys(this.timeJournal).length ? { time_journal: this.timeJournal } : {}),   // @a: anc-exec-time-builtins
@@ -5563,6 +5570,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     if (stateData.cumulative_tokens) {
       engine.cumulativeTokens = stateData.cumulative_tokens;
     }
+    if (stateData.web_search_modes) engine.webSearchModes = { ...stateData.web_search_modes };   // @a: anc-exec-protocol-adapter
     if (stateData.terminal_state) engine.terminalState = stateData.terminal_state;
     if (stateData.notify_channel) engine.notifyChannel = stateData.notify_channel;   // @a: anc-cli-notify-reuse
     if (stateData.upstream_feedback) engine.upstreamFeedback = stateData.upstream_feedback;   // D41 复用半边跨进程恢复 // @a: anc-exec-l2c-retry-feedback

@@ -333,5 +333,5 @@ echo "◦ 快照区已弃置（版本提交由 tag 与主区 cherry-pick 双持,
 
 STEP="完成"
 echo "✅ 发版完成: @hoplogic/hopjit@$PKGV (引擎+driver+examples 成对分发, 快照 $SNAP)"
-echo "➡️  下一步: 同步 GitHub 公开快照——./scripts/github-publish.sh(产快照并打印推送命令,推送由人手敲)"
+echo "➡️  下一步: 同步 GitHub 公开快照——./scripts/github-publish.sh(产快照并打印推送命令;例行推送 agent 可做,或跑 HopAnt hop3-snapshot-sync)"
 echo "   完整流程(publish → push main → push tag → verify)见 maintainers/RELEASING.md §6"

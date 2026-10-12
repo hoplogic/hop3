@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-08-12T01:30+0800
+	last_sync: 2026-10-12T22:09+0800
 	note: 工具调用通道总览（2026-08-12 作者要求"tool use/tool call 的接口总结一下，形成文档"）。工具相关条款散在 act-body/exec-engine/shared-providers/tools/step-dispatcher 五份文档——各自权威留原锚点原位，本文是通道地图：哪条路径、谁执行、什么协议面、哪里拦截，一张表看全
 %%
 
@@ -11,7 +11,7 @@
 
 > 家族分工（接口标准/通道地图/装配层/具体工具四切面）见 [[tools]] 开头"工具设计面地图"节——本文管"工具怎么被步骤消费"这一面。
 
-> **模块版本**：tool-channels `v0.4.0`（2026-09-30 加通道⑦ run_approved_command,todo/0132;枢纽文档——本文只汇总不定义，各通道条款权威在原锚点；冲突以权威为准）。上版 v0.3.0（2026-08-31）——⑥的服务面收窄：非内建件缺省走 caller 原生能力，⑥退为兜底（作者定"复用模式下应该用 agent 自己的 web search"，权威=prompt-assembler ^anc-exec-tool-manifest-source 第 4 条）。演进史归 git log。
+> **模块版本**：tool-channels `v0.4.1`（2026-10-12 todo/0153：相邻件节的 server-side search 从"评估中"改为已落地——anthropic 协议请求时探测,权威 step-dispatcher ^anc-exec-protocol-adapter;能力捷径非原子 IO 的边界申报不变）。上版 v0.4.0（2026-09-30 加通道⑦ run_approved_command,todo/0132;枢纽文档——本文只汇总不定义，各通道条款权威在原锚点；冲突以权威为准）。上版 v0.3.0（2026-08-31）——⑥的服务面收窄：非内建件缺省走 caller 原生能力，⑥退为兜底（作者定"复用模式下应该用 agent 自己的 web search"，权威=prompt-assembler ^anc-exec-tool-manifest-source 第 4 条）。演进史归 git log。
 
 ## 文档结构与内容分级
 
@@ -73,6 +73,6 @@
 
 ## 相邻但不是工具通道的东西【说明】
 
-- **server-side search**（Anthropic `web_search` server tool / 百炼 `enable_search` 参数）：搜索在**模型服务端**执行、单次 API 请求内完成，客户端零工具循环——不属于上表任何通道，不触碰 ④ 的协议边界。评估中（2026-08-12），若落地则是协议适配层（^anc-exec-protocol-adapter）的请求映射增量，spec 作者面一个声明位、协议差异压进适配器；
+- **server-side search**（Anthropic `web_search` server tool / 百炼 `enable_search` 参数）：搜索在**模型服务端**执行、单次 API 请求内完成，客户端零工具循环——不属于上表任何通道，不触碰 ④ 的协议边界。已落地（2026-10-12,todo/0153）：anthropic 协议下 spec 声明的标准工具 `web_search` 在首次真实请求时探测 provider 认不认服务端搜索声明,认就按原生搜索发、不认回退 tool_servers 注册项,规则权威 [[step-dispatcher#^anc-exec-protocol-adapter]]「web_search 请求时探测」条款。上一行申报的边界照旧成立——它是能力捷径不是原子 IO：hoplog 只记 `server_tool_use` 块的工具名与 input、结果块的类型与长度,搜索结果体本身不进引擎;
 - **MCP 工具**（如百炼 WebSearch MCP）：复用模式下属宿主自己的工具面（CC/Codex 挂 MCP，hopjit 无感知）；standalone 引擎当 MCP client 已实装（tool-interface ^anc-exec-mcp-binding,2026-08-12——本行原文"未立项"过时随更）；
 - **call 子 spec**：不是工具是子程序（[[exec-engine]] Call 执行模型）——工具无自身执行状态，call 有完整实例生命周期。

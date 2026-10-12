@@ -3,13 +3,15 @@
 	source: [[chain-enforcement]]
 	source_id: hopjit-chain-enforcement
 	type: intent
-	last_sync: 2026-10-02T02:30+0800
+	last_sync: 2026-10-12T22:32+0800
 	note: 发版工程设计——快照制（release 启动冻结 commit，全部检查与发布对着快照 worktree 跑）。G5 检查单（scripts/release.sh）与 GitHub 公开快照发布（scripts/github-publish.sh）的行为权威；chain-enforcement §8 的 release 闸行是其守卫映射。2026-10-02 增 ^anc-release-tarball-self-contained（npm 包文档自足——用户面文档随包分发,不靠 GitHub 兜底）。
 %%
 
 # 发版工程——快照制（release snapshot）
 
-> **模块版本**：release-engineering `v0.3.2`（2026-10-03 todo/0139 挂钩②改形态——作者定"agents.md 是给 git clone 的人用的,不是 hop3 用户用的"：进包清单 35→36,新增入口件 `docs/agent-instructions-template.md`——可贴进用户项目 CLAUDE.md / AGENTS.md 的 hop 使用指令模板,正文 ≤10 行〔每会话常驻〕,源文件恒为发布件形态〔零 @trace/锚点/双链/卡号,清洗对它是空操作〕;agent 问过用户才贴,install-skill 不写用户指令文件）；
+> **模块版本**：release-engineering `v0.3.4`（2026-10-12 作者定"hop3 的推送由你手敲——这个改一下"与"github 没必要和 npm 一致,tag 一致就行"：hop3 快照仓的例行推送改由 agent 执行〔main 随时可跟内网 HEAD;tag 只在远端还没有 v<版本> 时推〕,force 与覆盖仍归人;远端已有 v<版本> 时 publish 不打不移本地 tag、删掉指向别处的旧本地 tag,只给推 main 的命令;输出末尾加两行机读结论 `PUSH_MAIN=yes|no` 与 `PUSH_TAG=v<版本>|none`,供 HopAnt `hop3-snapshot-sync` 照做）；
+> - 上版 v0.3.3=2026-10-12 作者定新增用户系列教程 11〔Hop 流程元件全生命周期〕：进包清单 36→37,教程用户系列 14→15 份；
+> - 上版 v0.3.2=2026-10-03 todo/0139 挂钩②改形态——作者定"agents.md 是给 git clone 的人用的,不是 hop3 用户用的"：进包清单 35→36,新增入口件 `docs/agent-instructions-template.md`——可贴进用户项目 CLAUDE.md / AGENTS.md 的 hop 使用指令模板,正文 ≤10 行〔每会话常驻〕,源文件恒为发布件形态〔零 @trace/锚点/双链/卡号,清洗对它是空操作〕;agent 问过用户才贴,install-skill 不写用户指令文件）；
 > - 上版 v0.3.1=2026-10-03 工程链 review 修复：HopTrait PkgDocsLifecycle 从散文改写成 trait 块〔三模式 Inputs/Outputs/失败条件 + ensures/preserves——preserves 钉 prepack 恒经 build 与 driver 指路路径恒在清单〕;净度验收散文区改用与清洗同一把 CommonMark 尺并加 NUL 第八样;词表缺席分叉明示;分项计数 14 份;守卫条目补七条反例;⑤ 删未兑现子句、⑥ 改三条）。上版 v0.3.0（2026-10-02 ^anc-release-tarball-self-contained 定形：进包的是打包期清洗后的发布件〔prepack 原地替换/postpack 备份恢复〕,清单权威 scripts/pkgdocs-manifest.json,D 系列/工程实现链/ARCHITECTURE 不进;同日 v0.2.0 首稿曾按整目录进包,作者抓'发布版本不应留内部信息'后改定形）。上版 v0.1.0（2026-09-04 快照制立文,此前无版本行——本行首立）。逐版演进史归 git log。
 
 **给谁**：改 `scripts/release.sh` 的人（agent 或维护者）。逐次操作归维护者操作手册（内部维护面,不随快照分发,人每次发版照走）；本文是行为权威——脚本怎么改、为什么这么定，冲突以本文为准。
@@ -92,7 +94,7 @@ tag 指向快照区那个提交（父=SNAP），主分支上是它的 cherry-pic
 - ⑦b registry 轮询：两次查询之间的等待秒数写成一个数组 `POLL_SLEEPS`，合计不少于 9 分钟（现值 570 秒，共查 13 次）。
   - 为什么：npm 新版本在 registry 上可见的延迟波动很大。0.1.7 实测 3 秒仍读到旧版；0.18.0 发版时 publish 成功约 5 分钟后 `npm view` 才返回新版本，原先 6 次共 210 秒的轮询先判了失败，人只好重跑 release 走续发模式补完后半程。轮询判失败的代价是人多跑一轮，轮询多等几分钟的代价是零，所以宁长勿短；
   - 写成数组是为了让总时长可以被静态断言钉住（守卫断言组读数组求和）。
-- 收尾指路：`✅ 发版完成` 那行之后打印下一步——同步 GitHub 公开快照（`./scripts/github-publish.sh`，流程见维护者操作手册的 GitHub 快照节，推送归人）。快照同步本身不挂进 release.sh 自动执行：它有一步外向推送，按仓库拓扑规定归人手敲；挂一行指路是为了让这一步不再靠人记得。
+- 收尾指路：`✅ 发版完成` 那行之后打印下一步——同步 GitHub 公开快照（`./scripts/github-publish.sh`，流程见维护者操作手册的 GitHub 快照节）。快照同步不挂进 release.sh 自动执行：release.sh 由人在终端跑，快照同步是另一件事，由 agent 按操作手册执行（例行推送 agent 可推，force 与覆盖归人）；挂一行指路是为了让这一步不再靠人记得。
 
 ## 守卫断言组【说明】
 
@@ -111,7 +113,11 @@ maintainers/ 目录（涉内部源的维护者文档，2026-09-13 建）的"不�
 
 ## GitHub 公开快照发布【契约】 ^anc-release-github-snapshot
 
-（todo/0094。npm 发版之后，`scripts/github-publish.sh` 把内网源按白名单导出成净化快照，在一个本地快照仓里追加一个提交，再由人推到 GitHub 公开仓；推完跑 `scripts/github-verify.sh` 验证。公开仓的历史是"一版一个快照提交"逐版累积，不 force。）
+（todo/0094。npm 发版之后，`scripts/github-publish.sh` 把内网源按白名单导出成净化快照，在一个本地快照仓里追加一个提交，再推到 GitHub 公开仓；推完跑 `scripts/github-verify.sh` 验证。公开仓的历史是"每次同步一个快照提交"逐次累积，不 force。）
+
+**推送分工**（2026-10-12 作者定）：例行推送由 agent 执行——推 main，以及远端还没有 `v<版本>` 时推这个 tag。四类高危操作仍归人：任何仓库的 force push、公开仓的首推与覆盖、npm publish、仓库建删与可见性变更（权威在仓库拓扑规定）。所以 agent 只推 fast-forward：新提交以远端 main 为父，远端拒收就停下报人，不加 `--force` 重推。
+
+**main 与 tag 的分工**：公开仓 main 可以随时跟内网 HEAD，不必等 npm 发版；tag `v<版本>` 只对齐 npm 版本——一个版本号只推一次 tag，之后同版本号内的多次同步只推 main，远端的 tag 留在第一次同步那个提交上不动。
 
 **问题怎么来的**：快照仓缺省落在系统临时目录 `$TMPDIR/hop3-github-snapshot`。旧脚本判断"首次还是追加"只看本地 `.git` 目录在不在——在就追加，不在就 `git init` 新建。临时目录会被系统周期清理，清掉之后脚本新建出一条与远端毫无关系的孤立历史（一个没有父提交的提交），推送时才被 GitHub 的 fast-forward 保护拒绝，而脚本前面全程报绿。
 
@@ -149,10 +155,14 @@ maintainers/ 目录（涉内部源的维护者文档，2026-09-13 建）的"不�
 
 - 净度闸照旧：白名单导出面对 `scripts/github-purity-words.txt` 零命中才往下走。**命中时修内网源头**（把措辞改成中性说法并提交，再重跑脚本），不改快照里的文件——改快照的结果下次导出会被覆盖回来；词表本身的扩缩要作者批；
 - 与上一版有差异才提交，提交说明形态 `hoplogic <版本> (snapshot of internal <内网短提交号>)` 不变（verify 的 probe1 按 `snapshot of internal` 认快照提交）；
-- **本地 tag `v<版本>` 恒指向本次的快照提交（HEAD）**：不存在就打；已存在但指向别的提交，就用 `git tag -f` 移到 HEAD，并打印原来指向哪个提交。为什么不能"已存在不重打"：本地 tag 和本地历史一样是派生物，立基（规则表第 5、6、7 行）丢掉旧历史后，上一轮导出时打的旧 tag 还悬在那个孤立提交上——照脚本打印的命令推 tag，会把一条与公开历史无关的孤立提交推上公开仓（远端还没有这个 tag 时推送不会被拒）。同理，第 4 行"导出了还没推"之后源码又变、再导出一次，旧 tag 会停在上一次那个提交上；
-- 远端 tag 的提醒分两种：远端已有 `v<版本>` 且与 HEAD 是同一个提交，打印"远端已有同一 tag，无需推 tag"；远端已有但指向别的提交，打印"本版已同步过，本次产生了不同的快照提交，推 tag 会被远端拒"——同一版本号内容又变了，属于需要人判断的情形，脚本不自动处理（不删远端、不改版本号）；
+- **本地 tag 按远端有没有 `v<版本>` 分两种处理**（远端探测时已一并取到远端 tag）：
+  - **远端还没有这个 tag**（本版第一次同步）：本地 tag `v<版本>` 恒指向本次的快照提交（HEAD）——不存在就打；已存在但指向别的提交，就用 `git tag -f` 移到 HEAD，并打印原来指向哪个提交。为什么不能"已存在不重打"：本地 tag 和本地历史一样是派生物，立基（规则表第 5、6、7 行）丢掉旧历史后，上一轮导出时打的旧 tag 还悬在那个孤立提交上——照着推 tag，会把一条与公开历史无关的孤立提交推上公开仓（远端还没有这个 tag 时推送不会被拒）。同理，第 4 行"导出了还没推"之后源码又变、再导出一次，旧 tag 会停在上一次那个提交上；
+  - **远端已有这个 tag**（本版同步过，这次是版本号不变的后续同步）：不打、不移本地 tag，不给推 tag 的命令，打印"远端已有 tag，本次只推 main"。本地若有同名 tag 且指向的不是远端 tag 那个提交，用 `git tag -d` 删掉——它是派生物，留着只会被误推（推送会被远端拒，或者在远端 tag 被人删掉后把孤立提交推上去）；
 - 本地仓的远端名 `github` 由脚本配置好（`git remote add`，已存在则 `set-url`）——这是本地配置，不是外向动作；
-- **推送归人**：脚本只打印推送 main 与推送 tag 两条命令和随后的 verify 命令，自己不推（仓库拓扑规定 hop3 快照仓的例行发版推送随 release 流程归人）。
+- **脚本自己不推送**：只打印要执行的推送命令与随后的 verify 命令，再输出两行机读结论供执行推送的一方（agent 或 HopAnt `hop3-snapshot-sync`）照做，不必再解析中文提示：
+  - `PUSH_MAIN=yes`（本地 HEAD 不等于远端 main，要推）或 `PUSH_MAIN=no`（相等，main 无需推）；
+  - `PUSH_TAG=v<版本>`（要推这个 tag）或 `PUSH_TAG=none`（不推 tag）。
+  推送与导出分在两处，是为了让推送前能插一道核对（新提交以远端 main 为父、提交说明是快照形态），核对过了再推。
 
 ### 公开快照自洽
 
@@ -174,8 +184,8 @@ HopType LocalRepoState:
 
 HopTrait PublishGithubSnapshot:
   requires: 内网主区 HEAD 是已发 npm 版本（或其后的发版无关提交）；快照目录可写
-  ensures: 快照仓 main 的新提交以远端 main 为父（远端空仓时为根提交）；本地 tag v<版本> 恒指向本次快照提交（旧 tag 指向别处时移过来）；远端探测失败时退出非零且快照目录零改动
-  preserves: 推送恒归人；净度闸与白名单剔除清单语义不变；公开历史只追加不改写
+  ensures: 快照仓 main 的新提交以远端 main 为父（远端空仓时为根提交）；远端没有 v<版本> 时本地 tag v<版本> 恒指向本次快照提交（旧 tag 指向别处时移过来）且输出 PUSH_TAG=v<版本>；远端已有 v<版本> 时本地不留指向别处的同名 tag 且输出 PUSH_TAG=none；输出 PUSH_MAIN=yes|no 与本地 HEAD 是否等于远端 main 一致；远端探测失败时退出非零且快照目录零改动
+  preserves: 脚本自身不做外向推送；净度闸与白名单剔除清单语义不变；公开历史只追加不改写（推送方只推 fast-forward,不 force）
 
 HopSop:
   1. 用 git ls-remote 取 RemoteProbe；失败则打印"远端探测失败"与原始报错，退出非零。
@@ -185,13 +195,14 @@ HopSop:
   5. 清空快照目录里 .git 以外的一切，按白名单导出、执行剔除清单与快照版配置改写。
   6. 净度闸：词表命中则列出命中文件并退出非零（修法是改内网源头）。
   7. git add -A；与上一版有差异才提交。
-  8. 本地 tag v<版本> 指向 HEAD：不存在就打，指向别处就 git tag -f 移过来并打印原指向；远端已有同名 tag 时按是否与 HEAD 同一提交打印两种提醒之一。
-  9. 配置远端名 github；打印推送 main、推送 tag、运行 verify 三条命令，交人执行。
+  8. 远端没有 v<版本>：本地 tag 指向 HEAD——不存在就打，指向别处就 git tag -f 移过来并打印原指向；push_tag = v<版本>。
+     远端已有 v<版本>：不打不移；本地同名 tag 指向的不是远端 tag 那个提交就 git tag -d 删掉并打印；打印"本次只推 main"；push_tag = none。
+  9. 配置远端名 github；push_main = (HEAD != 远端 main) ? yes : no；打印要执行的推送命令（push_main 为 yes 才有推 main，push_tag 不是 none 才有推 tag）与 verify 命令；末尾输出 PUSH_MAIN=<push_main> 与 PUSH_TAG=<push_tag> 两行。
 ```
 
 守卫（@v: anc-release-github-snapshot，`tests/guard-scripts.test.ts`）：用本地裸仓当远端的行为测试覆盖立基规则表第 1、2、4、5、6、7 行（第 3 行是第 2 行跑完后的续跑形态，逻辑与第 4 行同一分支）。
 
-另有一例全流程行为测试：在临时替身仓库里放一份脚本副本与最小白名单文件，远端用本地裸仓，快照目录预置一个与远端分叉、且带旧 tag `v<版本>` 的本地仓，跑完整发布后断言新提交的父提交是远端 main、本地 tag 指向新提交。
+另有一例全流程行为测试：在临时替身仓库里放一份脚本副本与最小白名单文件，远端用本地裸仓，快照目录预置一个与远端分叉、且带旧 tag `v<版本>` 的本地仓，跑完整发布后断言新提交的父提交是远端 main、本地 tag 指向新提交、输出 `PUSH_TAG=v<版本>` 与 `PUSH_MAIN=yes`。配对的反例同样形态，只是远端已有 tag `v<版本>`（指向远端 main）：断言本地旧 tag 被删、输出 `PUSH_TAG=none`、没有推 tag 的命令行。
 
 release.sh 静态断言两条——`POLL_SLEEPS` 求和不少于 540 秒、`✅ 发版完成` 之后有指向 `github-publish.sh` 的一行。读 `github-publish.sh` 与 `github-verify.sh` 的测试一律带公开快照标记跳过。
 
@@ -211,10 +222,10 @@ release.sh 静态断言两条——`POLL_SLEEPS` 求和不少于 540 秒、`✅ 
 
 ```yaml
 PkgDocsManifest:
-  files % list[path]        # 进包的源文件相对路径,36 项——
+  files % list[path]        # 进包的源文件相对路径,37 项——
     # 入口六件：README.md / USAGE.md / docs/AGENT-GUIDE.md / docs/agent-instructions-template.md（贴进用户项目 CLAUDE.md / AGENTS.md 的指令模板,正文 ≤10 行,源即发布件形态——它每会话常驻,长了是用户的上下文税）/ docs/WORKAROUNDS.md / docs/reference/配置参考.md
     # 概念层 15 份：语法参考 / 核心规范 / 配套HopJIT运行时能力 / 错误模型 / 五份扩展（事务与补偿、可观测性与YAMLL、有序思考与渐进固化、Python语法沙箱、模型变速箱适配）/ Prompt组装参考 / prompt-author / 核心创新 / HopSop标准作业流程 / HopType体系 / HopAnt概念
-    # 教程用户系列 14 份：00-新人导读、01-第一次运行 ×4（ClaudeCode/Codex/cfuse/opencode 四载体各一份）、02-读懂一份spec … 10-钉钉通知 共 9 份
+    # 教程用户系列 15 份：00-新人导读、01-第一次运行 ×4（ClaudeCode/Codex/cfuse/opencode 四载体各一份）、02-读懂一份spec … 11-流程元件HopAnt-装跑总结分享 共 10 份
     # 例外 1 份：D10-hop_python计算体——挂 D 系列名但是用户写 act body 的必需知识（用户系列引用 12 次,教程 03 '下一篇 D10 讲'、08 列为前提）,随包;其余 D 篇不进
   excluded_prefixes % list[path]   # 守卫用：files 白名单里不许出现的源路径前缀——docs/design/ TRACEABILITY.md Doctree.md docs/i18n/ docs/obsolete/ ARCHITECTURE.md docs/tutorials/D docs/concepts/工程实现链
 ```

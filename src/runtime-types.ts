@@ -142,6 +142,9 @@ export interface StateFile {
   // 累计 token 消耗（Dispatcher 累计→引擎随快照落盘→resume 回填）——预算护栏不被进程重启绕过。
   // token_budget 不落盘（宿主 resume 时重新给定的配置,非执行状态）。见 [[step-dispatcher#^anc-exec-cost-guardrails]]。// @a: anc-exec-cost-guardrails
   cumulative_tokens?: number;
+  // 独立模式 web_search 请求时探测结果（provider service_id → native | client | none）——本 run 内每个 provider 探测一次,
+  // 随快照落盘,resume / 跨进程恢复不重探;不写回用户配置。见 [[step-dispatcher#^anc-exec-protocol-adapter]] web_search 请求时探测条款。// @a: anc-exec-protocol-adapter
+  web_search_modes?: Record<string, 'native' | 'client' | 'none'>;
   can_fanout?: boolean;  // @a: anc-exec-parallel-subinstance — agent 环境标识：是否允许 fan-out。顶层 true / parallel worker 子实例 false（已在并行分支内）
   context_mode?: 'full' | 'minimal';  // @a: anc-exec-context-mode — context 精简档（run 时定，env 可覆盖）；缺省 full
   subtree_root?: string; // @a: anc-exec-parallel-subinstance — parallel worker 子实例：执行 scope 收窄到的 child 子树根 step_id（其余预标 skipped）。worker 提示词据此裁 L1 骨架

@@ -41,7 +41,7 @@
 | 这份 spec 合法吗 | `validate <spec>` | `validate` |
 | 任务卡上批过的命令（act 步骤里探索性执行） | 无命令行对应——回退期间走载体自己的 Bash，逐条弹窗 | `run_approved_command` |
 | 走 MCP 独立模式跑 | 无命令行对应——在 hopjit server 进程里执行 | `start_run` / `run_status` / `resume_run` / `stop_run` / `list_runs` |
-| 总结成可复用的流程元件（HopAnt）/ 分享 / 装 HopAnt | `ant pack --out hop_tasks/ants`（总结落项目级）/ `ant share` / `ant install [--scope user\|project]` / `ant adapt` / `ant list` / `ant remove [--scope]` / `ant bootstrap` | `ant_pack` / `ant_share` / `ant_install` / `ant_adapt` / `ant_list` / `ant_remove` / `ant_bootstrap`（参数与命令行同名，下划线连写；装与分享写 `~/.hopjit/` 由 server 进程做，不经载体文件沙盒） |
+| 总结成可复用的 Hop 流程元件（HopAnt）/ 分享 / 装 HopAnt | `ant pack --out hop_tasks/ants`（总结落项目级）/ `ant share` / `ant install [--scope user\|project]` / `ant adapt` / `ant list` / `ant remove [--scope]` / `ant bootstrap` | `ant_pack` / `ant_share` / `ant_install` / `ant_adapt` / `ant_list` / `ant_remove` / `ant_bootstrap`（参数与命令行同名，下划线连写；装与分享写 `~/.hopjit/` 由 server 进程做，不经载体文件沙盒） |
 | 把自然语言 skill 翻译成 spec | 不是单条命令——由 hopbuild skill 驱动 | 无 |
 
 两条路的执行姿态不同，别混：**升格任务卡**（hop-skill §2）的每一步由主对话的 agent 自己干；**跑现成 spec / HopAnt**（hopspec-skill §1）主 agent 只做编排，执行段外包给 subagent。命令相同，谁在干活不同。
@@ -80,7 +80,7 @@
 - `list <目录>` · 列目录下可执行的 spec。
 - `pack <spec> [--carrier ...] [--dir <目录>] [--name <名>] [--assets a,b] [--force]` · 把一份 hopskill spec 打成独立具名 skill（不是 HopAnt，那是下面 `ant pack`）。
 
-**HopAnt**（现成的 HopSpec 工具，两级：项目级 `<项目>/hop_tasks/ants/<id>/`〔这个项目总结出的〕与用户级 `~/.hopjit/ants/<id>/`〔装进来的〕，按 id 找时项目级先）
+**HopAnt**（对用户叫 Hop 流程元件——现成的、由 HopSpec 驱动的流程，两级：项目级 `<项目>/hop_tasks/ants/<id>/`〔这个项目总结出的〕与用户级 `~/.hopjit/ants/<id>/`〔装进来的〕，按 id 找时项目级先）
 
 - `ant install <目录> [--dry-run] [--scope user|project]` · 装一个 HopAnt 目录或 HopAnt 包；缺省装用户级 `~/.hopjit/ants/`，`--scope project` 装进本项目 `hop_tasks/ants/`。
 - `ant adapt <id>` · 核本机对这个 HopAnt 的依赖（工具注册、凭证、命令）齐不齐，齐则写适配戳。

@@ -2,7 +2,7 @@
 // @v: anc-struct-shared-providers — Provider 接口族的行为面（凭证解析/SDK 注入）在本文件覆盖
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { load as yamlLoadRaw } from 'js-yaml';
-import { parseModelRef, StepDispatcher, DirSpecProvider, isHighlyRepetitive, truncationAdvice, normalizeFullwidthKeyColons, classifyStopReason, usageZeroWarning, analyzeCommitWith, renderCommitAnalysisPrompt, makeCommitAnalyzer, COMMIT_ANALYSIS_SYSTEM } from '../src/dispatcher.js';
+import { parseModelRef, StepDispatcher, DirSpecProvider, isHighlyRepetitive, truncationAdvice, normalizeFullwidthKeyColons, classifyStopReason, usageZeroWarning, analyzeCommitWith, renderCommitAnalysisPrompt, makeCommitAnalyzer, COMMIT_ANALYSIS_SYSTEM, classifyWebSearchResponse, isServerToolRejection } from '../src/dispatcher.js';
 import { parseFragment, flattenFragmentNumbering } from '../src/parser.js';
 import Anthropic from '@anthropic-ai/sdk';
 import { mkdtempSync, readFileSync } from 'node:fs';
@@ -8767,6 +8767,264 @@ Outputs:
     const r = await dispatcher.runSpec();
     expect(r.status).toBe('completed');
     expect(r.outputs?.r).toBe('ok');
+  });
+});
+
+// web_search 请求时探测 provider 原生搜索（todo/0153,作者 2026-10-12 拍"请求时探测"）——独立模式 anthropic 协议下
+// spec 声明的 web_search 首次真实请求即探测:响应含 server_tool_use 即 native（只认块类型不看名）,tool_use web_search 即
+// client（走注册项）,忽略 / 400 拒收则有注册重发一次客户端形态、没注册 WEB_SEARCH_UNAVAILABLE;结果按 service_id 存
+// state.json web_search_modes。设计权威 step-dispatcher ^anc-exec-protocol-adapter「web_search 请求时探测」条款。
+// @v: anc-exec-protocol-adapter, anc-exec-tools-reconcile
+describe('web_search 请求时探测 provider 原生搜索（todo/0153）', () => {
+  const WS_SPEC = `# WS
+Id: ws-probe
+Goal: g
+
+Tools:
+- web_search(query) -> result: yaml  # 网页检索
+  - query: text   # 查询词
+
+Outputs:
+- r2: text  # 出
+
+## Steps
+1. [act free] 搜一
+  - 工具: web_search
+  + → r1: text  # 出
+2. [act free] 搜二
+  - ← r1
+  - 工具: web_search
+  + → r2: text  # 出
+`;
+  const USAGE = { input_tokens: 10, output_tokens: 5 };
+  const WS_REG_PROVIDER = {
+    list: () => [{ name: 'web_search', description: '外部检索', input_schema: { type: 'object', properties: { query: { type: 'string' } } }, requires_commit: false, category: 'special' as const }],
+    execute: vi.fn(async () => ({ result: '[{"title":"t"}]', success: true })),
+  };
+  const NO_WS_PROVIDER = {
+    list: () => [{ name: 'other', description: 'o', input_schema: { type: 'object', properties: {} }, requires_commit: false, category: 'special' as const }],
+    execute: async () => ({ result: 'x', success: true }),
+  };
+  const toolsOfCall = (mockCreate: any, n: number) => (mockCreate.mock.calls[n][0] as { tools: Array<Record<string, unknown>> }).tools;
+  // 工具面里 web_search 那一条（基础文件工具同在清单里,按名取不按下标）
+  const wsOfCall = (mockCreate: any, n: number) => toolsOfCall(mockCreate, n).find(t => t.name === 'web_search');
+  const SERVER_DECL = { type: 'web_search_20250305', name: 'web_search', max_uses: 3 };
+
+  // 纯函数两件（设计 classify_web_search_response 与第 6 步的 400 判据）
+  it('正例：classifyWebSearchResponse——server_tool_use 任意名 → native;tool_use web_search → client;只有 text → ignored', () => {
+    expect(classifyWebSearchResponse({ content: [{ type: 'server_tool_use', name: 'web_search' }, { type: 'text' }] })).toBe('native');
+    expect(classifyWebSearchResponse({ content: [{ type: 'server_tool_use', name: 'web_search_prime' }, { type: 'tool_result' }, { type: 'text' }] })).toBe('native');
+    expect(classifyWebSearchResponse({ content: [{ type: 'text' }, { type: 'tool_use', name: 'web_search' }] })).toBe('client');
+    expect(classifyWebSearchResponse({ content: [{ type: 'text' }] })).toBe('ignored');
+  });
+  it('反例：isServerToolRejection——400 且报文提 tools 才算;401 / 500 / 400 无关报文都不算', () => {
+    const mk = (status: number, msg: string) => Object.assign(new Error(msg), { status });
+    expect(isServerToolRejection(mk(400, 'invalid request: tools[0].type is not supported'))).toBe(true);
+    expect(isServerToolRejection(mk(400, 'unknown tool type web_search_20250305'))).toBe(true);
+    expect(isServerToolRejection(mk(401, 'tools not allowed'))).toBe(false);
+    expect(isServerToolRejection(mk(500, 'tools crashed'))).toBe(false);
+    expect(isServerToolRejection(mk(400, 'temperature out of range'))).toBe(false);
+  });
+
+  it('正例 1：deepseek 形态——首响应含 server_tool_use + web_search_tool_result → native,产出取 text,toolCallLog 记 server_tool_use;第二步同 provider 不再探测直接发服务端声明', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ws-native-'));
+    const engine = new ExecutionEngine();
+    engine.initExecution(WS_SPEC, HOST, { stateDir: dir, logDir: join(dir, 'log'), logLevel: 'debug' });   // debug 级才记 llm.response 与 tool 块 args_preview
+    const host: HostConfig = { ...HOST, tool_provider: NO_WS_PROVIDER };   // 未注册——走起跑放行进探测那条路
+    const dispatcher = new StepDispatcher(engine, host);
+    const mockCreate = (dispatcher as any).defaultClient.messages.create;
+    mockCreate.mockReset();   // 前序用例可能把 Anthropic mock 换成共享 create——按用例清零计数与队列
+    mockCreate.mockResolvedValueOnce({
+      content: [
+        { type: 'server_tool_use', id: 's1', name: 'web_search', input: { query: '北京天气' } },
+        { type: 'web_search_tool_result', tool_use_id: 's1', content: [{ type: 'web_search_result', title: 't', url: 'u' }] },
+        { type: 'text', text: '晴 20 度' },
+      ], stop_reason: 'end_turn', usage: USAGE,
+    });
+    mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: '第二步答案' }], stop_reason: 'end_turn', usage: USAGE });
+    const r = await dispatcher.runSpec();
+    expect(r.status).toBe('completed');
+    expect(r.outputs?.r2).toBe('第二步答案');
+    expect(engine.getWebSearchMode('default')).toBe('native');
+    // 探测轮与第二步各一次请求——没有额外探测请求
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+    expect(wsOfCall(mockCreate, 0)).toEqual(SERVER_DECL);
+    expect(wsOfCall(mockCreate, 1)).toEqual(SERVER_DECL);
+    expect(toolsOfCall(mockCreate, 1).filter(t => t.name === 'web_search')).toHaveLength(1);   // 替换不是追加
+    // 留痕：hoplog tool 块记 server_tool_use;快照 state.json 带 web_search_modes
+    const yaml = readFileSync(engine.getHopLog()!.getFilePath(), 'utf-8');
+    expect(yaml).toContain('name: web_search');                       // tool 块：server_tool_use 记成一条工具调用
+    expect(yaml).toContain('[server_tool_use web_search]');          // llm.response 摘要：带名与 input
+    expect(yaml).toMatch(/\[web_search_tool_result \d+字\]/);          // 结果块只记类型与长度,结果体不进引擎
+    const state = JSON.parse(readFileSync(join(dir, engine.getInstanceId(), 'state.json'), 'utf-8'));
+    expect(state.web_search_modes).toEqual({ default: 'native' });
+    // 跨进程恢复回填——resume 不重探
+    expect(ExecutionEngine.load(join(dir, engine.getInstanceId())).getWebSearchMode('default')).toBe('native');
+  });
+
+  it('正例 2：智谱形态——server_tool_use 名 web_search_prime + tool_result 块 → 同判 native（只认块类型不看工具名）', async () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(WS_SPEC, HOST);
+    const dispatcher = new StepDispatcher(engine, { ...HOST, tool_provider: NO_WS_PROVIDER });
+    const mockCreate = (dispatcher as any).defaultClient.messages.create;
+    mockCreate.mockReset();   // 前序用例可能把 Anthropic mock 换成共享 create——按用例清零计数与队列
+    mockCreate.mockResolvedValueOnce({
+      content: [
+        { type: 'server_tool_use', id: 'c1', name: 'web_search_prime', input: { search_query: '北京天气', location: 'cn' } },
+        { type: 'tool_result', tool_use_id: 'c1', content: "[{'text': [{'title': 't'}]}]" },
+        { type: 'text', text: '多云' },
+      ], stop_reason: 'end_turn', usage: USAGE,
+    });
+    mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: '二' }], stop_reason: 'end_turn', usage: USAGE });
+    const r = await dispatcher.runSpec();
+    expect(r.status).toBe('completed');
+    expect(engine.getWebSearchMode('default')).toBe('native');
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+  });
+
+  it('正例 3：antchat 形态——首响应 tool_use web_search 且 tool_servers 有注册 → 客户端工具循环执行注册项一次,模式 client,无额外请求', async () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(WS_SPEC, HOST);
+    const reg = { ...WS_REG_PROVIDER, execute: vi.fn(async () => ({ result: '[{"title":"t"}]', success: true })) };
+    const dispatcher = new StepDispatcher(engine, { ...HOST, tool_provider: reg });
+    const mockCreate = (dispatcher as any).defaultClient.messages.create;
+    mockCreate.mockReset();   // 前序用例可能把 Anthropic mock 换成共享 create——按用例清零计数与队列
+    mockCreate.mockResolvedValueOnce({ content: [{ type: 'tool_use', id: 'u1', name: 'web_search', input: { query: 'q' } }], stop_reason: 'tool_use', usage: USAGE });
+    mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: '一' }], stop_reason: 'end_turn', usage: USAGE });
+    mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: '二' }], stop_reason: 'end_turn', usage: USAGE });
+    const r = await dispatcher.runSpec();
+    expect(r.status).toBe('completed');
+    expect(engine.getWebSearchMode('default')).toBe('client');
+    expect(reg.execute).toHaveBeenCalledTimes(1);
+    expect(reg.execute.mock.calls[0][0]).toBe('web_search');
+    // 探测轮发的是服务端声明;工具结果回填轮与第二步发的都是客户端形态
+    expect(mockCreate).toHaveBeenCalledTimes(3);
+    expect(wsOfCall(mockCreate, 0)).toEqual(SERVER_DECL);
+    expect(wsOfCall(mockCreate, 1)).toMatchObject({ name: 'web_search', input_schema: expect.anything() });
+    expect(wsOfCall(mockCreate, 1)).not.toHaveProperty('type');
+    expect(wsOfCall(mockCreate, 2)).not.toHaveProperty('type');
+  });
+
+  it('正例 4：忽略形态——首响应只有 text 且有注册 → 同请求重发一次换客户端形态,模式 client（全链唯一一次额外请求）', async () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(WS_SPEC, HOST);
+    const dispatcher = new StepDispatcher(engine, { ...HOST, tool_provider: WS_REG_PROVIDER });
+    const mockCreate = (dispatcher as any).defaultClient.messages.create;
+    mockCreate.mockReset();   // 前序用例可能把 Anthropic mock 换成共享 create——按用例清零计数与队列
+    mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: '我无法联网' }], stop_reason: 'end_turn', usage: USAGE });   // 探测轮,弃
+    mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: '一' }], stop_reason: 'end_turn', usage: USAGE });          // 重发轮
+    mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: '二' }], stop_reason: 'end_turn', usage: USAGE });          // 第二步
+    const r = await dispatcher.runSpec();
+    expect(r.status).toBe('completed');
+    expect(r.outputs?.r2).toBe('二');
+    expect(engine.getWebSearchMode('default')).toBe('client');
+    expect(mockCreate).toHaveBeenCalledTimes(3);
+    expect(wsOfCall(mockCreate, 0)).toEqual(SERVER_DECL);
+    expect(wsOfCall(mockCreate, 1)).toMatchObject({ name: 'web_search', description: '外部检索' });
+    expect(wsOfCall(mockCreate, 1)).not.toHaveProperty('type');
+    expect(wsOfCall(mockCreate, 2)).not.toHaveProperty('type');
+    // 探测轮响应仍留在 hoplog（弃用标记）,不进 messages
+    const second = mockCreate.mock.calls[1][0] as { messages: Array<{ role: string }> };
+    expect(second.messages.every(m => m.role === 'user')).toBe(true);
+  });
+
+  it('反例 1：忽略形态且无注册 → 步骤失败,原因含 WEB_SEARCH_UNAVAILABLE 与"未注册 web_search",模式 none', async () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(WS_SPEC, HOST);
+    const dispatcher = new StepDispatcher(engine, { ...HOST, tool_provider: NO_WS_PROVIDER });
+    (dispatcher as any).sleep = () => Promise.resolve();
+    const mockCreate = (dispatcher as any).defaultClient.messages.create;
+    mockCreate.mockReset();   // 前序用例可能把 Anthropic mock 换成共享 create——按用例清零计数与队列
+    mockCreate.mockResolvedValue({ content: [{ type: 'text', text: '我无法联网' }], stop_reason: 'end_turn', usage: USAGE });
+    const r = await dispatcher.runSpec();
+    expect(r.status).toBe('failed');
+    expect(String(r.failure?.reason ?? '')).toContain('WEB_SEARCH_UNAVAILABLE');
+    expect(String(r.failure?.reason ?? '')).toContain('未注册 web_search');
+    expect(engine.getWebSearchMode('default')).toBe('none');
+    expect(mockCreate).toHaveBeenCalledTimes(1);   // 没注册就没有可重发的形态——不多发
+  });
+
+  it('反例 2：tool_use web_search 且无注册 → 失败,同文案', async () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(WS_SPEC, HOST);
+    const dispatcher = new StepDispatcher(engine, { ...HOST, tool_provider: NO_WS_PROVIDER });
+    (dispatcher as any).sleep = () => Promise.resolve();
+    const mockCreate = (dispatcher as any).defaultClient.messages.create;
+    mockCreate.mockReset();   // 前序用例可能把 Anthropic mock 换成共享 create——按用例清零计数与队列
+    mockCreate.mockResolvedValue({ content: [{ type: 'tool_use', id: 'u1', name: 'web_search', input: { query: 'q' } }], stop_reason: 'tool_use', usage: USAGE });
+    const r = await dispatcher.runSpec();
+    expect(r.status).toBe('failed');
+    expect(String(r.failure?.reason ?? '')).toContain('WEB_SEARCH_UNAVAILABLE');
+    expect(engine.getWebSearchMode('default')).toBe('none');
+  });
+
+  it('反例 3：protocol openai-chat 且 web_search 未注册 → runSpec 仍 INIT_FAILED（起跑放行只对 anthropic）', async () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(WS_SPEC, HOST);
+    const dispatcher = new StepDispatcher(engine, { ...HOST, protocol: 'openai-chat', tool_provider: NO_WS_PROVIDER });
+    const r = await dispatcher.runSpec();
+    expect(r.status).toBe('failed');
+    expect(r.failure?.step_id).toBe('(init)');
+    expect(String(r.failure?.reason ?? '')).toContain("'web_search' 不在环境工具面");
+    // 对照：anthropic 协议同配置不在起跑期拦（放行进探测）——探测轮之后才按响应定
+    const engine2 = new ExecutionEngine();
+    engine2.initExecution(WS_SPEC, HOST);
+    const d2 = new StepDispatcher(engine2, { ...HOST, tool_provider: NO_WS_PROVIDER });
+    (d2 as any).defaultClient.messages.create.mockReset();
+    (d2 as any).defaultClient.messages.create.mockResolvedValue({ content: [{ type: 'server_tool_use', id: 's', name: 'web_search', input: {} }, { type: 'text', text: 'x' }], stop_reason: 'end_turn', usage: USAGE });
+    const r2 = await d2.runSpec();
+    expect(r2.failure?.step_id).not.toBe('(init)');
+    expect(r2.status).toBe('completed');
+  });
+
+  it('反例 4：探测轮 400 且报文提 tools → 同忽略分支——有注册重发客户端形态,模式 client', async () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(WS_SPEC, HOST);
+    const dispatcher = new StepDispatcher(engine, { ...HOST, tool_provider: WS_REG_PROVIDER });
+    (dispatcher as any).sleep = () => Promise.resolve();
+    const mockCreate = (dispatcher as any).defaultClient.messages.create;
+    mockCreate.mockReset();   // 前序用例可能把 Anthropic mock 换成共享 create——按用例清零计数与队列
+    const rej = new Anthropic.APIError('tools: Input tag web_search_20250305 found using type does not match any of the expected tags');
+    (rej as { status?: number }).status = 400;
+    mockCreate.mockRejectedValueOnce(rej);
+    mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: '一' }], stop_reason: 'end_turn', usage: USAGE });
+    mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: '二' }], stop_reason: 'end_turn', usage: USAGE });
+    const r = await dispatcher.runSpec();
+    expect(r.status).toBe('completed');
+    expect(engine.getWebSearchMode('default')).toBe('client');
+    expect(mockCreate).toHaveBeenCalledTimes(3);
+    expect(wsOfCall(mockCreate, 1)).not.toHaveProperty('type');
+  });
+
+  it('正例 5：reason 步声明 web_search 走同一循环体——探测与模式缓存同样生效', async () => {
+    const REASON_SPEC = `# WSR
+Id: ws-reason
+Goal: g
+
+Tools:
+- web_search(query) -> result: yaml  # 网页检索
+  - query: text   # 查询词
+
+Outputs:
+- r: text  # 出
+
+## Steps
+1. [reason] 想
+  - 工具: web_search
+  + → r: text  # 出
+`;
+    const engine = new ExecutionEngine();
+    engine.initExecution(REASON_SPEC, HOST);
+    const dispatcher = new StepDispatcher(engine, { ...HOST, tool_provider: NO_WS_PROVIDER });
+    const mockCreate = (dispatcher as any).defaultClient.messages.create;
+    mockCreate.mockReset();   // 前序用例可能把 Anthropic mock 换成共享 create——按用例清零计数与队列
+    mockCreate.mockResolvedValueOnce({ content: [{ type: 'server_tool_use', id: 's', name: 'web_search', input: { query: 'q' } }, { type: 'web_search_tool_result', tool_use_id: 's', content: [] }, { type: 'text', text: '结论' }], stop_reason: 'end_turn', usage: USAGE });
+    const r = await dispatcher.runSpec();
+    expect(r.status).toBe('completed');
+    expect(r.outputs?.r).toBe('结论');
+    expect(engine.getWebSearchMode('default')).toBe('native');
+    expect(wsOfCall(mockCreate, 0)).toEqual(SERVER_DECL);
+    expect(toolsOfCall(mockCreate, 0)).toHaveLength(1);   // reason 工具面全按声明:只有 web_search
   });
 });
 

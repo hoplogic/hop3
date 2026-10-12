@@ -383,7 +383,7 @@ export function adapt(dir: string, env: AdaptEnv): AdaptReport { // @a: anc-hopa
   // 工具：复用引擎起跑的同一判据（与 checkRunDeps 共用 splitToolNeeds）
   const tools = splitToolNeeds(needs, env.tool_servers);
   const { missing, standard_unregistered: standardUnregistered, errors } = tools;
-  const notes = standardUnregistered.map(n => `${n} 是标准工具：复用模式由 caller 自带能力落实,可直接用;要用独立模式跑,先在 tool_servers 注册 tool_id 为 ${n} 的条目（样例 examples/hoptools-websearch.yaml）`);
+  const notes = standardUnregistered.map(n => `${n} 是标准工具：复用模式由 caller 自带能力落实,可直接用;独立模式下 anthropic 协议 provider 可能原生可搜、首次请求时探测,不认时才要在 tool_servers 注册 tool_id 为 ${n} 的条目（样例 examples/hoptools-websearch.yaml）`);
   for (const n of missing) hints.push(`工具 '${n}' 未注册：在 ~/.hopjit/config.yaml 的 tool_servers 节注册它,或把本机同能力的工具 tool_id 映射为 '${n}'`);
   for (const e of errors) hints.push(`工具声明问题：${e}`);
 

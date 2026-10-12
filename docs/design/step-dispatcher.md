@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-10-10T12:31+0800
+	last_sync: 2026-10-12T22:07+0800
 	note: StepDispatcher 组件定义 + impl run_spec, execute_step。内容分级（决策/契约/说明）+ 6 个定义锚点
 %%
 
@@ -74,6 +74,7 @@
 
 | 版本 | 内容一句话 | 要点与实撞出处 |
 |---|---|---|
+| v0.47.0 | web_search 请求时探测 provider 原生搜索 | todo/0153,作者 2026-10-12 三案里拍"请求时探测"（否显式配置字段与域名表）。anthropic 协议下 spec 声明的 web_search 首次真实请求即探测：tools 里换成服务端声明发出,响应含 server_tool_use（只认块类型不看工具名——deepseek web_search 与智谱 web_search_prime 同判）即 native,含 web_search 的 tool_use 即 client,忽略或 400 拒收则有注册重发一次客户端形态、没注册 WEB_SEARCH_UNAVAILABLE;结果按 service_id 存 state.json web_search_modes 随快照;起跑对账对未注册的 web_search 按缺省协议放行。^anc-exec-protocol-adapter 新条款,原"服务端工具不下发不消费"收窄到 openai 两协议 |
 | v0.46.11 | tool_result 渲染补 hint 旁注 | 2026-10-12 语义审计 #25 作者拍甲案;listdir 空目录明示语从 result 挪到 hint,渲染时追加在文本尾部 |
 | v0.46.10 | 禁用行消费面句补 check | 2026-10-12 语义审计 #18：1140 行"check/commit 不收禁用行"是 0161 同批漏改,同文 1089/1105 已改口;概念层 836 行作者拍甲案同步 |
 | v0.46.9 | call parallel 子实例的上游反馈与子实例 ID 两句补齐 | 2026-10-11 todo/0165;call 边界反馈条与 ^anc-exec-call-child-persist 第 1 条此前只写了串行 call 形态,launchParallelCallChild 这条路的 upstreamFeedback 传入与 `<步骤号>.<轮次>` 子实例 ID 取法补成明句;配套六条传递线（committed 传播 / upstreamFeedback 下传 / dirs 继承 / logLevel 继承 / 派生视图 / calls/ 布局）专测六正例一反例,六次变异重放各红;无行为改动 |
@@ -2766,7 +2767,58 @@ HopType: ProtocolClientHandle
 - 错误：与 chat 适配器共用同一 classifyError（同 SDK 同错误类同文案判据,零分叉）
 - **无状态端点兼容（最小公共面原则）**：适配器恒走"全量 input 重发"形态——不发 `previous_response_id`、恒显式发 `store:false`（OpenAI 官方缺省 store:true 会留服务端存档,显式关——standalone 不变量"显式压过隐式";DeepSeek 本就无状态,照发无害）、不用服务端会话态。
   - DeepSeek `/v1/responses` 无状态实证:恒报 store:false/previous_response_id:null,不支持的参数静默忽略;引擎 IR 本就每请求全量自含,增量态本无需求——最小公共面恰与现架构零摩擦;
-  - 服务端工具（web_search 等 built-in tools）不下发不消费（引擎工具面走自己的 ToolProvider,见 tool-channels）
+  - openai 两协议的服务端工具（web_search 等 built-in tools）不下发不消费（引擎工具面走自己的 ToolProvider,见 tool-channels）;anthropic 协议的 `web_search` 走下方「web_search 请求时探测 provider 原生搜索」条款,openai 协议的对应形态归后续
+
+**web_search 请求时探测 provider 原生搜索（todo/0153,作者 2026-10-12 拍"请求时探测"）**
+
+spec `## Tools` 段声明的标准工具 `web_search`,在独立模式下此前只有一条落实路：`tool_servers` 里注册一个外部检索 MCP（`tool_id: web_search`,范本 `examples/hoptools-websearch.yaml`）,没注册起跑就 INIT_FAILED。2026-10-12 对本机六个 anthropic 协议 provider 实测（hop_tasks/archive/0153独立模式原生搜索探测）：deepseek 认 Anthropic 原生的服务端搜索声明（响应里是 `server_tool_use` 块 + `web_search_tool_result` 块）,智谱 glm 认自家异形（`server_tool_use` 块但工具名叫 `web_search_prime`,结果块类型是 `tool_result`,内容是一个 Python repr 字符串）,antchat 两家把服务端工具声明当成普通客户端工具、回 `tool_use` 块等引擎执行,qwen_flash 忽略声明直接作答。四种响应形态都要有确定的处置。
+
+*为什么是请求时探测而不是配置字段或域名表*（作者三选一拍板,另两案的代价记在这里）：显式配置字段（providers[] 加 `native_search: true`,setup 对已知域名自动填）——每接一个新 provider 都要人手加一行,否则静默走不到原生搜索;按 base_url 域名自动判——第三方代理端点（antchat / dashscope 的 anthropic 兼容面）判不准,引擎被动跟着厂商域名表走,用户想关也没开关。请求时探测的代价是"可能多发一次请求、要缓存探测结果、行为取决于对面响应"——设计把多发压到只有一种响应形态会发生、缓存落在实例状态随快照持久化、每种响应形态的行为写死,三条代价各自封口。
+
+*触发条件*：本步工具面（节点授权筛后）含 `web_search`,且本步解析出的 provider 协议是 `anthropic`（`HostConfig.protocol` 缺省值,或 `{SERVICE_ID}_PROTOCOL` 为 anthropic）。openai-chat / openai-responses 本条款不覆盖,照旧只认 tool_servers 注册。
+
+*探测状态机*（dispatcher 私有,executeActWithTools 组 tools 数组与消费响应处各接一次;reason / check 走同一循环体,行为同）：
+
+```
+HopType: WebSearchModeTable
+  Id: web-search-mode-table
+  Fields:
+    - modes % yaml  # Record<service_id, 'native' | 'client' | 'none'>——每个 provider 一条,本 run 内探测一次定下;随 state.json 的 web_search_modes 键持久化,resume / 跨进程恢复不重探;不写回 ~/.hopjit/config.yaml（用户配置不由引擎改）
+
+# impl web_search_tools_for_request(tools, service_id, mode)   # 组 tools 数组时按模式决定 web_search 条目形态
+1. tools 里没有 name 为 web_search 的条目 → 原样返回（本条款不触发）
+2. mode 为 client → 原样返回（客户端工具形态,按 tool_servers 注册项下发;注册项不存在时 tools 里本来就没有这一条——起跑放行的是"未注册但协议是 anthropic",见下）
+3. mode 为 native 或 未定 → 把 web_search 条目**替换**成服务端工具声明 {type: 'web_search_20250305', name: 'web_search', max_uses: 3}（替换不是追加——同名两条 Anthropic 400 拒;max_uses 缺省 3,v1 不开放配置）;其余工具不动
+4. 注册项不存在且 mode 未定 → tools 里原本没有 web_search 条目,仍按第 3 步**追加**一条服务端工具声明（这是放行进探测的那条路）
+
+# impl classify_web_search_response(response, had_server_decl)   # 探测轮消费响应,定模式;had_server_decl=本轮 tools 里发的是不是服务端声明
+1. 本轮没发服务端声明 → 不判,返回 undefined（模式已定为 client 的后续轮,或本步没有 web_search）
+2. response.content 里有 type 为 server_tool_use 的块 → 'native'。**只认块类型不看工具名**（deepseek 叫 web_search,智谱叫 web_search_prime;看名字就把智谱判丢了）
+3. 否则 response.content 里有 type 为 tool_use 且 name 为 web_search 的块 → 'client'（antchat 形态：provider 把服务端声明当客户端工具,回了一个要引擎执行的调用）
+4. 否则 → 'ignored'（qwen_flash 形态：声明被无视,直接作答）
+
+# impl resolve_web_search_mode（executeActWithTools 内,每轮响应到手后、hasToolUse 判定之前）
+1. mode 已定（modes[service_id] 在场） → 跳过本函数
+2. kind = classify_web_search_response(response, had_server_decl);kind 为 undefined → 跳过
+3. kind 为 native → modes[service_id] = 'native',写进引擎状态随下次 persist 落盘;本轮按正常循环继续——
+   - assistant content 原样回显进 messages（Anthropic 原生接受 server_tool_use / web_search_tool_result 回显;智谱把 tool_result 放在 assistant content 里,回显也原样）;
+   - hasToolUse 只看 tool_use 块,server_tool_use 不会把循环带进客户端工具执行;
+   - 产出照旧从 text 块取。**引擎不解析搜索结果体**——模型已在服务端消费完,glm 的 Python repr 字符串对引擎是不透明块;
+   - 留痕：toolCallLog 记一条 {name: <server_tool_use 的工具名>, result: 'success', args_preview: input}（hoplog tool 块可对账"这一步搜了什么"）;hoplog llm.response 的块摘要里 server_tool_use 渲染成 `[server_tool_use <名>] <input JSON>`,web_search_tool_result / tool_result 渲染成 `[<块类型> <内容长度>字]`
+4. kind 为 client →
+   - tool_servers 里有 web_search 注册（toolProvider.list() 含 name 或 tool_id 为 web_search 的条目） → modes[service_id] = 'client',本轮这个 tool_use 就按现行客户端工具循环执行,不多发请求;
+   - 没注册 → modes[service_id] = 'none',抛 `WEB_SEARCH_UNAVAILABLE: provider <service_id> 不认原生搜索,且 tool_servers 未注册 web_search——按 examples/hoptools-websearch.yaml 注册一条,或换认原生搜索的 provider`（普通档失败,容器 retry 不会好转但不进事务级清单——换 provider 路由后重跑是合法的）
+5. kind 为 ignored →
+   - 有注册 → modes[service_id] = 'client',**同一请求重发一次**,tools 里 web_search 换回客户端工具形态（全链唯一一次额外请求,只在探测轮、只在这一种响应形态下发生;重发轮的响应替换本轮响应继续走循环,本轮响应只进 hoplog 不进 messages）;
+   - 没注册 → modes[service_id] = 'none',抛同上 WEB_SEARCH_UNAVAILABLE
+6. 探测轮请求被端点 400 拒且报文提到 tools / web_search / type（provider 整个拒收服务端声明）→ 与 kind 为 ignored 同处置（有注册重发客户端形态,没注册抛 WEB_SEARCH_UNAVAILABLE）;其余 400 照旧上抛
+```
+
+*模式定下后*：同 provider 的后续步骤直接按模式组 tools——native 每步带服务端声明,client 按注册项,不再探测;跨进程恢复时 modes 从快照回填。
+
+*起跑对账的放行条件*（[[exec-engine#^anc-exec-tools-reconcile]] 第二调用点 dispatcher.runSpec）：对账前先把 needs 里的 `web_search` 挑出来——它未注册且缺省 provider 协议为 anthropic → 从对账 needs 里剔除,放行进探测;未注册且协议不是 anthropic → 留在 needs 里,照旧 INIT_FAILED 指路注册;已注册 → 留在 needs 里走四判。放行只看缺省协议：显式 `@model` 路由到 openai 协议 provider 的步骤若用 web_search 没注册,会在 PROTOCOL_TOOL_LOOP_UNSUPPORTED / 该协议的既有路径上失败,不在起跑期拦。
+
+*v1 边界*：①引擎不解析搜索结果体,hoplog 只记 server_tool_use 的 input 与结果块的类型和长度;②openai 两协议不做;③max_uses 固定 3,不开放配置;④探测结果只落实例 state,不持久化到用户配置——换 run 重探一次（一次请求的代价,换来 provider 升级后自动跟上）;⑤真机端到端归作者终端（合入后用 examples/hop-fact-check.md 在 deepseek / glm 各跑一遍）。
 
 **工具循环协议边界（0020 批次改定,原"当下边界"段翻案）**：LLM 工具循环（executeActWithTools 的 tool_use 往返）按 **supportsToolLoop 能力谓词**分道。
 - anthropic 与 openai-responses 原生承载（responses 的 function_call/function_call_output typed items 与 IR tool_use/tool_result 一一映射,循环体共用零复制）;

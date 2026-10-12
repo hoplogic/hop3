@@ -1,16 +1,18 @@
 %% @trace
 	id: cyant-concept
 	type: intent
-	note: 2026-08-08 作者定名 HopAnt（曾用名 CyAnt，归队 Hop 全家桶；蚁的意象=小组件各司其职经 HopSpec 编排协作涌现复杂能力，是架构承诺非装饰比喻）。同日作者定：HopAnt 有两个具体部署形态——HopSkill 与 HopAgent。id 与锚点 ID 保持 cyant 不动（追溯链稳定优先）。2026-10-04 作者定实体化：HopAnt 是 hop 体系上的 app——/hop 可安装、可封装、可从网上下载并本地适配、可自演化的完整 hopspec 驱动工具;新增「五个关键特性」「实体形态」「生命周期（安装/适配/编排/演化/封装/分享）」三节。2026-10-06 作者定甲案：本文只讲实体与生命周期,四维度能力模型/两顶层契约/执行引擎五组件（约 330 行,含 anc-struct-cyant、anc-layer-*、anc-config-sandbox-*、anc-exec-requires-commit、anc-exec-sandbox-principle、anc-config-model-engine、anc-exec-model-routing、anc-struct-{spec-parser,exec-engine,prompt-assembler,step-dispatcher,hop-cli} 锚）原名迁入 HopSpec V3配套HopJIT运行时能力 ^anc-exec-capability-model
+	note: 2026-08-08 作者定名 HopAnt（曾用名 CyAnt，归队 Hop 全家桶；蚁的意象=小组件各司其职经 HopSpec 编排协作涌现复杂能力，是架构承诺非装饰比喻）。同日作者定：HopAnt 有两个具体部署形态——HopSkill 与 HopAgent。id 与锚点 ID 保持 cyant 不动（追溯链稳定优先）。2026-10-04 作者定实体化：HopAnt 是 hop 体系上的 app——/hop 可安装、可封装、可从网上下载并本地适配、可自演化的完整 hopspec 驱动工具;新增「五个关键特性」「实体形态」「生命周期（安装/适配/编排/演化/封装/分享）」三节。2026-10-06 作者定甲案：本文只讲实体与生命周期,四维度能力模型/两顶层契约/执行引擎五组件（约 330 行,含 anc-struct-cyant、anc-layer-*、anc-config-sandbox-*、anc-exec-requires-commit、anc-exec-sandbox-principle、anc-config-model-engine、anc-exec-model-routing、anc-struct-{spec-parser,exec-engine,prompt-assembler,step-dispatcher,hop-cli} 锚）原名迁入 HopSpec V3配套HopJIT运行时能力 ^anc-exec-capability-model。2026-10-12 作者定名称两层：中文名智蚁改元蚁;概念与设计层定义用"群体智能单元",用户面统一叫"Hop 流程元件","hop 体系上的 app"降为类比
 %%
 
-# HopAnt（智蚁）：Hop 体系的群体智能单元
+# HopAnt（元蚁）：Hop 体系的群体智能单元
 
  HopAnt 是 Hop 体系的**群体智能单元**。"单元"是相对群体说的——它的价值在两个方向上兑现：
  + **纵向**，一个 HopAnt 专注于做一件事情，在HopSpec智能体原生语言的保障和支持下，在被反复使用中持续演进，持续打磨，不断完善，越用越可靠。多个 HopAnt 能力单元经HopAnt编排单元可以涌现出超乎想象的能力；
  + **横向**，HopAnt 易于安全审计，可以自发适配，，在人和智能体之间方便的分享。一个人的实践经验安全便捷的成为群体的智力资产。
  
- 在用户手里,HopAnt是 hop 体系上的 app：一个完整的、由 HopSpec 驱动的工具,**由 /hop 安装、适配、编排、演化、封装、分享**——前四个动作是纵向（把一份用起来、让它变好）,后两个是横向（成为群体智力资产）。
+ 在用户手里,HopAnt 叫 **Hop 流程元件**：一个完整的、由 HopSpec 驱动的工具（像手机上的 app 一样装上就能用）,**由 /hop 安装、适配、编排、演化、封装、分享**——前四个动作是纵向（把一份用起来、让它变好）,后两个是横向（成为群体智力资产）。
+
+ **名称分两层,按读者用**（2026-10-12 作者定）：学名 HopAnt（元蚁）;概念与设计文档定义它时说"Hop 体系的群体智能单元";面向用户的文字（README、教程、/hop 对用户说的话）统一叫"Hop 流程元件",第一次出现时括注一次 HopAnt。"app""HopSpec 工具"只作解释时的类比,不当名字用。
 
 ## 动机
 
@@ -62,9 +64,9 @@ HopAnt 在三个时点各有一道检查：
 
 ## HopAnt实体形态 ^anc-struct-hopant-entity
 
-本节回答"HopAnt 落在盘上是什么样、用户怎么碰到它"——它是 **hop 体系上的 app**：一个完整的、由 HopSpec 驱动的工具,装在 hop 自己的目录下,由 `/hop` 统一安装、适配、编排、演化、封装、分享。类比：skill 之于 Claude Code,app 之于手机——但 HopAnt 比 skill 多三样东西：
+本节回答"HopAnt 落在盘上是什么样、用户怎么碰到它"——它是用户面前的 **Hop 流程元件**：一个完整的、由 HopSpec 驱动的工具,装在 hop 自己的目录下,由 `/hop` 统一安装、适配、编排、演化、封装、分享。类比：skill 之于 Claude Code,app 之于手机——但 HopAnt 比 skill 多三样东西：
 
-| skill（宿主技能） | HopAnt（hop app） |
+| skill（宿主技能） | HopAnt（Hop 流程元件） |
 |---|---|
 | 一份指令文本,宿主读了照做 | 一组 HopSpec + 知识附件,入口 spec 头声明依赖,引擎按步执行、把关、记账 |
 | 无状态,每次从零 | 有 `inner_store/`（跨 run 累积的数据、本机适配、用户偏好） |
@@ -85,7 +87,7 @@ HopAnt 在三个时点各有一道检查：
   scripts/           ← HopAnt 自带的代码工具（如 pdf 抽取、ocr 脚本,spec 经 run_script 调用）
   bootstrap.js       ← 可选。本 HopAnt 的安装脚本：核 hopjit 版本、装自己的运行时依赖（uv / playwright / 系统包……,作者写,hop 不替它管）;支持 --dry-run 只打印计划。安装时跑,适配与升级时可重跑
   SKILL.md           ← 可选薄壳（见下「与 skill 结构兼容」）
-  inner_store/       ← 持久性数据：跨 run 累积的结构化数据、适配戳与适配记录、谱系。只在本机,不随分享外传;读写机制归 todo/0144
+  inner_store/       ← 持久性数据：跨 run 累积的结构化数据、适配戳与适配记录、谱系。只在本机,不随分享外传
 ```
 
 **跑 HopAnt 时的工作区**：/hop 起 run 时,工作区（workspace）是**用户发起 /hop 时所在的项目目录**,不是 HopAnt 自己的目录——HopAnt 是工具,用户项目是它加工的对象。文件工具的读写、commit 的落点、spec 里相对路径的解析都按用户项目算。HopAnt 目录（`<hop 目录>/ants/<ant-id>/`）是**只读资源目录**：`knowledge/` 经 doc-ref 引用（引擎先在 spec 所在目录找,再在工作区找）;数据样例经文件工具读（spec 所在目录在读权限内）;`scripts/` 里 HopAnt 自带的脚本经入口 spec《已批准命令》列出、body 里 `subprocess.run` 调用,路径用 `spec_dir("scripts/x.py")` 取——它们是随 HopAnt 分发、装前可审的代码,走任务级授权,不经 `run_script`（那是给执行模型现写的脚本用的,另一套安全面）。commit 步不能写 HopAnt 目录——可分发面不被运行弄脏;演化回写 HopAnt 自己的 spec 归生命周期④另开口子。`inner_store/` 的注入归 todo/0144。
@@ -113,7 +115,7 @@ HopAnt 在三个时点各有一道检查：
 
 ### HopAnt Package（HopAnt 包）：分发封包格式 ^anc-struct-hopant-package
 
-**HopAnt 与 HopAnt 包是两个东西**。HopAnt 是装在 hop 目录里、被 /hop 分派执行的那个目录——是**活着的、在用的**单位（上节）。HopAnt 包（HopAnt Package）是为了把 HopAnt 从一台机器运到另一台而打的箱子——是**运输中的、静止的**单位。"包"指封包形态,不限于 npm 包：一个目录、它的压缩包、一个 git 仓库、一个 npm 包,都是 HopAnt 包,里面装一个或多个 HopAnt 的可分发面。两者的转换就是生命周期里的两个动作：**分享** = 把若干 HopAnt 的可分发面装进一个包;**安装** = 把包拆开,里面的每个 HopAnt 各自落到 hop 目录成为活的 HopAnt。包在拆开那一刻完成使命,之后 hop 目录里只有 HopAnt,没有"包"——装自同一个包的几个 HopAnt 之间没有任何"同包"关系,各自独立适配、演化、被分派、再被装进别的包分享出去。
+HopAnt 包是用于封装一个或多个HopAnt用于共享的包。"HopAnt包"指封包形态,不限于 npm 包：一个目录、它的压缩包、一个 git 仓库、一个 npm 包,都是 HopAnt 包,里面装一个或多个 HopAnt 的可分发面。两者的转换就是生命周期里的两个动作：**分享** = 把若干 HopAnt 的可分发面装进一个包;**安装** = 把包拆开,里面的每个 HopAnt 各自落到 hop 目录成为活的 HopAnt。包在拆开那一刻完成使命,之后 hop 目录里只有 HopAnt,没有"包"——装自同一个包的几个 HopAnt 之间没有任何"同包"关系,各自独立适配、演化、被分派、再被装进别的包分享出去。
 
 ```
 <HopAnt 包根>/

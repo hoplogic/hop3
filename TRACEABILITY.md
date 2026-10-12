@@ -460,6 +460,8 @@ spec 树编辑函数组（2026-08-19 作者立项"维护骨干与完整 spec 序
   - [[exec-engine#^anc-exec-tools-reconcile]] init 对账 ← 设计
     - engine.ts initExecution Tools 对账三判（名在清单/参数子集/requires_commit 一致——INIT_FAILED 逐条明细） — @a: anc-exec-tools-reconcile
       - dispatcher.test.ts 对账四例（子集 ok/缺工具/超集参数/零对账兼容） — @v: anc-exec-tools-reconcile
+    - dispatcher.ts runSpec 第二调用点的 web_search 放行（todo/0153）：needs 里标准工具 web_search 未注册且缺省 provider 协议为 anthropic 时从对账 needs 剔除、放行进首次请求时探测;其他协议未注册照旧 INIT_FAILED（规则权威 step-dispatcher ^anc-exec-protocol-adapter「起跑对账的放行条件」） — @a: anc-exec-tools-reconcile
+      - dispatcher.test.ts「web_search 请求时探测」反例 3（openai-chat 未注册仍 INIT_FAILED,对照 anthropic 同配置放行进探测;变异去 protocol 判→红） — @v: anc-exec-tools-reconcile
   - [[step-dispatcher#^anc-exec-call-tool]] call 工具决议 ← 设计（v0.14.3;概念 ^anc-step-call 扩义）
     - dispatcher.ts handleCallStep 两段决议 + executeCallTool 退化执行（requires_commit call 位拦截/output_mapping 回填） — @a: anc-exec-call-tool
       - dispatcher.test.ts 决议四例（工具命中落值/COMMIT_REQUIRED/双不中报文/同名 spec 优先） — @v: anc-exec-call-tool
@@ -2340,16 +2342,17 @@ npm 包文档自足——用户面文档（入口六件〔2026-10-03 +agent-inst
 
 ### anc-release-github-snapshot ✅（2026-09-26 todo/0094 立——快照区落临时目录被系统清理后，publish 脚本盲 init 产孤立历史——0.16.0 推送被拒后手工救回、0.17.0 事先发现后手工立基、0.18.0 撞到 .git 半残形态）
 
-GitHub 公开快照发布——远端是权威、本地快照仓是纯派生物：publish 先用 `git ls-remote` 探远端，按立基规则表七行处理本地仓（探测失败退出非零且快照目录零改动；远端空仓才真首建；本地 .git 缺失、损坏〔没有 HEAD〕、与远端分叉三种情形一律按远端 main 浅取立基；本地 HEAD 已含远端 main 才沿用），立基完才导出与过净度闸；提交后本地 tag 恒指向本次快照提交（立基丢掉旧历史后，上一轮留下的旧 tag 移过来，防把孤立提交当 tag 推上公开仓），打印推送 main、推送 tag、verify 三条命令交人。配套三件：公开快照里读被剔除脚本的测试按"`scripts/check-hopissues.mjs` 不存在"标记跳过；release.sh 的 registry 轮询拉到合计 570 秒；release.sh 收尾打印指向 github-publish.sh 的下一步。
+GitHub 公开快照发布——远端是权威、本地快照仓是纯派生物：publish 先用 `git ls-remote` 探远端，按立基规则表七行处理本地仓（探测失败退出非零且快照目录零改动；远端空仓才真首建；本地 .git 缺失、损坏〔没有 HEAD〕、与远端分叉三种情形一律按远端 main 浅取立基；本地 HEAD 已含远端 main 才沿用），立基完才导出与过净度闸；提交后按远端有没有 `v<版本>` 分两种处理 tag（2026-10-12 起 tag 只对齐 npm 版本）：远端没有时本地 tag 恒指向本次快照提交（立基丢掉旧历史后，上一轮留下的旧 tag 移过来，防把孤立提交当 tag 推上公开仓）；远端已有时不打不移、删掉指向别处的旧本地 tag，只推 main。脚本自己不推送，打印要执行的推送命令与 verify 命令，末尾输出机读结论 `PUSH_MAIN=yes|no` 与 `PUSH_TAG=v<版本>|none`，例行推送由 agent 或项目级 HopAnt hop3-snapshot-sync 执行（只推 fast-forward，force 归人）。配套三件：公开快照里读被剔除脚本的测试按"`scripts/check-hopissues.mjs` 不存在"标记跳过；release.sh 的 registry 轮询拉到合计 570 秒；release.sh 收尾打印指向 github-publish.sh 的下一步。
 
 - [[release-engineering#^anc-release-github-snapshot]] ← 设计权威（立基规则表七行 + HopType RemoteProbe/LocalRepoState + HopTrait PublishGithubSnapshot + 九步 HopSop + 公开快照自洽规则）
-  - scripts/github-publish.sh 远端立基块（探测、有效仓判法、drop_invalid_git/base_on_remote、七行分支、只立基开关）与导出后的本地 tag 移到 HEAD/远端 tag 两种提醒/打印推送命令 — @a: anc-release-github-snapshot
+  - scripts/github-publish.sh 远端立基块（探测、有效仓判法、drop_invalid_git/base_on_remote、七行分支、只立基开关）与导出后按远端 tag 有无分两支处理本地 tag（打或移到 HEAD / 删指向别处的旧 tag）、PUSH_MAIN 与 PUSH_TAG 机读结论、打印推送命令 — @a: anc-release-github-snapshot
   - scripts/release.sh ⑦b `POLL_SLEEPS` 数组与"✅ 发版完成"后的下一步指路 — @a: anc-release-github-snapshot
-    - tests/guard-scripts.test.ts 远端立基组（describe 名以"立基规则表"收尾）7 例（6 例用本地裸仓当远端的行为测试：①快照目录不存在→HEAD 等于远端 main ②.git 只剩 objects→删坏仓后立基 ③远端不可达→退出非零、报"远端探测失败"、快照目录无 .git ④远端空仓→真首建且点明首次 ⑤本地多一个未推提交→沿用本地 ⑥本地与远端分叉→按远端 main 立基；对应规则表第 1、2、4、5、6、7 行，第 3 行与第 4 行同一分支）+ 1 例全流程（⑦替身内网仓库跑完整发布:本地与远端分叉且带旧 tag→新提交的父提交是远端 main、本地 tag 移到新提交）— @v: anc-release-github-snapshot
+    - tests/guard-scripts.test.ts 远端立基组（describe 名以"立基规则表"收尾）9 例（6 例用本地裸仓当远端的行为测试：①快照目录不存在→HEAD 等于远端 main ②.git 只剩 objects→删坏仓后立基 ③远端不可达→退出非零、报"远端探测失败"、快照目录无 .git ④远端空仓→真首建且点明首次 ⑤本地多一个未推提交→沿用本地 ⑥本地与远端分叉→按远端 main 立基；对应规则表第 1、2、4、5、6、7 行，第 3 行与第 4 行同一分支）+ 3 例全流程（替身内网仓库跑完整发布:⑦远端没有 v<版本>、本地与远端分叉且带旧 tag→新提交的父提交是远端 main、本地 tag 移到新提交、输出 PUSH_TAG=v9.9.9 与推 tag 命令 ⑧同形态但远端已有 v<版本>→旧本地 tag 被删、PUSH_TAG=none、没有推 tag 的命令 ⑨推过之后源没变再跑→PUSH_MAIN=no、没有推 main 的命令;⑦⑧ 成对钉 tag 分支,⑦⑧ 与 ⑨ 成对钉 PUSH_MAIN）— @v: anc-release-github-snapshot
     - tests/guard-scripts.test.ts "registry 轮询时长与 GitHub 快照指路" 2 例（POLL_SLEEPS 求和不少于 540 秒 / "✅ 发版完成"之后 3 行内有指向快照发布脚本的一行）— @v: anc-release-github-snapshot
     - 修前红 2026-09-26：6 个行为测试对着基线 eb54e4e8 的 github-publish.sh 跑，6 例全红 ✅
     - 变异验证 2026-09-26：立基块换回修前的盲 init → 6 个行为测试全红 ✅，用备份复原后 shasum 一致（92599123）✅；POLL_SLEEPS 改回 6 次共 210 秒 → 轮询断言红 ✅，复原后 shasum 一致 ✅（输出件 /tmp/claude-502/observer-0094/）
     - 旧 tag 修前红 2026-09-26：⑦对着修 tag 前的脚本跑红（本地 tag 仍指孤立提交,期望新提交）✅，换回修后脚本 shasum 一致后转绿 ✅
+    - tag 只对齐 npm 版本 2026-10-12：修前脚本（HEAD 版）跑 ⑦⑧⑨ 三例全红 ✅;变异三处各自只红对应的测试——远端已有 tag 也照旧打移（`if [ -z "$REMOTE_TAG" ]` 改恒真）→⑧⑨红 ✅,PUSH_MAIN 恒 yes→⑨红 ✅,不删旧本地 tag→⑧红 ✅;复原后 shasum 一致（d940da9f）✅（输出件 .claude/tmp-review/hop3-push-mutation/）
 
 ### anc-meta-threshold-sync ✅（落点=scripts 的 @a:；验证=准入负向验证实录（见卡内），无独立 *.test.ts——同 anc-meta-hopissues-scan 先例;todo/0060）
 
@@ -2405,7 +2408,7 @@ py-sandbox 模块——Python 语法沙箱（2026-09-23 新增,核心层）：�
 
 ### anc-struct-cyant 🔲 未实现
 
-HopAnt 智蚁——双态组件模型的基本单元
+HopAnt 元蚁——双态组件模型的基本单元
 
 - [[HopSpec V3配套HopJIT运行时能力#^anc-struct-cyant]] ← 权威源
   - (后续迭代)
@@ -4913,6 +4916,8 @@ now()/today() 进 hop_python（work_zone_path 同档）——journal 记值保�
   - protocol-openai.ts（wrapAnthropicClient/makeOpenAiClient/makeOpenAiResponsesClient/classifyOpenAiError/LlmErrorKind；显式传 key 切断 openai SDK 隐读 OPENAI_API_KEY——standalone 不变量 2）+ dispatcher.ts 构造分派三道/getClientForService env 通道三道/executeActWithTools 谓词闸/executeReason 谓词降级 + provider-types.ts HostConfig.protocol + mcp-server.ts 三枚举校验/providerToHostConfig 贯穿/{SERVICE_ID}_PROTOCOL env — @a: anc-exec-protocol-adapter
   - config-load.ts providers[].protocol 三枚举文法核（2026-10-08 todo/0131 自 mcp-server 搬入） — @a: anc-exec-protocol-adapter
     - tests/protocol-openai.test.ts（chat+anthropic 包装 15 例既有 + responses 新例:请求映射 system→instructions/max_output_tokens/store:false、工具形顶层平铺、工具往返 typed items、响应 message→text/function_call→tool_use、usage 同名直取+cached_tokens、坏 JSON 响亮拒、incomplete→max_tokens、reasoning 不进 IR、错误分类共用判据、thinking→reasoning.effort 两点映射、reasoning 被拒剥除重试、reasoning item 工具轮回显）+ dispatcher.test.ts openai 集成 7 例（chat 5 例既有 + responses 工具循环全链两轮/{SERVICE_ID}_PROTOCOL=openai-responses 通道）+ mcp-server.test.ts config 校验（chat 与 responses 放行正例/枚举外乱值拒绝反例）— @v: anc-exec-protocol-adapter （Codex/opencode 自举协议照抄例归属 anc-cli-install-skill 卡,见彼处 @v 清单）
+  - dispatcher.ts web_search 请求时探测（todo/0153,2026-10-12 作者拍"请求时探测"）：runSpec 对账前对未注册且缺省协议 anthropic 的 web_search 放行进探测 / executeActWithTools 按 engine.getWebSearchMode 组 tools（native 或未定→服务端声明 web_search_20250305 max_uses 3,client→注册项）/ 响应后 classifyWebSearchResponse 定模式（server_tool_use 块→native 只认块类型不看名,tool_use web_search→client,否则 ignored 有注册重发一次）/ 探测轮 400 isServerToolRejection 同 ignored / webSearchClientFallback 没注册抛 WEB_SEARCH_UNAVAILABLE / server_tool_use 进 toolCallLog、summarizeResponseBlocks 结果块只记类型与长度 + engine.ts webSearchModes 表 get/set 随快照 web_search_modes 落盘与 load 回填 + runtime-types.ts state 键（hopant adapt 的 notes 文案同批改为"首次请求时探测",归 hopant 决策 7 自己的锚,不在此卡） — @a: anc-exec-protocol-adapter
+    - dispatcher.test.ts「web_search 请求时探测 provider 原生搜索（todo/0153）」11 例：纯函数两件（classifyWebSearchResponse 三形态 / isServerToolRejection 400 且报文提 tools 才算）+ 正例 1 deepseek 形态 native 留痕与第二步免探测、state.json web_search_modes 落盘与 load 回填 + 正例 2 智谱 web_search_prime 同判 native + 正例 3 antchat tool_use 有注册走客户端循环 + 正例 4 忽略形态有注册重发一次 + 正例 5 reason 步同循环体 + 反例 1 忽略无注册 WEB_SEARCH_UNAVAILABLE + 反例 2 tool_use 无注册同文案 + 反例 3 openai-chat 未注册仍 INIT_FAILED + 反例 4 400 提 tools 同忽略分支;四条决策分支变异各红（native 看名→正例 2 红 / 不写缓存→正例 1 第二步 create 次数红 / 忽略有注册改直接失败→正例 4 红 / 放行去 protocol 判→反例 3 红,记录 .claude/tmp-review/fix0153/mut/progress.md）— @v: anc-exec-protocol-adapter
 
 ### anc-struct-standalone-endpoint / anc-struct-standalone-facets / anc-exec-standalone-invariants / anc-meta-standalone-review ✅（standalone 统一设计，2026-08-11 作者定"本质上是一个统一接口端，需要统一的设计和审查"）
 

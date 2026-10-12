@@ -165,6 +165,43 @@ function endpointKey(ep: { service_id: string; base_url?: string }): string {
 // 降级只认这两码——EPERM 是系统策略拦截,不随时间自愈,照旧 fail-fast
 const REACHED_DOWNGRADE_CODES = new Set(['ENOTFOUND', 'ECONNREFUSED']);
 
+/** 标准工具 web_search 的调用名与服务端搜索声明的 max_uses（v1 固定 3,不开放配置）——
+ * ^anc-exec-protocol-adapter web_search 请求时探测条款。 */ // @a: anc-exec-protocol-adapter
+const WEB_SEARCH_TOOL_NAME = 'web_search';
+const WEB_SEARCH_MAX_USES = 3;
+
+/** 探测轮响应分类（设计 classify_web_search_response）：有 server_tool_use 块 → native（只认块类型不看工具名——
+ * deepseek 叫 web_search,智谱叫 web_search_prime,看名字就把智谱判丢了）;否则有 name 为 web_search 的 tool_use → client
+ *（provider 把服务端声明当客户端工具,回了个要引擎执行的调用）;两者皆无 → ignored（声明被无视,直接作答）。 */
+// @a: anc-exec-protocol-adapter
+export function classifyWebSearchResponse(response: { content: Array<{ type: string; name?: string }> }): 'native' | 'client' | 'ignored' {
+  if (response.content.some(b => b.type === 'server_tool_use')) return 'native';
+  if (response.content.some(b => b.type === 'tool_use' && b.name === WEB_SEARCH_TOOL_NAME)) return 'client';
+  return 'ignored';
+}
+
+/** 探测轮被端点整个拒收服务端搜索声明的判据：HTTP 400 且报文提到 tools / web_search / type（设计条款第 6 步）。
+ * 不看 SDK 错误类——各 anthropic 兼容端点的 400 报文形态不一,status 字段是共同面。 */ // @a: anc-exec-protocol-adapter
+export function isServerToolRejection(err: unknown): boolean {
+  const status = (err as { status?: number } | null)?.status;
+  if (status !== 400) return false;
+  return /tools|web_search|\btype\b/i.test(errMessage(err));
+}
+
+/** hoplog llm.response 的块摘要：text 原文、tool_use / server_tool_use 带名与 input、其余块（web_search_tool_result /
+ * tool_result / thinking 等）只记类型与内容长度——搜索结果体不进引擎（^anc-exec-protocol-adapter v1 边界①）。 */
+// @a: anc-exec-protocol-adapter
+export function summarizeResponseBlocks(response: Anthropic.Message): string {
+  return response.content.map(b => {
+    if (b.type === 'text') return b.text;
+    if (b.type === 'tool_use') return `[tool_use ${b.name}] ${JSON.stringify(b.input)}`;
+    if (b.type === 'server_tool_use') return `[server_tool_use ${b.name}] ${JSON.stringify(b.input)}`;
+    const content = (b as { content?: unknown }).content;
+    const len = content === undefined ? 0 : (typeof content === 'string' ? content : JSON.stringify(content)).length;
+    return `[${b.type} ${len}字]`;
+  }).join('\n');
+}
+
 // 错误对象的可读文案——message 优先取字段（SDK 错误对象可能非 Error 子类,String() 得 [object Object]）。
 function errMessage(err: unknown): string {
   const m = (err as { message?: unknown })?.message;
@@ -548,7 +585,12 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
     // 外部工具经 tool_registry 装配进 CompositeToolProvider,init 期 hostConfig.tool_provider
     // 缺席看不见;此处对装配后全集再核,review D1 实抓'init 对账在生产通道不生效'）。
     // @a: anc-exec-tools-reconcile
-    const needs = this.engine.getSpec()?.header.tools;
+    const declared = this.engine.getSpec()?.header.tools;
+    // web_search 请求时探测放行（^anc-exec-protocol-adapter web_search 条款"起跑对账的放行条件"）：
+    // 标准工具 web_search 未注册且缺省 provider 协议为 anthropic → 从对账 needs 里剔除,放行进首次
+    // 请求时探测（provider 可能原生可搜）;其他协议未注册照旧 INIT_FAILED 指路注册;已注册走四判。
+    // @a: anc-exec-protocol-adapter
+    const needs = declared?.filter(n => !(n.name === WEB_SEARCH_TOOL_NAME && !this.webSearchRegistered() && (this.hostConfig.protocol ?? 'anthropic') === 'anthropic'));
     if (needs?.length) {
       const r = ExecutionEngine.reconcileTools(needs, this.toolProvider.list());
       if (r.errors.length) {
@@ -2002,6 +2044,36 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     return [...lines.slice(0, i), ...lines.slice(end)].join('\n');
   }
 
+  /** tool_servers 里有没有 web_search 注册（name 或 tool_id 命中——Composite list() 把 tool_id 独立成条目）。
+   * ^anc-exec-protocol-adapter web_search 条款 */ // @a: anc-exec-protocol-adapter
+  private webSearchRegistered(): boolean {
+    return this.toolProvider.list().some(t => t.name === WEB_SEARCH_TOOL_NAME);
+  }
+
+  /** 本步要不要 web_search：已注册时看筛后 tools 里有没有;未注册时（起跑放行进探测的那条路）看 spec Tools 段
+   * 声明了它且本步授权允许（act/commit 恒含 basic 之外须节点声明——web_search 是 special 件,按 `- 工具:` 声明
+   * 或 `*` 判,被禁即不要）。^anc-exec-protocol-adapter web_search 条款"触发条件" */ // @a: anc-exec-protocol-adapter
+  private stepWantsWebSearch(tools: Anthropic.Tool[], grantAll: boolean, granted: Set<string>, denied: Set<string>): boolean {
+    if (tools.some(t => t.name === WEB_SEARCH_TOOL_NAME)) return true;
+    if (denied.has(WEB_SEARCH_TOOL_NAME)) return false;
+    const declared = this.engine.getSpec()?.header.tools?.some(n => n.name === WEB_SEARCH_TOOL_NAME) ?? false;
+    return declared && (grantAll || granted.has(WEB_SEARCH_TOOL_NAME));
+  }
+
+  /** 探测判"不认原生搜索"后的客户端工具形态：有注册 → 模式 client,tools 里 web_search 换回注册项的客户端声明;
+   * 没注册 → 模式 none,抛 WEB_SEARCH_UNAVAILABLE 指路（^anc-exec-protocol-adapter web_search 条款第 4/5/6 步）。
+   * 返回替换后的完整 tools 数组。 */ // @a: anc-exec-protocol-adapter
+  private webSearchClientFallback(serviceId: string, tools: Anthropic.Tool[]): Anthropic.Tool[] {
+    const reg = this.toolProvider.list().find(t => t.name === WEB_SEARCH_TOOL_NAME);
+    if (!reg) {
+      this.engine.setWebSearchMode(serviceId, 'none');
+      throw new Error(`WEB_SEARCH_UNAVAILABLE: provider ${serviceId} 不认原生搜索,且 tool_servers 未注册 web_search——按 examples/hoptools-websearch.yaml 注册一条,或换认原生搜索的 provider`);
+    }
+    this.engine.setWebSearchMode(serviceId, 'client');
+    const clientDecl: Anthropic.Tool = { name: reg.name, description: reg.description, input_schema: reg.input_schema as Anthropic.Tool.InputSchema };
+    return tools.map(t => t.name === WEB_SEARCH_TOOL_NAME ? clientDecl : t);
+  }
+
   // act 步骤中 LLM 仅能从预注册工具列表选择调用——无任意代码执行 // @a: anc-exec-sandbox-principle, anc-config-sandbox-step-mapping
   private async executeActWithTools(step: StepReady, allowCommit = false): Promise<Record<string, unknown>> {
     this.lastFinalTurn.delete(step.step_id);   // 先删旧记录——不拿上一次的正文判这一次 // @a: anc-exec-text-toolcall-hint
@@ -2015,7 +2087,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     // reason / check 步 basic 不豁免（^anc-exec-reason-tools 2026-09-18 修订 reason 全按声明,
     // 2026-10-11 todo/0161 check 并入同一套规则;basic 与 special 同一文法;act/commit 的 basic 恒下发照旧）。// @a: anc-exec-reason-tools
     const isDeclaredOnlyStep = nodeForGrants?.step_type === 'reason' || nodeForGrants?.step_type === 'check';
-    const tools = this.toolProvider.list()
+    let tools: Anthropic.Tool[] = this.toolProvider.list()
       .filter(t => !deniedNames.has(t.name))   // 禁用优先——被禁件（含 basic 族）从清单整体剔除,LLM 根本看不到（^anc-step-tool-deny） // @a: anc-step-tool-deny
       .filter(t => (!isDeclaredOnlyStep && (t.category ?? 'special') === 'basic') || grantAll || grantedNames.has(t.name))
       // requires_commit 件在 list 期过滤（^anc-exec-reason-tools "不能 commit 写"——reason 与
@@ -2055,6 +2127,24 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     const resolved = this.resolveModel(category, step);
     const actClient = this.getClientForService(resolved.service_id);
     const maxOutputBudget = this.resolveMaxOutputTokens(resolved.service_id);   // 循环外解析一次（^anc-exec-output-budget）
+    // web_search 请求时探测（^anc-exec-protocol-adapter web_search 条款,todo/0153）：本步要用 web_search 且
+    // provider 是 anthropic 协议时,按本 run 已定的模式组 tools——native / 未定 → web_search 条目换成服务端
+    // 搜索声明（未注册时追加一条）;client → 客户端工具形态原样。探测就是首次真实请求,不另发试探。
+    // @a: anc-exec-protocol-adapter
+    const wantsWebSearch = this.stepWantsWebSearch(tools, grantAll, grantedNames, deniedNames);
+    let webSearchServerDecl = false;
+    if (wantsWebSearch && actClient.protocol === 'anthropic') {
+      const mode = this.engine.getWebSearchMode(resolved.service_id);
+      if (mode === 'none') {
+        throw new Error(`WEB_SEARCH_UNAVAILABLE: provider ${resolved.service_id} 不认原生搜索,且 tool_servers 未注册 web_search——按 examples/hoptools-websearch.yaml 注册一条,或换认原生搜索的 provider`);
+      }
+      if (mode !== 'client') {
+        const idx = tools.findIndex(t => t.name === WEB_SEARCH_TOOL_NAME);
+        const decl = { type: 'web_search_20250305', name: WEB_SEARCH_TOOL_NAME, max_uses: WEB_SEARCH_MAX_USES } as unknown as Anthropic.Tool;
+        if (idx >= 0) tools[idx] = decl; else tools.push(decl);
+        webSearchServerDecl = true;
+      }
+    }
     // 工具循环按 supportsToolLoop 能力谓词分道（0020 批,原 openai 全拒翻案——anthropic/
     // openai-responses 承载,openai-chat 维持 fail-fast 指路,不带病进循环。带 body 的 act
     // 不经此路径〔body 工具走引擎白名单通道〕）。// @a: anc-exec-protocol-adapter
@@ -2104,23 +2194,65 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
       try {
         response = await this.callLlmWithRetry(loopRequest, actClient);
       } catch (err: unknown) {
-        // 补救档（^anc-exec-toolloop-ctx-degrade——0070 实撞主形态:tool_result 累积撞模型窗,
-        // 原工具循环零捕获直死;首撞压缩重试一次,二次撞墙=确定性失败,CONTEXT_OVERFLOW:
-        // 前缀入 exec-engine 确定性口袋,容器 retry 不原样重跑）。// @a: anc-exec-toolloop-ctx-degrade
-        if (actClient.classifyError(err) !== 'context_overflow') throw err;
-        const changed = ctxCompressed ? false
-          : await this.compressToolLoopMessages(messages, step, resolved.model, actClient);
-        if (!changed) {
-          throw new Error('CONTEXT_OVERFLOW: 工具循环压缩降级后仍超模型窗——单步材料量超出模型能力，拆步骤（for-each 逐份）或换更大窗的模型');
-        }
-        ctxCompressed = true;
-        try {
-          response = await this.callLlmWithRetry({ ...loopRequest, messages }, actClient);
-        } catch (err2: unknown) {
-          if (actClient.classifyError(err2) === 'context_overflow') {
+        // 探测轮被端点 400 拒且报文提到 tools / web_search / type（provider 整个拒收服务端搜索声明）→
+        // 与"忽略"形态同处置：有注册重发客户端形态,没注册 WEB_SEARCH_UNAVAILABLE（^anc-exec-protocol-adapter
+        // web_search 条款第 6 步）。其余错误照旧走下方分支。// @a: anc-exec-protocol-adapter
+        if (webSearchServerDecl && isServerToolRejection(err)) {
+          this.engine.getHopLog()?.recordWarn(step.step_id, `provider ${resolved.service_id} 拒收服务端 web_search 声明（400）——按"不认原生搜索"处置`);
+          tools = this.webSearchClientFallback(resolved.service_id, tools);   // 换新数组不原地改——探测轮请求对象留给 hoplog 原样
+          webSearchServerDecl = false;
+          response = await this.callLlmWithRetry({ ...loopRequest, tools }, actClient);
+        } else {
+          // 补救档（^anc-exec-toolloop-ctx-degrade——0070 实撞主形态:tool_result 累积撞模型窗,
+          // 原工具循环零捕获直死;首撞压缩重试一次,二次撞墙=确定性失败,CONTEXT_OVERFLOW:
+          // 前缀入 exec-engine 确定性口袋,容器 retry 不原样重跑）。// @a: anc-exec-toolloop-ctx-degrade
+          if (actClient.classifyError(err) !== 'context_overflow') throw err;
+          const changed = ctxCompressed ? false
+            : await this.compressToolLoopMessages(messages, step, resolved.model, actClient);
+          if (!changed) {
             throw new Error('CONTEXT_OVERFLOW: 工具循环压缩降级后仍超模型窗——单步材料量超出模型能力，拆步骤（for-each 逐份）或换更大窗的模型');
           }
-          throw err2;
+          ctxCompressed = true;
+          try {
+            response = await this.callLlmWithRetry({ ...loopRequest, messages }, actClient);
+          } catch (err2: unknown) {
+            if (actClient.classifyError(err2) === 'context_overflow') {
+              throw new Error('CONTEXT_OVERFLOW: 工具循环压缩降级后仍超模型窗——单步材料量超出模型能力，拆步骤（for-each 逐份）或换更大窗的模型');
+            }
+            throw err2;
+          }
+        }
+      }
+
+      // web_search 探测判定（^anc-exec-protocol-adapter web_search 条款 resolve_web_search_mode——每轮响应到手后、
+      // hasToolUse 判定之前;模式已定则跳过）：server_tool_use 块（只认块类型不看工具名——deepseek 叫
+      // web_search,智谱叫 web_search_prime）→ native;tool_use 名 web_search → client（有注册照客户端循环,
+      // 没注册 WEB_SEARCH_UNAVAILABLE）;两者皆无 → ignored（有注册重发一次客户端形态,没注册同上失败）。
+      // @a: anc-exec-protocol-adapter
+      if (webSearchServerDecl && this.engine.getWebSearchMode(resolved.service_id) === undefined) {
+        const kind = classifyWebSearchResponse(response);
+        if (kind === 'native') {
+          this.engine.setWebSearchMode(resolved.service_id, 'native');
+        } else {
+          this.engine.getHopLog()?.recordWarn(step.step_id, `provider ${resolved.service_id} 不认原生搜索（探测轮响应：${kind === 'client' ? '把 web_search 当客户端工具回了 tool_use' : '无视声明直接作答'}）——回退 tool_servers 注册项`);
+          tools = this.webSearchClientFallback(resolved.service_id, tools);   // 没注册在此抛 WEB_SEARCH_UNAVAILABLE;换新数组不原地改
+          webSearchServerDecl = false;
+          if (kind === 'ignored') {
+            // 全链唯一一次额外请求：同一请求重发,web_search 换回客户端形态;探测轮响应只进 hoplog 不进 messages
+            this.engine.getHopLog()?.recordStepMeta(step.step_id, {
+              llm: { model: resolved.model, max_tokens: maxOutputBudget, stop_reason: response.stop_reason ?? 'absent', input_tokens: response.usage?.input_tokens, output_tokens: response.usage?.output_tokens, response: `[web_search 探测轮,已弃用] ${summarizeResponseBlocks(response)}` },
+              tokens_used: (response.usage?.input_tokens ?? 0) + (response.usage?.output_tokens ?? 0),
+            });
+            response = await this.callLlmWithRetry({ ...loopRequest, tools }, actClient);
+          }
+          // kind === 'client'：本轮的 tool_use 就按下方客户端工具循环执行,不多发请求
+        }
+      }
+      // native 模式留痕：server_tool_use 记进 toolCallLog（hoplog tool 块可对账"这一步搜了什么"）;结果体不解析
+      // @a: anc-exec-protocol-adapter
+      for (const b of response.content) {
+        if (b.type === 'server_tool_use') {
+          toolCallLog.push({ name: b.name, result: 'success', at: new Date().toISOString(), args_preview: JSON.stringify(b.input).slice(0, 500) });
         }
       }
 
@@ -2144,7 +2276,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
           // 当次请求实际输入体量三项合计（^anc-exec-ctx-watermark——单看 input_tokens 被缓存命中掩住真实体量）// @a: anc-exec-ctx-watermark
           ctx_input_total: (response.usage?.input_tokens ?? 0) + (response.usage?.cache_read_input_tokens ?? 0) + (response.usage?.cache_creation_input_tokens ?? 0),
           ...(iteration === 0 ? { prompt: this.serializeRequestPrompt(loopRequest) } : {}),
-          response: response.content.map(b => b.type === 'text' ? b.text : (b.type === 'tool_use' ? `[tool_use ${b.name}] ${JSON.stringify(b.input)}` : `[${b.type}]`)).join('\n'),
+          response: summarizeResponseBlocks(response),   // server_tool_use / 结果块按类型与长度留痕（^anc-exec-protocol-adapter web_search 条款）// @a: anc-exec-protocol-adapter
         },
         tokens_used: (response.usage?.input_tokens ?? 0) + (response.usage?.output_tokens ?? 0),
       });

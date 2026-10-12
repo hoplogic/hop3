@@ -1287,7 +1287,7 @@ describe('npm 包文档自足：用户面文档经打包期清洗后随包分发
   it('① 清单每一项在仓库存在;files 中清单项与 manifest 等长（不是 ≥ 下限）;driver 三载体 hop-skill 指路的包内路径在清单内', () => {
     for (const f of manifest.files) expect(existsSync(join(REPO, f)), `清单项不存在: ${f}`).toBe(true);
     expect(files.filter(f => manifest.files.includes(f)).length).toBe(manifest.files.length);
-    expect(manifest.files.length).toBe(36);   // 2026-10-03 +docs/agent-instructions-template.md（todo/0139 挂钩②改形态）
+    expect(manifest.files.length).toBe(37);   // 2026-10-03 +docs/agent-instructions-template.md（todo/0139 挂钩②改形态）;2026-10-12 +教程 11
     for (const sk of HOP_SKILLS) {
       const t = readFileSync(join(REPO, sk), 'utf-8');
       const refs = [...t.matchAll(/@hoplogic\/hopjit\/((?:docs|examples)\/[^`）)\n]+?\.md)/g)].map(m => m[1]);   // 路径含空格（HopSpec V3语法参考.md）,不能用 \s 断
@@ -1535,10 +1535,9 @@ describe.skipIf(PUBLIC_SNAPSHOT)('github-publish.sh 远端立基（立基规则�
     expect(head(snap)).toBe(r0.main);
   }, 60_000);
 
-  it('⑦ 全流程:本地仓与远端分叉且带上一轮导出留下的旧 tag → 新快照提交以远端 main 为父,本地 tag 移到新提交（修前"已存在不重打"留旧 tag 在孤立提交上,本例红）', () => {
-    const r0 = remote(true);
-    // 替身内网仓库:脚本按自身位置找仓库根,放一份脚本副本 + 白名单全部目录与文件的最小占位 + 净度词表
-    const repo = join(r0.root, 'repo');
+  /** 替身内网仓库:脚本按自身位置找仓库根,放一份脚本副本 + 白名单全部目录与文件的最小占位 + 净度词表;版本 9.9.9 */
+  function standInRepo(root: string): string {
+    const repo = join(root, 'repo');
     mkdirSync(join(repo, 'scripts'), { recursive: true });
     cpSync(PUBLISH, join(repo, 'scripts', 'github-publish.sh'));
     writeFileSync(join(repo, 'scripts', 'github-purity-words.txt'), '# 替身词表\nzz-never-matches-zz\n');
@@ -1554,23 +1553,71 @@ describe.skipIf(PUBLIC_SNAPSHOT)('github-publish.sh 远端立基（立基规则�
     git(['init', '-q', '-b', 'main', repo]);
     git(['add', '-A'], repo);
     git(['commit', '-q', '-m', 'internal'], repo);
-    // 快照目录:与远端分叉的本地仓,旧 tag v9.9.9 打在孤立提交上
-    const snap = join(r0.root, 'snap');
+    return repo;
+  }
+  /** 快照目录:与远端分叉的本地仓,旧 tag v9.9.9 打在孤立提交上;返回孤立提交号 */
+  function orphanSnapWithTag(snap: string): string {
     git(['init', '-q', '-b', 'main', snap]);
     git(['commit', '-q', '--allow-empty', '-m', 'orphan'], snap);
     git(['tag', 'v9.9.9'], snap);
-    const orphan = head(snap);
+    return head(snap);
+  }
+  function fullPublish(repo: string, url: string, snap: string): { code: number; out: string } {
     const r = spawnSync('bash', [join(repo, 'scripts', 'github-publish.sh'), snap], {
       encoding: 'utf-8',
-      env: { ...GIT_ENV, HOP3_GITHUB_URL: r0.url },
+      env: { ...GIT_ENV, HOP3_GITHUB_URL: url },
     });
-    const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
-    expect(r.status, out).toBe(0);
+    return { code: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+  }
+  const tagOf = (snap: string) => git(['--git-dir', join(snap, '.git'), 'tag', '--list', 'v9.9.9']);
+
+  it('⑦ 全流程:远端还没有 v<版本>,本地仓与远端分叉且带上一轮导出留下的旧 tag → 新快照提交以远端 main 为父,本地 tag 移到新提交,输出 PUSH_TAG=v9.9.9（修前"已存在不重打"留旧 tag 在孤立提交上,本例红）', () => {
+    const r0 = remote(true);
+    const repo = standInRepo(r0.root);
+    const snap = join(r0.root, 'snap');
+    const orphan = orphanSnapWithTag(snap);
+    const r = fullPublish(repo, r0.url, snap);
+    expect(r.code, r.out).toBe(0);
     const newHead = head(snap);
     expect(newHead).not.toBe(orphan);
     expect(git(['--git-dir', join(snap, '.git'), 'rev-parse', 'HEAD^'])).toBe(r0.main);
     expect(git(['--git-dir', join(snap, '.git'), 'rev-parse', 'v9.9.9^{commit}'])).toBe(newHead);
-    expect(out).toContain('已移到');
+    expect(r.out).toContain('已移到');
+    expect(r.out).toContain('git push github v9.9.9');
+    expect(r.out).toMatch(/^PUSH_TAG=v9\.9\.9$/m);
+    expect(r.out).toMatch(/^PUSH_MAIN=yes$/m);
+  }, 60_000);
+
+  it('⑧ 全流程:远端已有 v<版本>（tag 只对齐 npm 版本,本版同步过）→ 不移本地 tag、删掉指向孤立提交的旧本地 tag,只推 main:输出 PUSH_TAG=none 且没有推 tag 的命令（与 ⑦ 成对;修前恒把 tag 移到 HEAD 并打印推 tag,本例红）', () => {
+    const r0 = remote(true);
+    git(['tag', 'v9.9.9', r0.main], join(r0.root, 'seed'));
+    git(['push', '-q', r0.url, 'v9.9.9'], join(r0.root, 'seed'));
+    const repo = standInRepo(r0.root);
+    const snap = join(r0.root, 'snap');
+    orphanSnapWithTag(snap);
+    const r = fullPublish(repo, r0.url, snap);
+    expect(r.code, r.out).toBe(0);
+    expect(git(['--git-dir', join(snap, '.git'), 'rev-parse', 'HEAD^'])).toBe(r0.main);
+    expect(tagOf(snap)).toBe('');
+    expect(r.out).toContain('本次只推 main');
+    expect(r.out).not.toContain('git push github v9.9.9');
+    expect(r.out).toMatch(/^PUSH_TAG=none$/m);
+    expect(r.out).toMatch(/^PUSH_MAIN=yes$/m);
+  }, 60_000);
+
+  it('⑨ 全流程:上一轮已推到远端、内网源没变再跑一次 → 本地 HEAD 等于远端 main,输出 PUSH_MAIN=no 且没有推 main 的命令（与 ⑦⑧ 的 PUSH_MAIN=yes 成对）', () => {
+    const r0 = remote(true);
+    const repo = standInRepo(r0.root);
+    const snap = join(r0.root, 'snap');
+    const first = fullPublish(repo, r0.url, snap);
+    expect(first.code, first.out).toBe(0);
+    git(['push', '-q', r0.url, 'main', 'v9.9.9'], snap);
+    const r = fullPublish(repo, r0.url, snap);
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).toContain('快照与上次一致');
+    expect(r.out).not.toContain('git push github main');
+    expect(r.out).toMatch(/^PUSH_MAIN=no$/m);
+    expect(r.out).toMatch(/^PUSH_TAG=none$/m);
   }, 60_000);
 });
 

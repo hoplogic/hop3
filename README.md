@@ -39,7 +39,7 @@ hopjit setup
 ```
 /hop 跑咖啡店周报
 ```
-跑一个装好的 **HopAnt**——hop 体系上的 app，一个目录里装着入口规约、知识附件和演示数据。`hopjit setup` 已经带了两个演示件：咖啡店周报（汇总一周营业数据、判断经营状态、出一份给店主看的周报）和事实核查（从文档提取断言、逐条搜外部依据、给来源打可信度）。说名字就能跑；参数确认一次，规约里标了"要问人"的地方停下来问你，其余不打扰。仓库里的 `examples/*.md` 也能这样跑，给路径即可。
+跑一个装好的 **Hop 流程元件**（hop 里叫 HopAnt）——像手机上装好的 app，一个目录里装着入口规约、知识附件和演示数据。`hopjit setup` 已经带了两个演示件：咖啡店周报（汇总一周营业数据、判断经营状态、出一份给店主看的周报）和事实核查（从文档提取断言、逐条搜外部依据、给来源打可信度）。说名字就能跑；参数确认一次，规约里标了"要问人"的地方停下来问你，其余不打扰。仓库里的 `examples/*.md` 也能这样跑，给路径即可。
 
 ```
 /hop 把 skills/code-review 翻译成 hopspec
@@ -53,7 +53,7 @@ hopjit setup
 ```
 三句话走完一个 HopAnt 的诞生：第一句是一件普通的活（查天气、给建议）；第二句把它总结成一个可复用的 Hop 流程元件（hop 里叫 HopAnt）——城市变成参数，"先查再核再给建议"的步骤和核验点固定下来，落在本项目的 `hop_tasks/ants/` 下，从此你说"查上海天气"它就跑；第三句把它打成一个包，拷到同事机器上 `/hop 安装` 一下他也能用。
 
-想看更多：[教程目录](./docs/tutorials/00-新人导读.md)（用户系列 01–10）；要接自己的工具或改引擎看 [开发者导读](./docs/tutorials/D0-生态开发者导读.md)。
+想看更多：[教程目录](./docs/tutorials/00-新人导读.md)（用户系列 01–11）；要接自己的工具或改引擎看 [开发者导读](./docs/tutorials/D0-生态开发者导读.md)。
 
 项目内三个名字各司其职：
 
@@ -62,7 +62,7 @@ hopjit setup
 | **HOP 3.0** | HOP 语言/概念层的 v3.0 版本。概念规范：[核心规范](./docs/concepts/HopSpec%20V3核心规范.md)（语言权威）· [核心创新](./docs/concepts/HopSpec核心创新.md)（定位）；全部 13 份见 [Doctree](./Doctree.md)「概念层」表 |
 | **HopSpec** | HOP 的任务规约语言——用 markdown 声明任务结构（步骤类型、数据流、循环/分支/并行、人机介入点）                                                                                                     |
 | **HopJIT**  | hoplogic 项目里的 HopSpec 执行引擎（npm 包 `@hoplogic/hopjit`、命令 `hopjit`）——负责执行状态管理、变量存储、retry/adaptive 修复、None 传播等流控                                                |
-| **HopAnt**  | hop 体系上的 app——一组 spec + 知识附件 + 代码工具收成一个单元，住两个地方：你这个项目总结出来的在 `<项目>/hop_tasks/ants/`，装进来给所有项目用的在 `~/.hopjit/ants/`；/hop 装它、跑它、把你干完的活总结成它、分享给别人。概念见 [HopAnt概念](./docs/concepts/HopAnt概念.md)                              |
+| **HopAnt**  | Hop 流程元件——一组 spec + 知识附件 + 代码工具收成一个可复用的单元（像手机上的 app，装上就能用），住两个地方：你这个项目总结出来的在 `<项目>/hop_tasks/ants/`，装进来给所有项目用的在 `~/.hopjit/ants/`；/hop 装它、跑它、把你干完的活总结成它、分享给别人。概念见 [HopAnt概念](./docs/concepts/HopAnt概念.md)                              |
 
 ## 两种跑法
 
@@ -89,7 +89,7 @@ npm run release          # 发版检查单，一步不过即停
 ## 再往下读
 
 - `hopjit` 命令行手册（agent 在 MCP 工具不可用时按它回退；人在 /hop 出问题时按它排查；含 /hop 话语→命令→MCP 工具对应表、两种模式、`web_search` 从哪来）：[USAGE.md](./USAGE.md)
-- 教程：[00-新人导读](./docs/tutorials/00-新人导读.md) 分流到用户系列 01–10
+- 教程：[00-新人导读](./docs/tutorials/00-新人导读.md) 分流到用户系列 01–11
 - 语言权威：[语法参考](./docs/concepts/HopSpec%20V3语法参考.md)（写规约时查）· [核心规范](./docs/concepts/HopSpec%20V3核心规范.md)（想弄懂机制时读）
 - 改引擎、接工具、看架构：[开发者导读](./docs/tutorials/D0-生态开发者导读.md) · [ARCHITECTURE](./ARCHITECTURE.md) · [文档地图 Doctree](./Doctree.md)
 - 项目现状：[STATUS.md](./STATUS.md)
