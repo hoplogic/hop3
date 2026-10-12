@@ -1,12 +1,12 @@
 #!/bin/bash
-# 发版档（design ^anc-driver-live-e2e-entry 三档表）：10 快乐路径 + 6 失败路径,并发 5,~10min。
+# 发版档（design ^anc-driver-live-e2e-entry 三档表）：9 快乐路径 + 6 失败路径（共 15 场景）,并发 5,~10min。
 # 凭证判据不变（硬闸仍只看 cc/codex delegated 双绿且指向 HEAD）。flash 已迁 deep（LLM 质量面）。
 set -u
 cd "$(dirname "$0")/.."
 LOGDIR=".e2e-evidence/logs"; mkdir -p "$LOGDIR"
 RUNLOG="$LOGDIR/run-$(date +%Y%m%dT%H%M%S).summary.txt"
 CONC="${HOPSPEC_E2E_CONCURRENCY:-5}"
-echo "═══ live:core 发版档（16 场景,并发 $CONC;日志→$LOGDIR/）═══"
+echo "═══ live:core 发版档（15 场景,并发 $CONC;日志→$LOGDIR/）═══"
 npm run -s build || exit 1
 # 覆盖率测量（作者 2026-08-15"所有的真机测试应该度量总覆盖率"）：HOPJIT_COVERAGE=1 开启——
 # NODE_V8_COVERAGE 经 env 传播到全部 node 子进程（CLI/server/子实例各落一份,报告器合并）。

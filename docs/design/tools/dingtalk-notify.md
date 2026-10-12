@@ -41,14 +41,14 @@ trait: DingtalkNotify
 ## 类型约定【契约】 ^anc-tool-dingtalk-types
 
 ```
-struct: NotifyArgs
+HopType: NotifyArgs
   Id: dingtalk-notify-args
   Fields:
     - text % text        # 消息正文（title 在场时作 markdown 正文,支持 markdown 文法）
     - title % line       # 可选。给了走 markdown 消息（手机通知栏显示标题）,缺席纯 text 消息
     - at_mobiles % [line] # 可选。@人手机号列表（消息在对方会话里标红——等人停点的提档手段）
 
-struct: NotifyResult    # ToolResult.result 的 JSON 内容（content_type: json）
+HopType: NotifyResult    # ToolResult.result 的 JSON 内容（content_type: json）
   Id: dingtalk-notify-result
   Fields:
     - sent % bool        # true=钉钉受理（errcode=0）

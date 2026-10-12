@@ -38,14 +38,17 @@ export interface ToolCallRecord {
   name: string;
   result: 'success' | 'failure';
   at: string;
-  server?: string;        // 外部工具归属（mcp 绑定的 server 逻辑名）——内置工具缺席
-  duration_ms?: number;   // 外部调用耗时（出引擎进程,延迟是审计必需——五点需求⑤）
+  args_preview?: string;          // debug 级：调用参数 JSON 截断预览（≤500 字符）——tool_result 是模型每轮决策的直接输入,不在账上验尸只能猜
+  result_preview?: string;        // debug 级：结果文本截断预览（≤500 字符）
+  server?: string;                // 外部工具归属（mcp 绑定的 server 逻辑名）——内置工具缺席
+  duration_ms?: number;           // 外部调用耗时（出引擎进程,延迟是审计必需——五点需求⑤）
+  discarded_text_blocks?: number; // 多 text 块取首块时的丢弃计数（0006 留痕,binding 层填）
 }
 
 /** commit 步骤的审计字段：不可逆操作的目标、授权来源、结果、时间——审计性字段，无视日志级别始终记录。见 [[spec-observability#^anc-obs-audit]] */
 export interface CommitAuditRecord {
   target?: string;
-  authorized_by: 'human' | 'caller' | 'policy' | 'none';
+  authorized_by: 'engine_safe' | 'model_safe' | 'human' | 'task_always' | 'caller' | 'policy' | 'none';   // engine_safe=引擎按动作分类判安全放行,model_safe=安全分析模型判安全放行,task_always=人选了这一步以后都通过（^anc-exec-commit-approval）
   result: 'success' | 'failure';
   at: string;
 }
@@ -54,7 +57,7 @@ export interface CommitAuditRecord {
 export interface HitlRecord { // @a: anc-obs-hitl-record
   shown?: string;                    // 展示给人的问题面（=summary,与 paused question 同源——#34 受众分流后 instruction 不进人眼;选项归 response_options,instruction 审计痕在 paused 卡整卡）
   response?: string;
-  responder?: 'human' | 'caller';
+  responder?: 'caller';              // 恒 caller：应答一律经调用方通道进引擎,human 值不可达（设计 ^anc-obs-hitl-record「responder 取值」收窄）
   // 结构化选项 {value,label}——设计契约形态；string[] 旧形态兼容读（写侧一律结构化）。
   // 2026-08-08 语义审计 ❌ 修复：原 options: string[] 扁平化丢 label。
   response_options?: Array<{ value: string; label?: string }>;
@@ -96,7 +99,7 @@ export interface StepMeta {
   // formatPromptText 渲染件,意图层记录与实发内容分叉,假 prompt 骗过十几轮走查）。
   // response = LLM 原始回复全文（解析前 text content,DEBT-09:每轮尝试独立落账丢弃轮保痕）。
   // @a: anc-obs-llm-response, anc-obs-record-at-boundary
-  llm?: { model?: string; max_tokens?: number; thinking?: string; input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null; ctx_input_total?: number; prompt?: string; response?: string };   // cache 两字段:缓存观测（openai 协议 null 如实记）;max_tokens=当次请求实发上限（发送口抄实际参数,^anc-exec-output-budget 观测条）;thinking=当次实发思考参数摘要（'disabled'/'enabled:budget=N'/'effort:low'〔思考关不掉的端点把关思考改发 output_config effort,^anc-exec-thinking-disable-unsupported〕/缺席记 'absent'——0100 五级链落地后恒显式,probe 核参数的唯一通道:响应 usage 不含思考开关,0100 真机 probe 实撞观测缺口后补）;ctx_input_total=当次输入体量三项合计（^anc-exec-ctx-watermark,0095——缓存命中会掩住真实体量）// @a: anc-exec-cache-control, anc-exec-output-budget, anc-exec-ctx-watermark
+  llm?: { model?: string; max_tokens?: number; stop_reason?: string; thinking?: string; input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null; ctx_input_total?: number; prompt?: string; response?: string; pipeline_stage?: 'initial_plan' | 'failure_analysis' | 'replan_strategy' | 'generate' };   // pipeline_stage=replan 流水线段的 llm 块才带（todo/0151,^anc-exec-adaptive-pipeline 观测条）;cache 两字段:缓存观测（openai 协议 null 如实记）;max_tokens=当次请求实发上限（发送口抄实际参数,^anc-exec-output-budget 观测条）;stop_reason=响应收尾原因原值,缺席记 'absent'（todo/0121,^anc-exec-output-abort-loud）;thinking=当次实发思考参数摘要（'disabled'/'enabled:budget=N'/'effort:low'〔思考关不掉的端点把关思考改发 output_config effort,^anc-exec-thinking-disable-unsupported〕/缺席记 'absent'——0100 五级链落地后恒显式,probe 核参数的唯一通道:响应 usage 不含思考开关,0100 真机 probe 实撞观测缺口后补）;ctx_input_total=当次输入体量三项合计（^anc-exec-ctx-watermark,0095——缓存命中会掩住真实体量）// @a: anc-exec-cache-control, anc-exec-output-budget, anc-exec-ctx-watermark, anc-exec-output-abort-loud
   tokens_used?: number;
   // adaptive 三段流水线中间产物（生成侧留痕——离线审核候选文件时对照"当时怎么想的"）。
   // 见 step-dispatcher ^anc-exec-adaptive-pipeline。// @a: anc-exec-adaptive-pipeline
@@ -121,6 +124,10 @@ export interface HopLogOptions {
   goal: string;
   inputs?: Record<string, unknown>;
   traceId?: string;  // 跨 run 关联:worker 子实例继承父 trace_id
+  // 本 run 工作区根绝对路径——写进 header `workspace_dir:` 行,让"这次跑在哪个目录上"对人可见（此前只有
+  // state.json 记,作者 2026-10-07 问"运行时是否显示一下 cwd 是啥？或者写在 hoplog 里"）;engine 从 hostConfig 透传,
+  // 缺席（直接构造 HopLog 的测试/工具场景）不写该行。见 [[spec-observability#^anc-obs-file-layout]] // @a: anc-cli-workspace-arg
+  workspaceDir?: string;
 }
 
 /** 日志保留上限缺省值——日志根目录最多留 3 个 run 目录（含本次）,作者定（todo/0127）。见 [[spec-observability#^anc-obs-log-retention]] */
@@ -237,6 +244,7 @@ export class HopLog { // @a: anc-obs-hoplog, anc-obs-execution-log-absorption
   private headerRunId = '(unknown)';
   private headerTraceId = '(unknown)';
   private headerStartedAt = '';
+  private headerWorkspaceDir: string | undefined;   // @a: anc-cli-workspace-arg
 
   constructor(options: HopLogOptions) {
     this.level = options.level ?? 'info';   // 缺省 info（2026-09-30 todo/0127 作者定——对外分发防塞爆硬盘,prompt+response 占字节 65%;2026-08-23 曾定 debug,前提'个人开发体积可承受'已变。排障显式 debug） // @a: anc-obs-log-levels
@@ -254,6 +262,7 @@ export class HopLog { // @a: anc-obs-hoplog, anc-obs-execution-log-absorption
     this.headerRunId = runId;
     this.headerTraceId = options.traceId ?? runId;
     this.headerStartedAt = timestamp();
+    this.headerWorkspaceDir = options.workspaceDir;
 
     // Header — written immediately。spec_id（用户在 spec 写的 Id:）/trace_id（调用方传入）走 toYaml 转义
     // ——外部来源值含空格/冒号/特殊字符会破 YAML header；run_id（内部生成固定格式）/level（枚举）无需。
@@ -265,6 +274,8 @@ export class HopLog { // @a: anc-obs-hoplog, anc-obs-execution-log-absorption
     this.append(`trace_id: ${toYaml(options.traceId ?? runId)}\n`); // @a: anc-obs-trace-inherit
     this.append(`level: ${this.level}\n`);
     this.append(`started_at: ${toYaml(this.headerStartedAt)}\n`);
+    // workspace_dir 紧随 started_at（半稳契约：新字段只追加在既有字段之后;路径含空格/冒号走 toYaml）// @a: anc-cli-workspace-arg
+    if (this.headerWorkspaceDir !== undefined) this.append(`workspace_dir: ${toYaml(this.headerWorkspaceDir)}\n`);
     // title/goal 在 spec: 下的 2 空格层级；多行值走 block scalar，内容须比键更深缩进（indent=1 → 内容 4 空格 > 键 2 空格）。
     // 不传 indent 时多行 goal 的 block scalar 内容仅 2 空格 = 键缩进 → YAML 非法（block 判空 + 内容行无冒号）。
     this.append(`spec:\n  title: ${toYaml(options.title, 1)}\n  goal: ${toYaml(options.goal, 1)}\n`);
@@ -291,6 +302,7 @@ export class HopLog { // @a: anc-obs-hoplog, anc-obs-execution-log-absorption
       const head = readFileSync(log.filePath, 'utf-8').slice(0, 800);
       const t = head.match(/^trace_id:\s*(.+)$/m); if (t) log.headerTraceId = t[1].trim().replace(/^"|"$/g, '');
       const st = head.match(/^started_at:\s*(.+)$/m); if (st) log.headerStartedAt = st[1].trim().replace(/^"|"$/g, '');
+      const ws = head.match(/^workspace_dir:\s*(.+)$/m); if (ws) log.headerWorkspaceDir = ws[1].trim().replace(/^"|"$/g, '');   // @a: anc-cli-workspace-arg
     }
     // 目录不在（crash 后被清理）：重建+重发最小 header+断档标记,续跑不因 ENOENT 失败（hopissues/0116）// @a: anc-obs-log-retention
     if (!existsSync(runDir)) {
@@ -372,7 +384,10 @@ export class HopLog { // @a: anc-obs-hoplog, anc-obs-execution-log-absorption
       // startedSteps 已含文件中所有写过骨架的 step（含未 done 的）——recordStepStart 幂等判据直接用它：
       // startedSteps 有且未 done = resume 续/ recover 重发，跳过骨架只补 resumed_at（见 recordStepStart）。
     }
-    mkdirSync(runDir, { recursive: true });
+    // 重建已在上方"目录不在"分支做过（成功则目录在,失败则 appendDead）——这里不再无条件 mkdir：
+    // 失败场景下再 mkdir 会把 EACCES 原样抛出,上方 catch 的"warn + 降级,run 继续"承诺落空
+    // （todo/0136 ③ 补 resume 侧测试时实抓,设计 ^anc-obs-hoplog-resume 步 1 条件分支）。// @a: anc-obs-hoplog-resume
+    if (!log.appendDead && !existsSync(runDir)) mkdirSync(runDir, { recursive: true });
 
     // resume marker 延迟写入：不在此 append（可能砸进上一步未闭合的 prompt 块标量中间破坏
     // YAML），仅暂存时间戳，由下一次写入按正确层级落成结构化字段 resumed_at（三出口见 pendingResume 声明处）。
@@ -659,11 +674,14 @@ export class HopLog { // @a: anc-obs-hoplog, anc-obs-execution-log-absorption
 
   /** settle 块（P1 统一模型）：容器收齐终态化一条——settled_at。
    * 见 [[spec-observability#^anc-obs-parallel-reap]]。 // @a: anc-obs-parallel-reap */
-  recordParallelSettle(hostStepId: string): void {
+  recordParallelSettle(hostStepId: string, reaped?: string[]): void {   // reaped=已收子实例清单（设计 ^anc-obs-parallel-reap 定签名两参,todo/0129 B7 补第二参）
     const f = 2 * this.stepDepth(hostStepId) + 2;
     this.blockHeader(hostStepId);
     this.append(`${this.ind(f)}settle:\n`);
     this.append(`${this.ind(f + 2)}settled_at: ${toYaml(timestamp())}\n`);
+    // 逐项按块缩进写（与 fanout 的 children: 列表同形）——此前 `reaped: ${toYaml(list)}` 把 `- x` 行写到了 0 列,
+    // 块内不合法 YAML（2026-10-08 review 补 reaped 比对测试时实抓,todo/0129 B7 落地时没有读回核对）。// @a: anc-obs-parallel-reap
+    if (reaped && reaped.length) this.append(`${this.ind(f + 2)}reaped:\n${reaped.map(id => `${this.ind(f + 4)}- ${toYaml(id)}`).join('\n')}\n`);
     this.flush();
   }
   // 见 design/spec-observability.md ^anc-obs-nested-tree。// @a: anc-obs-parallel-dispatch
@@ -731,6 +749,7 @@ export class HopLog { // @a: anc-obs-hoplog, anc-obs-execution-log-absorption
       `trace_id: ${toYaml(this.headerTraceId)}\n` +
       `level: ${this.level}\n` +
       `started_at: ${toYaml(this.headerStartedAt || timestamp())}\n` +
+      (this.headerWorkspaceDir !== undefined ? `workspace_dir: ${toYaml(this.headerWorkspaceDir)}\n` : '') +   // @a: anc-cli-workspace-arg
       `log_gap:\n  at: ${toYaml(timestamp())}\n  reason: ${reason}\n` +
       `execution:\n`);
   }

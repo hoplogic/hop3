@@ -33,7 +33,7 @@ Install at the root of the project where you'll run specs:
 
 ```bash
 cd <your project>
-hopjit install-skill --carrier codex --demo
+hopjit setup --carrier codex
 ```
 
 Generated layout:
@@ -45,11 +45,13 @@ Generated layout:
 │   └── segment-driver.md       # execution segment (continuous reason/act/check loop)
 └── references/                 # execution details such as discovery / execution-rules
 
-.agents/skills/demo-coffee-week/
-├── SKILL.md                    # $demo-coffee-week named demo entry
-├── spec.md
-└── coffee-sales.json
+~/.hopjit/ants/demo-coffee-week/          # demo HopAnt (installed by default, carrier-independent, not in the $ menu)
+├── demo-coffee-week.md         # entry spec
+├── coffee-sales.json           # demo data
+└── inner_store/                # local state, not distributed
 ```
+
+The same directory also holds `demo-fact-check` (simplified fact checker) and `demo-rename` (batch rename).
 
 > Advanced: `--plus` additionally installs two research skills `$hop-fact-check` / `$hop-deep-research` (also project-scoped), and merges the search/browser tool config they need into `~/.hopjit/config.yaml` — after that only `export DASHSCOPE_API_KEY=<your Bailian key>` remains. Skip on first run.
 
@@ -58,10 +60,10 @@ Generated layout:
 Codex triggers skills implicitly by their description, or you can invoke explicitly with `$`:
 
 ```text
-$demo-coffee-week
+$hopspec run ~/.hopjit/ants/demo-coffee-week/demo-coffee-week.md
 ```
 
-That is the shortest first run. The generic driver entry is still:
+That is the shortest first run. Any other spec runs through the same entry:
 
 ```
 $hopspec run examples/data-quality.md
@@ -80,7 +82,7 @@ The main orchestrator first locates the hopjit CLI (a single `command -v hopjit`
 | Symptom | Remedy |
 |---|---|
 | Codex doesn't trigger the skill | Confirm `.agents/skills/hopspec/SKILL.md` exists in the **current project** and its first line is `---`; invoke explicitly with `$hopspec run …`; if it still doesn't appear, restart Codex |
-| `$demo-coffee-week` doesn't appear | Reinstall with `hopjit install-skill --carrier codex --demo --force`; you can also type `/skills` and pick from the list |
+| `~/.hopjit/ants/demo-coffee-week/` is missing | Re-run `hopjit setup --carrier codex` and read the failure reason in the `demo_note` field; installed demos are not overwritten — to refresh one, run `hopjit ant remove demo-coffee-week` first |
 | Engine not found | `npm i -g @hoplogic/hopjit`; or in-project `npm i @hoplogic/hopjit` |
 | parallel seems "stuck" | In conversation-driven mode, parallel steps currently execute sequentially (results identical) — the jobs finish one after another before it continues; just let it run to completion |
 

@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]], [[reuse-mode-prompt-flow]], [[parallel-execution]], [[hop-cli]]
 	source_id: hopjit-design, hopjit-reuse-mode-prompt-flow, hopjit-parallel-execution, hopjit-hop-cli
 	type: extend
-	last_sync: 2026-09-27T20:38+0800
+	last_sync: 2026-10-08T23:21+0800
 	note: Codex 复用模式 driver carrier 正式设计：优先按 main/segment-driver/parallel-worker 三主体拆分，以 spawn 直发结果决定 delegated/inline（2026-08-08 废 nonce probe——任务即握手+产物侧首步心跳）；定义 action envelope、规则一致性、批式 fan-out 与安装布局。
 %%
 
@@ -36,6 +36,8 @@ Codex driver carrier 是 HopJIT 复用模式在 Codex 本地客户端中的驱�
 - agent session 切换是 caller 内部实现，不是新的引擎状态。
 - 正常 session 交接保留 `running`；`hopjit resume` 只用于真正的崩溃恢复。
 - paused 决策、adaptive replan、parallel fan-out 与终态汇总只归 main orchestrator。
+- **驱动通道优先 MCP 工具,CLI 回退**（todo/0146,2026-10-07）：会话里 hopjit MCP 工具可见时,main orchestrator 与单 agent 降级形态用复用驱动工具（`mcp__hopjit__run` / `submit_and_fetch_next` / `reap_and_fetch_next` / `status` / `resume` / `abort` / `validate`,[[mcp-server#^anc-mcp-reuse-driver-tools]]）推进 run,与 CLI 子命令同一引擎调用序、同一响应,通道认领同为 `cli`,同一个 run 可在两者间切换。工具不可见（未注册、server 起不来、opencode 注册缺省未启用、子 agent 会话不继承 MCP）时回退 CLI 命令,回退时每条命令不加管道与截断。segment driver 与 parallel worker 拿到的 action envelope 不变,它们用哪个通道由各自会话可见的工具决定。Codex 的工具放行按 `<server>_<tool>` 粒度由用户配置,setup 只在 `permission_note` 里指路（[[hop-cli#^anc-cli-install-skill-permission]]）。
+- **commit 转人工停点**：commit 执行前先做安全分析,全部动作可逆或低危则引擎直接执行;run 或 submit 返回 `pause_reason: commit` 说明有动作需要人确认,main orchestrator 用不懂代码的人也读得懂的话把 `presented_data.context.analysis` 讲给用户（这一步在做什么、需要确认的动作各有什么后果、建议）,代码在用户要求时才贴,在对话里给三个选项（只批准这一次 / 这一步以后都通过 / 不批准）——这一问就是人批准,载体弹窗不承担批准职责;用户选前两项后调 `mcp__hopjit__approve_commit`（scope 取所选项,工具不可用时用 CLI `hopjit approve_commit`）再 `resume`,选不批准则不调、按用户意思改卡或 `abort`（[[exec-engine#^anc-exec-commit-approval]]）。这类停点同 confirm 一样只归 main orchestrator,执行 agent 遇到即交回。
 
 **本模块负责**：
 
@@ -381,18 +383,9 @@ driver/codex/
 - 驱动件是 CC 版 `driver/hop-skill.md` 的 Codex 适配（同语义分载体——协议 token 与 CC 版对齐，载体差异仅三处：触发形态 `$hop`、问人走对话直接问答〔规约 C9 同款〕、2b 外包按 spawn 能力降级〔无 spawn 则全自驱，无 INLINE_FALLBACK 仪式——/hop 本就缺省自驱，外包只是可选优化〕）；
 - 不引用 hopspec 的 agents/references;自带 `references/hop-ops.md` 一件（运维场景按需读,其他活不读）。
 
-带 `--demo` 时额外安装（**demo 恒项目级**——2026-08-27 作者定"只有 demo 是项目级":演示材料跟项目走,落 cwd 的 `.agents/skills/`,不随正式件进用户级）：
+演示件不再装进 Codex skill 目录（2026-10-06 作者定"demo skill 方向错了，以后都应该是 hopant"，todo/0142）：setup 缺省把三个演示件生成 HopAnt 装进 `~/.hopjit/ants/`，与载体无关（权威 [[hop-cli]] ^anc-cli-install-skill-demo-ants）。Codex 侧经 `$hop` / `$hopspec run <入口 spec 路径>` 调用；早先 `--demo` 装进 `<cwd>/.agents/skills/demo-*` 的旧副本由 setup 的陈旧扫描整目录挪进 `~/.hopjit/stale-backup/`（[[hop-cli#^anc-cli-stale-skill-scan]]）。
 
-```text
-<cwd>/.agents/skills/demo-coffee-week/   （demo 集三件同形态）
-├── SKILL.md
-├── spec.md
-└── coffee-sales.json
-```
-
-Codex 显式调用为 `$demo-coffee-week`（或用 `/skills` 选择）。该薄包装定位 hopspec 的 SKILL.md（用户级 `~/.codex/skills/hopspec/` 或本项目 `.agents/skills/hopspec/`,就近取在场的那份）并委托执行，不复制 main/segment/worker 协议。
-
-Codex 安装分支只从公共 references 复用 `cli-discovery.md`。不删除旧安装遗留文件；当前 `--force` 仍只覆盖受管目标。**旧项目级残留检测（2026-08-27 作者抓"项目级留着老 skill 只会造成版本冲突"）**：装置器检测 cwd 的 `.agents/skills/{hopspec,hop}` 正式件残留（与本次目标不同路径时）,响应带 `legacy_note` 响亮点名+给出删除命令——Codex 同名 project>user,残留会永久盖住用户级新版=静默旧版锁定;不自动删（可能是用户有意项目级钉版,删除权归人）。
+Codex 安装分支只从公共 references 复用 `cli-discovery.md`。不删除旧安装遗留文件；当前 `--force` 仍只覆盖受管目标。历史用户级装载点 `~/.agents/skills/` 下带本器版本戳的陈旧自带件（含旧名 `hopskill-build`）由陈旧扫描挪进备份区，规则权威在 [[hop-cli#^anc-cli-stale-skill-scan]]。**旧项目级残留检测（2026-08-27 作者抓"项目级留着老 skill 只会造成版本冲突"）**：装置器检测 cwd 的 `.agents/skills/{hopspec,hop}` 正式件残留（与本次目标不同路径时）,响应带 `legacy_note` 响亮点名+给出删除命令——Codex 同名 project>user,残留会永久盖住用户级新版=静默旧版锁定;不自动删（可能是用户有意项目级钉版,删除权归人）。
 
 开发期 `npm run dev:install` 同一次刷新安装两套用户级受管副本：CC 到 `~/.claude/skills`,Codex 到 `~/.codex/skills`。只刷新一侧会让另一侧继续加载旧协议文案；driver 源或 CLI caller 协议变更后，两套副本都必须 `--force` 覆盖。
 
@@ -428,7 +421,7 @@ Codex 安装分支只从公共 references 复用 `cli-discovery.md`。不删除�
 
 | 场景 | 验收条件 | 当前状态（2026-08-06） |
 |---|---|---|
-| Skill 安装与发现 | 新会话能发现 `$hopspec`；带 `--demo` 时能直接 `$coffee-week`；`SKILL.md` 第一行是 `---` | ✅ 已验证；2026-08-06 `$coffee-week` live E2E 完成唯一 instance 与 27600 周报 |
+| Skill 安装与发现 | 新会话能发现 `$hopspec`；`SKILL.md` 第一行是 `---`；setup 装出的演示 HopAnt 经 `$hopspec run` 能跑到终态 | ✅ 已验证；2026-08-06 `$coffee-week` live E2E 完成唯一 instance 与 27600 周报（旧形态演示 skill）;2026-10-06 改 HopAnt 后 codex:demo 真机重验通过（ZenMux,setup 装出的 demo-coffee-week 经 `$hopspec run` 跑到终态,唯一 instance） |
 | delegated 顶层执行段 | main 真实派生 segment driver（非 inline）；envelope 交接；返回引擎 JSON 原样；无空输出猜测 | ✅ 手工 ×2；自动 live E2E 2026-08-06 再验：ZenMux Codex delegated，main 零 HopJIT 写命令 + segment wait + 唯一 completed instance |
 | 直发能力门 | spawn 不可用 → inline 完成任务；spawn 可用 → 首 segment 直发真任务完成；首步心跳期限内引擎零实例 → close+inline | ✅ 双翼真机验证（2026-08-09 e2e 全绿）：delegated 翼=codex:delegated + 15-43 归档（spawn 成、任务即握手、单实例完成）；inline 翼=codex:flash（ds4flash spawn 未成走 inline，main 恰一次 run、业务终态过，凭证 exercised_mode=inline）。心跳假死分支待真实假死场景出现时顺带验 |
 | 返回值=引擎 JSON 原样 | 弱模型 segment 干完活后 main 能从其返回中取出引擎 JSON 并按真值消费（不再验手工信封） | ◐ 契约已生效（2026-08-09 e2e 全绿轮 flash 走 inline 通过，凭证 exercised_mode=inline）；**delegated 交接路径待 flash spawn 恰可用的轮次真机验**——flash 的 spawn 可用性本身在环境间抖动（16:51 轮 spawn 成、其余轮 inline），下次 exercised_mode=delegated 的通过轮即销账 |

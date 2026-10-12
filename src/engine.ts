@@ -2,18 +2,19 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 // @module: exec-engine ^anc-struct-exec-engine
-import { randomUUID } from 'node:crypto';
-import { writeFileSync, mkdirSync, realpathSync, unlinkSync, existsSync, readFileSync, rmSync } from 'node:fs';
-import { join, dirname, basename, isAbsolute, resolve } from 'node:path';
+import { randomUUID, createHash } from 'node:crypto';
+import { writeFileSync, mkdirSync, realpathSync, unlinkSync, existsSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { join, dirname, basename, isAbsolute, resolve, normalize } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { parseSpec, serializeSpec } from './parser.js';
-import { validateSpec, validateOutputValues, coerceOutputValues, recoverOutputValues, recoverFencedValue, normalizeOutputsToFixpoint, formatSchemaMismatch } from './validator.js';
+import { B10_READ_TOOLS, B2_BUILTIN_NOTIFY_TOOLS, validateSpec, validateOutputValues, coerceOutputValues, recoverOutputValues, recoverFencedValue, normalizeOutputsToFixpoint, formatSchemaMismatch } from './validator.js';
 import { VariableStore, getWriteScope, isTerminalStatus, type StepStatus } from './ast-runtime.js';
 import {
   dfsNextStep, propagateCompletion, finalizeForEachCollect,
   collectDescendants, findNonTerminalBefore,
   type TraversalState, getCollectPairs, getAsyncUnitVars } from './engine-traverse.js';
-import { FilePersistence, MemoryPersistence, writeChildParams, readChildParams, stateExists, readState, readVars, flattenVars, writeAtomic, readStateSeq } from './persistence.js';
+import { FilePersistence, MemoryPersistence, writeChildParams, readChildParams, stateExists, readState, readVars, flattenVars, writeAtomic, readStateSeq, findRunRoot } from './persistence.js';
 import { unionApprovedCommandNames } from './command-exec.js';
 import { HopLog, timestamp, type LogLevel } from './hoplog.js';
 import { resolveDocRefs, formatDocRefContext, DocRefError } from './doc-ref.js';
@@ -22,13 +23,14 @@ import type { PersistenceProvider, HostConfig, ToolProvider } from './provider-t
 import { credentialLikeHopEnvKey, hopEnvCredentialError } from './provider-types.js';
 import type { ExecEvent, FailKind, StepFailRecord, StateFile, AssembledContext, RetryRecord, InflightCall } from './runtime-types.js';
 import { PromptAssembler, formatPromptText, formatHumanContext, actRoleKind, stepDeliversReadTool } from './prompt.js';
-import type { SpecAST, StepNode, ExecutableStepType, SubtaskStep, CaseStep, StepSummary, BranchStep, CheckStep, CallStep, ConfirmStep, AskStep, ResponseOption, ActStep, CommitStep, ParallelStep , LoopStep, OutputDecl } from './ast-types.js';
-import { DEFAULT_EXPANSION_MAX } from './ast-types.js';   // @a: anc-exec-subtask-free-expand
-import type { InitResponse, NextResponse, CommandResponse, StatusResponse, VarsResponse, ReplanResponse, StepReady, AbortResponse, AdaptiveNeeded } from './cli-types.js';
+import type { SpecAST, StepNode, ExecutableStepType, SubtaskStep, CaseStep, StepSummary, BranchStep, CheckStep, CallStep, ConfirmStep, AskStep, ResponseOption, ActStep, CommitStep, ParallelStep , LoopStep, OutputDecl, ActBody, ActExpr, ActStatement, CallExpr } from './ast-types.js';
+import { DIRS_VAR_REF_RE, DEFAULT_EXPANSION_MAX, DEFAULT_KEEP } from './ast-types.js';   // @a: anc-exec-subtask-free-expand, anc-exec-commit-action-facts
+import type { InitResponse, NextResponse, CommandResponse, StatusResponse, VarsResponse, ReplanResponse, StepReady, AbortResponse, AdaptiveNeeded, ExecutionPaused } from './cli-types.js';
 import type { ValidationError } from './errors.js';
 import { EXECUTABLE_STEP_TYPES, CONTAINER_STEP_TYPES, hasChildren, getChildren, DEFLATE_THRESHOLD, isUpdateModeOutput } from './ast-helpers.js';
 import { ErrorCode } from './errors.js';
-import { bodyHasToolCall } from './act-body-parser.js';
+import { bodyHasToolCall, serializeActBody, exprChildren } from './act-body-parser.js';
+import { ACT_BUILTIN_NAMES } from './act-builtins.js';
 import { BodyInterpreter, ToolCallPending, makeReplayToolProvider, evalExprSync } from './act-body-interpreter.js';
 
 // 重试容器：subtask 或 case（case 就是 branch 下的 subtask，retry/adaptive 语义相同）
@@ -47,6 +49,308 @@ const ENGINE_NOOP_TOOL_PROVIDER: ToolProvider = {
   },
 };
 
+/** 安全分析结果里的一个动作:引擎动作清单条目加上判断与大白话后果。HopSchema 见 [[exec-engine#^anc-exec-commit-approval]] AnalyzedAction。// @a: anc-exec-commit-approval */
+export interface AnalyzedAction {
+  line: number;
+  callee: string;
+  category: string;
+  cited_lines: number[];
+  verdict: 'safe' | 'human';
+  consequence: string;
+}
+/** 安全分析结果（分析函数返回值与引擎合并后同一形态）。source=template 是无模型或模型出错时的固定模板。// @a: anc-exec-commit-approval */
+export interface CommitAnalysis {
+  summary: string;
+  actions: AnalyzedAction[];
+  recommendation: string;
+  model: string | null;
+  source: 'model' | 'template';
+}
+/** 引擎提取的一个有副作用的动作。HopSchema 见 [[exec-engine#^anc-exec-commit-action-facts]] CommitAction。// @a: anc-exec-commit-action-facts */
+export interface CommitAction {
+  line: number;
+  callee: string;
+  category: string;
+  risk: 'safe' | 'review' | 'human';
+  args: Record<string, unknown>;
+  keep: number | null;
+  reason: string;
+}
+/** 一个参数表达式按来源渲染的结果（只在 extractCommitActions 内部使用）。HopSchema 见 [[exec-engine#^anc-exec-commit-action-facts]] ArgForm。
+ * kind:value=只由字面量决定;form=用到本步输入,运行时才有值;unknown=运行前定不了。// @a: anc-exec-commit-action-facts */
+interface ArgForm { kind: 'value' | 'form' | 'unknown'; value: unknown; shown: unknown; sources: string[]; in_work_zone: boolean }
+/** commit 批准账一条记录（账文件=这些记录组成的 JSON 数组）。outcome=referred 不是授权,只用来复用分析结果、防止同一个 commit 步骤反复分析。
+ * HopSchema 见 [[exec-engine#^anc-exec-commit-approval]] CommitApprovalRecord。// @a: anc-exec-commit-approval */
+interface CommitApprovalRecord {
+  outcome: 'approved' | 'referred';
+  decided_by: 'human' | 'model_safe' | 'engine_safe' | 'analysis';
+  spec_path: string;
+  step_id: string;
+  fingerprint: string;
+  scope: 'once' | 'task' | null;
+  run_id: string | null;
+  analysis: CommitAnalysis | null;
+  decided_at: string;
+}
+/** commitFingerprint 的返回值:body 原文与只覆盖 body 的指纹。// @a: anc-exec-commit-approval */
+export interface CommitFacts { body: string; fingerprint: string }
+/** 交给分析函数的材料;渲染成 prompt 归分析函数（dispatcher makeCommitAnalyzer）。// @a: anc-exec-commit-approval */
+export interface CommitAnalysisRequest {
+  goal: string;
+  narratives: Array<{ title: string; content: string }>;
+  step: { step_id: string; summary: string; irreversible_action: string };
+  body_lines: string;
+  actions: CommitAction[];
+  gate_fact: string;
+}
+/** 安全分析函数类型（组合根注册;抛错由 commitGate 接住改用模板分析、转人工）。实现见 [[step-dispatcher#^anc-exec-commit-analyzer]]。// @a: anc-exec-commit-approval, anc-exec-commit-analyzer */
+export type CommitAnalyzer = (request: CommitAnalysisRequest) => Promise<CommitAnalysis>;
+/** checkCommitApproval / commitGate 的返回值:这个 commit 步骤当前 body 的批准情况。查账命中与关卡关闭时不扫描,actions 为空表。
+ * from_ledger=true 表示批准来自账上记录;commitGate 据它判断引擎判定安全要不要记账。// @a: anc-exec-commit-approval */
+export interface CommitApprovalState {
+  approved: boolean;
+  decided_by: 'engine_safe' | 'model_safe' | 'human' | 'task_always' | 'gate_closed' | null;
+  from_ledger: boolean;
+  fingerprint: string;
+  body: string;
+  actions: CommitAction[];
+  store_path: string | null;
+  analysis: CommitAnalysis | null;
+}
+/** approveCommit 返回:ok 带批准的步骤、指纹与范围,error 带码。HopSchema 见 [[hop-cli#^anc-cli-commit-approve-response]]。// @a: anc-exec-commit-approval, anc-cli-commit-approve-response */
+export type CommitApproveResponse =
+  | { status: 'ok'; step_id: string; fingerprint: string; scope: 'once' | 'task'; already_approved?: true; store_path?: string }
+  | { status: 'error'; code: ErrorCode; message: string };
+/** 批准账键用的 spec 路径:解析软链后的规范化绝对路径,文件不存在时退回 resolve。commit 账与 dirs 账记账、查账同用——
+ * 同一份 spec 经软链与经真实路径访问是同一个键,只问一次。见 [[exec-engine#^anc-exec-commit-approval]]。// @a: anc-exec-commit-approval */
+function canonicalSpecPath(specPath: string): string {
+  try { return realpathSync(specPath); } catch { return resolve(specPath); }
+}
+
+/** COMMIT_NOT_APPROVED 报文（独立模式两个产生点同源:mcp-server resume_run 同步预检与 dispatcher.resume 的 commit 分支）。
+ * 恒含:先用大白话讲安全分析、不先贴代码、用三个选项问,选批准后调 approve_commit 的完整参数（含 instance_id、fingerprint、scope 两个取值）、再 resume_run。
+ * 见 [[mcp-server#^anc-mcp-commit-approve]]「COMMIT_NOT_APPROVED 报文同源」。// @a: anc-mcp-commit-approve */
+export function commitNotApprovedMessage(stepId: string, fingerprint: string, instanceId: string, childInstance?: string): string {
+  const child = childInstance ? `, child_instance: "${childInstance}"` : '';
+  return `COMMIT_NOT_APPROVED: commit 步骤 '${stepId}' 有需要人确认的动作,还没批准——先用大白话把停点里的安全分析（context.analysis:每个需要确认的动作的后果与建议）讲给用户,代码不先贴,用户要看再给 context.body;然后在对话里用三个选项问:只批准这一次 / 这一步以后都通过 / 不批准。用户选前两项后调 approve_commit(instance_id: "${instanceId}"${child}, step_id: "${stepId}", fingerprint: "${fingerprint}", scope: "once" 或 "task"),再 resume_run${childInstance ? '（带同一个 child_instance）' : ''};选不批准则不调`;
+}
+
+/** commit_audit.authorized_by 取值:批准关卡的来源 engine_safe / model_safe / human / task_always 原样记,关卡关闭（gate_closed）或无关卡记 policy。
+ * 两模式共用（独立模式 dispatcher.executeCommit、复用模式 advanceToCaller 的 body 执行后）。// @a: anc-exec-commit-approval */
+export function commitAuthorizedBy(decidedBy: CommitApprovalState['decided_by'] | undefined): 'engine_safe' | 'model_safe' | 'human' | 'task_always' | 'policy' {
+  return decidedBy === 'engine_safe' || decidedBy === 'model_safe' || decidedBy === 'human' || decidedBy === 'task_always' ? decidedBy : 'policy';
+}
+
+const COMMIT_RECORD_OUTCOMES = new Set(['approved', 'referred']);
+const COMMIT_RECORD_DECIDERS = new Set(['human', 'model_safe', 'engine_safe', 'analysis']);
+const COMMIT_RECORD_SCOPES = new Set(['once', 'task']);
+/** 读批准账:缺席或损坏一律当空表（宁可多问一次,不能静默放行）。outcome / decided_by / spec_path / fingerprint / scope 取值不合法的记录丢弃,
+ * scope=once 的记录 step_id 与 run_id 也必须是字符串——v0.54 的 auto_review 记录与缺 run_id 的 once 记录因此不再匹配。// @a: anc-exec-commit-approval */
+function readCommitApprovals(storePath: string): CommitApprovalRecord[] {
+  try {
+    if (!existsSync(storePath)) return [];
+    const data = JSON.parse(readFileSync(storePath, 'utf-8')) as unknown;
+    if (!Array.isArray(data)) return [];
+    return data.filter((r): r is CommitApprovalRecord => {
+      if (!r || typeof r !== 'object') return false;
+      const x = r as Record<string, unknown>;
+      if (!COMMIT_RECORD_OUTCOMES.has(x['outcome'] as string) || !COMMIT_RECORD_DECIDERS.has(x['decided_by'] as string)
+        || typeof x['spec_path'] !== 'string' || typeof x['fingerprint'] !== 'string') return false;
+      if (x['scope'] !== null && !COMMIT_RECORD_SCOPES.has(x['scope'] as string)) return false;
+      return x['scope'] !== 'once' || (typeof x['step_id'] === 'string' && typeof x['run_id'] === 'string');
+    });
+  } catch { return []; }
+}
+
+// ── commit 动作清单:分类表与模板后果（^anc-exec-commit-action-facts）──
+/** 运行前定不下来的参数值统一记这句（作者定"不猜测"）。// @a: anc-exec-commit-action-facts */
+export const COMMIT_ARG_UNKNOWN = '运行前无法确定';
+/** spec 内容工具里只算返回值、不写盘的纯函数件——不进动作清单。// @a: anc-exec-commit-action-facts */
+const COMMIT_PURE_TOOLS = new Set(['validate_spec', 'read_spec_tree', 'insert_node', 'replace_node', 'replace_children', 'renumber_steps']);
+const COMMIT_CONTENT_ARGS = new Set(['content', 'new_text', 'old_text']);
+const COMMIT_KEEP_TOOLS = new Set(['write', 'edit_file', 'move', 'remove']);
+const COMMIT_ARG_MAX = 200;
+
+/** 按分类表定一个调用的 category / risk / reason;不进清单的调用返回 null。keep:文件写类四件的 keep 实参（缺省 DEFAULT_KEEP,定不了 null）;
+ * targetInWorkZone:目标（move 为两端）按写法确定落在本 run 的 work_zone 内。// @a: anc-exec-commit-action-facts */
+function classifyCommitCall(callee: string, keep: number | null, targetInWorkZone: boolean): Pick<CommitAction, 'category' | 'risk' | 'reason'> | null {
+  if (callee === 'subprocess.run') return { category: 'run_command', risk: 'human', reason: '外部命令做了什么在任务之外,一律需要人确认' };
+  if (ACT_BUILTIN_NAMES.has(callee) || B10_READ_TOOLS.has(callee) || COMMIT_PURE_TOOLS.has(callee)) return null;
+  if (callee === 'run_script') return { category: 'run_script', risk: 'human', reason: '脚本做了什么在任务之外,一律需要人确认' };
+  if (B2_BUILTIN_NOTIFY_TOOLS.has(callee)) return { category: 'notify', risk: 'human', reason: '对外发送通知,发出后收不回,一律需要人确认' };
+  if (callee === 'create') return { category: 'create_file', risk: 'safe', reason: '只新建文件,已存在时不覆盖' };
+  if (callee === 'append') return { category: 'append', risk: 'safe', reason: '只在文件末尾追加,原有内容不变' };
+  if (callee === 'makedirs') return { category: 'make_dir', risk: 'safe', reason: '只新建目录' };
+  if (COMMIT_KEEP_TOOLS.has(callee)) {
+    const kind = callee === 'move' ? 'move' : callee === 'remove' ? 'remove' : 'overwrite';
+    // work_zone 内的文件不进回收站,先判 work_zone:对它写"可以找回"与事实不符
+    if (targetInWorkZone) return { category: 'work_zone_write', risk: 'safe', reason: '目标在任务的临时工作区内,不影响用户文件' };
+    if (keep !== null && keep >= 1) return { category: `${kind}_keep`, risk: 'safe', reason: `keep=${keep},改动前把旧版本留存进回收站` };
+    return {
+      category: kind === 'remove' ? 'remove_permanent' : `${kind}_no_keep`, risk: 'review',
+      reason: keep === 0 ? 'keep=0,不留存旧版本' : 'keep 的值运行前无法确定,不能确认会留存旧版本',
+    };
+  }
+  return { category: 'external_tool', risk: 'human', reason: '不是内置工具,它对外部系统的影响引擎判断不了,一律需要人确认' };
+}
+
+/** 按 category 取模板后果,填入参数摘要（templateAnalysis 与 mergeAnalysis 补位共用）。// @a: anc-exec-commit-action-facts */
+function commitActionTemplate(a: CommitAction): string {
+  const arg = (k: string): string => {
+    const v = a.args[k];
+    if (v === undefined) return COMMIT_ARG_UNKNOWN;
+    if (Array.isArray(v)) return v.map(x => String(x)).join(' ');
+    return typeof v === 'string' ? v : JSON.stringify(v);
+  };
+  switch (a.category) {
+    case 'create_file': return `新建文件 ${arg('path')};文件已存在时不会覆盖,操作失败`;
+    case 'append': return `在 ${arg('path')} 末尾追加内容,原有内容不变`;
+    case 'make_dir': return `新建目录 ${arg('path')}`;
+    case 'overwrite_keep': return `写入 ${arg('path')};如果文件已存在,旧版本先存进回收站（最多保留 ${a.keep} 份）,可以找回`;
+    case 'move_keep': return `把 ${arg('from')} 移到 ${arg('to')};如果目标已存在,旧版本先存进回收站,可以找回`;
+    case 'remove_keep': return `删除 ${arg('path')},文件进回收站,可以找回`;
+    case 'work_zone_write': return `改动任务的临时工作区 ${arg(a.callee === 'move' ? 'to' : 'path')},不影响你的文件`;
+    case 'overwrite_no_keep': return `写入 ${arg('path')};如果文件已存在,旧内容被直接覆盖、不留旧版本,找不回`;
+    case 'move_no_keep': return `把 ${arg('from')} 移到 ${arg('to')};如果目标已存在,它被直接替换、找不回`;
+    case 'remove_permanent': return `永久删除 ${arg('path')},不进回收站,找不回`;
+    case 'run_command': return `运行命令 ${arg('argv')};命令做了什么在任务之外,引擎判断不了`;
+    case 'run_script': return `运行脚本 ${arg('path')};脚本做了什么在任务之外,引擎判断不了`;
+    case 'notify': return '向外发送通知,发出后收不回';
+    default: return `调用外部工具 ${a.callee},它对外部系统的影响引擎判断不了`;
+  }
+}
+
+/** 无模型或模型出错时的固定模板分析:引擎 risk=safe 的判 safe,其余判 human。// @a: anc-exec-commit-approval */
+export function templateAnalysis(actions: CommitAction[], note: string): CommitAnalysis {
+  const analyzed: AnalyzedAction[] = actions.map(a => ({
+    line: a.line, callee: a.callee, category: a.category, cited_lines: [a.line],
+    verdict: a.risk === 'safe' ? 'safe' : 'human', consequence: commitActionTemplate(a),
+  }));
+  const m = analyzed.filter(a => a.verdict === 'human').length;
+  return {
+    summary: `这一步共有 ${actions.length} 个动作,其中 ${m} 个需要你确认`,
+    actions: analyzed,
+    recommendation: `${note};引擎无法确认标为需要确认的动作安全,请看清后果再决定`,
+    model: null, source: 'template',
+  };
+}
+
+/** 模型可用的额外分类:只用于把 review 动作改判为 safe 时说明理由。// @a: anc-exec-commit-action-facts */
+const COMMIT_MODEL_CATEGORIES = new Set(['rotation', 'data_op']);
+/** 把分析函数的返回值对回引擎动作清单:按 line + callee 对齐;引擎 risk=human 的恒 human（模型不能降低）;
+ * 模型漏掉的引擎动作补 human + 模板后果;清单之外的动作丢弃;review 动作被判 safe 时才采信模型的 rotation / data_op 分类。
+ * // @a: anc-exec-commit-approval, anc-exec-commit-action-facts */
+export function mergeAnalysis(actions: CommitAction[], returned: CommitAnalysis): CommitAnalysis {
+  const pool = Array.isArray(returned?.actions) ? [...returned.actions] : [];
+  const merged: AnalyzedAction[] = actions.map(a => {
+    const idx = pool.findIndex(r => !!r && r.line === a.line && r.callee === a.callee);
+    const r = idx >= 0 ? pool.splice(idx, 1)[0] : undefined;
+    const modelVerdict = r && (r.verdict === 'safe' || r.verdict === 'human') ? r.verdict : undefined;
+    let verdict: 'safe' | 'human' = a.risk === 'human' ? 'human' : (modelVerdict ?? 'human');
+    const consequence = r && typeof r.consequence === 'string' && r.consequence.trim() ? r.consequence : commitActionTemplate(a);
+    let category = a.category;
+    // 模型分类只在把 review 动作改判 safe 时采信,且必须说出属于哪一种可放行的模式;说不出按 human 处理
+    if (a.risk === 'review' && verdict === 'safe') {
+      if (r && COMMIT_MODEL_CATEGORIES.has(r.category)) category = r.category;
+      else verdict = 'human';
+    }
+    const cited = r && Array.isArray(r.cited_lines) && r.cited_lines.length > 0 && r.cited_lines.every(n => Number.isInteger(n)) ? r.cited_lines : [a.line];
+    return { line: a.line, callee: a.callee, category, cited_lines: cited, verdict, consequence };
+  });
+  return {
+    summary: typeof returned?.summary === 'string' ? returned.summary : '',
+    actions: merged,
+    recommendation: typeof returned?.recommendation === 'string' ? returned.recommendation : '',
+    model: typeof returned?.model === 'string' ? returned.model : null,
+    source: 'model',
+  };
+}
+
+// ── Config.dirs：任务级目录声明与授权（^anc-exec-dirs-grant,todo/0148）──
+/** 展开后的声明目录。outside=workspace 之外的条目（需人批的就是这些）;dirs_hash=按 "<mode>:<path>" 排序后 sha256。// @a: anc-exec-dirs-grant */
+export interface DeclaredDirs { read: string[]; readwrite: string[]; outside: Array<{ path: string; mode: 'read' | 'readwrite' }>; dirs_hash: string }
+interface DirsApprovalRecord { spec_path: string; dirs_hash: string; approved_at: string }
+/** approveDirs 返回。// @a: anc-exec-dirs-grant */
+export type DirsApproveResponse =
+  | { status: 'ok'; dirs_hash: string; already_approved?: true; store_path?: string }
+  | { status: 'error'; code: ErrorCode; message: string };
+/** 读 dirs 批准账:缺席或损坏一律当空表（同 commit 账）。// @a: anc-exec-dirs-grant */
+function readDirsApprovals(storePath: string): DirsApprovalRecord[] {
+  try {
+    if (!existsSync(storePath)) return [];
+    const data = JSON.parse(readFileSync(storePath, 'utf-8')) as unknown;
+    return Array.isArray(data) ? data.filter((r): r is DirsApprovalRecord => !!r && typeof r === 'object'
+      && typeof (r as DirsApprovalRecord).spec_path === 'string' && typeof (r as DirsApprovalRecord).dirs_hash === 'string') : [];
+  } catch { return []; }
+}
+/** 复用模式子实例继承父 DeclaredDirs 的参数文件保留键（与 hop_env_* 同通道透传,组合根摘出进 EngineOptions.inheritedDirs,不进业务 params）。// @a: anc-exec-dirs-grant */
+export const DECLARED_DIRS_PARAM = '__hop_declared_dirs';
+/** dirs 账与 commit 账同目录换名——引擎只持一个注册位（给 commit 账路径）,规则真身 hopant.dirsApprovalStorePath。// @a: anc-exec-dirs-grant */
+function dirsStoreFromCommitStore(commitStorePath: string): string { return join(dirname(commitStorePath), 'dirs_approvals.json'); }
+
+/** Config.dirs 展开、核存在、分档——设计 HopSop 七步（[[exec-engine#^anc-exec-dirs-grant]]）。任何一条拒即返回 INIT_FAILED 文案（string）,
+ * 调用方包成 InitError;合法返回 DeclaredDirs。{var} 从 params / hop_env 取值且须 / 开头;~ 与 ~/… 展开 homedir;相对路径与 $HOME 之类一律拒;
+ * normalize 后含 .. 段拒;statSync 非目录拒;同目录两档按 readwrite 计并 warn。// @a: anc-exec-dirs-grant */
+export function resolveDeclaredDirs(
+  config: Record<string, unknown> | undefined, params: Record<string, unknown> | undefined, hopEnv: Record<string, string> | undefined,
+  workspaceDir: string, warn: (m: string) => void,
+): DeclaredDirs | { init_failed: string } {
+  const empty: DeclaredDirs = { read: [], readwrite: [], outside: [], dirs_hash: '' };
+  const raw = config?.['dirs'];
+  if (raw === undefined) return empty;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { init_failed: `INIT_FAILED: Config.dirs 须是 {read?: [路径], readwrite?: [路径]} 映射（实际 ${JSON.stringify(raw)}）` };
+  const expandOne = (item: unknown, mode: 'read' | 'readwrite'): string | { init_failed: string } => {
+    if (typeof item !== 'string' || !item.trim()) return { init_failed: `INIT_FAILED: Config.dirs.${mode} 的条目须是非空字符串（实际 ${JSON.stringify(item)}）` };
+    const v = item.trim();
+    let expanded: string;
+    const m = DIRS_VAR_REF_RE.exec(v);
+    if (m) {
+      const name = m[1];
+      const val = name.startsWith('hop_env_') ? hopEnv?.[name] : params?.[name];
+      if (val === undefined || val === null || val === '') return { init_failed: `INIT_FAILED: Config.dirs.${mode} 引用的 {${name}} 没有值——起跑时经 params 传入` };
+      if (typeof val !== 'string' || !val.startsWith('/')) return { init_failed: `INIT_FAILED: Config.dirs.${mode} 引用的 {${name}} 值 ${JSON.stringify(val)} 不是 / 开头的绝对路径——调用方传绝对路径,引擎不猜相对谁（变量值不展开 ~）` };
+      expanded = val;
+    } else if (v === '~' || v.startsWith('~/')) {
+      expanded = v === '~' ? homedir() : join(homedir(), v.slice(2));
+    } else if (v.startsWith('/')) {
+      expanded = v;
+    } else if (v.startsWith('~')) {
+      return { init_failed: `INIT_FAILED: Config.dirs.${mode} 不认 ${JSON.stringify(v)}——~ 只表示当前用户家目录（~ 或 ~/…）,不支持 ~用户名 形式` };
+    } else {
+      return { init_failed: `INIT_FAILED: Config.dirs.${mode} 不支持相对路径 ${JSON.stringify(v)}——spec 目录起跑已可读,readwrite 不许指向 HopAnt 自身;写 / 开头的绝对路径、~/…,或 {变量}` };
+    }
+    // .. 判在 normalize 之前——normalize 会把 /a/../b 折成 /b,判在之后等于没判（首测实抓）;变量值与字面同判
+    if (expanded.split('/').includes('..')) return { init_failed: `INIT_FAILED: Config.dirs.${mode} 的 ${JSON.stringify(v)} 含 .. 段（${expanded}）——写规范化后的绝对路径,引擎不替你算` };
+    const p = normalize(expanded).replace(/\/+$/, '') || '/';
+    let isDir = false;
+    try { isDir = statSync(p).isDirectory(); } catch { /* 不存在 */ }
+    if (!isDir) return { init_failed: `INIT_FAILED: Config.dirs.${mode} 声明的目录不存在：${p}——先建好再跑,引擎不替你建` };
+    return p;
+  };
+  const out: DeclaredDirs = { read: [], readwrite: [], outside: [], dirs_hash: '' };
+  for (const mode of ['read', 'readwrite'] as const) {
+    const list = (raw as Record<string, unknown>)[mode];
+    if (list === undefined) continue;
+    if (!Array.isArray(list)) return { init_failed: `INIT_FAILED: Config.dirs.${mode} 须是列表（实际 ${JSON.stringify(list)}）` };
+    for (const item of list) {
+      const r = expandOne(item, mode);
+      if (typeof r !== 'string') return r;
+      if (!out[mode].includes(r)) out[mode].push(r);
+    }
+  }
+  for (const d of out.readwrite) {
+    const i = out.read.indexOf(d);
+    if (i >= 0) { out.read.splice(i, 1); warn(`Config.dirs: ${d} 同时出现在 read 与 readwrite——按 readwrite 计`); }
+  }
+  const wsReal = (() => { try { return realpathSync(resolve(workspaceDir)); } catch { return resolve(workspaceDir); } })();
+  const inWs = (p: string) => { const rp = (() => { try { return realpathSync(p); } catch { return p; } })(); return rp === wsReal || rp.startsWith(wsReal.endsWith('/') ? wsReal : wsReal + '/'); };
+  for (const p of out.read) if (!inWs(p)) out.outside.push({ path: p, mode: 'read' });
+  for (const p of out.readwrite) if (!inWs(p)) out.outside.push({ path: p, mode: 'readwrite' });
+  const keys = [...out.read.map(p => `read:${p}`), ...out.readwrite.map(p => `readwrite:${p}`)].sort();
+  out.dirs_hash = keys.length ? createHash('sha256').update(keys.join('\n')).digest('hex') : '';
+  return out;
+}
+
 /** ExecutionEngine 构造/初始化选项——状态目录、持久化、日志、Inputs 实参、call/parallel 子实例参数等。见 [[exec-engine#^anc-struct-exec-engine]] */
 // 派发启动宽限期（§U2 dispatch-lost 判据）：账面已入而子实例目录未建的允许时长——
 // 覆盖复用模式后台 worker 启动延迟；超此才判 dispatch-lost。// @a: anc-exec-parallel-inflight-reconcile
@@ -64,8 +368,9 @@ export const ENGINE_WRAP_PREFIXES: readonly RegExp[] = [
 ];
 /** 事务级前缀（失败根因在结构或子层,任何一轮重跑都同因——直达兜底）。 */
 export const TRANSACTIONAL_PREFIXES: readonly string[] = ['DEPTH_EXCEEDED:', 'CalleeFailure:', 'CONTEXT_OVERFLOW:'];
-/** 步级瞬态前缀（失败绑定本轮输入,下轮带新反馈输入即变——首撞免扣预算）。 */
-export const TRANSIENT_PREFIXES: readonly string[] = ['OUTPUT_TRUNCATED:', 'THINKING_EXHAUSTED:', 'TOOL_LOOP_REPEAT:'];
+/** 步级瞬态前缀（失败绑定本轮输入,下轮带新反馈输入即变——首撞免扣预算）。OUTPUT_ABORTED 2026-10-08 review 修复从事务级改入
+ * （审核类停止的根因是本轮内容,[[step-dispatcher#^anc-exec-output-abort-loud]]）。 */ // @a: anc-exec-output-abort-loud
+export const TRANSIENT_PREFIXES: readonly string[] = ['OUTPUT_TRUNCATED:', 'THINKING_EXHAUSTED:', 'TOOL_LOOP_REPEAT:', 'OUTPUT_ABORTED:'];
 /** 失败档次：事务级直达兜底 / 步级瞬态首撞免扣 / 普通照扣预算走阶梯。 */
 export type FailClass = 'transactional' | 'transient' | 'normal';
 /** 判失败档次——设计 HopSop 五步:失败记录类别为确定性即事务级;否则反复剥开头的包装前缀,剩下的开头命中哪份清单就是哪档,都不命中为普通。 */
@@ -102,6 +407,15 @@ export interface EngineOptions {
   // call 边界反馈传递（D41 ^anc-exec-l2c-retry-feedback L2b 条）：父层重试反馈跨 call 传入——
   // 子实例 PromptAssembler 渲染 L2b 上游反馈区块全步骤可见;递归下传逐层拼接,截断衰减。
   upstreamFeedback?: string;
+  // Config.dirs 子实例继承：父实例已展开并（经人或经 start_run.dirs）批准的清单——子实例不重展开、不重核,只并入自己的两白名单。
+  // 复用模式经 launch_command / init_command 的参数文件保留键 DECLARED_DIRS_PARAM 透传,独立模式 dispatcher 直传。见 [[exec-engine#^anc-exec-dirs-grant]] 子实例与恢复条 // @a: anc-exec-dirs-grant
+  inheritedDirs?: DeclaredDirs;
+  // 独立模式 Config.dirs 的唯一授权面：start_run.dirs 显式传的清单（绝对路径）。引擎在 resolveDeclaredDirs 之后、persist 之前对账：
+  // 缺即 INIT_FAILED 不建实例,多即 warn 不授,对上记账为已批。见 [[exec-engine#^anc-exec-dirs-grant]] 独立模式条 // @a: anc-exec-dirs-grant
+  dirsGrant?: { read?: string[]; readwrite?: string[] };
+  // 独立模式 dispatcher 起的子引擎（callee / worker）：没有人可问,子 spec 自带的 Config.dirs 一律忽略并 warn（顶层 start_run.dirs 只授权顶层）。
+  // 复用模式子实例是独立进程、走 cli 入口,不设此标。见 [[exec-engine#^anc-exec-dirs-grant]] 子实例与恢复条 // @a: anc-exec-dirs-grant
+  standaloneChild?: boolean;
   // 驱动通道（双执行硬闸——建 run 入口声明,init 内部 persist 前置入,落盘即有账）。
   // @a: anc-exec-driver-channel
   driverChannel?: 'cli' | 'mcp';
@@ -123,7 +437,7 @@ export interface EngineOptions {
  * 读失败返回 null=闸跳过比对（fail-open,与键缺席同路径）——版本读取问题是宿主装置故障,不该拒用户的 spec
  *（第十一轮 review 修:原兜底 0.0.0 落进数值比恒小于一切声明值,读失败时带键 spec 全被误拒,与本句本意正相反）。
  * engine_min_version 闸消费（^anc-exec-engine-min-version-gate）。 */
-function getEngineVersion(): string | null { // @a: anc-exec-engine-min-version-gate
+export function getEngineVersion(): string | null { // @a: anc-exec-engine-min-version-gate   （导出供 hopjit ant adapt 取同一 fail-open 语义的版本值——design/hopant.md adapt 步 5）
   try {
     const pkgPath = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
     return (JSON.parse(readFileSync(pkgPath, 'utf-8')) as { version?: string }).version ?? null;
@@ -231,7 +545,8 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
   // 统一模型在飞记账（call parallel 渐进派发）：派发即入账落盘（防重），收割即出账；
   // killed 项保留（不复活凭据）。见 design/parallel-execution.md §U2。// @a: anc-exec-parallel-inflight
   private inflight: InflightCall[] = [];
-  // 统一模型派发门：独立模式 dispatcher 置位；复用模式恒关（subtask parallel 串行下钻=退化窗口）。
+  // 统一模型派发门：缺省关,由组合根置位——独立模式 dispatcher 对非 worker 实例置位;复用模式 cli.ts run /
+  // reuse-driver 对顶层实例置位、advance 续推按持久化的 can_fanout 重开（worker / call 子实例不开——嵌套退化串行不变式,§U8）。
   // @a: anc-exec-parallel-dispatch-model
   private unifiedDispatch = false;
 
@@ -249,6 +564,48 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     if (specDir && !hostConfig.sandbox.filesystem.read_access.allowed.includes(specDir)) {
       hostConfig.sandbox.filesystem.read_access.allowed.push(specDir);
     }
+    // Config.dirs 任务级目录（^anc-exec-dirs-grant,todo/0148）：展开 → 核存在 → read∪readwrite 入读白名单、readwrite 入写白名单;
+    // 任一条拒即 INIT_FAILED 不建实例。授权闸在首次推进时查（advanceToCaller 开头）。// @a: anc-exec-dirs-grant
+    const dirsWarnings: string[] = [];
+    // 子实例（parallel worker / call callee）：不重展开不重核——继承父的 DeclaredDirs 只并白名单（^anc-exec-dirs-grant 子实例与恢复条）。
+    // 独立模式 callee 自带 Config.dirs 且无继承：忽略并 warn（无人可问;顶层 start_run.dirs 只授权顶层）。
+    const isChildInstance = !!(options?.subtreeRoot || options?.parentInstanceId);
+    let declared: DeclaredDirs | { init_failed: string };
+    if (options?.inheritedDirs) {
+      declared = options.inheritedDirs;
+    } else if (isChildInstance && options?.standaloneChild && ast.header.config?.['dirs'] !== undefined) {
+      dirsWarnings.push('Config.dirs: 独立模式子 spec 的目录声明被忽略——无人可问;要让子 spec 碰外部目录,把目录声明在顶层 spec 并经 start_run.dirs 传');
+      declared = { read: [], readwrite: [], outside: [], dirs_hash: '' };
+    } else {
+      declared = resolveDeclaredDirs(ast.header.config as Record<string, unknown> | undefined, options?.params, hostConfig.hop_env, hostConfig.workspace_dir, m => dirsWarnings.push(m));
+    }
+    if ('init_failed' in declared) {
+      return { status: 'error', errors: [{ kind: 'validate', rule: 'INIT_FAILED', severity: 'error', message: declared.init_failed } as ValidationError] };
+    }
+    // 独立模式授权面对账（dirsGrant）——两边取真实路径;缺即 INIT_FAILED 不建实例,多即 warn 不授。// @a: anc-exec-dirs-grant
+    let grantApproved = false;
+    if (options?.dirsGrant && !options?.inheritedDirs) {
+      const real = (p: string) => { try { return realpathSync(resolve(p)); } catch { return resolve(p); } };
+      const givenRaw: Array<[string, string]> = [...(options.dirsGrant.read ?? []).map(p => [`read:${real(p)}`, `read:${p}`] as [string, string]), ...(options.dirsGrant.readwrite ?? []).map(p => [`readwrite:${real(p)}`, `readwrite:${p}`] as [string, string])];
+      const given = new Set(givenRaw.map(([k]) => k));
+      const missing = declared.outside.filter(o => !given.has(`${o.mode}:${real(o.path)}`));
+      if (missing.length) {
+        return { status: 'error', errors: [{ kind: 'validate', rule: 'INIT_FAILED', severity: 'error',
+          message: `INIT_FAILED: spec Config.dirs 声明了 workspace 之外的目录,独立模式须由调用方在 start_run 的 dirs 参数里显式传同一组目录才算批准。缺：${missing.map(o => `${o.mode}:${o.path}`).join(', ')}` } as ValidationError] };
+      }
+      const declaredKeys = new Set(declared.outside.map(o => `${o.mode}:${real(o.path)}`));
+      for (const [k, raw] of givenRaw) if (!declaredKeys.has(k)) dirsWarnings.push(`start_run.dirs 传了 spec 没声明的 ${raw}——不授权,照 workspace 规则`);
+      grantApproved = declared.outside.length > 0;
+    }
+    for (const d of [...declared.read, ...declared.readwrite]) {
+      if (!hostConfig.sandbox.filesystem.read_access.allowed.includes(d)) hostConfig.sandbox.filesystem.read_access.allowed.push(d);
+    }
+    if (declared.readwrite.length) {
+      const wa = hostConfig.sandbox.filesystem.write_access ?? (hostConfig.sandbox.filesystem.write_access = { allowed: [] });
+      for (const d of declared.readwrite) if (!wa.allowed.includes(d)) wa.allowed.push(d);
+    }
+    this.declaredDirs = declared.dirs_hash ? declared : null;
+    this.pendingDirsGrantApproval = grantApproved;   // persist 之后记账（账路径要 instanceDir）// @a: anc-exec-dirs-grant
     // P15 doc-ref 静态校验需 workspace + sandbox（hostConfig 提供）;specDir 随传（两级基准与注入期同判）。// @a: anc-rule-p15
     const validationErrors = validateSpec(ast,
       hostConfig.workspace_dir ? { workspace_dir: hostConfig.workspace_dir, sandbox: hostConfig.sandbox, hop_env: hostConfig.hop_env, spec_dir: specDir } : undefined);
@@ -258,6 +615,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     }
     // warn 级不阻断，透传到 InitSuccess.warnings（警告被吞掉等于不存在）
     const warnings = validationErrors.filter((e: ValidationError) => e.severity === 'warn');
+    for (const m of dirsWarnings) warnings.push({ kind: 'validate', rule: 'CONFIG', severity: 'warn', message: m } as ValidationError);   // @a: anc-exec-dirs-grant
 
     // Tools 段对账（^anc-exec-tools-reconcile——spec 需求声明 vs 环境工具面三判:
     // 工具名在清单/参数名子集容忍超集报错/requires_commit 一致性。早失败——不让缺工具的
@@ -331,6 +689,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
         ? readChildParams(join(options.stateDir, this.instanceId)) : null);
       if (childParams) {
         for (const [k, v] of Object.entries(childParams)) {
+          if (k === DECLARED_DIRS_PARAM) continue;   // 保留键不是 Inputs——由组合根摘进 EngineOptions.inheritedDirs // @a: anc-exec-dirs-grant
           // 只保护 caller 真正显式传入的键；Inputs 声明会预先放入 undefined/default，
           // 不能把“已声明但未赋实参”误判成覆盖。child 实参应覆盖声明默认值。
           if (!options?.params || !(k in options.params)) inputs[k] = v;
@@ -459,6 +818,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
         goal: ast.header.goal ?? '',
         inputs: inputs,
         traceId: options.traceId ?? this.instanceId,  // 顶层用 instanceId,worker 继承父的 instanceId → 父子 trace_id 一致 // @a: anc-obs-trace-inherit
+        workspaceDir: hostConfig.workspace_dir,   // header workspace_dir: 行——本 run 工作区根对人可见 // @a: anc-cli-workspace-arg
       });
     }
 
@@ -478,6 +838,11 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
       if (this.instanceDir) this.stateSeq = readStateSeq(this.instanceDir).seq;
     }
     this.persist();
+    if (this.pendingDirsGrantApproval) {   // start_run.dirs 对上即记账为已批（账仍写,resume 与审计一致）// @a: anc-exec-dirs-grant
+      const st = this.checkDirsApproval();
+      if (st && !st.approved) this.approveDirs(st.dirs_hash);
+      this.pendingDirsGrantApproval = false;
+    }
 
     return {
       status: 'ok',
@@ -593,6 +958,421 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
   static setEngineToolProviderFactory(f: (hostConfig: HostConfig) => ToolProvider): void { ExecutionEngine.engineToolProviderFactory = f; }
   /** 测试专用注销（静态位跨测试组泄漏的对治——注册后不注销会让同进程后续测试组带着工厂跑） */
   static resetEngineToolProviderFactory(): void { ExecutionEngine.engineToolProviderFactory = null; }
+  /** 复用模式 call 的 callee 路径解析（cli 组合根注册 hopant resolveCalleeSpecPath 闭包——engine 层1 不 import
+   * hopant 层2;快照存不了函数,静态位每进程注册一次,load 后照样可用）。缺席=命令里留占位符。
+   * 见 [[exec-engine#^anc-exec-callee-resolver]]。// @a: anc-exec-callee-resolver */
+  private static calleeSpecResolver: ((callerSpecPath: string, calleeId: string, workspaceDir: string) => string | null) | null = null;
+  /** 第三参 workspaceDir=本实例工作区——组合根据此算项目级 HopAnt 根（两级根,设计 ^anc-exec-callee-resolver;hopant 决策 1 / 9） */
+  static setCalleeSpecResolver(r: (callerSpecPath: string, calleeId: string, workspaceDir: string) => string | null): void { ExecutionEngine.calleeSpecResolver = r; }
+  /** 测试专用注销（同 resetEngineToolProviderFactory） */
+  static resetCalleeSpecResolver(): void { ExecutionEngine.calleeSpecResolver = null; }
+  /** 拼进命令的 callee 位置：解析出的绝对路径,解析不到/空 id/内存态引擎留 <CALLEE_SPEC_PATH:id> 占位 // @a: anc-exec-callee-resolver */
+  private calleePathToken(calleeId: string): string {
+    const placeholder = `<CALLEE_SPEC_PATH:${calleeId}>`;
+    if (!calleeId || !ExecutionEngine.calleeSpecResolver || !this.specPath) return placeholder;
+    return ExecutionEngine.calleeSpecResolver(resolve(this.specPath), calleeId, this.hostConfig?.workspace_dir ?? '') ?? placeholder;
+  }
+  /** commit 批准账位置解析（组合根 cli / mcp-server 注册——HopAnt 目录判定要 hopant 层2,engine 不 import）。
+   * 缺席或返回 null=批准闸关闭。见 [[exec-engine#^anc-exec-commit-approval]]。// @a: anc-exec-commit-approval */
+  private static commitApprovalStoreResolver: ((specPath: string, instanceDir: string, workspaceDir: string) => string | null) | null = null;
+  /** 第三参 workspaceDir=本实例工作区——组合根据此算项目级 HopAnt 根,spec 在项目级 HopAnt 下账也落它的 inner_store/（两级根） */
+  static setCommitApprovalStoreResolver(r: (specPath: string, instanceDir: string, workspaceDir: string) => string | null): void { ExecutionEngine.commitApprovalStoreResolver = r; }
+  /** 测试专用注销（同 resetEngineToolProviderFactory） */
+  static resetCommitApprovalStoreResolver(): void { ExecutionEngine.commitApprovalStoreResolver = null; }
+
+  /** commit 安全分析函数（mcp-server 组合根按独立模式配置注册——分析要调模型,模型客户端在 dispatcher 层2,engine 不 import）。
+   * 缺席=本宿主没有分析模型,需要模型判的动作按模板转人工。见 [[exec-engine#^anc-exec-commit-approval]]。// @a: anc-exec-commit-approval, anc-exec-commit-analyzer */
+  private static commitAnalyzer: CommitAnalyzer | null = null;
+  static setCommitAnalyzer(a: CommitAnalyzer | null): void { ExecutionEngine.commitAnalyzer = a; }
+  /** 测试专用注销（同 resetEngineToolProviderFactory） */
+  static resetCommitAnalyzer(): void { ExecutionEngine.commitAnalyzer = null; }
+
+  /** body 原文与只覆盖 body 的指纹。输入值与引用文件不进指纹:安全分析只看 body 的写法与参数来源,不看某次运行的参数值
+   * （作者 2026-10-09 定"核心是研判的时候，应该判断这个过程，不应该是实例化的参数"）,body 不变分析结论就不变;for-each 每轮共用一次批准。
+   * // @a: anc-exec-commit-approval */
+  commitFingerprint(node: CommitStep): CommitFacts {
+    const body = serializeActBody(node.body!);
+    return { body, fingerprint: createHash('sha256').update(`body:\n${body}`).digest('hex') };
+  }
+
+  /** 列出 body 里每一处有副作用的调用并给出引擎风险判定（分类表见 [[exec-engine#^anc-exec-commit-action-facts]]）。
+   * 参数按来源渲染、不读本步输入的实际值（作者 2026-10-09 定"核心是研判的时候，应该判断这个过程，不应该是实例化的参数"）:
+   * 字面量给值,用到输入的给名字形态,依赖工具结果或 now()/today() 的记"运行前无法确定"（作者定"不猜测"）。
+   * work_zone 按写法判:work_zone_path(...) 开头才算落在 work_zone 内,不做绝对路径比较。// @a: anc-exec-commit-action-facts */
+  extractCommitActions(node: CommitStep): CommitAction[] {
+    const inputNames = new Set((node.inputs ?? []).map(b => b.name));
+    const UNKNOWN: ArgForm = { kind: 'unknown', value: undefined, shown: COMMIT_ARG_UNKNOWN, sources: [], in_work_zone: false };
+    const valueForm = (v: unknown): ArgForm => ({ kind: 'value', value: v, shown: v, sources: [], in_work_zone: false });
+    const hasRuntimeCall = (e: ActExpr): boolean => {
+      if (e.type === 'call' && e.callee !== 'work_zone_path' && e.callee !== 'spec_dir'
+        && (!ACT_BUILTIN_NAMES.has(e.callee) || e.callee === 'subprocess.run' || e.callee === 'now' || e.callee === 'today')) return true;
+      return exprChildren(e).some(hasRuntimeCall);
+    };
+    // 表达式引用的变量名;列表推导的迭代变量在推导内部不算外部引用
+    const refNames = (e: ActExpr, bound: Set<string>, out: Set<string>): void => {
+      if (e.type === 'var') { if (!bound.has(e.name)) out.add(e.name); return; }
+      if (e.type === 'comprehension') {
+        refNames(e.source, bound, out);
+        const inner = new Set(bound).add(e.itemVar);
+        refNames(e.element, inner, out);
+        if (e.filter) refNames(e.filter, inner, out);
+        return;
+      }
+      for (const c of exprChildren(e)) refNames(c, bound, out);
+    };
+    const evalValue = (e: ActExpr, locals: Map<string, ArgForm>): ArgForm => {
+      let v: unknown;
+      try { v = evalExprSync(e, name => locals.get(name)?.value); } catch { return UNKNOWN; }
+      return v === undefined ? UNKNOWN : valueForm(v);
+    };
+    const hasDotDot = (f: ArgForm): boolean => f.kind === 'value' && String(f.value).includes('..');
+    // 字符串拼接（a + b）与 f-string 的段落
+    const concatParts = (e: ActExpr): ActExpr[] | null => {
+      if (e.type === 'binary' && e.op === '+') return [e.left, e.right];
+      if (e.type === 'fstring') return e.parts.map(p => (p.kind === 'text' ? { type: 'literal', value: p.text, literal_kind: 'string' } as ActExpr : p.expr));
+      return null;
+    };
+    const argForm = (e: ActExpr, locals: Map<string, ArgForm>): ArgForm => {
+      if (e.type === 'literal') return valueForm(e.value);
+      if (e.type === 'var') {
+        if (locals.has(e.name)) return locals.get(e.name)!;
+        if (inputNames.has(e.name)) return { kind: 'form', value: undefined, shown: `${e.name}(本步输入,运行时取值)`, sources: [e.name], in_work_zone: false };
+        return UNKNOWN;
+      }
+      if (hasRuntimeCall(e)) return UNKNOWN;
+      if (e.type === 'call' && (e.callee === 'work_zone_path' || e.callee === 'spec_dir')) {
+        const isWz = e.callee === 'work_zone_path';
+        const prefix = isWz ? '任务临时工作区' : 'spec 所在目录';
+        if (e.args.length === 0) return { kind: 'form', value: undefined, shown: prefix, sources: [], in_work_zone: isWz };
+        const r = argForm(e.args[0]!.value, locals);
+        if (r.kind === 'unknown' || hasDotDot(r)) return UNKNOWN;   // 解释器运行时拒绝含 .. 的 rel
+        return { kind: 'form', value: undefined, shown: `${prefix}${isWz ? '里的 ' : '下的 '}${String(r.shown)}`, sources: r.sources, in_work_zone: isWz };
+      }
+      const parts = concatParts(e);
+      if (parts) {
+        const forms = parts.map(p => argForm(p, locals));
+        if (forms.some(f => f.kind === 'unknown')) return UNKNOWN;
+        if (forms.every(f => f.kind === 'value')) return evalValue(e, locals);
+        if (forms.every(f => typeof f.shown === 'string')) {
+          return {
+            kind: 'form', value: undefined, shown: forms.map(f => f.shown as string).join(''),
+            sources: [...new Set(forms.flatMap(f => f.sources))],
+            in_work_zone: forms[0]!.in_work_zone && forms.slice(1).every(f => f.kind === 'value' && !hasDotDot(f)),
+          };
+        }
+        // 有一段的渲染不是字符串（数字相加、列表拼接）:按其他表达式处理
+      } else if (e.type === 'list_literal') {
+        const forms = e.elements.map(el => argForm(el, locals));
+        if (forms.some(f => f.kind === 'unknown')) return UNKNOWN;
+        if (forms.every(f => f.kind === 'value')) return valueForm(forms.map(f => f.value));
+        return { kind: 'form', value: undefined, shown: forms.map(f => f.shown), sources: [...new Set(forms.flatMap(f => f.sources))], in_work_zone: false };
+      }
+      const names = new Set<string>();
+      refNames(e, new Set(), names);
+      const forms = [...names].map(n => argForm({ type: 'var', name: n }, locals));
+      if (forms.some(f => f.kind === 'unknown')) return UNKNOWN;
+      if (forms.every(f => f.kind === 'value')) return evalValue(e, locals);
+      const sources = [...new Set(forms.flatMap(f => f.sources))];
+      return { kind: 'form', value: undefined, shown: `由本步输入 ${sources.join('、')} 算出(运行时取值)`, sources, in_work_zone: false };
+    };
+    const summarize = (name: string | undefined, f: ArgForm): unknown => {
+      if (name && COMMIT_CONTENT_ARGS.has(name)) {
+        if (f.kind === 'value') return `<${typeof f.value === 'string' ? f.value.length : (JSON.stringify(f.value)?.length ?? 0)} 字的内容>`;
+        return f.kind === 'form' ? '<运行时生成的内容>' : COMMIT_ARG_UNKNOWN;
+      }
+      if (f.kind === 'value' && typeof f.value === 'string' && f.value.length > COMMIT_ARG_MAX) return `${f.value.slice(0, COMMIT_ARG_MAX)}…（共 ${f.value.length} 字）`;
+      return f.shown;
+    };
+    const actions: CommitAction[] = [];
+    const collectCalls = (e: ActExpr | undefined, out: CallExpr[]): void => {
+      if (!e) return;
+      if (e.type === 'call') out.push(e);
+      for (const c of exprChildren(e)) collectCalls(c, out);
+    };
+    const visit = (stmts: ActStatement[] | undefined, locals: Map<string, ArgForm>): void => {
+      for (const st of stmts ?? []) {
+        const calls: CallExpr[] = [];
+        collectCalls(st.type === 'assign' ? st.value : st.type === 'call' ? st.call : st.condition, calls);
+        for (const call of calls) {
+          const keepArg = call.args.find(a => a.name === 'keep');
+          const keep: number | null = !COMMIT_KEEP_TOOLS.has(call.callee) ? null
+            : !keepArg ? DEFAULT_KEEP
+            : keepArg.value.type === 'literal' && keepArg.value.literal_kind === 'number' && Number.isInteger(keepArg.value.value) && (keepArg.value.value as number) >= 0 ? keepArg.value.value as number
+            : null;
+          const args: Record<string, unknown> = {};
+          const forms: Record<string, ArgForm> = {};
+          call.args.forEach((a, i) => {
+            if (a.name === 'keep') return;
+            const name = a.name ?? (call.callee === 'subprocess.run' && i === 0 ? 'argv' : `arg${i}`);
+            forms[name] = argForm(a.value, locals);
+            args[name] = summarize(a.name, forms[name]!);
+          });
+          const inWz = call.callee === 'move' ? !!forms['from']?.in_work_zone && !!forms['to']?.in_work_zone
+            : COMMIT_KEEP_TOOLS.has(call.callee) ? !!forms['path']?.in_work_zone
+            : false;
+          const cls = classifyCommitCall(call.callee, keep, inWz);
+          if (!cls) continue;
+          actions.push({ line: st.line ?? 0, callee: call.callee, ...cls, args, keep });
+        }
+        if (st.type === 'assign') {
+          locals.set(st.target, argForm(st.value, locals));   // unknown 也记下:后续同名引用指向局部变量,不回落到同名输入
+        } else if (st.type === 'if') {
+          // 两个分支各从一份副本出发;运行前不知道走哪边,两边赋值不同的变量在 if 之后定不了
+          const thenLocals = new Map(locals);
+          const elseLocals = new Map(locals);
+          visit(st.then_body, thenLocals);
+          visit(st.else_body, elseLocals);
+          for (const n of new Set([...thenLocals.keys(), ...elseLocals.keys()])) {
+            const a = thenLocals.get(n);
+            const b = elseLocals.get(n);
+            locals.set(n, a !== undefined && b !== undefined && JSON.stringify(a) === JSON.stringify(b) ? a : UNKNOWN);
+          }
+        }
+      }
+    };
+    visit(node.body?.statements, new Map());
+    return actions;
+  }
+
+  /** 查某 commit 步骤当前 body 是否已批准（设计 HopSop 十四步;所有记录按 spec + 步骤号 + 指纹匹配）。非 commit 或无 body 返回 null;关卡关闭时恒 approved（decided_by=gate_closed）。
+   * 先查账、账上没有授权记录才扫描（作者 2026-10-09 定"这个任务之前批过放行的话，连前面的引擎扫描都不应该执行"）;只读,不调模型、不写账——
+   * resume 与 approve_commit 也调它。账文件缺席或损坏按空表处理,宁可多问一次,不能静默放行。// @a: anc-exec-commit-approval */
+  checkCommitApproval(stepId: string): CommitApprovalState | null {
+    const node = this.findStepById(stepId);
+    if (!node || node.step_type !== 'commit' || !(node as CommitStep).body) return null;
+    const facts = this.commitFingerprint(node as CommitStep);
+    const base = { fingerprint: facts.fingerprint, body: facts.body };
+    const closed: CommitApprovalState = { approved: true, decided_by: 'gate_closed', from_ledger: false, ...base, actions: [], store_path: null, analysis: null };
+    const resolver = ExecutionEngine.commitApprovalStoreResolver;
+    if (!resolver || !this.specPath || !this.instanceDir) return closed;
+    const specKey = canonicalSpecPath(this.specPath);
+    const storePath = resolver(specKey, this.instanceDir, this.hostConfig?.workspace_dir ?? '');
+    if (!storePath) return closed;
+    const runId = basename(findRunRoot(this.instanceDir));
+    const records = readCommitApprovals(storePath).filter(r => r.spec_path === specKey && r.step_id === stepId && r.fingerprint === facts.fingerprint);
+    const fromLedger = (decidedBy: CommitApprovalState['decided_by']): CommitApprovalState =>
+      ({ approved: true, decided_by: decidedBy, from_ledger: true, ...base, actions: [], store_path: storePath, analysis: null });
+    if (records.some(r => r.outcome === 'approved' && r.decided_by === 'human' && r.scope === 'task')) return fromLedger('task_always');
+    if (records.some(r => r.outcome === 'approved' && r.decided_by === 'model_safe')) return fromLedger('model_safe');
+    if (records.some(r => r.outcome === 'approved' && r.decided_by === 'engine_safe')) return fromLedger('engine_safe');
+    if (records.some(r => r.outcome === 'approved' && r.decided_by === 'human' && r.scope === 'once' && r.run_id === runId)) return fromLedger('human');
+    const actions = this.extractCommitActions(node as CommitStep);   // 账上没有这一步当前 body 的授权,才扫描
+    if (actions.every(a => a.risk === 'safe')) return { approved: true, decided_by: 'engine_safe', from_ledger: false, ...base, actions, store_path: storePath, analysis: null };
+    const referral = records.filter(r => r.outcome === 'referred').pop();
+    return { approved: false, decided_by: null, from_ledger: false, ...base, actions, store_path: storePath, analysis: referral?.analysis ?? null };
+  }
+
+  /** 两模式共用的 commit 批准关卡（设计 HopSop 十步）:先查账,账上没有才扫描;引擎扫描判全部安全记 engine_safe（作者 2026-10-09 定
+   * "如果是引擎扫描过没危险的，也应该以后放行"）;未批准且这个 commit 步骤没分析过才分析一次——模型判全部安全记 model_safe 授权,
+   * 其余（含无模型、分析出错）记 referred 防重复分析,返回未批准由调用方组装停点。// @a: anc-exec-commit-approval */
+  async commitGate(stepId: string): Promise<CommitApprovalState | null> {
+    const state = this.checkCommitApproval(stepId);
+    if (!state) return state;
+    const specKey = () => canonicalSpecPath(this.specPath!);
+    if (state.approved && state.decided_by === 'engine_safe' && !state.from_ledger) {
+      this.appendCommitRecord(state.store_path!, {
+        outcome: 'approved', decided_by: 'engine_safe', spec_path: specKey(), step_id: stepId, fingerprint: state.fingerprint,
+        scope: 'task', run_id: null, analysis: null, decided_at: new Date().toISOString(),
+      });
+      return state;   // 账已原子写盘,实例内存状态没变,不 persist
+    }
+    if (state.approved) return state;
+    if (state.analysis) return state;   // 这个 commit 步骤分析过并转了人:不重新分析,反复分析直到模型判安全等于绕过人
+    const analyzer = ExecutionEngine.commitAnalyzer;
+    const node = this.findStepById(stepId) as CommitStep;
+    let analysis: CommitAnalysis;
+    if (!analyzer) {
+      analysis = templateAnalysis(state.actions, '本机没有配置安全分析模型');
+    } else {
+      try {
+        analysis = mergeAnalysis(state.actions, await analyzer(this.buildCommitAnalysisRequest(node, state.actions)));
+      } catch (e) {
+        analysis = templateAnalysis(state.actions, `安全分析出错:${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    this.recordEvent(stepId, 'commit_analysis',
+      `source=${analysis.source} model=${analysis.model ?? '-'} actions=${analysis.actions.map(a => `${a.line}:${a.category}:${a.verdict}`).join(',')} recommendation=${analysis.recommendation.slice(0, 200)}`);
+    const decidedAt = new Date().toISOString();
+    if (analysis.source === 'model' && analysis.actions.every(a => a.verdict === 'safe')) {
+      this.appendCommitRecord(state.store_path!, {
+        outcome: 'approved', decided_by: 'model_safe', spec_path: specKey(), step_id: stepId, fingerprint: state.fingerprint,
+        scope: 'task', run_id: null, analysis, decided_at: decidedAt,
+      });
+      this.persist();
+      return { ...state, approved: true, decided_by: 'model_safe', analysis: null };
+    }
+    this.appendCommitRecord(state.store_path!, {
+      outcome: 'referred', decided_by: 'analysis', spec_path: specKey(), step_id: stepId, fingerprint: state.fingerprint,
+      scope: null, run_id: null, analysis, decided_at: decidedAt,
+    });
+    this.persist();
+    return { ...state, analysis };
+  }
+
+  /** 组装安全分析材料:任务目标与背景章节、步骤、带 spec 行号的 body、动作清单、本步之前已通过的把关（一行事实）。
+   * 不给输入值全文、文件内容与前序把关产出——安全性只看动作本身。// @a: anc-exec-commit-approval */
+  buildCommitAnalysisRequest(node: CommitStep, actions: CommitAction[]): CommitAnalysisRequest {
+    const header = this.spec?.header;
+    const steps: StepNode[] = [];
+    const walk = (ns: StepNode[]): void => { for (const n of ns) { steps.push(n); if (hasChildren(n)) walk(getChildren(n)); } };
+    walk(this.spec?.steps ?? []);
+    const gates: string[] = [];
+    for (const n of steps) {
+      if (n.step_id === node.step_id) break;
+      if (this.stepStates.get(n.step_id) !== 'done') continue;
+      if (n.step_type === 'check' && (n as CheckStep).is_finally) gates.push(`${n.step_id} check final`);
+      else if (n.step_type === 'confirm') gates.push(`${n.step_id} confirm`);
+    }
+    const bodyLines: string[] = [];
+    const walkStmts = (ss: ActStatement[] | undefined, level: number): void => {
+      for (const st of ss ?? []) {
+        const text = serializeActBody({ statements: [st] }).split('\n')[0]!;
+        bodyLines.push(`${st.line ?? '?'}: ${'    '.repeat(level)}${text}`);
+        if (st.type === 'if') {
+          walkStmts(st.then_body, level + 1);
+          if (st.else_body?.length) { bodyLines.push(`${st.else_line ?? '?'}: ${'    '.repeat(level)}else:`); walkStmts(st.else_body, level + 1); }
+        }
+      }
+    };
+    walkStmts(node.body?.statements, 0);
+    return {
+      goal: header?.goal ?? '',
+      narratives: header?.narrative_sections ?? [],
+      step: { step_id: node.step_id, summary: node.summary, irreversible_action: node.irreversible_action },
+      body_lines: bodyLines.join('\n'),
+      actions,
+      gate_fact: gates.length ? `本步之前已通过的把关:${gates.join(', ')}` : '本步之前没有已通过的 check final 或 confirm',
+    };
+  }
+
+  /** 批准账追加一条记录（父目录 0700 递归建,原子写）。// @a: anc-exec-commit-approval */
+  private appendCommitRecord(storePath: string, record: CommitApprovalRecord): void {
+    const records = readCommitApprovals(storePath);
+    records.push(record);
+    mkdirSync(dirname(storePath), { recursive: true, mode: 0o700 });
+    writeAtomic(storePath, JSON.stringify(records, null, 2));
+  }
+
+  /** 人的批准记账:fingerprint 必须与当前一致——证明批准的是这个 commit 步骤此刻的 body;scope=once 只在本次运行内有效（记 run_id）,
+   * scope=task 这份 spec 的这一步以后都通过（body 不变）。已批准时幂等,唯一例外是把本次运行的人批准升级为 task。// @a: anc-exec-commit-approval */
+  approveCommit(stepId: string, fingerprint: string, scope: string): CommitApproveResponse {
+    if (scope !== 'once' && scope !== 'task') {
+      return { status: 'error', code: ErrorCode.INVALID_STATE, message: `INVALID_STATE: scope 只能是 once（只批准这一次）或 task（这一步以后都通过）,收到 '${scope}'` };
+    }
+    const state = this.checkCommitApproval(stepId);
+    if (!state) return { status: 'error', code: ErrorCode.INVALID_STATE, message: `INVALID_STATE: 步骤 '${stepId}' 不是带 body 的 commit,无需批准` };
+    if (state.fingerprint !== fingerprint) {
+      return { status: 'error', code: ErrorCode.COMMIT_NOT_APPROVED,
+        message: `COMMIT_NOT_APPROVED: 步骤 '${stepId}' 的 body 指纹与提交值不符——body 已变,当前指纹 ${state.fingerprint}。请把当前停点里的安全分析讲给人听过后用这个指纹重新批准` };
+    }
+    const storeField = state.store_path ? { store_path: state.store_path } : {};
+    if (state.approved && !(scope === 'task' && state.decided_by === 'human')) {
+      return { status: 'ok', step_id: stepId, fingerprint, scope, already_approved: true, ...storeField };
+    }
+    const storePath = state.store_path!;   // 走到这里必有账路径:关卡关闭的情形上一步已返回
+    this.appendCommitRecord(storePath, {
+      outcome: 'approved', decided_by: 'human', spec_path: canonicalSpecPath(this.specPath!), step_id: stepId, fingerprint, scope,
+      run_id: scope === 'once' ? basename(findRunRoot(this.instanceDir!)) : null, analysis: null, decided_at: new Date().toISOString(),
+    });
+    this.recordEvent(stepId, 'commit_approved', `commit 批准记账 scope=${scope} fingerprint=${fingerprint.slice(0, 12)}`);
+    this.persist();   // 同 approveDirs——CLI approve_commit 进程退出前把审计事件落盘 // @a: anc-exec-commit-approval
+    return { status: 'ok', step_id: stepId, fingerprint, scope, store_path: storePath };
+  }
+
+  /** 查 Config.dirs 清单是否已批。无 workspace 外目录 → null（闸关,无需批）;resolver 缺席或内存态 → approved=true（同 commit 批准第 3 步）。
+   * // @a: anc-exec-dirs-grant */
+  checkDirsApproval(): { approved: boolean; dirs_hash: string; outside: DeclaredDirs['outside']; store_path: string | null } | null {
+    const d = this.declaredDirs;
+    if (!d || d.outside.length === 0) return null;
+    const resolver = ExecutionEngine.commitApprovalStoreResolver;
+    if (!resolver || !this.specPath || !this.instanceDir) return { approved: true, dirs_hash: d.dirs_hash, outside: d.outside, store_path: null };
+    const specAbs = canonicalSpecPath(this.specPath);
+    const commitStore = resolver(specAbs, this.instanceDir, this.hostConfig?.workspace_dir ?? '');
+    if (!commitStore) return { approved: true, dirs_hash: d.dirs_hash, outside: d.outside, store_path: null };
+    const storePath = dirsStoreFromCommitStore(commitStore);
+    const approved = readDirsApprovals(storePath).some(r => r.spec_path === specAbs && r.dirs_hash === d.dirs_hash);
+    return { approved, dirs_hash: d.dirs_hash, outside: d.outside, store_path: storePath };
+  }
+
+  /** 把当前 Config.dirs 清单记入批准账。dirs_hash 须与当前一致——证明批准的是此刻这份清单。// @a: anc-exec-dirs-grant */
+  approveDirs(dirsHash: string): DirsApproveResponse {
+    const state = this.checkDirsApproval();
+    if (!state) return { status: 'error', code: ErrorCode.INVALID_STATE, message: 'INVALID_STATE: 本实例的 Config.dirs 没有 workspace 之外的目录,无需批准' };
+    if (state.dirs_hash !== dirsHash) {
+      return { status: 'error', code: ErrorCode.DIRS_NOT_APPROVED,
+        message: `DIRS_NOT_APPROVED: 清单哈希与提交值不符——声明或 Inputs 已变,当前哈希 ${state.dirs_hash},清单：${state.outside.map(o => `${o.mode}:${o.path}`).join(', ')}。请把当前清单呈给人看过后用这个哈希重新批准` };
+    }
+    if (state.approved) return { status: 'ok', dirs_hash: dirsHash, already_approved: true, ...(state.store_path ? { store_path: state.store_path } : {}) };
+    const storePath = state.store_path!;
+    const records = readDirsApprovals(storePath);
+    records.push({ spec_path: canonicalSpecPath(this.specPath!), dirs_hash: dirsHash, approved_at: new Date().toISOString() });
+    mkdirSync(dirname(storePath), { recursive: true, mode: 0o700 });
+    writeAtomic(storePath, JSON.stringify(records, null, 2));
+    this.recordEvent('', 'dirs_approved', `dirs 批准记账 dirs_hash=${dirsHash.slice(0, 12)}`);
+    this.removePausedCard();
+    this.persist();   // 事件落 state.json——CLI approve_dirs 进程随即退出,不 persist 事件就丢 // @a: anc-exec-dirs-grant
+    return { status: 'ok', dirs_hash: dirsHash, store_path: storePath };
+  }
+
+  /** 组装 dirs 批准暂停载荷（pause_reason 'dirs',只列 workspace 外的条目）。// @a: anc-exec-dirs-grant */
+  buildDirsApprovalPause(state: { dirs_hash: string; outside: DeclaredDirs['outside'] }): ExecutionPaused {
+    return this.stampWorkspace({
+      status: 'paused',
+      instance_id: this.instanceId,
+      step_id: '',
+      pause_reason: 'dirs',
+      presented_data: {
+        summary: 'Config.dirs 目录授权',
+        question: `本任务要碰 workspace 之外的 ${state.outside.length} 个目录（见 context.dirs,mode=read 只读 / readwrite 读写——读写的只对 commit 步骤开写）,同意吗`,
+        instruction: `调 approve_dirs(dirs_hash: "${state.dirs_hash}") 批准后 resume 续跑;同一份清单批准一次即可,声明或 Inputs 变了要重新批准`,
+        context: { dirs: state.outside, dirs_hash: state.dirs_hash },
+        output_schema: [],
+      },
+      response_options: [],
+      work_zone: this.getWorkZone(),
+    });
+  }
+
+  /** 组装 commit 转人工暂停载荷（两模式同一形态）:context 带安全分析与 body,instruction 要求先讲大白话、代码不先贴,
+   * response_options 固定三项。// @a: anc-exec-commit-approval */
+  buildCommitApprovalPause(stepId: string, state: Pick<CommitApprovalState, 'fingerprint' | 'body' | 'analysis'>): ExecutionPaused {
+    const node = this.findStepById(stepId) as CommitStep;
+    return this.stampWorkspace({   // 停点响应回显 workspace_dir（hop-cli ^anc-cli-workspace-arg 回显契约列了 ExecutionPaused）
+      status: 'paused',
+      instance_id: this.instanceId,
+      step_id: stepId,
+      pause_reason: 'commit',
+      presented_data: {
+        summary: node.summary,
+        question: `这一步有需要你确认的动作:${node.summary}`,
+        instruction: `用大白话把 context.analysis 讲给用户:先一句 summary,再逐条列出 verdict 为 human 的动作的 consequence,最后给 recommendation。不贴代码,用户要看时再给 context.body。然后用三个选项问:选"只批准这一次"调 approve_commit(step_id: "${stepId}", fingerprint: "${state.fingerprint}", scope: "once"),选"这一步以后都通过"同样调用但 scope: "task",调完再续跑;选"不批准"则不调。`,
+        context: { step_id: stepId, fingerprint: state.fingerprint, analysis: state.analysis, body: state.body },
+        output_schema: node.outputs ?? [],
+      },
+      response_options: [
+        { value: 'once', label: '只批准这一次', description: '本次运行里执行这一步;下次运行同一个任务还会再问' },
+        { value: 'task', label: '这一步以后都通过', description: '这一步的代码不变,以后每次运行都直接执行、不再问;代码改了会重新分析' },
+        { value: 'deny', label: '不批准', description: '不执行这一步,任务停在这里,由你决定改任务还是中止' },
+      ],
+      work_zone: this.getWorkZone(),
+    });
+  }
+
+  /** 写 commit 批准暂停卡（paused.json,与 confirm/ask 卡同一文件与生命周期）。// @a: anc-exec-commit-approval */
+  writeCommitApprovalCard(payload: ExecutionPaused): void {
+    this.recordEvent(payload.step_id, 'commit_approval_pause', `等待批准 commit fingerprint=${String(payload.presented_data.context?.['fingerprint'] ?? '').slice(0, 12)}`);
+    this.writePausedCard(payload as unknown as Record<string, unknown>);
+    this.persist();
+  }
+
+  /** 独立模式批准后的步骤回置:running→pending 并删卡,下一次派发重新进 executeCommit。
+   * 与 resetStepForNetworkPause 同形,只接受 running 态。// @a: anc-exec-commit-approval */
+  resetCommitStepAfterApproval(stepId: string): void {
+    if (this.stepStates.get(stepId) !== 'running') return;
+    this.stepStates.set(stepId, 'pending');
+    this.removePausedCard();
+    this.persist();
+  }
   private engineToolProvider: ToolProvider | null = null;
   private getEngineToolProvider(): ToolProvider | null {
     if (!this.hostConfig || !ExecutionEngine.engineToolProviderFactory) return null;   // 工厂/配置缺席——退回全挂起旧形态
@@ -662,7 +1442,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     this.hoplog?.recordStepMeta(stepId, { taken: `escalate: ${need.slice(0, 120)}` });
     this.writePausedCard(response);
     this.persist();
-    return response as unknown as CommandResponse;
+    return this.stampWorkspace(response) as unknown as CommandResponse;   // @a: anc-cli-workspace-arg
   }
 
   // 最近祖先重试容器（subtask/case）——升层反馈的挂账位（与 getActiveRetryFeedback 的
@@ -679,6 +1459,10 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
 
   // 升层待答步（快照持久化——跨进程 resume 仍走专用消化路）。// @a: anc-exec-check-escalate
   private escalatePending: string | null = null;
+  /** Config.dirs 展开结果（起跑定死,持久化进 state.json——resume 后仍在,不重算;null=未声明或全在 workspace 内）。// @a: anc-exec-dirs-grant */
+  private declaredDirs: DeclaredDirs | null = null;
+  private pendingDirsGrantApproval = false;   // 独立模式 dirsGrant 对上后,persist 之后再记账 // @a: anc-exec-dirs-grant
+  getDeclaredDirs(): DeclaredDirs | null { return this.declaredDirs; }
   getEscalatePending(): string | null { return this.escalatePending; }
 
   /** subprocess.run 命令 journal 步骤级持久数组（独立模式 dispatcher 注入用——两模式同一账,
@@ -720,7 +1504,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     this.hoplog?.recordStepMeta(subtaskId, { taken: `escalate: 展开续批 ${this.expansionCount}/${expansionMax}` });
     this.writePausedCard(response);
     this.persist();
-    return response as unknown as CommandResponse;
+    return this.stampWorkspace(response) as unknown as CommandResponse;   // @a: anc-cli-workspace-arg
   }
 
   /** 升层应答消化（^anc-exec-check-escalate 应答回注条款）：guidance 直写发起层所在重试容器的
@@ -786,7 +1570,22 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     return steps.every(s => isTerminalStatus(this.stepStates.get(s.step_id)));
   }
 
-  nextStep(): NextResponse {
+  // 带 work_zone 的响应形态并列回显 workspace_dir（本 run 工作区根,=hostConfig.workspace_dir）——复用模式工作区由
+  // 进程 cwd 隐式决定、CC 会话里用户看不见,回显让 driver 能向用户说一句"这个活在哪个目录上跑"。收口两处：
+  // NextResponse 出口 nextStep / advanceToCaller;escalate / 展开续批两个 paused 构造器（它们经 completeStep →
+  // completeAndAdvance 非 ok 直返,不过前两处——阅卷实抓首发 paused 无字段、nextStep 重放同卡有）。
+  // 见 [[hop-cli#^anc-cli-workspace-arg]] // @a: anc-cli-workspace-arg
+  private stampWorkspace<T extends object>(r: T): T {
+    if (r && typeof r === 'object' && 'work_zone' in r && !('workspace_dir' in r)) {
+      const ws = this.hostConfig?.workspace_dir;
+      if (ws) (r as unknown as { workspace_dir: string }).workspace_dir = ws;
+    }
+    return r;
+  }
+
+  nextStep(): NextResponse { return this.stampWorkspace(this.nextStepRaw()); }   // @a: anc-cli-workspace-arg
+
+  private nextStepRaw(): NextResponse {
     if (!this.spec) {
       return {
         status: 'failed',
@@ -827,6 +1626,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     // 未捕获失败短路（函数级 fail）：实例已终止,直接返回 failed——不依赖顶层扫描
     // （失败步骤可能深嵌容器内,容器级联标 done 会吞掉它）。
     if (this.terminalFailure) {
+      this.recordResumeRejected(this.terminalFailure.stepId, this.terminalFailure.reason);   // @a: anc-exec-resume-rejected-event
       this.hoplog?.close('failed');
       this.finalizeTerminal('failed');   // 0043 // @a: anc-exec-state-persistence
       return {
@@ -845,6 +1645,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     if (allTerminal) {
       const hasFailed = this.findFirstFailedStep(steps);
       if (hasFailed) {
+        this.recordResumeRejected(hasFailed.step_id, this.getFailureReason(hasFailed.step_id));   // @a: anc-exec-resume-rejected-event
         this.hoplog?.close('failed');
         this.finalizeTerminal('failed');   // 0043 // @a: anc-exec-state-persistence
         return {
@@ -1215,6 +2016,11 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
       // default_value：取第一个声明输出在 inputs 中的同名推断值（前序产出），无则 undefined
       const firstOut = target.outputs?.[0]?.name;
       const defaultValue = firstOut ? context.inputs[firstOut] : undefined;
+      // default_values：每个声明按名取前序同名产出当建议值（2026-10-08 作者定——结构化类型的 ask 要给人一个建议输入来改,
+      // 不让人凭空敲结构;default_value 只给第一个声明,保留向后兼容）。来源规则与 driver 义务见设计
+      // step-dispatcher ^anc-exec-hitl-presentation 建议值供给条。// @a: anc-exec-hitl-presentation
+      const defaultValues: Record<string, unknown> = {};
+      for (const o of target.outputs ?? []) if (context.inputs[o.name] !== undefined) defaultValues[o.name] = context.inputs[o.name];
       // present_inputs:透传 AskStep 声明,driver 据此完整 dump 这些 context 字段(禁缩略)。
       // 见 design/step-dispatcher.md ^anc-exec-hitl-presentation。// @a: anc-rule-p14, anc-exec-hitl-presentation
       const askNode = target as AskStep;
@@ -1234,6 +2040,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
           context: formatHumanContext(this.resolveRawInputs(target), this.getWorkZone()),
           output_schema: target.outputs ?? [],
           ...(defaultValue !== undefined ? { default_value: defaultValue } : {}),
+          ...(Object.keys(defaultValues).length ? { default_values: defaultValues } : {}),
           ...(askNode.present_inputs && askNode.present_inputs.length > 0 ? { present_inputs: askNode.present_inputs } : {}),
         },
         // 结构化候选：← 输入中的字符串列表值转 options（概念 ^anc-step-ask"候选来自 ←，可选"——
@@ -1316,7 +2123,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
         // @a: anc-exec-stale-resubmit
         if (doneDecl?.step_type === 'confirm') {
           const decision = this.extractDecision(outputs);
-          if (decision !== undefined && !CONFIRM_REJECT_VALUES.has(String(decision).toLowerCase())) {
+          if (decision !== undefined && decision !== null && !CONFIRM_REJECT_VALUES.has(String(decision).toLowerCase())) {
             cmp = this.mapConfirmOutputs(doneDecl, outputs, decision);
           }
         } else if (doneDecl?.step_type === 'ask') {
@@ -1458,7 +2265,13 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     // 见概念 ^anc-step-confirm / 设计 step-dispatcher ^anc-exec-confirm-answer。// @a: anc-exec-confirm-answer
     if (declNode?.step_type === 'confirm') {
       const decision = this.extractDecision(outputs);
-      if (decision !== undefined && CONFIRM_REJECT_VALUES.has(String(decision).toLowerCase())) {
+      // 取不到决定值 → 拒收（todo/0146 review 决策 2）:不写变量表、不记 hitl、保留暂停卡、不推进。
+      // null 与缺席同判——JSON 没有 undefined,序列化后的空值恰是 null;把"没给决定"当同意等于空回答绕过人工闸。
+      if (decision === undefined || decision === null) {
+        return { status: 'error', code: ErrorCode.SCHEMA_MISMATCH,
+          message: `SCHEMA_MISMATCH: confirm 步骤 '${stepId}' 的回答里没有决定值——传 {"value": "approve"} 或 {"value": "reject"}` };
+      }
+      if (CONFIRM_REJECT_VALUES.has(String(decision).toLowerCase())) {
         // reject = 授权否决 → 全局中止（非局部 None 传播）：fail 本步 + 跳过所有未终态步骤。
         // 见概念 ^anc-step-confirm reject 全局中止 / 设计 ^anc-exec-confirm-answer。
         this.stepStates.set(stepId, 'failed');
@@ -1493,6 +2306,32 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
         }
       }
       outputs = this.mapAskOutputs(declNode, outputs, stepId);
+      // 文本型声明收到非标量拒收（hopissues/0119 第二失守面）：line/text/markdown 声明拿到对象或数组 →
+      // SCHEMA_MISMATCH 不写表不记 hitl 卡保留。只在写入路径判,幂等比对路径不拒;yaml/列表/类型面声明收
+      // 对象是合法值不拦;coerceAskTypes"只做无损转换不新增拒收面"契约不动,拒收面住在这里。
+      // @a: anc-exec-hitl-presentation
+      const TEXT_DECL_TYPES = new Set(['line', 'text', 'markdown']);
+      const shapeBad = (declNode.outputs ?? []).find(d => TEXT_DECL_TYPES.has(d.type) && outputs && outputs[d.name] !== null && typeof outputs[d.name] === 'object');
+      if (shapeBad) {
+        const sample = (declNode.outputs ?? []).map(d => `"${d.name}": "<值>"`).join(', ');
+        return { status: 'error', code: ErrorCode.SCHEMA_MISMATCH,
+          message: `ASK_ANSWER_SHAPE: 声明 '${shapeBad.name}' 是 ${shapeBad.type}（文本）,应答给的是${Array.isArray(outputs![shapeBad.name]) ? '数组' : '对象'}——多输出 ask 的应答按声明名提交：{${sample}}` };
+      }
+      // 多个声明被同一个对象灌满拒收（2026-10-08 作者定"拒收并说明原因",六卡批 review N1）：两个以上声明、单值灌满后
+      // 至少两个声明的值是同一个对象引用（信封里的对象键与全部声明名零交集就是这形态）→ 拒。放行的后果是每个消费者
+      // 拿错料而引擎报成功零提示;真要两声明同值 {"a":X,"b":X} 写得出来。多声明结构化 ask 本就不是推荐写法（概念 ask
+      // 要的是数据值,典型标量;结构化数据由前置步骤备好）,本闸是防御性兜底。单声明不经本闸;按声明名分键的照常放行。
+      // @a: anc-exec-hitl-presentation
+      const askDeclsF = declNode.outputs ?? [];
+      if (askDeclsF.length >= 2 && outputs) {
+        const objVals = askDeclsF.map(d => outputs![d.name]).filter(v => v !== null && typeof v === 'object');
+        const flooded = objVals.length >= 2 && objVals.every(v => v === objVals[0]);
+        if (flooded) {
+          const sample = askDeclsF.map(d => `"${d.name}": <${d.type} 值>`).join(', ');
+          return { status: 'error', code: ErrorCode.SCHEMA_MISMATCH,
+            message: `ASK_ANSWER_FLOOD: ${askDeclsF.length} 个声明（${askDeclsF.map(d => d.name).join('、')}）收到了同一份对象——几乎必是忘了按声明名分键（应答里的对象键名与任何声明名都对不上,引擎才把整个对象灌给了每个声明）。多输出 ask 的应答按声明名提交：{${sample}};真要两个声明同一个值就显式各写一份` };
+        }
+      }
       // ask 零映射拒收（0031,^anc-exec-hitl-presentation 零映射条款）：规范化后一个声明输出都
       // 没得到有效值 → 拒收不写表不记 hitl 卡保留（典型:answer={value:'approve'} 而前序无同名
       // 推断值——approve 是 confirm 应答形态,ask 要业务值）。部分映射放行（增量应答合法,
@@ -1605,6 +2444,13 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
   }
 
   async completeAndAdvance(stepId: string, outputs?: Record<string, unknown>): Promise<NextResponse | CommandResponse> {
+    // 带 body 的 commit 产出只能由引擎执行 body 得到——driver 递交的产出无权替代,
+    // 否则就绕过了批准闸与 body 定死的执行。// @a: anc-exec-commit-approval
+    const target = this.findStepById(stepId);
+    if (target?.step_type === 'commit' && (target as CommitStep).body) {
+      return { status: 'error', code: ErrorCode.COMMIT_BODY_ENGINE_ONLY,
+        message: `COMMIT_BODY_ENGINE_ONLY: 步骤 '${stepId}' 是带 body 的 commit,产出只能由引擎执行 body 得到,不接受递交。停在批准停点时先 approve_commit,再 resume 续跑` };
+    }
     const resp = this.completeStep(stepId, outputs);
     if (resp.status !== 'ok') return resp;   // 错误不推进（重做本步也是"下一步指令"）
     // 幂等重发不进 advance（hopissues/0056 作者拍 B 案,^anc-exec-stale-resubmit 收尾半边）：
@@ -1655,11 +2501,22 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     // P2 渐进协议（dispatch_ready 交 driver）恢复并行。见 parallel-execution §U7。
     // tool_request 挂起恢复：上个进程解释含工具 body 到一半（步骤已 running、journal 已有结果）。
     // nextStep 不返回 running 步 → 显式找挂起步先续跑（顺序执行下最多一个）。// @a: anc-exec-tool-request
+    // Config.dirs 授权闸（^anc-exec-dirs-grant）：首个步骤之前——read 授权在 act 步就要用,比 commit 闸早。未批 → paused/dirs,
+    // 尚未派发任何步骤,状态不动;approveDirs 记账后再推进即过。// @a: anc-exec-dirs-grant
+    const dirsGate = this.checkDirsApproval();
+    if (dirsGate && !dirsGate.approved) {
+      const pause = this.buildDirsApprovalPause(dirsGate);
+      this.recordEvent('', 'dirs_approval_pause', `等待批准 Config.dirs dirs_hash=${dirsGate.dirs_hash.slice(0, 12)}`);
+      this.writePausedCard(pause as unknown as Record<string, unknown>);
+      this.persist();
+      return pause;
+    }
     const suspended = this.findSuspendedBodyStep();
-    let result: NextResponse = suspended ?? this.nextStep();
+    let result: NextResponse = suspended ?? this.nextStepRaw();
     while (result.status === 'step_ready' && !this.isCallerActionPoint(result.step_id)) {
       const node = this.findStepById(result.step_id) as ActStep | CommitStep | CheckStep | null;
       if (!node?.body) break;   // 防御性二次确认（无 body 本该被 isCallerActionPoint 拦为介入点）
+      let commitDecidedBy: CommitApprovalState['decided_by'] | undefined;   // 本步批准来源,body 执行完写 commit_audit 用
       // commit 执行入口动态核（^anc-exec-advance-order-invariant 防线二,复用模式入口）：
       // commit 不可逆,执行前核"文档序先于本步的全部步骤已终态"——存在 pending/running 即拒,
       // WAITING_WRITEBACK 同族响应带点名,不执行 body（步骤保持 running,前序交付后重放续跑,
@@ -1667,15 +2524,28 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
       if (node.step_type === 'commit') {
         const blocking = findNonTerminalBefore(result.step_id, this.spec?.steps ?? [], this.stepStates);
         if (blocking) {
-          return {
+          return this.stampWorkspace({
             status: 'failed',   // 载体形态:非终态错误响应（不 finalize 不 close）——与 WAITING_WRITEBACK 同族
             instance_id: this.instanceId,
             failed_step_id: '',
             failure_reason: `WAITING_WRITEBACK: commit 步 '${result.step_id}' 之前的步骤 '${blocking}' 尚未终态——不可逆操作拒绝越序执行,先交付前序步骤结果,不是失败`,
             partial_outputs: this.deflateValues(this.collectOutputs()),
             work_zone: this.getWorkZone(),
-          };
+          });
         }
+        // commit 批准关卡（复用模式）：账上已批准或引擎扫描判定全部安全（记账）就执行;否则这个 commit 步骤第一次到达时做一次安全分析,
+        // 模型判全部安全就执行,有需要人确认的动作则停下等人选,步骤保持 running,下次推进经 findSuspendedBodyStep
+        // 回到这里重查（同一指纹分析过不重新分析）;已批准则删卡执行。
+        // @a: anc-exec-commit-approval
+        const approval = await this.commitGate(result.step_id);
+        if (approval && !approval.approved) {
+          const pause = this.buildCommitApprovalPause(result.step_id, approval);
+          this.hoplog?.recordStepMeta(result.step_id, { taken: `commit 转人工 fingerprint=${approval.fingerprint.slice(0, 12)}` });
+          this.writeCommitApprovalCard(pause);
+          return pause;
+        }
+        if (approval) this.removePausedCard();
+        commitDecidedBy = approval?.decided_by;
       }
       // 含工具 body：确定性重放——journal 内结果代入，journal 外挂起转 ToolRequest。
       // 纯计算 body：journal 恒空、永不挂起，行为与旧逻辑一致。// @a: anc-exec-tool-request
@@ -1716,6 +2586,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
         toolProvider: provider,
         allowCommit: result.step_type === 'commit',
         workZone: this.getWorkZone(),
+        specDir: this.specPath ? dirname(resolve(this.specPath)) : undefined,   // @a: anc-exec-spec-dir
         toolCallLog: [],
         warnLog: bodyWarnLog,
         hopEnv: this.hostConfig?.hop_env,   // @a: anc-exec-body-hop-env
@@ -1729,7 +2600,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
       } catch (e: unknown) {
         if (e instanceof ToolCallPending) {
           this.persistToolJournal();   // 挂起点落盘（journal 未变也保险持久一次 state）
-          return {
+          return this.stampWorkspace({
             status: 'tool_request',
             instance_id: this.instanceId,
             step_id: result.step_id,
@@ -1742,7 +2613,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
             tool_call_seq: e.seq,
             output_path: result.work_zone ? join(result.work_zone, `tool_${result.step_id}_${e.seq}.json`) : undefined,
             work_zone: result.work_zone,
-          };
+          });
         }
         // 直执工具失败——实际到达形态只有 TOOL_EXEC_ERROR（含被 provider 层折包的 WORK_ZONE_ONLY）
         // 与 COMMIT_REQUIRED 两种;正则保留 WORK_ZONE_ONLY 前缀属防御性冗余（2026-09-05 review
@@ -1779,11 +2650,18 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
           result = this.nextStep();
           continue;
         }
-        return result;   // 其余错误（INVALID_STATE 等）→ 停在该步交 caller（不静默吞）
+        return this.stampWorkspace(result);   // 其余错误（INVALID_STATE 等）→ 停在该步交 caller（不静默吞）
       }
-      result = this.nextStep();
+      // commit_audit（复用模式,commitGateSite 第 5 步）:与独立模式同一映射记授权来源——引擎判安全 / 模型判安全 / 人批准 / 这一步以后都通过 / 关卡关闭
+      // @a: anc-exec-commit-approval, anc-obs-audit
+      if (node.step_type === 'commit') {
+        this.hoplog?.recordStepMeta(result.step_id, {
+          commit_audit: { target: (node as CommitStep).irreversible_action ?? node.summary, authorized_by: commitAuthorizedBy(commitDecidedBy), result: 'success', at: new Date().toISOString() },
+        });
+      }
+      result = this.nextStepRaw();
     }
-    return result;
+    return this.stampWorkspace(result);
   }
 
   // 旧通道 nextParallelBatch/fan-out 已删（P0.5）——统一通道派发见 dispatchParallelSubtask/dispatchParallelCall。
@@ -2097,7 +2975,11 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
       this.recordEvent(entry.step_id, 'parallel_reap', `${childInstance} ok`);
       this.hoplog?.recordParallelReap(entry.host_container, childInstance, 'completed');   // @a: anc-exec-parallel-reap-log, anc-obs-parallel-reap
     } else if (outcome.failure) {
-      const failedStepId = Object.keys(outcome.failure.stepStates).find(id => outcome.failure!.stepStates[id] === 'failed');
+      // 内核取首个带失败明细的 failed 步（与 failCallStep ^anc-exec-callee-kernel 同律）——容器收口判据
+      // （^anc-exec-container-fail-close）起容器也记 failed 但无 stepFailReasons,键序首个会取到容器丢掉叶子真因。
+      // @a: anc-exec-container-fail-close, anc-exec-callee-kernel
+      const failedIdsS = Object.keys(outcome.failure.stepStates).filter(id => outcome.failure!.stepStates[id] === 'failed');
+      const failedStepId = failedIdsS.find(id => outcome.failure!.stepFailReasons[id]) ?? failedIdsS[0];
       const kernel = (failedStepId ? outcome.failure.stepFailReasons[failedStepId] : undefined)
         ?? { reason: 'child failed', fail_kind: 'error' as FailKind };
       this.recordEvent(entry.step_id, 'parallel_reap', `${childInstance} failed: ${kernel.reason}`);
@@ -2165,7 +3047,13 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
       }
     }
     this.stepStates.set(hostId, 'done');
-    this.hoplog?.recordParallelSettle(hostId);   // 收齐入轨（P1 §U3）// @a: anc-exec-parallel-reap-log, anc-obs-parallel-reap
+    // 已收清单从本宿主范围内的 parallel_reap 事件取（事件 detail 形如 `<子实例号> ok|failed: …`,首词即子实例号;与 settle 同源 execEvents）。
+    // 只收形如子实例号的首词——串行退化事件的 detail 首词是 `serial-degraded`,不是子实例,不进"已收子实例清单"
+    // （review 面三缺陷 1:mut-8 实证此前混入假 id 无测试拦）。// @a: anc-exec-parallel-reap-log, anc-obs-parallel-reap
+    const reaped = [...new Set((this.execEvents ?? [])
+      .filter(ev => ev.event === 'parallel_reap' && (ev.step_id === hostId || ev.step_id.startsWith(hostId + '.')))
+      .map(ev => String(ev.detail ?? '').split(' ')[0]).filter(w => /^\d+(\.\d+)*(#\d+)?$/.test(w)))];
+    this.hoplog?.recordParallelSettle(hostId, reaped);   // 收齐入轨（P1 §U3）
     this.hoplog?.recordStepDone(hostId);
     this.propagateAndRecord(hostId);
   }
@@ -2178,6 +3066,8 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     // hop_env 随派发透传（环境参数对子实例同义——worker/call 子进程各自组合根摘出重建同一张表;
     // 业务 params 优先,防环境键覆盖业务同名——命名空间保留下不可能,防御写法）。// @a: anc-config-hop-env
     if (this.hostConfig?.hop_env) params = { ...this.hostConfig.hop_env, ...params };
+    // Config.dirs 继承：父已展开已批的清单随参数文件透传,子实例不重展开不重核（^anc-exec-dirs-grant 子实例与恢复条）// @a: anc-exec-dirs-grant
+    if (this.declaredDirs) params = { ...params, [DECLARED_DIRS_PARAM]: this.declaredDirs };
     const paramsArg = this.cmdArgValue(kind === 'subtask' ? 'parallel' : 'calls', childInstance, 'params.json', JSON.stringify(params));
     // 卫星日志约定（^anc-obs-parallel-child-satellite）：worker 日志归父 run 目录
     // parallel/<ci>/log（call→calls/<ci>/log）——缺省会各开顶层 run 目录破坏约定
@@ -2189,13 +3079,21 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     const lvl = this.hoplog?.getLevel();
     const levelArg = lvl ? ` --log-level ${lvl}` : '';
     const logArg = (parentRunDir ? ` --log-dir "${join(parentRunDir, kind === 'subtask' ? 'parallel' : 'calls', childInstance, 'log')}"` : '') + levelArg;
+    // 子实例恒继承父工作区根（子进程 cwd 由 driver 的 Bash 决定,不带即父子分叉）// @a: anc-cli-workspace-arg
+    const wsArg = this.workspaceArg();
     if (kind === 'subtask') {
       // 同 spec 子树收窄 worker：init 沿用 --parallel-parent/--parallel-child 通道（目录 parallel/<ci>/）
-      return `node "${this.cliAbsPath}" --json run "${this.specPath}" --parallel-parent ${this.instanceId} --parallel-child ${childInstance} --params ${paramsArg} --state-dir "${stateDir}"${logArg}`;
+      return `node "${this.cliAbsPath}" --json run "${this.specPath}" --parallel-parent ${this.instanceId} --parallel-child ${childInstance} --params ${paramsArg} --state-dir "${stateDir}"${wsArg}${logArg}`;
     }
-    // call：callee spec 由 driver 按名解析（复用模式寻址归 caller——SpecProvider 是独立模式件），
-    // 命令给 init 骨架，<CALLEE_SPEC_PATH> 占位由 driver 填
-    return `node "${this.cliAbsPath}" --json run "<CALLEE_SPEC_PATH:${callee}>" --call-parent ${this.instanceId} --call-step ${childInstance} --params ${paramsArg} --state-dir "${stateDir}"${logArg}`;
+    // call：callee 路径经注册的解析函数填绝对路径（两级:同目录 → HopAnt 根）;解析不到留占位由 driver 按 discovery 找
+    // @a: anc-exec-callee-resolver
+    return `node "${this.cliAbsPath}" --json run "${this.calleePathToken(callee ?? '')}" --call-parent ${this.instanceId} --call-step ${childInstance} --params ${paramsArg} --state-dir "${stateDir}"${wsArg}${logArg}`;
+  }
+
+  // `--workspace "<父 workspace_dir>"` 片段（路径双引号包裹,^anc-string-escape shell 通道）;hostConfig 缺席返空串。// @a: anc-cli-workspace-arg
+  private workspaceArg(): string {
+    const ws = this.hostConfig?.workspace_dir;
+    return ws ? ` --workspace "${ws}"` : '';
   }
 
   // 命令数据值走参数文件（hopissues/0097——旧实装两层 JSON.stringify 塞双引号,反引号与 ${X}
@@ -2246,6 +3144,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     // params=引擎 auto-map 快照（取值方一律引擎 ^anc-exec-call-auto-map）+hop_env 透传（同派发纪律）
     let params = this.resolveCallParams(step.step_id);
     if (this.hostConfig?.hop_env) params = { ...this.hostConfig.hop_env, ...params };
+    if (this.declaredDirs) params = { ...params, [DECLARED_DIRS_PARAM]: this.declaredDirs };   // @a: anc-exec-dirs-grant
     // 插值形态先求值再进占位（^anc-step-call-dynamic-callee）——求值不出即不拼协议载荷
     // （与 cliAbsPath 缺席同款返回 undefined 形态）,决不让 {表达式} 原文漏进命令。// @a: anc-step-call-dynamic-callee
     const callee = this.resolveCalleeToken(step);
@@ -2269,7 +3168,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     const combined = this.buildUpstreamFeedbackPayload(step.step_id);
     const fbArg = combined ? ` --upstream-feedback ${this.cmdArgValue('calls', childInstance, 'feedback.txt', combined)}` : '';
     return {
-      init_command: `${base} init "<CALLEE_SPEC_PATH:${callee}>" --parent ${this.instanceId} --step ${step.step_id} --child-instance ${childInstance} --params ${paramsArg}${fbArg} --state-dir "${stateDir}" --trace ${this.instanceId}${logArg}`,
+      init_command: `${base} init "${this.calleePathToken(callee)}" --parent ${this.instanceId} --step ${step.step_id} --child-instance ${childInstance} --params ${paramsArg}${fbArg} --state-dir "${stateDir}" --trace ${this.instanceId}${this.workspaceArg()}${logArg}`,
       child_state_dir: childStateDir,
       child_instance: childInstance,
       // 循环起步命令（cc:call 真机实撞:init 建的子实例是"新建未推进"态,skill 说"走标准循环"
@@ -2329,6 +3228,15 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
       const node = this.findStepById(entry.step_id);
       if (!node) continue;
       const isCall = node.step_type === 'call';
+      // 跑过的子实例拼 resume 续跑,没跑过的才拼 run 重建（2026-10-08 作者定"同一个工作的 commit 不能被反复执行,
+      // 是宪法级原则"——此前恒拼 run,worker 入口对已有目录走 re-init 净室整目录重建从头跑,子实例内已执行且已批准
+      // 的 commit 被静默重放一次〔review 面二 probe3b 实证〕;判据与 paused 分派同一个 stateExists——state.json
+      // 在场=跑过至少一步,派发只写 params.json 不算）。resume 走 recover：load 快照+复位悬空 running,已执行步骤
+      // 由持久化状态跳过。U4b 第 6 条 stale_launch 分叉条 // @a: anc-exec-parallel-hitl-queue, anc-exec-call-reinit-clean
+      if (this.instanceDir && this.cliAbsPath && stateExists(join(this.instanceDir, isCall ? 'calls' : 'parallel', ci))) {
+        map[ci] = `node "${this.cliAbsPath}" --json resume --state-dir "${join(this.instanceDir, isCall ? 'calls' : 'parallel')}" --instance ${ci}`;
+        continue;
+      }
       // 账面快照优先（loop 推进后 itemVar 现值≠派发时值,现算必错——实测 [21,21]）;老账无快照才现算兜底
       const params = entry.params ?? this.resolveChildParams(node, getWriteScope(entry.step_id, this.spec!));
       const cmd = this.buildDispatchLaunchCommand(isCall ? 'call' : 'subtask', entry.step_id, ci, params,
@@ -2350,29 +3258,34 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     const instDir = this.instanceDir;
     if (!instDir) return { reaped, stale };
     for (const entry of [...this.inflight]) {
-      // paused 账恢复（U4b 第6条,36 轮 review 证伪原'队列从账+盘上卡重建'——独立模式子实例
-      // 是内存态崩溃即灭,无米之炊）：重派发重跑到暂停点重新入队——账删除+标注步骤回 pending,
-      // 下一轮 dfs 重新派发（subtask/call 是事务边界重跑合法,与嵌套 call 暂停'恢复重跑整个
-      // call'同哲学;人还没答过,重新暂停零损失）。子目录在场（文件态）仍走 stale 重建。
-      // @a: anc-exec-parallel-hitl-queue
+      // paused 账恢复（U4b 第 6 条——分派判据=子实例目录是否在场,2026-10-07 hopissues/0126 改定）：
+      // 目录在场 → stale 续跑（独立模式 reconcileAndRebuild 走 load+recoverDanglingRunning+runSpec 到暂停点
+      // 重新入队;复用模式经 stale/stale_launch 交 driver 重起 worker）,不论子实例有没有执行过 commit;
+      // 目录不在场（父无 instanceDir 的纯内存形态,子实例崩溃即灭）→ 重派发重跑到暂停点重新入队。
+      // 此前按退火标记分派（无 commit → 清账+步骤回 pending+删目录重派发）——对 [loop for-each] × [subtask parallel]
+      // 是错的：N 个子实例在 for-each 游标走到最后一项之后才全部停下,步骤置回 pending 后 dfs 只按当前游标派
+      // 最后一项,前 N-1 项账删目录清游标不回退,commit 一次没执行而 run 以 completed 收尾（hopkb 306 组只回 1 组）。
+      // "目录在场即续跑"不碰 stepStates / loopCounters / 目录,N 项天然保住;单个子实例续跑到暂停点与重派发
+      // 重跑在人没答过时结果相同。有 commit 的目录必在场,退火标记在分派里不再需要。
+      // @a: anc-exec-parallel-hitl-queue, anc-exec-call-child-persist
       if (entry.status === 'paused') {
         const nodeP = this.findStepById(entry.step_id);
         const childDirP = join(instDir, nodeP?.step_type === 'call' ? 'calls' : 'parallel', entry.child_instance);
-        // 分派判据改退火标记（^anc-exec-call-child-persist 随批——子实例落盘后目录恒在,原
-        // "目录在=stale 重建"使 U4b 恢复改道未通深水区;人还没答过,重派发重跑零损失仍是正路,
-        // 唯一不能重跑的是已执行 commit 的子实例——重派发=commit 重放,恰是落盘要防的第④坑）：
-        // 无 commit → 重派发（清残目录防下次误判）;有 commit → stale 续跑(load+resumeSpec)。
-        // @a: anc-exec-parallel-hitl-queue, anc-exec-call-child-persist
-        const childHasCommit = stateExists(childDirP) && (readState(childDirP).committed_steps ?? []).length > 0;
-        if (!childHasCommit) {
+        if (!stateExists(childDirP)) {
           this.inflight = this.inflight.filter(f => f.child_instance !== entry.child_instance);
           this.stepStates.set(entry.step_id, 'pending');
-          if (stateExists(childDirP)) rmSync(childDirP, { recursive: true, force: true });   // 残目录清场——重派发建新账,旧盘面留着会误导下轮对账
-          this.recordEvent(entry.step_id, 'step_start', `hitl-paused 子实例 ${entry.child_instance} 跨进程恢复——重派发重跑到暂停点重新入队（U4b 恢复路,无 commit 重跑零损失）`);
+          this.recordEvent(entry.step_id, 'step_start', `hitl-paused 子实例 ${entry.child_instance} 跨进程恢复——子实例目录不在场,重派发重跑到暂停点重新入队（U4b 恢复路,无目录可续）`);
           this.persist();
           continue;
         }
-        stale.push(entry.child_instance);   // 已执行 commit 的 paused 子实例:必须续跑不可重跑
+        // 续跑即重新在飞：paused 翻回 inflight——独立模式续跑到暂停点会再 markInflightPaused。复用模式
+        // 真链不经本支（CLI 通道没有 markInflightPaused 写入者,worker 停卡时父账仍 inflight,走下方
+        // inflight-且-子实例非终态 的 stale 支）;本支对复用模式只在"独立模式建账后换 CLI 口对账"的混合
+        // 形态命中。两支汇到同一份 stale/stale_launch。
+        entry.status = 'inflight';
+        this.recordEvent(entry.step_id, 'step_start', `hitl-paused 子实例 ${entry.child_instance} 跨进程恢复——子实例目录在场,续跑到暂停点重新入队（U4b 第 6 条,hopissues/0126）`);
+        this.persist();
+        stale.push(entry.child_instance);
         continue;
       }
       if (entry.status !== 'inflight') continue;
@@ -2566,9 +3479,12 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
       // 隔壳形态:壳 retry/on fail 照常运转,兜底产物照常聚合喂 collect（旧形态只留痕不 fail,
       // 壳兜底永不触发〔D80 探针坑②〕）。call 直挂 loop 形态:call 步此刻是 done（派发即推进）,
       // failStep 的 running 门会拒——沿旧集合语义留痕不贡献元素,行为不变（退化等价）。
-      const failedStepId = Object.keys(outcome.failure.stepStates).find(id => outcome.failure!.stepStates[id] === 'failed');
-      const kernel = (failedStepId ? outcome.failure.stepFailReasons[failedStepId] : undefined)
+      const failedIdsC = Object.keys(outcome.failure.stepStates).filter(id => outcome.failure!.stepStates[id] === 'failed');
+      const failedStepId = failedIdsC.find(id => outcome.failure!.stepFailReasons[id]) ?? failedIdsC[0];   // 带明细优先（同上）// @a: anc-exec-container-fail-close, anc-exec-callee-kernel
+      const rawKernel = (failedStepId ? outcome.failure.stepFailReasons[failedStepId] : undefined)
         ?? { reason: 'callee failed', fail_kind: 'error' as FailKind };
+      // 规则 2 嵌套失败单跳摘要——与 failCallStep 同律（0156 B4）// @a: anc-exec-callee-kernel
+      const kernel = { ...rawKernel, reason: this.summarizeNestedCalleeFailure(rawKernel.reason) };
       this.recordEvent(entry.step_id, 'parallel_reap', `${childInstance} failed: ${kernel.reason}`);
       const chainDelivered = this.deliverReapedFailureAlongChain(entry.step_id, entry.iter, kernel);
       if (!chainDelivered) {
@@ -2766,6 +3682,23 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     };
   }
 
+  /** 嵌套失败单跳摘要（^anc-exec-callee-kernel 规则 2）：reason 若自身是 CalleeFailure JSON,消化成
+   * "调用 <孙spec> 失败于其步骤 <X>（已试 N 次）：<孙 reason 截 200>" 一跳文本;解析不动截 300 兜底;
+   * 非 CalleeFailure 前缀原样。串行 failCallStep 与 call parallel 的 reapParallelCall 失败分支共用
+   *（0156 B4——此前并行路径不经此,深链孙层 JSON 透传父层）。*/ // @a: anc-exec-callee-kernel
+  private summarizeNestedCalleeFailure(reason: string): string {
+    if (!reason.startsWith('CalleeFailure:')) return reason;
+    try {
+      const inner = JSON.parse(reason.slice('CalleeFailure:'.length).trim()) as {
+        callee_spec_id?: string; failed_step?: string; reason?: string; attempts?: number;
+      };
+      const innerReason = (inner.reason ?? '').slice(0, 200);
+      return `调用 '${inner.callee_spec_id ?? '?'}' 失败于其步骤 '${inner.failed_step ?? '?'}'（已试 ${inner.attempts ?? '?'} 次）：${innerReason}`;
+    } catch {
+      return reason.slice(0, 300);   // 解析不动也不透传全文——截断兜底
+    }
+  }
+
   failCallStep(callStepId: string, childState: { specId: string; childInstanceId: string; stepFailReasons: Record<string, StepFailRecord>; stepStates: Record<string, string>; retryHistory?: Record<string, RetryRecord[]> }): CommandResponse {
     const step = this.findStepById(callStepId);
     if (!step || step.step_type !== 'call') {
@@ -2794,18 +3727,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     // 接口面,孙层原文对父是陌生词汇。子实例调孙失败的 kernel 是 CalleeFailure JSON,消化成
     // 一跳可读摘要再以本层视角上升;归纳保证每层 reason 恒为单跳文本。全链细节归 hoplog
     // 卫星目录,上传通道管决策可读。）// @a: anc-exec-callee-kernel
-    let kernelReason = kernel.reason;
-    if (kernelReason.startsWith('CalleeFailure:')) {
-      try {
-        const inner = JSON.parse(kernelReason.slice('CalleeFailure:'.length).trim()) as {
-          callee_spec_id?: string; failed_step?: string; reason?: string; attempts?: number;
-        };
-        const innerReason = (inner.reason ?? '').slice(0, 200);
-        kernelReason = `调用 '${inner.callee_spec_id ?? '?'}' 失败于其步骤 '${inner.failed_step ?? '?'}'（已试 ${inner.attempts ?? '?'} 次）：${innerReason}`;
-      } catch {
-        kernelReason = kernelReason.slice(0, 300);   // 解析不动也不透传全文——截断兜底
-      }
-    }
+    const kernelReason = this.summarizeNestedCalleeFailure(kernel.reason);
     const calleeFailure = {
       callee_spec_id: childState.specId,
       child_instance: childState.childInstanceId,
@@ -3133,6 +4055,14 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     // 会被 REPLAN_DUPLICATE 误杀——与 proactive 分池同因,阅卷实锤后补〕）。
     if (!isFreeExpansion) {
       this.replanCounters.set(subtaskId, currentCount + 1);
+      // 退化检测（^anc-exec-retry-adaptive 熔断机制第 3 项,todo/0129 B3 补实装——此前只有相似度闸）：
+      // 新 children 步数 ≥ 上次 2 倍判"计划膨胀",warn 仍接受（LLM 可能合理地更细粒度;拒绝归相似度闸与上限）。
+      // 只在 adaptive 且有上次基线时判——proactive 提交在上方分支已 return 走不到这里,不另设条件（review 面三 G9 抓死条件）。// @a: anc-exec-retry-adaptive
+      if (lastChildren && lastChildren.length > 0 && newSummaries.length >= lastChildren.length * 2) {
+        const msg = `[replan-inflation] subtask '${subtaskId}' 新计划 ${newSummaries.length} 步是上次 ${lastChildren.length} 步的 ${(newSummaries.length / lastChildren.length).toFixed(1)} 倍——计划膨胀,仍接受;连续膨胀多半是把失败原因当成"再细一点"在解`;
+        this.recordEvent(subtaskId, 'replan', msg);
+        this.hoplog?.recordWarn(subtaskId, msg);
+      }
       this.lastReplanChildren.set(subtaskId, newSummaries);
     } else {
       // 首次展开落地：总计数自增（契约7熔断底账）+ hoplog 骨架（原零记录,执行树凭空缺节点——契约9）
@@ -3224,36 +4154,6 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     }
   }
 
-  selectBranch(stepId: string, selectedCaseId: string, reason?: string): CommandResponse {
-    const branch = this.findStepById(stepId) as BranchStep | null;
-    if (!branch || branch.step_type !== 'branch') {
-      return { status: 'error', code: ErrorCode.INVALID_STEP_ID, message: `Step '${stepId}' is not a branch` };
-    }
-
-    const state = this.stepStates.get(stepId);
-    if (state !== 'pending' && state !== 'running') {
-      return { status: 'error', code: ErrorCode.INVALID_STATE, message: `Branch '${stepId}' is ${state}, expected pending or running` };
-    }
-
-    const caseStep = branch.children.find(c => c.step_id === selectedCaseId);
-    if (!caseStep) {
-      return { status: 'error', code: ErrorCode.INVALID_STEP_ID, message: `Case '${selectedCaseId}' not found in branch '${stepId}'` };
-    }
-
-    this.stepStates.set(stepId, 'running');
-    this.stepStates.set(caseStep.step_id, 'running');
-    for (const c of branch.children) {
-      if (c.step_id !== selectedCaseId) {
-        this.stepStates.set(c.step_id, 'skipped');
-        this.skipAllDescendants(c);
-      }
-    }
-
-    this.recordEvent(stepId, 'branch_select', reason ?? selectedCaseId);
-    this.persist();
-    return { status: 'ok' };
-  }
-
   /** initial_plan 请求组装（^anc-exec-subtask-free-expand 契约1/2——三出口〔首吐/再吐/resume〕
    * 共用单点:"这是首规划"由状态判定〔free 且 children 空〕,不是一次性组装。缺值输入显式 null
    * 占位+missing_inputs 清单——规划方须能分辨"值缺失"与"没这个输入"。// @a: anc-exec-subtask-free-expand */
@@ -3303,7 +4203,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     let pauseSummary: { pause_reason?: string; paused_step_id?: string; call_path?: string[] } = {};
     if (executionStatus === 'paused') {
       const d = this.detectPausedState();
-      if (d) pauseSummary = { pause_reason: d.reason, paused_step_id: d.stepId, ...(d.callPath && d.callPath.length > 0 ? { call_path: d.callPath } : {}) };
+      if (d) pauseSummary = { pause_reason: d.reason, ...(d.stepId ? { paused_step_id: d.stepId } : {}), ...(d.callPath && d.callPath.length > 0 ? { call_path: d.callPath } : {}) };   // dirs 停驻无 paused_step_id（源⑥）
     }
 
     // completed 标记与步骤态一致性核（hopissues/0093——病态快照〔盘外写入/回放重建〕形态:
@@ -3440,6 +4340,24 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
   // propagateCompletion + 容器 done 记录:统一调用点,通过 newlyDone 通道捕获级联标 done 的容器,
   // 逐个 recordStepDone(含容器声明的聚合输出,从父 scope 读)/Failed。
   // 见 design/spec-observability.md ^anc-obs-step-done-timing。// @a: anc-obs-step-done-timing
+  /** 级联顶判据（^anc-exec-container-fail-close 第 5 步）：没有容器父,或父链已越出 worker 子树根（子树根之外是父实例的掩码,不是本实例的边界）。 */ // @a: anc-exec-container-fail-close
+  private isCascadeTop(stepId: string): boolean {
+    if (this.subtreeRoot && stepId === this.subtreeRoot) return true;
+    const parentId = getParentStepId(stepId);
+    if (!parentId) return true;
+    if (this.subtreeRoot && !parentId.startsWith(this.subtreeRoot + '.') && parentId !== this.subtreeRoot) return true;
+    return false;
+  }
+
+  /** 沿 failed 子步一路向下取真正失败的叶子（带 stepFailReasons 明细者优先）,供 terminal_failure 的 reason 点名真因。 */ // @a: anc-exec-container-fail-close
+  private deepestFailedDescendant(node: StepNode): string | null {
+    if (!hasChildren(node)) return node.step_id;
+    const failedKids = getChildren(node).filter(c => this.stepStates.get(c.step_id) === 'failed');
+    if (failedKids.length === 0) return node.step_id;
+    const withDetail = failedKids.find(c => this.stepFailReasons.has(c.step_id) && !hasChildren(c));
+    return this.deepestFailedDescendant(withDetail ?? failedKids[0]);
+  }
+
   private propagateAndRecord(stepId: string): void {
     const newlyDone: { node: StepNode; failed: boolean }[] = [];
     const loopIters: { loopId: string; iter: number }[] = [];
@@ -3456,6 +4374,27 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
       retryCounters: this.retryCounters,
     }, this.spec!);
     for (const li of loopIters) this.recordEvent(li.loopId, 'loop_iter', String(li.iter));   // 先于 hoplog 早退——事件流不依赖 hoplog
+    // 容器 failed 级联到顶即实例终止（^anc-exec-container-fail-close HopSop 第 5 步,2026-10-12 todo/0167 作者拍甲案）：
+    // 级联把一个没有容器父（或父是 worker 的子树根掩码之外）的容器标成 failed,说明失败穿透了全部事务边界——
+    // 概念 ^anc-exec-none-propagation 只有两个去向,"失败了还继续往下跑"不存在。此前级联到顶就停,nextStep 把 failed
+    // 容器当已终态步跳过、顶层兄弟照跑,run 以 completed 收场（0162 反例实撞）。与 fail_step 3.1 同形态：未终态步骤
+    // 标 skipped、terminalFailure 指向容器且 reason 带叶子真因;terminalFailure 已在场（叶子路径先到）则不覆盖。
+    // @a: anc-exec-container-fail-close
+    if (!this.terminalFailure) {
+      const topFailed = newlyDone.find(({ node, failed }) => failed && this.isCascadeTop(node.step_id));
+      if (topFailed) {
+        const leaf = this.deepestFailedDescendant(topFailed.node);
+        const leafReason = leaf ? this.stepFailReasons.get(leaf)?.reason : undefined;
+        const reason = leaf && leaf !== topFailed.node.step_id
+          ? `container '${topFailed.node.step_id}' failed: 子步骤 '${leaf}' 失败未被任何祖先消化${leafReason ? `（${leafReason}）` : ''}`
+          : `container '${topFailed.node.step_id}' failed`;
+        for (const [id, status] of this.stepStates) {
+          if (status === 'pending' || status === 'running') this.stepStates.set(id, 'skipped');
+        }
+        this.terminalFailure = { stepId: topFailed.node.step_id, reason };
+        this.recordStepFailure(topFailed.node.step_id, reason);
+      }
+    }
     if (!this.hoplog) return;
     // worker 掩码祖先豁免（^anc-obs-step-done-timing 豁免条,todo/0022）：subtreeRoot 的真祖先
     // 是 executeSubtreeOnly 设的 scope 掩码——结构状态非执行态,worker 内从未 start;对它们记
@@ -3718,6 +4657,10 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
    * 判定,取最深层停点并头插调用步号成 callPath。parallel 子实例不下钻——run 整体状态归
    * parallel-execution ^anc-exec-parallel-hitl-queue 第 3 条。 // @a: anc-cli-status-response */
   private detectPausedState(): { reason: string; stepId: string; callPath?: string[] } | null {
+    // 源⑥：Config.dirs 批准停驻（run 级前置条件,卡 step_id 恒空串——源③的"卡 step_id 仍 running"永不命中;
+    // 判定不依赖卡：state.json declared_dirs.outside 非空且账未批即 paused/dirs,paused_step_id 缺席）。// @a: anc-exec-dirs-grant
+    const dirsGate = this.checkDirsApproval();
+    if (dirsGate && !dirsGate.approved) return { reason: 'dirs', stepId: '' };
     // 源③优先读卡（卡有完整 pause_reason）,但必须过陈卡对账
     const card = this.readPausedCardRaw();
     if (card && typeof card['step_id'] === 'string') {
@@ -3874,6 +4817,18 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
       if (!this.deterministicWaived.has(waiveKey)) {
         this.deterministicWaived.add(waiveKey);
         this.recordEvent(subtask.step_id, 'retry', `deterministic failure—免扣预算（步级瞬态首撞:${truncPrefix},带新反馈重跑;同步骤同前缀复发照扣）`);
+        // 免扣轮也要把失败原因写进账,否则 getActiveRetryFeedback 读不到、重跑是同输入重放——"带新反馈重跑"
+        // 的前提就不成立。attempt 沿用已用次数不加一（免扣轮不是一次 attempt）。// @a: anc-exec-deterministic-no-retry
+        const waivedHistory = this.retryHistory.get(subtask.step_id) ?? [];
+        const usedSoFar = (subtask.retry ?? 3) - (this.retryCounters.get(subtask.step_id) ?? (subtask.retry ?? 3));
+        waivedHistory.push({
+          attempt: usedSoFar,
+          failure_reason: full,
+          steps_tried: this.summarizeChildren(subtask),
+          event_seq: this.execEvents.length,
+          waived: true,
+        });
+        this.retryHistory.set(subtask.step_id, waivedHistory);
         this.resetSubtaskForRetry(subtask);
         this.persist();
         return;
@@ -4065,9 +5020,10 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
   }
 
   // confirm answer 决策值提取：从 caller 注入的 answer 取 decision/value/answer 键或单值。
+  // 非对象回答（字符串、数组、null）返回 undefined 不抛——落到 confirm 分支的"取不到决定值"拒收。
   // 见 ^anc-exec-confirm-answer。
   private extractDecision(answer?: Record<string, unknown>): unknown {
-    if (!answer) return undefined;
+    if (!answer || typeof answer !== 'object' || Array.isArray(answer)) return undefined;
     if ('decision' in answer) return answer['decision'];
     if ('value' in answer) return answer['value'];
     if ('answer' in answer) return answer['answer'];
@@ -4091,8 +5047,8 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     return mapped;
   }
 
-  // ask answer → 数据值落到 +→ 声明变量名。caller answer 三种形态：
-  // ①{声明名:值} 直接采用 ②{value:值}/单值包装 → 落到首个声明名 ③approve/空 → 采用 default_value（前序推断）
+  // ask answer → 数据值落到 +→ 声明变量名。四分支（名字与设计同一套）：顶层键命中 {声明名:值} 直接采用 /
+  // 信封内键命中 {value:{声明名:值}} 剥封后按键采用 / approve 快捷 → 采用 default_value（前序推断）/ 单值灌满 → 每个声明都赋同一值
   // 见 ^anc-step-ask / ^anc-exec-hitl-presentation。// @a: anc-step-ask, anc-exec-hitl-presentation
   private mapAskOutputs(
     node: StepNode,
@@ -4101,11 +5057,19 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
   ): Record<string, unknown> {
     const decls = node.outputs ?? [];
     if (decls.length === 0) return answer ?? {};
-    // ① answer 的 key 已匹配声明名 → 直接采用（同样过类型归一）
+    // 顶层键命中：answer 的 key 已匹配声明名 → 直接采用（同样过类型归一）
     if (answer && decls.some(d => d.name in answer)) return this.coerceAskTypes(decls, answer);
     const raw = this.extractDecision(answer);
+    // 信封内键命中：信封里按声明名分好家的对象 → 按键采用（hopissues/0119：驱动文档教的注入形态是信封
+    // {"value": …},多输出 ask 的 caller 照模板把 {声明名: 值} 放进信封——顶层只有 value 一个键,顶层键命中不成立,
+    // 原先落到单值灌满把同一整对象赋给每个声明,line 声明装对象下游拼成 [object Object]。与顶层键命中同语义只多剥一层。
+    // !Array.isArray 守卫在行为上冗余（数组的 'name' in raw 恒 false 本就不命中）,留着是让判据读起来与设计 HopSop 步 4 一字对应）。
+    // @a: anc-exec-hitl-presentation
+    if (raw && typeof raw === 'object' && !Array.isArray(raw) && decls.some(d => d.name in (raw as Record<string, unknown>))) {
+      return this.coerceAskTypes(decls, raw as Record<string, unknown>);
+    }
     const mapped: Record<string, unknown> = {};
-    // ③ approve 快捷：采用 default_value（首个声明在前序产出中的同名推断值）
+    // approve 快捷：采用 default_value（首个声明在前序产出中的同名推断值）
     const isApproveShortcut = raw !== undefined && String(raw).toLowerCase() === 'approve';
     for (const d of decls) {
       if (isApproveShortcut) {
@@ -4113,7 +5077,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
         const scopeId = getWriteScope(stepId, this.spec!);
         mapped[d.name] = this.variables.read(d.name, scopeId);
       } else {
-        // ② 用 caller 提供的值
+        // 单值灌满：用 caller 提供的值（多声明时同一值灌满每个声明——文本型由 completeStep ask 分支的 ASK_ANSWER_SHAPE 接手）
         mapped[d.name] = raw;
       }
     }
@@ -4407,6 +5371,16 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     this.execEvents.push({ at: new Date().toISOString(), step_id: stepId, event, detail });
   }
 
+  // 对已终态失败的实例再次推进（resume/load 后 nextStep）被拒时记一条 resume_rejected 事件并落盘——
+  // 之前只有响应通道带 failure_reason,状态与日志零痕迹（hopissues/0122）。判"再次"的依据=进入时
+  // terminalState 已是 failed（快照回填的）;首次到达终态时 step_failed 事件已在,不记。
+  // 设计 [[exec-engine#^anc-exec-resume-rejected-event]] // @a: anc-exec-resume-rejected-event
+  private recordResumeRejected(stepId: string, reason: string): void {
+    if (this.terminalState !== 'failed') return;
+    this.recordEvent(stepId, 'resume_rejected', reason);
+    this.persist();
+  }
+
   // 步骤失败：记事件流 + 存结构化失败原因（getFailureReason 的唯一来源，跨进程稳定）。
   private recordStepFailure(stepId: string, reason: string, failKind: FailKind = 'error'): void {
     this.recordEvent(stepId, 'step_failed', reason);
@@ -4497,6 +5471,7 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
       ...(this.hoplog ? { hoplog_run_dir: this.hoplog.getRunDir() } : {}),
       ...(this.adaptiveNeededSubtask ? { adaptive_needed_subtask: this.adaptiveNeededSubtask } : {}),
       ...(this.escalatePending ? { escalate_pending: this.escalatePending } : {}),   // 升层待答跨进程 // @a: anc-exec-check-escalate
+      ...(this.declaredDirs ? { declared_dirs: this.declaredDirs } : {}),   // Config.dirs 展开结果跨进程 // @a: anc-exec-dirs-grant
       ...(this.terminalFailure ? { terminal_failure: this.terminalFailure } : {}),
       ...(this.terminalState ? { terminal_state: this.terminalState } : {}),   // 0043 终局有据 // @a: anc-exec-state-persistence
       ...(this.notifyChannel ? { notify_channel: this.notifyChannel } : {}),   // 复用模式通知渠道跨进程（^anc-cli-notify-reuse——每条 CLI 命令新进程,内存值活不过一条命令） // @a: anc-cli-notify-reuse
@@ -4600,6 +5575,9 @@ export class ExecutionEngine { // @a: anc-struct-exec-engine
     }
     if (stateData.escalate_pending) {
       engine.escalatePending = stateData.escalate_pending;   // @a: anc-exec-check-escalate
+    }
+    if (stateData.declared_dirs) {
+      engine.declaredDirs = stateData.declared_dirs as DeclaredDirs;   // @a: anc-exec-dirs-grant
     }
     if (stateData.adaptive_needed_subtask) {
       engine.adaptiveNeededSubtask = stateData.adaptive_needed_subtask;

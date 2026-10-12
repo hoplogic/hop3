@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-09-27T20:38+0800
+	last_sync: 2026-10-09T15:54+0800
 	note: SpecAST 完整 TypeScript 类型定义——所有组件的数据模型依赖。内容分级（决策/契约/说明）
 %%
 
@@ -15,7 +15,7 @@ SpecParser 的输出类型，也是 ExecutionEngine、PromptAssembler、StepDisp
 
 ## 定位【契约】 ^anc-struct-spec-ast
 
-> **模块版本**：spec-ast `v0.10.3`（2026-09-27）。0.x 未承诺稳定。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
+> **模块版本**：spec-ast `v0.10.9`（2026-10-12 语义审计 #15 #16 #17：HopType SpecHeader 补 tools / approved_commands / narrative_sections / decl_zone_orphans 四字段,StructuralStepType 枚举补 on_fail 改 8 种、终值 15、StepNode 成员补 OnFailStep,DocRefFragment 补 preview / full_chars——三处设计字段数与代码对齐,代码零改动）。上版 v0.10.8（2026-10-11 todo/0161：CheckStep 字段表补 tool_grants / tool_denies——无 body 的 check 与 reason 同一套声明制工具面,AST 同形态并排）。上版 v0.10.7（2026-10-11 语义审计 0156 C 类：CaseStep 字段表补 `parallel`、CallStep 字段表补 `callee_expr` / `callee_expr_src`——三字段代码早已在场,设计字段表漏登）。上版 v0.10.6（2026-10-09 IfStmt 加可选 `else_line`;act body 语句 `line` 注明是 spec 文件真实行号——commit 安全分析批次 review 修复,[[spec-parser#^anc-rule-act-body-line]]）。上版 v0.10.5（2026-10-09 出口表加 `DEFAULT_KEEP`——keep 缺省值从 tools.ts 迁入,engine 与 tools 同源;补登 `UnaryExpr`——validator 识别负号字面量 keep 要用;commit 安全分析批次 review 修复）。上版 v0.10.4（2026-10-07 SpecConfig 加 `dirs` 字段）。0.x 未承诺稳定。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
 **① 自身定位**：spec-ast 模块是 HopJIT 的**类型契约层**——定义所有模块共享的数据模型（15 种 HopSpec 步骤、AST 结构、变量/头部声明、ActBody 表达式），以及 AST 上的纯谓词与常量。它是整条实现链的"公共词汇表"，被 parser/engine/prompt/dispatcher/cli 全员依赖。
 
 **② 边界（负责什么 / 不碰什么）**：
@@ -53,7 +53,7 @@ SpecParser 的输出类型，也是 ExecutionEngine、PromptAssembler、StepDisp
 | `SubtaskStep` / `LoopStep` / `BranchStep` / `CaseStep` / `BreakStep` / `ContinueStep` / `ExitStep` | 类型 | ast-types.ts | 7 结构/控制流步骤类型 | stable |
 | `ParallelStep` | 类型 | ast-types.ts | parallel 标注 subtask 的收窄别名 `SubtaskStep & {parallel: true}`（engine/engine-traverse/parser/validator 类型收窄用——原独立步骤类型 2026-08-07 退役,统一模型 P0.5 复活为别名形态） | stable |
 | `isParallelContainer` / `getForEach` | 函数 | ast-helpers.ts | parallel 容器谓词 + for-each 子句取值（engine/engine-traverse/validator/cli 判派发形态共用判据） | stable |
-| `ActBody` / `ActStatement` / `ActExpr` / `AssignStmt` / `CallStmt` / `IfStmt` / `BinaryExpr` / `BinaryOp` / `CallExpr` / `CallArg` 等 | 类型 | ast-types.ts | hop_python AST（act-body/validator 消费） | stable |
+| `ActBody` / `ActStatement` / `ActExpr` / `AssignStmt` / `CallStmt` / `IfStmt` / `BinaryExpr` / `BinaryOp` / `UnaryExpr` / `CallExpr` / `CallArg` 等 | 类型 | ast-types.ts | hop_python AST（act-body/validator 消费;UnaryExpr 2026-10-09 登记——validator B2 第④判识别负号字面量 keep 时 import） | stable |
 | `DocRef` / `DocRefFragment` | 类型 | ast-types.ts | doc-ref 引用/片段结构 | stable |
 | `ResponseOption` / `StepSummary` | 类型 | ast-types.ts | 辅助类型（confirm 选项 / replan 摘要） | stable |
 | `hasChildren` / `getChildren` / `isContainerStep` / `getParentStepId` | 函数 | ast-helpers.ts | AST 谓词 + step_id 寻址（全员消费） | stable |
@@ -62,6 +62,8 @@ SpecParser 的输出类型，也是 ExecutionEngine、PromptAssembler、StepDisp
 | `formatTypeDecl` / `collectTypeDeclClosure` | 函数 | ast-helpers.ts | TypeDecl 字段级序列化+闭包收集（prompt L1 Types 段与 SCHEMA_MISMATCH 反馈两消费点单源——0017:生成/反馈/校验三面同一份契约） | provisional |
 | `DEFLATE_THRESHOLD` / `HUMAN_PREVIEW_THRESHOLD` / `INLINE_PREVIEW_MAX` | 常量 | ast-helpers.ts | 大内容阈值（engine/prompt deflate 判定;INLINE_PREVIEW_MAX=inline 通道预览限额,^anc-exec-llm-inline-context 两个使用点 prompt/doc-ref 共用;v3 起只对下发面含 read 的步骤生效） | stable |
 | `DEFAULT_EXPANSION_MAX` | 常量 | ast-types.ts | subtask free 展开熔断缺省（engine/validator 双侧同源——dff2cb7 批迁入与 SpecConfig 同居,清单漏登 0830 review 补） | stable |
+| `DEFAULT_KEEP` | 常量 | ast-types.ts | 文件写类四件（write / edit_file / move / remove）keep 实参的缺省值 3——tools 执行留存与 engine commit 动作清单提取（^anc-exec-commit-action-facts）共用同一来源;住本层是因为 engine 不引用 tools,两侧都已引用 ast-types（同 DEFAULT_EXPANSION_MAX 先例,[[tools/file-tools#^anc-exec-file-keep-recycle]]） | provisional |
+| `DIRS_VAR_REF_RE` | 常量 | ast-types.ts | Config.dirs 条目 `{名字}` 引用的标识符判据（含中文,与 parser 变量名字符集同源;validator V16 与 engine resolveDeclaredDirs 同用——住本层避免 validator→engine 回边,^anc-exec-dirs-grant） | provisional |
 | `VariableStore` / `VariableScope` / `StepStatus` | 类/类型 | ast-runtime.ts | 变量存储（扁平命名空间语义;scope 树仅作 for-each 收集缓冲与 vars.json v2 存储基质）+ 步骤状态（engine/prompt 消费） | stable |
 | `buildStepMap` | 函数 | ast-runtime.ts | step_id→StepNode 反查表构建（**纯函数,2026-08-14 随 run 隔离不变量去缓存**——原模块顶层 `let _stepMapCache` 是"run 级缓存住进程级槽"的违反面〔权威 [[../ARCHITECTURE#^anc-run-isolation]]〕:多 run 互踢命中率归零,且是全库唯一可变模块全局、被仿写即正确性 bug;缓存归属改引擎实例持有） | stable |
 | `isTerminalStatus` | 函数 | ast-runtime.ts | **单点定义终态集合**（done/failed/skipped）——engine/engine-traverse 多处判据复用，新增终态只改这里。与 `StepStatus` 配套（2026-08-01 补登：清单原列了 StepStatus 却漏了这个配套谓词） | stable |
@@ -116,8 +118,8 @@ SpecParser 的输出类型，也是 ExecutionEngine、PromptAssembler、StepDisp
 
 将 15 种 HopSpec 步骤切成两类：
 
-- **6 种 ExecutableStepType**（`reason`/`act`/`check`/`confirm`/`commit`/`call`）——由 StepDispatcher 分派、直接调 LLM API 执行。
-- **8 种 StructuralStepType**（`subtask`/`parallel`/`loop`/`branch`/`case`/`break`/`continue`/`exit`）——由 ExecutionEngine 内部解析展开，不直接出现在交给 LLM 执行的 `StepReady.step_type` 中。
+- **7 种 ExecutableStepType**（`reason`/`act`/`check`/`confirm`/`ask`/`commit`/`call`——本行旧文漏 ask,2026-10-12 语义审计 #16 随同节一并改）——由 StepDispatcher 分派、直接调 LLM API 执行。
+- **8 种 StructuralStepType**（`subtask`/`loop`/`branch`/`case`/`break`/`continue`/`exit`/`on_fail`——parallel 2026-08-07 降为属性退出,on_fail 2026-08-21 入;2026-10-12 语义审计 #16 随锚点块一并改）——由 ExecutionEngine 内部解析展开，不直接出现在交给 LLM 执行的 `StepReady.step_type` 中。
 
 **为何拍板**：另一合法选项是"全部 15 种一视同仁交给 dispatcher"。选择二分，是因为结构/控制流是 Engine 的职责（展开 children、选择 next_step、评估 branch 条件），不应消耗一次 LLM 调用。`StepReady.step_type` 因此被收窄为仅 6 个可执行值——分支决策若需 LLM 推理，必须在 branch 前置 reason 步骤产出分类变量。该二分直接决定了 `StepType` 的子类型划分（见下文「StepType 联合类型」章节）。
 
@@ -151,7 +153,7 @@ v1 的 `output_schema` 与变量类型校验采取分层策略：
 SpecAST 是 Spec markdown 解析后的完整抽象语法树根节点 ^anc-ast-spec-ast
 
 ```
-struct: SpecAST
+HopType: SpecAST
   Id: spec-ast
   Fields:
     - header % SpecHeader             # Spec 头部字段结构
@@ -169,7 +171,7 @@ struct: SpecAST
 ## SpecHeader【契约】 ^anc-ast-spec-header
 
 ```
-struct: SpecHeader
+HopType: SpecHeader
   Id: spec-header
   Fields:
     - title % line                    # Spec 标题（首个 # heading）
@@ -183,8 +185,12 @@ struct: SpecHeader
     - config % SpecConfig             # 可选。## Config 段
     - doc_refs % [DocRef]             # 可选。doc-ref 提取落点（spec-parser ^anc-rule-doc-ref-extract 权威,本块补同步）
     - colon_separators % [SchemaColonSeparatorRecord]  # 可选。仍用冒号 `:` 作 HopSchema 分隔符的声明位置清单（spec-parser ^anc-rule-schema-sep-dual 权威）;全用 `%` 时缺席。属位置元数据,与 source_location 同类——比较 AST 语义等价时一并剥掉
+    - tools % [ToolNeed]              # 可选。## Tools 段工具需求声明——init 对环境注册面对账（spec-parser ^anc-rule-tools-section 权威;2026-10-12 语义审计 #15 本块补同步）
+    - approved_commands % [[line]]    # 可选。## 已批准命令 段,一行一个 argv 前缀（spec-parser ^anc-rule-approved-commands 权威;#15 补同步）
+    - narrative_sections % [yaml]     # 可选。叙事段 {title, content} 列表——spec 段之外给人与 LLM 读的章节（spec-parser ^anc-rule-narrative-sections 权威;#15 补同步）
+    - decl_zone_orphans % [yaml]      # 可选。声明区里不属任何声明文法的孤行 {line, text, section}——W1 警告料源（spec-parser ^anc-rule-decl-zone-warn 权威;#15 补同步）
 
-struct: SchemaColonSeparatorRecord
+HopType: SchemaColonSeparatorRecord
   Id: schema-colon-separator-record
   Fields:
     - line % number                   # 该声明在 spec 源文件里的行号（从 1 起）
@@ -192,20 +198,20 @@ struct: SchemaColonSeparatorRecord
     - name % line                     # 冒号左边的名字（变量名/字段名/工具参数名）
     - type % line                     # 冒号右边的类型文本
 
-struct: TypeDecl
+HopType: TypeDecl
   Id: type-decl
   Fields:
     - name % line                     # 类型名
     - fields % yaml                   # field_name → 类型字符串的字典（"text" | "bool" | "line" | "number" | "enum(...)" | "markdown" | "yaml" | "prompt" 等）
 
-struct: VarDecl
+HopType: VarDecl
   Id: var-decl
   Fields:
     - name % line                     # 变量名
     - type % line                     # 基础类型（ValueTypeString，定义见 shared-types）或自定义 TypeDecl 名
     - description % line              # 可选。# 注释
 
-struct: SpecConfig
+HopType: SpecConfig
   Id: spec-config
   Fields:
     - max_depth % number              # 可选。call 深度限制，默认 10（声明在场,运行时零消费——随将来需求再接,教学面勿列）
@@ -215,6 +221,7 @@ struct: SpecConfig
     - expansion_max % number          # 可选。subtask free 展开总数上限（缺省 20;权威 [[exec-engine]] ^anc-exec-subtask-free-expand 契约7）
     - engine_min_version % line       # 可选。引擎最低版本闸（权威 [[exec-engine#^anc-exec-engine-min-version-gate]]）
     - requires_commands % [line]      # 可选。body 依赖的本地命令声明（权威 [[exec-engine#^anc-exec-requires-commands-gate]]）
+    - dirs % yaml                     # 可选。任务级目录声明 {read?: [line], readwrite?: [line]}（权威 [[exec-engine#^anc-exec-dirs-grant]];2026-10-07 todo/0148）
     - ...: yaml                      # 扩展配置项（任意键，值型 unknown）
 ```
 
@@ -224,7 +231,7 @@ struct: SpecConfig
 - **守卫双向核**（tests/config-keys-doc-sync.test.ts,npm test 内常驻）：
   - ①清单→文档:清单每键在概念层语法参考的记载面在场——判据是**名字边界正则**（键名前后都不是标识符字符才算在场,防 model 被 models 的记载子串吞并假绿——立守卫批阅卷实锤裸子串判在 model 键上实质失效后改定;从宽面保留:不限定出现位置与包裹形态,记载质量归语义审计）,缺即红点名键与文件;
   - ②代码→清单:扫 src/*.ts 的 `config?.['键']`/`specConfig?.['键']` 索引消费形态（键名限 ASCII 标识符——注释里的中文示例字样不是真键）,提取键不在清单即红——经索引通道加新消费键,不登清单+不写概念层就过不了机检;
-  - **扫描面边界如实记**:具名字段属性访问（如 `specConfig?.model`）不在扫描面——具名字段有 tsc 管类型,概念层记载靠"入清单三件同批"纪律与本条①兜（新键若加成 SpecConfig 具名字段走属性访问,②的机检承诺不覆盖它）;上方 struct 把五消费键都列成具名字段是**文档视图**,TS 接口实况是 model/max_depth/max_retries/expansion_max 四个具名+其余走索引签名——struct 按语义完整列,TS 按消费通道选形态,两者不同步是设计使然;
+  - **扫描面边界如实记**:具名字段属性访问（如 `specConfig?.model`）不在扫描面——具名字段有 tsc 管类型,概念层记载靠"入清单三件同批"纪律与本条①兜（新键若加成 SpecConfig 具名字段走属性访问,②的机检承诺不覆盖它）;上方 struct 把六消费键都列成具名字段是**文档视图**,TS 接口实况是 model/max_depth/max_retries/expansion_max 四个具名+其余走索引签名——struct 按语义完整列,TS 按消费通道选形态,两者不同步是设计使然;
 - **为什么钉概念层不钉设计层**：设计先行有 check-design-first 机检守,历次批次设计层从未漏;脱节恒发生在概念层（受控快照,误解为"只有 vault 演进才动"）——守卫对准实际出血点。 ^anc-ast-config-keys-doc-sync
 
 TypeDecl 的 v1 output_schema 校验策略（见关键决策四）：基础类型（text/bool/line/number/[line]）做值类型检查；enum(...) 做值属于枚举成员检查；自定义 TypeDecl 仅验证字段名存在性（fields 键子集检查），不做递归类型匹配。v1 不支持嵌套 TypeDecl 引用校验：fields 值为自定义类型名时（如 "AddressType"），v1 不递归解析，视同 any。v2+ 可引入完整的递归类型校验。
@@ -249,9 +256,9 @@ TypeDecl 定义 Types 段的复用结构体（名称+字段字典+逐字段说�
 三个类型均为枚举/联合，不是 struct：
 
 - **ExecutableStepType**——7 种可执行类型（由 StepDispatcher.execute_step 分派/复用模式交 caller），枚举值：`reason` / `act` / `check` / `confirm` / `ask` / `commit` / `call`
-- **StructuralStepType**——7 种结构/控制流类型（由 ExecutionEngine 内部解析，不出现在 StepReady.step_type 中；parallel 已于 2026-08-07 降为 subtask/loop 的属性，不再是类型），枚举值：`subtask` / `loop` / `branch` / `case` / `break` / `continue` / `exit`
+- **StructuralStepType**——8 种结构/控制流类型（由 ExecutionEngine 内部解析，不出现在 StepReady.step_type 中；parallel 已于 2026-08-07 降为 subtask/loop 的属性，不再是类型），枚举值：`subtask` / `loop` / `branch` / `case` / `break` / `continue` / `exit` / `on_fail`（兜底块 2026-08-21 立,概念 ^anc-step-on-fail;2026-10-12 语义审计 #16 本行补）
 - **StepType** = ExecutableStepType ∪ StructuralStepType，全部 15 种
-（本块 2026-08-08 语义审计两次修正：原文 6+8=14 漏 ask 且未随 parallel 降属性更新；7+7=**14** 为终值——"13 种"系重构时在漏 ask 的旧数上 −1 所得，作者已确认更正。）
+（本块 2026-08-08 语义审计两次修正：原文 6+8=14 漏 ask 且未随 parallel 降属性更新；当时 7+7=14 为终值。2026-08-21 on_fail 入结构类型后为 7+8=**15**——2026-10-12 语义审计 #16 把本行与上行枚举一并补齐,此前枚举漏 on_fail 且 14 与 15 并存。）
 
 可执行与结构的分界：`StepReady.step_type` 仅包含 `ExecutableStepType`（7 个值）。Engine 遇到 structural 类型（含 branch）时自动展开 children 或将合适的 child 推到 `next_step`。branch 步骤由 Engine 内部评估 case 条件并选择匹配的 case，不需要 LLM 推理——如果分支决策需要 LLM 推理，应在 branch 前置一个 reason 步骤产出分类变量。
 
@@ -264,7 +271,7 @@ TypeDecl 定义 Types 段的复用结构体（名称+字段字典+逐字段说�
 由关键决策二（step_id 层级数字编码）推演：`step_id` 为点分层级字符串。由关键决策三（discriminated union）推演：`step_type` 为判别字段，各子接口将其收窄为字面量。
 
 ```
-struct: BaseStep
+HopType: BaseStep
   Id: base-step
   Fields:
     - step_id % line                  # 层级编码，如 "1.2.3"
@@ -279,14 +286,14 @@ struct: BaseStep
     - source_location % SourceLocation  # 可选。markdown 原文位置（错误报告用）
     - doc_refs % [DocRef]             # 可选。doc-ref 提取落点（spec-parser ^anc-rule-doc-ref-extract 权威,本块补同步）
 
-struct: VarBinding
+HopType: VarBinding
   Id: var-binding
   Fields:
     - name % line                     # 变量名
     - source % line                   # 引用来源（变量名，与 name 同值）
     - synthesized % bool              # 可选。parser 从 for-each 子句合成的消费边（非作者书写，V9 据此辨冗余）
 
-struct: SourceLocation
+HopType: SourceLocation
   Id: source-location
   Fields:
     - line_start % number             # 原文起始行号
@@ -298,12 +305,12 @@ struct: SourceLocation
 本组对应 ExecutableStepType（关键决策一）——由 StepDispatcher 分派、直接调 LLM API 执行。组级共性：每个接口将 `step_type` 收窄为字面量（关键决策三）；语义约束（沙箱、commit 兜底等）以注释附在各接口处。
 
 ```
-struct: ReasonStep ^anc-step-reason
+HopType: ReasonStep ^anc-step-reason
   Id: step-reason
   Fields:                            # 含 BaseStep 全部字段，step_type 收窄为 'reason'
     # 无额外字段——推理上下文完全由 PromptAssembler 组装
 
-struct: ActStep ^anc-step-act
+HopType: ActStep ^anc-step-act
   Id: step-act
   Fields:                            # 含 BaseStep 全部字段，step_type 收窄为 'act'
     - body % ActBody                  # 可选。```hop_python 围栏解析所得的结构化 body（见 ^anc-ast-act-body）；省略=无结构化 body，执行回退自然语言 instruction
@@ -311,17 +318,19 @@ struct: ActStep ^anc-step-act
     # requires_commit=true 的工具在 act 步骤中被 StepDispatcher 自动拦截。
     # 沙箱外的写/删/移动必须用 commit 步骤，由 Spec 流程保障安全性。
 
-struct: CheckStep ^anc-step-check
+HopType: CheckStep ^anc-step-check
   Id: step-check
   Fields:                            # 含 BaseStep 全部字段，step_type 收窄为 'check'
     - is_finally % bool               # 可选。[check final] 变体（旧写法 finally 兼容读将废止）：Constraints 的可执行化身，adaptive 不可改写或跳过 ^anc-step-check-finally
     - body % ActBody                  # 可选（2026-08-19 作者拍板 A,概念 ^anc-step-check-body）。纯机械判定的 hop_python body——与 act 同文法同解释器,body 直赋两槽变量,引擎消化零 LLM;省略=LLM 判（语义面核验正当形态）。原静默面收口:此前 check 里写围栏滑进 instruction 变提示词,两头不占
+    - tool_grants % [yaml]            # 可选（2026-10-11 todo/0161,作者定"check 工具可能要读文件,留个口子"）。`- 工具: 名  # 意图` 条目行,{name, note?} 与 ActStep / ReasonStep 同形态——无 body 的 check 用它声明核对产出实物要读哪些工具,全按声明下发、零声明零工具（[[step-dispatcher#^anc-exec-reason-tools]]）;带 body 的 check 不消费（解释器机械判定）
+    - tool_denies % [yaml]            # 可选（同批随扩,^anc-step-tool-deny）。`- 禁工具: 名  # 为什么禁` 条目行,{name, note?},与授权行同族文法
     # 验证上下文由 PromptAssembler.assemble_check_context 组装
     # 固定输出签名（封闭）：outputs 必须恰好为 bool（判定槽）+ text（说明槽）两项，由 P11 强制
     # （[[spec-parser#^anc-rule-p11]]）。引擎按类型定位 bool 槽判通过/失败、text 槽作失败说明
     # （[[exec-engine#^anc-exec-check-verdict]]）。槽经 outputs[].type 区分，与用户变量名无关。
 
-struct: ConfirmStep ^anc-step-confirm
+HopType: ConfirmStep ^anc-step-confirm
   Id: step-confirm
   Fields:                            # 含 BaseStep 全部字段，step_type 收窄为 'confirm'
     - require_human % bool            # 可选。true=必须人工确认，false/省略=Caller可代确认
@@ -329,7 +338,7 @@ struct: ConfirmStep ^anc-step-confirm
     # ResponseOption 定义见 shared-types.md（此处为就近引用，权威定义在 shared-types）
     # 纯审批闸门：+→ 仅允许 bool（approve→true / reject→全局中止）。要 caller 提供业务数据用 AskStep
 
-struct: AskStep ^anc-step-ask
+HopType: AskStep ^anc-step-ask
   Id: step-ask
   Fields:                            # 含 BaseStep 全部字段，step_type 收窄为 'ask'
     - require_human % bool            # 可选。true=必须真人提供数据
@@ -340,7 +349,7 @@ struct: AskStep ^anc-step-ask
     # paused 返回自包含介入请求（question/output_schema/default_value/options/present_inputs），
     # 见 ^anc-exec-hitl-presentation。present_inputs 由配套运行时 driver 承诺完整 dump（不缩略）
 
-struct: CommitStep ^anc-step-commit
+HopType: CommitStep ^anc-step-commit
   Id: step-commit
   Fields:                            # 含 BaseStep 全部字段，step_type 收窄为 'commit'
     - irreversible_action % line      # 不可逆操作描述（从 > 指令提取）
@@ -348,15 +357,17 @@ struct: CommitStep ^anc-step-commit
     # commit 本身不内嵌 confirm——Spec 作者可选择在 commit 前显式放置 confirm 步骤来保护
     # 验证规则 P8：retry/adaptive subtask 内含 commit 时，必须有 confirm 兜底
 
-struct: CallStep ^anc-step-call
+HopType: CallStep ^anc-step-call
   Id: step-call
   Fields:                            # 含 BaseStep 全部字段，step_type 收窄为 'call'
     - callee_spec_id % line           # 可选。被调用 Spec 的 ID（解析自 "[call] spec_id : summary"，Spec 库/注册表查找）
+    - callee_expr % ActExpr           # 可选。callee 位插值表达式（晚绑定 `[call {expr}]`,运行期求值得 callee id）——与 callee_spec_id 互斥恰一（validator P1）。解引用契约归 [[step-dispatcher#^anc-step-call-dynamic-callee]]
+    - callee_expr_src % line          # 可选。插值表达式原文（serializer 往返回写 `{原文}` 用;解引用失败报文回显）。与 callee_expr 同生同灭
     - param_mapping % [ParamMapping]  # 可选。输入映射：from=父变量, to=子 Input 名（- ← 子参数: 父变量）
     - output_mapping % [ParamMapping] # 可选。输出映射：from=子 Output 名, to=父变量名（+ → 父变量: 子输出）
     - parallel % bool                 # 可选。callee 并发申报转述（统一模型 2026-08-11 P0）：异步派发、宿主 loop 边界收齐。见 [[parallel-execution#^anc-exec-parallel-dispatch-model]]
 
-struct: ParamMapping
+HopType: ParamMapping
   Id: param-mapping
   Fields:
     - from % line                     # 来源变量名（字面量项=作者原文,如 `"seq"`——序列化回写用）
@@ -388,64 +399,65 @@ act/commit 的结构化 body——`> ```hop_python` 围栏内的「无推理编�
 - **BinaryOp** 枚举：`+` `-` `*` `/` `%` `//` `**` `==` `!=` `<` `>` `<=` `>=` `and` `or` `in` `not in`——% // ** 2026-08-10 补齐（** 右结合、-2**2==-4 Python 优先级）；in/not in 成员测试（数组查元素/字符串查子串/对象查键）
 
 ```
-struct: ActBody
+HopType: ActBody
   Id: act-body
   Fields:
     - statements % [ActStatement]     # 语句序列
     - source_location % SourceLocation  # 可选。围栏在原文位置，错误定位
 
-struct: AssignStmt                   # local = <expr>  或  outputName = <expr>（写 +→ 输出）
+HopType: AssignStmt                   # local = <expr>  或  outputName = <expr>（写 +→ 输出）
   Id: assign-stmt
   Fields:
     - type % line                     # 判别字面量 'assign'
     - target % line                   # 变量名（body 局部 or +→ 输出名）
     - value % ActExpr                 # 右值表达式
-    - line % number                   # 可选。原文行号
+    - line % number                   # 可选。spec 文件真实行号（1 起算,规则见 [[spec-parser#^anc-rule-act-body-line]]）
 
-struct: CallStmt                     # 工具/内置调用作为独立语句（副作用，如 write）
+HopType: CallStmt                     # 工具/内置调用作为独立语句（副作用，如 write）
   Id: call-stmt
   Fields:
     - type % line                     # 判别字面量 'call'
     - call % CallExpr                 # 调用表达式
-    - line % number                   # 可选。原文行号
+    - line % number                   # 可选。spec 文件真实行号（1 起算,规则见 [[spec-parser#^anc-rule-act-body-line]]）
 
-struct: IfStmt                       # 无推理分支；condition 须确定性可求值
+HopType: IfStmt                       # 无推理分支；condition 须确定性可求值
   Id: if-stmt
   Fields:
     - type % line                     # 判别字面量 'if'
     - condition % ActExpr             # 分支条件
     - then_body % [ActStatement]      # 命中分支语句
     - else_body % [ActStatement]      # 可选。elif 在 parser 层展开为 else_body:[IfStmt] 嵌套，消除 elif 节点
-    - line % number                   # 可选。原文行号
+    - else_line % number              # 可选。else 行（elif 展开时为 elif 行）的 spec 文件行号;commit 安全分析材料单列 else 行时用
+    - line % number                   # 可选。spec 文件真实行号（1 起算,规则见 [[spec-parser#^anc-rule-act-body-line]]）
 
-struct: LiteralExpr
+HopType: LiteralExpr
   Id: literal-expr
   Fields:
     - type % line                     # 判别字面量 'literal'
     - value % line                    # 字面值，值型 string | number | boolean | null（null=Python None，2026-08-09 补）
     - literal_kind % line             # 枚举：'string' | 'number' | 'bool' | 'null'
 
-struct: VarRefExpr                   # 变量引用（← 输入 / body 局部 / 上文赋值）
+HopType: VarRefExpr                   # 变量引用（← 输入 / body 局部 / 上文赋值）
   Id: var-ref-expr
   Fields:
     - type % line                     # 判别字面量 'var'
     - name % line                     # 变量名
 
-struct: FieldAccessExpr              # obj.field（可链式 a.b.c）
+HopType: FieldAccessExpr              # obj.field（可链式 a.b.c）
   Id: field-access-expr
   Fields:
     - type % line                     # 判别字面量 'field'
     - object % ActExpr                # 被访问对象
     - field % line                    # 字段名
 
-struct: IndexExpr                    # items[i]——动态下标任意表达式；负数下标 Python 语义（items[-1]=末元素）；字符串同款取单字符（s[0]，权威 [[act-body#^anc-step-act-body-str-index]]）
+HopType: IndexExpr                    # items[i]——动态下标任意表达式；负数下标 Python 语义（items[-1]=末元素）；字符串同款取单字符（s[0]，权威 [[act-body#^anc-step-act-body-str-index]]）
   Id: index-expr
   Fields:
     - type % line                     # 判别字面量 'index'
     - object % ActExpr                # 被下标对象
     - index % ActExpr                 # 下标表达式
 
-struct: SliceExpr                    # seq[start:stop]——切片；钳位宽容语义与单下标 None 传播分野,分立节点（^anc-step-act-body-slice）
+HopType: SliceExpr                    # seq[start:stop]——切片；钳位宽容语义与单下标 None 传播分野,分立节点（^anc-step-act-body-slice）
   Id: slice-expr
   Fields:
     - type % line                     # 判别字面量 'slice'
@@ -453,7 +465,7 @@ struct: SliceExpr                    # seq[start:stop]——切片；钳位宽�
     - start % ActExpr                 # 起点端点（可缺席=Python 缺省 0）
     - stop % ActExpr                  # 终点端点（可缺席=Python 缺省 len）
 
-struct: BinaryExpr
+HopType: BinaryExpr
   Id: binary-expr
   Fields:
     - type % line                     # 判别字面量 'binary'
@@ -461,33 +473,33 @@ struct: BinaryExpr
     - left % ActExpr                  # 左操作数
     - right % ActExpr                 # 右操作数
 
-struct: UnaryExpr
+HopType: UnaryExpr
   Id: unary-expr
   Fields:
     - type % line                     # 判别字面量 'unary'
     - op % line                       # 枚举：'not' | '-'
     - operand % ActExpr               # 操作数
 
-struct: CallExpr                     # callee ∈ 白名单（内置函数 ∪ ToolProvider 工具）
+HopType: CallExpr                     # callee ∈ 白名单（内置函数 ∪ ToolProvider 工具）
   Id: call-expr
   Fields:
     - type % line                     # 判别字面量 'call'
     - callee % line                   # 被调用名
     - args % [CallArg]                # 实参列表
 
-struct: ListLiteralExpr              # [1, "a", x]——元素任意表达式
+HopType: ListLiteralExpr              # [1, "a", x]——元素任意表达式
   Id: list-literal-expr
   Fields:
     - type % line                     # 判别字面量 'list_literal'
     - elements % [ActExpr]            # 元素表达式列表
 
-struct: DictLiteralExpr              # {"k": v}——键=任意表达式求值后 str 归一（2026-08-20 Python 对齐,原"键限字符串字面量"废;权威 [[act-body#^anc-step-act-body-dict-key]]）
+HopType: DictLiteralExpr              # {"k": v}——键=任意表达式求值后 str 归一（2026-08-20 Python 对齐,原"键限字符串字面量"废;权威 [[act-body#^anc-step-act-body-dict-key]]）
   Id: dict-literal-expr
   Fields:
     - type % line                     # 判别字面量 'dict_literal'
     - entries % yaml                  # 键值对列表，每项 { key: line; value: ActExpr }
 
-struct: TernaryExpr                  # a if c else b——条件表达式（右结合,最低优先级,惰性求值只算命中分支）
+HopType: TernaryExpr                  # a if c else b——条件表达式（右结合,最低优先级,惰性求值只算命中分支）
   Id: ast-ternary-expr
   Fields:
     - type % line                       # 'ternary'
@@ -495,7 +507,7 @@ struct: TernaryExpr                  # a if c else b——条件表达式（右�
     - then % ActExpr
     - else % ActExpr
 
-struct: ComprehensionExpr            # [expr for x in xs (if cond)]——列表推导,嵌套深度≤2（^anc-step-act-body-comprehension;2026-09-05 review 补登——2026-08-19 实装时漏登本权威）
+HopType: ComprehensionExpr            # [expr for x in xs (if cond)]——列表推导,嵌套深度≤2（^anc-step-act-body-comprehension;2026-09-05 review 补登——2026-08-19 实装时漏登本权威）
   Id: comprehension-expr
   Fields:
     - type % line                     # 判别字面量 'comprehension'
@@ -504,13 +516,13 @@ struct: ComprehensionExpr            # [expr for x in xs (if cond)]——列表�
     - source % ActExpr                # 被迭代列表表达式
     - filter % ActExpr                # 过滤条件（可缺席）
 
-struct: FStringExpr                  # f"共{n}条"——{{/}} 转义字面花括号；插值 None→"None"、对象→JSON
+HopType: FStringExpr                  # f"共{n}条"——{{/}} 转义字面花括号；插值 None→"None"、对象→JSON
   Id: fstring-expr
   Fields:
     - type % line                     # 判别字面量 'fstring'
     - parts % yaml                    # 文本段与插值交替列表，每项 {kind:'text'; text: line} 或 {kind:'expr'; expr: ActExpr}
 
-struct: CallArg
+HopType: CallArg
   Id: call-arg
   Fields:
     - name % line                     # 可选。工具调用用命名参数（name 必填，对应 ToolProvider Record args）；内置函数用位置参数（name 省略）
@@ -527,14 +539,14 @@ struct: CallArg
 本组对应 StructuralStepType（关键决策一）——由 ExecutionEngine 内部解析展开，不直接交给 LLM 执行。组级共性：每个接口将 `step_type` 收窄为字面量（关键决策三）；容器类（subtask/parallel/loop/branch/case）持有 `children`，其约束见下文 children 约束表。
 
 ```
-struct: BranchStep ^anc-step-branch
+HopType: BranchStep ^anc-step-branch
   Id: step-branch
   Fields:                            # 含 BaseStep 全部字段，step_type 收窄为 'branch'
     - children % [CaseStep]           # Engine 内部评估 case.condition 选择匹配的 case
     # branch 声明 +→ 聚合输出（统一接口名），各 case 用同名填充（同一个东西）。
     # branch done 时从命中 case scope 读同名值透传到外层。无命中 → 不写值。见 [[exec-engine]] 变量作用域规则 5b
 
-struct: SubtaskStep ^anc-step-subtask
+HopType: SubtaskStep ^anc-step-subtask
   Id: step-subtask
   Fields:                            # 含 BaseStep 全部字段，step_type 收窄为 'subtask'
     - retry % number                  # 可选。最大重试次数，默认 3（retry 仅属 subtask/case——事务边界属性）
@@ -552,7 +564,7 @@ ParallelStep 独立步骤类型退役——静态并行=SubtaskStep.parallel，�
 - ParallelStep 保留为类型别名 `SubtaskStep & {parallel:true}` 仅供引擎路径类型收窄（P0.5 收窄：LoopStep.parallel 已随 loop 头文法废除删除，宿主只剩 subtask/call）。
 
 ```
-struct: LoopStep ^anc-step-loop
+HopType: LoopStep ^anc-step-loop
   Id: step-loop
   Fields:                            # 含 BaseStep 全部字段，step_type 收窄为 'loop'
     - max_iterations % number         # 可选。条件循环形态：最大迭代次数，默认 100
@@ -561,37 +573,38 @@ struct: LoopStep ^anc-step-loop
     - children % [StepNode]           # 循环体步骤。break/continue 终止或跳过当前迭代
     # loop 无 retry：失败单元是单次迭代，事务性重试用 children 内嵌 [subtask retry=N]
 
-struct: CaseStep ^anc-step-case
+HopType: CaseStep ^anc-step-case
   Id: step-case
   Fields:                            # 含 BaseStep 全部字段，step_type 收窄为 'case'
     - condition % line                # 可选。条件表达式：{var} / {var}=={literal} / {var}!={literal}。空 = default case（必须为最后一个）
     - retry % number                  # 可选。最大重试次数，默认 3（case 就是 branch 下的 subtask，语义同 SubtaskStep.retry）
     - adaptive % bool                 # 可选。是否启用 adaptive replan，默认 false（语义同 SubtaskStep.adaptive）
+    - parallel % bool                 # 可选。callee 并发申报，语义同 SubtaskStep.parallel（2026-08-13 作者定 parallel 宿主=subtask/call/case;见下文 ^anc-step-parallel 条款）
     - children % [StepNode]           # 仅作为 branch 的直接 child，不可嵌套在其他容器中（validator 检查）
     # case 即 branch 下的 subtask：开自己的作用域、声明自己的 `+ →` 聚合输出（BaseStep.outputs），
     # children 产出聚合后提升到 branch 外层供后续引用。互斥 case 各自声明所需输出名（按需，不强制同名）
     # 由概念层「case 就是 branch 下的 subtask」推演：case 继承 subtask 的全部重试语义。
     # retry 祖先查找（fail_step）须同时匹配 subtask 和 case 容器。
 
-struct: BreakStep ^anc-step-break
+HopType: BreakStep ^anc-step-break
   Id: step-break
   Fields:                            # 含 BaseStep 全部字段，step_type 收窄为 'break'
     - target_loop % line              # 可选。目标循环步骤号（[break 5.2] 的 5.2）——缺省=最近祖先循环;须是自身祖先循环（C3 扩展判）。与 HopSop [退出循环 <序号>] 对偶
     # 仅允许在 loop 内。Engine 检测到后终止目标循环（无 target_loop 即最近祖先）
 
-struct: ContinueStep ^anc-step-continue
+HopType: ContinueStep ^anc-step-continue
   Id: step-continue
   Fields:                            # 含 BaseStep 全部字段，step_type 收窄为 'continue'
     - target_loop % line              # 可选。目标循环步骤号——缺省=最近祖先循环;须是自身祖先循环（C3 扩展判）。与 HopSop [继续循环 <序号>] 对偶
     # 仅允许在 loop 内。Engine 检测到后跳过目标循环的当前迭代（含内层循环整体结束）
 
-struct: ExitStep ^anc-step-exit
+HopType: ExitStep ^anc-step-exit
   Id: step-exit
   Fields:                            # 含 BaseStep 全部字段，step_type 收窄为 'exit'
     - exit_outputs % yaml             # 可选。提前退出时的输出值（变量名 → 值的字典，值型 unknown）
     # 可在任意位置。Engine 检测到后终止整个 Spec 执行
 
-struct: OnFailStep ^anc-step-on-fail
+HopType: OnFailStep ^anc-step-on-fail
   Id: step-on-fail
   Fields:                            # 含 BaseStep 全部字段，step_type 收窄为 'on_fail'
     - children % [StepNode]           # 兜底 children——宿主 retry 耗尽后执行,走完失败被消化
@@ -610,7 +623,7 @@ struct: OnFailStep ^anc-step-on-fail
 StepNode 是联合类型（不是 struct），成员枚举：
 
 - 可执行：ReasonStep / ActStep / CheckStep / ConfirmStep / AskStep / CommitStep / CallStep
-- 结构/控制流：BranchStep / SubtaskStep / ParallelStep（SubtaskStep 的类型收窄别名）/ LoopStep / CaseStep / BreakStep / ContinueStep / ExitStep
+- 结构/控制流：BranchStep / SubtaskStep / ParallelStep（SubtaskStep 的类型收窄别名）/ LoopStep / CaseStep / BreakStep / ContinueStep / ExitStep / OnFailStep（2026-10-12 语义审计 #16 补,成员列表此前漏）
 
 TypeScript 的判别联合（discriminated union）通过 `step_type` 字段自动收窄类型。
 
@@ -635,13 +648,13 @@ TypeScript 的判别联合（discriminated union）通过 `step_type` 字段自�
 doc-ref `[[文档路径#章节名]]` 是 KnowledgeProvider 的**确定性对偶**——无 provider、无相关性排序，作者钉定文件+章节，引擎读文件切章节注入（见 [[doc-ref#^anc-exec-doc-ref-resolve]]）。类型定义在 ast-types.ts（AST 契约层）：
 
 ```
-struct: DocRef                       # parser 预提取的引用声明（进 AST：BaseStep.doc_refs / SpecHeader.doc_refs）
+HopType: DocRef                       # parser 预提取的引用声明（进 AST：BaseStep.doc_refs / SpecHeader.doc_refs）
   Id: doc-ref
   Fields:
     - doc % line                      # workspace 相对文档路径（Obsidian 省 .md 时引擎补全兜底）
     - section % line                  # 章节名（匹配 markdown 标题，不含 # 前缀）
 
-struct: DocRefFragment               # dispatcher 运行期解析出的章节内容（注入 doc_ref_context 前的中间形态）
+HopType: DocRefFragment               # dispatcher 运行期解析出的章节内容（注入 doc_ref_context 前的中间形态）
   Id: doc-ref-fragment
   Fields:
     - doc % line                      # workspace 相对文档路径
@@ -650,6 +663,8 @@ struct: DocRefFragment               # dispatcher 运行期解析出的章节内
     - content % text                  # 切出的章节正文
     - matched % line                  # 匹配级别，枚举：'exact' | 'normalized' | 'fuzzy'（fuzzy 多命中取首 + warn）
     - file_path % line                # 可选。大节 deflate 后的 $file 绝对路径（小节内联时缺省）
+    - preview % text                  # 可选。inline 预览通道:超限大节的头部节选——值位真内容非死引用,此时 file_path=全文落盘路径（^anc-exec-llm-inline-context v2;2026-10-12 语义审计 #17 本块补同步）
+    - full_chars % int                # 可选。inline 预览通道:全文字符数,预览条目"体量"行渲染用（^anc-exec-llm-inline-context;#17 补同步）
 ```
 
 `DocRef` 由 parser 提取入 AST（[[spec-parser#^anc-rule-doc-ref-extract]]），P15 静态校验存在性（[[spec-parser#^anc-rule-p15]]）。`DocRefFragment` 是 engine 解析的运行期产物，渲染进 `AssembledContext.doc_ref_context`（[[prompt-assembler#^anc-exec-doc-ref-injection]]）。解析流程见 [[doc-ref#^anc-exec-doc-ref-resolve]]。

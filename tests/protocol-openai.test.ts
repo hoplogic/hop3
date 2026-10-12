@@ -76,6 +76,22 @@ describe('OpenAI 协议适配器（IR 双向映射）', () => {
     expect(resp.stop_reason).toBe('max_tokens');
   });
 
+  // finish_reason 原值透传（todo/0121——旧形态非 length 一律映 end_turn,content_filter 被吞成正常收尾）
+  // @v: anc-exec-output-abort-loud
+  it('反例：finish_reason=content_filter → stop_reason 原值透传,不再映成 end_turn', async () => {
+    createMock.mockResolvedValueOnce({ ...OPENAI_RESP, choices: [{ message: { content: '半截' }, finish_reason: 'content_filter' }] });
+    const c = makeOpenAiClient({ apiKey: 'k' });
+    const resp = await c.create({ model: 'm', messages: [{ role: 'user', content: 'x' }], max_tokens: 10 });
+    expect(resp.stop_reason).toBe('content_filter');
+  });
+  it('正例：finish_reason=stop / 缺席 → end_turn;tool_calls → tool_use（映射表三行）', async () => {
+    const c = makeOpenAiClient({ apiKey: 'k' });
+    createMock.mockResolvedValueOnce({ ...OPENAI_RESP, choices: [{ message: { content: 'a' }, finish_reason: null }] });
+    expect((await c.create({ model: 'm', messages: [{ role: 'user', content: 'x' }], max_tokens: 10 })).stop_reason).toBe('end_turn');
+    createMock.mockResolvedValueOnce({ ...OPENAI_RESP, choices: [{ message: { content: 'a' }, finish_reason: 'tool_calls' }] });
+    expect((await c.create({ model: 'm', messages: [{ role: 'user', content: 'x' }], max_tokens: 10 })).stop_reason).toBe('tool_use');
+  });
+
   it('反例：请求带 tools → PROTOCOL_TOOL_LOOP_UNSUPPORTED（当下边界防御性兜底，报文指路）', async () => {
     const c = makeOpenAiClient({ apiKey: 'k' });
     await expect(c.create({
@@ -333,6 +349,19 @@ describe('OpenAI Responses 协议适配器（IR 双向映射 + 工具循环）',
     const c = makeOpenAiResponsesClient({ apiKey: 'k' });
     const resp = await c.create({ model: 'm', messages: [{ role: 'user', content: 'x' }], max_tokens: 10 });
     expect(resp.stop_reason).toBe('max_tokens');
+  });
+
+  // @v: anc-exec-output-abort-loud
+  it('反例：status=incomplete + reason=content_filter → stop_reason 原值透传（不映 max_tokens 也不映 end_turn）', async () => {
+    responsesCreateMock.mockResolvedValueOnce({
+      ...RESPONSES_TEXT_RESP,
+      status: 'incomplete',
+      incomplete_details: { reason: 'content_filter' },
+      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '半截' }] }],
+    });
+    const c = makeOpenAiResponsesClient({ apiKey: 'k' });
+    const resp = await c.create({ model: 'm', messages: [{ role: 'user', content: 'x' }], max_tokens: 10 });
+    expect(resp.stop_reason).toBe('content_filter');
   });
 
   it('正例：reasoning item 丢弃不进 IR（引擎不消费思考正文）', async () => {

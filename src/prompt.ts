@@ -9,7 +9,7 @@ import { hasChildren, getChildren, DEFLATE_THRESHOLD, INLINE_PREVIEW_MAX, HUMAN_
 import { serializeActBody } from './act-body-parser.js';
 import { dump as yamlDump } from 'js-yaml';
 import { getWriteScope, type VariableStore, type StepStatus } from './ast-runtime.js';
-import { ENGINE_BUILTIN_SPECIAL_TOOL_NAMES } from './provider-types.js';
+import { ENGINE_BUILTIN_SPECIAL_TOOL_NAMES, YAML_DUMP_OPTS } from './provider-types.js';
 import * as nodeFs from 'node:fs';
 import * as nodePath from 'node:path';
 
@@ -377,9 +377,11 @@ export class PromptAssembler { // @a: anc-exec-prompt-assembly, anc-struct-promp
     // @knowledge 并列——检索型知识在场时追加不覆盖）。// @a: anc-rule-narrative-sections, anc-exec-cache-affinity
     const narratives = this.engine.getSpec()?.header.narrative_sections ?? [];
     if (narratives.length > 0) {
-      const nsText = narratives.map(n => '本文件《' + n.title + '》:' + '\n' + n.content).join('\n\n');
-      // 组装期本字段恒空(检索在后跑,其追加分支在 injectKnowledgeContext)——直建
-      ctx.spec_knowledge_context = '[Spec 级知识（全程恒定）]' + '\n' + nsText;
+      // 条目化（与 doc-ref / @knowledge 条目同形态,2026-10-12 语义审计 #12 同批）：来源=本文件章节名,
+      // 作用=缺省供给的叙事段。组装期本字段恒空(检索在后跑,其追加分支在 injectKnowledgeContext)——直建
+      ctx.spec_knowledge_context = narratives
+        .map(n => `- 来源: 本文件《${n.title}》\n  作用: spec 文件自带的内容章节——作者写在文件里就是缺省要供给的背景,全程恒定\n  内容: |\n${indentBlock(n.content, 4)}`)
+        .join('\n');
     }
 
     if (retryFeedback) {
@@ -429,10 +431,11 @@ export class PromptAssembler { // @a: anc-exec-prompt-assembly, anc-struct-promp
     // reason 清单渲染随下发面收窄（^anc-exec-reason-tools 2026-09-18 修订联动——零声明 reason
     // 走单发零工具,请求 tools 为空而 prompt 仍渲染十件清单=清单与下发面失同源,渲染残留实撞:
     // 物理刀后首验 coffee 步骤3 行为已零工具但 prompt 文字段还挂满配清单）。
-    const reasonHasGrants = step.step_type === 'reason'
+    // check 同款（2026-10-11 todo/0161——无 body 的 check 与 reason 同一套声明制,清单与下发面同源）。// @a: anc-exec-reason-tools
+    const declaredOnlyHasGrants = (step.step_type === 'reason' || (step.step_type === 'check' && !(step as { body?: unknown }).body))
       && (((step as StepNode & { tool_grants?: { name: string }[] }).tool_grants?.length ?? 0) > 0);
     if ((step.step_type === 'act' && !(step as ActStep).body)
-        || (reasonHasGrants && (this.engine.getToolDefs?.()?.length ?? 0) > 0)) {
+        || (declaredOnlyHasGrants && (this.engine.getToolDefs?.()?.length ?? 0) > 0)) {
       // 供给三面之路径写域（^anc-exec-tool-manifest-supply）:work_zone 渲染 workspace 相对形态
       // （工具路径语义一致）;绝对路径转相对失败或空串=如实省略写盘行。
       const wzAbs = this.engine.getWorkZone();
@@ -796,8 +799,9 @@ export class PromptAssembler { // @a: anc-exec-prompt-assembly, anc-struct-promp
 
   // L4 输入元信息：类型与说明从声明处取（产出步 + → 声明 / 文件头 Inputs）——值语义随值供给,
   // 渲染层不回访 engine。查不到的变量给空对象（渲染层降级为无说明条目,不编造）。
+  // 公开成员:v0.31.0 为 commit 研判材料公开,v0.32.0 起模块外暂无调用方,取法不变（prompt-assembler ^anc-exec-inputs-render）。
   // @a: anc-exec-inputs-render
-  private buildInputMeta(step: StepNode): Record<string, { type?: string; description?: string; type_closure?: Record<string, Record<string, string>> }> {
+  buildInputMeta(step: StepNode): Record<string, { type?: string; description?: string; type_closure?: Record<string, Record<string, string>> }> {
     const meta: Record<string, { type?: string; description?: string; type_closure?: Record<string, Record<string, string>> }> = {};
     if (!step.inputs?.length) return meta;
     const spec = this.engine.getSpec()!;
@@ -1080,7 +1084,7 @@ export class PromptAssembler { // @a: anc-exec-prompt-assembly, anc-struct-promp
     // 2. L2 知识：逐源已在 formatKnowledgeContext 平摊；总量压力下整层降为指针行（留痕非静默丢）。
     if (ctx.knowledge_context && excess > 0) {
       const saved = this.estimateTokens(ctx.knowledge_context);
-      ctx.knowledge_context = `[知识上下文]${NOTE('知识注入因预算省略——可经 lack_of_info 触发补充检索找回')}`;
+      ctx.knowledge_context = `- 来源: （@knowledge 检索结果）\n  作用: 留痕\n  内容: ${NOTE('知识注入因预算省略——可经 lack_of_info 触发补充检索找回')}`;
       excess -= saved - this.estimateTokens(ctx.knowledge_context);
       this.warn(stepId, `L2 知识整层省略（省 ~${saved} tokens）`);
     }
@@ -1454,6 +1458,20 @@ export async function retrieveKnowledge(
   return result;
 }
 
+/** @knowledge 四来源的「作用」缺省句（^anc-exec-doc-ref-injection 条目化条款——作者 2026-08-24 定条目形态,
+ * 来源类型决定作用句;2026-10-12 语义审计 #12 落地：此前 @knowledge 仍渲染 `### 节头 + source_id: content` 旧混编）。 */
+export const KNOWLEDGE_ROLE_NOTE = {
+  spec: '全程判据基准——spec 级知识,整个规约执行期间恒定有效',
+  step: '本步专用——按本步 @knowledge 提示检索到的知识',
+  dynamic: '自动补充背景——按本步摘要与指令语义检索到的知识',
+  supplementary: 'lack_of_info 后补——前序产出基于不完整信息,本条是补充检索结果',
+} as const;
+
+/** 一条 @knowledge 片段 → yaml 条目（与 doc-ref 条目同形态：来源 / 作用 / 内容: |）。// @a: anc-exec-knowledge-retrieval */
+export function formatKnowledgeEntry(f: KnowledgeFragment, role: keyof typeof KNOWLEDGE_ROLE_NOTE, roleSuffix = ''): string {
+  return `- 来源: ${f.source_id}\n  作用: ${KNOWLEDGE_ROLE_NOTE[role]}${roleSuffix}\n  内容: |\n${indentBlock(f.content, 4)}`;
+}
+
 /**
  * Format knowledge retrieval results into the L2 knowledge_context string.
  * Deduplicates by source_id and applies budget trimming.
@@ -1490,60 +1508,44 @@ export function formatKnowledgeContext(
     return '';
   }
 
-  const sections: string[] = [];
+  // yaml 条目化（与 doc-ref 条目同形态,四来源靠「作用」句区分,不再用 ### 节头分节混编——
+  // 作者 2026-08-24 定,2026-10-12 语义审计 #12 落地）。来源顺序：spec → 补充 → 步骤 → 动态。
+  const suppSuffix = triggerStepId ? `（由步骤 ${triggerStepId} 触发）` : '';
+  const entries: string[] = [
+    ...specFragments.map(f => formatKnowledgeEntry(f, 'spec')),
+    ...suppFragments.map(f => formatKnowledgeEntry(f, 'supplementary', suppSuffix)),
+    ...stepFragments.map(f => formatKnowledgeEntry(f, 'step')),
+    ...dynamicFragments.map(f => formatKnowledgeEntry(f, 'dynamic')),
+  ];
 
-  if (specFragments.length > 0) {
-    const lines = specFragments.map(f => `${f.source_id}: ${f.content}`);
-    sections.push(`### Spec @knowledge（全程可用）\n${lines.join('\n')}`);
-  }
-
-  if (suppFragments.length > 0) {
-    const triggerNote = triggerStepId
-      ? `（由步骤 ${triggerStepId} 的 lack_of_info 触发，前序步骤未参考此知识）`
-      : '';
-    const lines = suppFragments.map(f => `${f.source_id}: ${f.content}`);
-    sections.push(`### 补充检索${triggerNote}\n${lines.join('\n')}`);
-  }
-
-  if (stepFragments.length > 0) {
-    const lines = stepFragments.map(f => `${f.source_id}: ${f.content}`);
-    sections.push(`### 步骤 @knowledge\n${lines.join('\n')}`);
-  }
-
-  if (dynamicFragments.length > 0) {
-    const lines = dynamicFragments.map(f => `${f.source_id}: ${f.content}`);
-    sections.push(`### 动态检索\n${lines.join('\n')}`);
-  }
-
-  let formatted = `[知识上下文]\n${sections.join('\n---\n')}`;
+  let formatted = entries.join('\n');
 
   // 逐源平摊压缩（2026-08-09 作者定，取代整串尾切——旧注释称 remove-by-priority 实为一刀切）：
   // 预算按源分份额（spec 40%/step 30%/补充 20%/动态 10%，缺席源份额归其余按比例），
   // 单源超份额在片段边界截（整条 fragment 取舍不横切），被弃逐条留痕。// @a: anc-exec-token-budget
   if (formatted.length > budgetChars) {
-    const groups: { name: string; frags: KnowledgeFragment[]; share: number; note?: string }[] = [
-      { name: 'Spec @knowledge（全程可用）', frags: specFragments, share: 0.4 },
-      { name: '补充检索', frags: suppFragments, share: 0.2 },
-      { name: '步骤 @knowledge', frags: stepFragments, share: 0.3 },
-      { name: '动态检索', frags: dynamicFragments, share: 0.1 },
-    ].filter(g => g.frags.length > 0);
+    type Role = keyof typeof KNOWLEDGE_ROLE_NOTE;
+    const groups: { name: string; role: Role; suffix: string; frags: KnowledgeFragment[]; share: number }[] = ([
+      { name: 'spec', role: 'spec' as Role, suffix: '', frags: specFragments, share: 0.4 },
+      { name: '补充检索', role: 'supplementary' as Role, suffix: suppSuffix, frags: suppFragments, share: 0.2 },
+      { name: '步骤', role: 'step' as Role, suffix: '', frags: stepFragments, share: 0.3 },
+      { name: '动态', role: 'dynamic' as Role, suffix: '', frags: dynamicFragments, share: 0.1 },
+    ]).filter(g => g.frags.length > 0);
     const totalShare = groups.reduce((a, g) => a + g.share, 0);
     const rebuilt: string[] = [];
     const dropped: string[] = [];
     for (const g of groups) {
       const quota = Math.floor(budgetChars * (g.share / totalShare));
-      const lines: string[] = [];
       let used = 0;
       let omitted = 0;
       for (const f of g.frags) {
-        const ln = `${f.source_id}: ${f.content}`;
-        if (used + ln.length + 1 <= quota) { lines.push(ln); used += ln.length + 1; }
+        const entry = formatKnowledgeEntry(f, g.role, g.suffix);
+        if (used + entry.length + 1 <= quota) { rebuilt.push(entry); used += entry.length + 1; }
         else { omitted++; dropped.push(`${g.name}/${f.source_id}`); }
       }
-      if (omitted > 0) lines.push(`（本源另有 ${omitted} 条因预算省略）`);
-      if (lines.length > 0) rebuilt.push(`### ${g.name}\n${lines.join('\n')}`);
+      if (omitted > 0) rebuilt.push(`- 来源: （${g.name} 源另有 ${omitted} 条因预算省略）\n  作用: 留痕\n  内容: |\n    （略）`);
     }
-    formatted = `[知识上下文]\n${rebuilt.join('\n---\n')}`;
+    formatted = rebuilt.join('\n');
     if (dropped.length > 0) formatted += `\n[context-compress] 共省略 ${dropped.length} 条知识片段`;
   }
 
@@ -1594,13 +1596,12 @@ export async function injectKnowledgeContext(
   // 会改 formatKnowledgeContext 的平摊语义,故采用加法拆分:specKnowledge 非空时单独渲染,
   // formatKnowledgeContext 遇 spec 源为空自然跳过该节。// @a: anc-exec-cache-affinity
   if (result.specKnowledge.length > 0) {
-    const lines = [...new Map(result.specKnowledge.map(f => [f.source_id, f])).values()]
-      .map(f => `${f.source_id}: ${f.content}`);
+    const retrieved = [...new Map(result.specKnowledge.map(f => [f.source_id, f])).values()]
+      .map(f => formatKnowledgeEntry(f, 'spec')).join('\n');   // 条目化,与 narrative / doc-ref 条目同形态 // @a: anc-exec-knowledge-retrieval
     // 追加不覆盖（阅卷漂移二实锤:narrative 组装期先入本字段,检索后跑赋值曾整段覆盖——
     // "并列追加"契约的正确修点在检索侧）。// @a: anc-rule-narrative-sections
-    const retrieved = `[Spec 级知识（全程恒定）]\n${lines.join('\n')}`;
     ctx.spec_knowledge_context = ctx.spec_knowledge_context
-      ? ctx.spec_knowledge_context + '\n\n' + lines.join('\n')
+      ? ctx.spec_knowledge_context + '\n' + retrieved
       : retrieved;
   }
   const sources = [...result.specKnowledge, ...result.stepKnowledge, ...result.supplementary, ...result.dynamic]
@@ -1923,7 +1924,7 @@ function indentBlock(text: string, spaces: number): string {
  * 值位毒成 "bool = false",下游 hop_python 按非空字符串恒真计数,合同评审结论翻转而 run 报
  * completed）。选 `%` 的判据=模型回抄时 YAML 解析器响亮地死（实测 js-yaml:毒行混排与列表
  * 元素内均抛 YAMLException;`::` 则被吞进键名成 "clause_id :" 静默收下,与换符前同样安静地错）。 */
-const HOPSCHEMA_SEP = ' % ';
+export const HOPSCHEMA_SEP = ' % ';
 
 const HOPSCHEMA_INLINE_STR_MAX = 120;   // 短单行字符串 = '值' 的长度界——超过或含单引号或多行,升 =| 块
 const HOPSCHEMA_DEPTH_MAX = 6;          // 嵌套深度护栏——超过该层子树降级 yamlDump 块（防病态深嵌套烧栈）
@@ -1977,7 +1978,7 @@ function renderHopSchemaField(name: string, v: unknown, declType: string | undef
   }
   if (depth >= HOPSCHEMA_DEPTH_MAX) {
     try {
-      return [`${structHead}  #（嵌套超 ${HOPSCHEMA_DEPTH_MAX} 层,本子树降级 YAML 块）`, ...indentBlock(yamlDump(v).trimEnd(), 4).split('\n')];
+      return [`${structHead}  #（嵌套超 ${HOPSCHEMA_DEPTH_MAX} 层,本子树降级 YAML 块）`, ...indentBlock(yamlDump(v, YAML_DUMP_OPTS).trimEnd(), 4).split('\n')];   // @a: anc-config-yaml-dump-opts
     } catch {
       return [`${structHead} = ${JSON.stringify(v) ?? 'None'}`];
     }
@@ -2006,21 +2007,23 @@ function renderHopSchemaListElement(el: unknown, elemType: string | undefined, c
   if (el === null || el === undefined) return ['- None'];
   if (typeof el === 'string' && !el.includes('\n') && el.length <= HOPSCHEMA_INLINE_STR_MAX && !el.includes("'")) return [`- '${el}'`];
   // 病态元素位（多行/含引号字符串、嵌套列表）:该元素 yamlDump 兜底——YAML 列表文法本身表达
-  try { return yamlDump([el]).trimEnd().split('\n'); } catch { return [`- ${JSON.stringify(el) ?? 'None'}`]; }
+  try { return yamlDump([el], YAML_DUMP_OPTS).trimEnd().split('\n'); } catch {   // 列表元素兜底档——缺省 lineWidth 曾把 195 字符含空格元素折成 `- >-` 三行（0127 第二受害面）// @a: anc-config-yaml-dump-opts
+   return [`- ${JSON.stringify(el) ?? 'None'}`]; }
 }
 
 /** 顶层结构值渲染（renderInputEntries 对象档与 inline $preview 对象档共用——正文与预览同形态）。
  * 总量护栏:渲染超 INLINE_PREVIEW_MAX 字符时整值降级 yamlDump 块（注明）。抛出异常由调用方兜底。 */
 function renderHopSchemaStructValue(v: object, declType: string | undefined, closure: FieldTypeClosure | undefined): { body: string; degraded: boolean } {
   const body = renderHopSchemaStructBody(v, declType, closure, 1).join('\n');
-  if (body.length > INLINE_PREVIEW_MAX) return { body: yamlDump(v).trimEnd(), degraded: true };
+  if (body.length > INLINE_PREVIEW_MAX) return { body: yamlDump(v, YAML_DUMP_OPTS).trimEnd(), degraded: true };   // 0127 主灶：缺省参数把 21K 多行字段折行 185 处、空行翻倍 // @a: anc-config-yaml-dump-opts
   return { body, degraded: false };
 }
 
 /** L4 条目化渲染：每变量元信息头+围栏包裹（^anc-exec-inputs-render——禁 `名字: 值` 裸拼接:
  * 多行值边界靠猜、值内 `xxx: yyy` 行与变量名行无法区分,13K 原文裸倾倒实撞）。
- * 头行分隔符恒 HOPSCHEMA_SEP（`%`）——与递归字段层同一分隔符,顶层变量行就是第一层。 */
-function renderInputEntries(inputs: Record<string, unknown>, meta?: Record<string, { type?: string; description?: string; type_closure?: FieldTypeClosure }>, hasToolFace = true): string {
+ * 头行分隔符恒 HOPSCHEMA_SEP（`%`）——与递归字段层同一分隔符,顶层变量行就是第一层。
+ * 保留导出:v0.31.0 为 commit 研判 prompt 导出,v0.32.0 起模块外暂无消费方（prompt-assembler 对外接口表）。// @a: anc-exec-inputs-render */
+export function renderInputEntries(inputs: Record<string, unknown>, meta?: Record<string, { type?: string; description?: string; type_closure?: FieldTypeClosure }>, hasToolFace = true): string {
   const entries = Object.entries(inputs);
   if (entries.length === 0) return '(无输入)';
   return entries.map(([k, v]) => {
@@ -2152,9 +2155,13 @@ export function buildToolManifest(
       lines.push('工具调用失败先自己想办法：换参数重试、换清单里语义等价的工具、走别的路径拿到等效结果，都合法。确认换不动、没有它就无法完成任务时，不要硬凑产出：输出单键 `tool_failure: 哪件工具怎么失败、试过什么自救`，引擎会按故障处置（整段重跑或如实失败）。仅工具调用实际失败时才用此出口。');
     }
     lines.push('参数类型是工具调用协议的词表（string/boolean/number/array，描述你要填的 JSON 值形态），与产出声明的 HopSchema（line/text/int…）是两个体系，不互译。');
+    // reason 步 basic 不再恒列（^anc-exec-reason-tools 2026-09-18 修订：reason 全按声明下发,basic 与 special 同一文法;
+    // dispatcher 下发面当时已改,本清单漏改——reason 声明子集时仍列全部 basic,清单与下发面失同源;todo/0129 B8 补）// @a: anc-exec-reason-tools
+    // check 同入声明制（2026-10-11 todo/0161）——与 dispatcher 下发面的 isDeclaredOnlyStep 同一谓词。// @a: anc-exec-reason-tools
+    const isDeclaredOnlyStep = supply?.stepType === 'reason' || supply?.stepType === 'check';
     const avail = defs
       .filter(t => !deniedNames.has(t.name))   // 禁用优先——先于分档过滤（^anc-step-tool-deny） // @a: anc-step-tool-deny
-      .filter(t => (t.category ?? 'special') === 'basic' || grantAll || grantedNames.has(t.name))
+      .filter(t => (!isDeclaredOnlyStep && (t.category ?? 'special') === 'basic') || grantAll || grantedNames.has(t.name))
       .filter(t => !t.requires_commit);   // requires_commit 件恒不列——与 dispatcher 下发面同源（^anc-exec-reason-tools 同源承诺） // @a: anc-exec-reason-tools
     for (const t of avail) {
       const props = (t.input_schema?.['properties'] ?? {}) as Record<string, { type?: string; description?: string }>;
@@ -2193,7 +2200,7 @@ export function buildToolManifest(
   return lines.join('\n');
 }
 
-function buildL0Worldview(): string { // @a: anc-exec-l0-worldview-impl, anc-exec-hitl-presentation
+function buildL0Worldview(): string { // @a: anc-exec-l0-worldview-impl
   // L0 世界观五件+静态地图（^anc-exec-l0-worldview-impl 2026-08-30 扩定,2026-08-31 词表列全
   // 15 种——作者抓"讲了几个关键的叶子节点,但没讲容器节点类别"。修订短 prompt 的 revision
   // 地图档随机制废除删,2026-08-31 作者定"只用标准态"）。
@@ -2315,14 +2322,14 @@ function roleGuideOf(stepType?: string, allowShellCommands = false): string {
 /** 本步下发的工具面里有没有 read——inline 预览分道判定（^anc-exec-llm-inline-context v3,
  * todo/0115 A 案）。预览条目的指路语"有文件工具时可读全文"只对能 read 的步骤成立,没有 read 的
  * 步骤拿到节选只能按开头干活,所以全量内联。规则与 dispatcher 下发面同序:禁用优先→act/commit
- * basic 恒下发（read 属 basic）→reason 按声明（read 或 *）→其余（check、replan 借用的 subtask
- * 节点）零工具。已知偏差:openai-chat 协议上声明了 read 的 reason 实际零工具单发,组装期拿不到
+ * basic 恒下发（read 属 basic）→reason 与 check 按声明（read 或 *,check 自 todo/0161 与 reason
+ * 同一套声明制）→其余（replan 借用的 subtask 节点）零工具。已知偏差:openai-chat 协议上声明了 read 的 reason 实际零工具单发,组装期拿不到
  * 协议,仍按"有"判（设计已标注）。两个使用点:resolveInputs 与 engine doc-ref 注入。 */
 export function stepDeliversReadTool(step: StepNode): boolean { // @a: anc-exec-llm-inline-context
   const s = step as StepNode & { tool_grants?: { name: string }[]; tool_denies?: { name: string }[] };
   if ((s.tool_denies ?? []).some(d => d.name === 'read')) return false;
   if (step.step_type === 'act' || step.step_type === 'commit') return true;
-  if (step.step_type === 'reason') return (s.tool_grants ?? []).some(g => g.name === 'read' || g.name === '*');
+  if (step.step_type === 'reason' || step.step_type === 'check') return (s.tool_grants ?? []).some(g => g.name === 'read' || g.name === '*');
   return false;
 }
 

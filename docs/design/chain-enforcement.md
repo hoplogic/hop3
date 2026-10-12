@@ -3,7 +3,7 @@
 	source: [[../concepts/工程实现链规范]]
 	source_id: engineering-chain-spec
 	type: extend
-	last_sync: 2026-08-17T13:00+0800
+	last_sync: 2026-10-11T10:47+0800
 	note: 实现链的机检守卫总览——把静态、确定性与真实载体守卫按"守链哪一环"归位成一条主线，标出已守/空白，并定何时跑。回答"这条链凭什么不会腐坏"。
 %%
 
@@ -45,8 +45,8 @@
 | 概念层 | 锚点命名合法（`anc-{category}-{concept}`、类别在表内） | `scan.py`（命名违规检查） | `concept-anchor-rules.md` 类别表 |
 | 概念/设计层 | **锚点前必须半角空格**（否则锚点隐形、不被采集） | `check-anchor-format.mjs` | `^anc-meta-anchor-space` |
 | 概念/设计层 | **同文件禁重复锚定义**（影子契约必漂移、引用歧义） | `check-anchor-format.mjs`（同脚本第二职责） | `^anc-meta-anchor-unique` |
-| 代码/测试层 | **@a:/@v: 必须行首注释形态**（句尾粘连采集正则收不到、锚点隐形——0057 G-采集实撞,收敛书写比放宽采集稳） | `check-anchor-format.mjs`（同脚本第三职责） | `^anc-meta-anchor-head` |
-| 代码层内核 | **禁触进程级状态**（`process.env`/`process.cwd`/`process.chdir`——run 隔离不变量的机检半边:进程状态只许组合根〔cli.ts 命令入口/mcp-server.ts serve+startRun 入口〕一次读取折进 run 级 HostConfig,内核运行期只消费载体;含模块顶层可变状态禁令） | `check-process-state.mjs` | `^anc-run-isolation`（ARCHITECTURE,单机版架构总条款） |
+| 代码/测试层 | **@a:/@v: 必须行首注释形态**（句尾粘连采集正则收不到、锚点隐形——0057 G-采集实撞,收敛书写比放宽采集稳）;**锚 id 尾粘检同时扫 .ts 注释段与 TRACEABILITY.md 卡片行的 `— @a:/@v:` 归属声明**（2026-10-08 todo/0133——卡片行尾粘让 scan 归属静默回退为卡 id,审计照绿;scan.py 解析失败同时改记 invalid_refs 不回退） | `check-anchor-format.mjs`（同脚本第三职责）+ `scan.py` parse_anchor_ids | `^anc-meta-anchor-head` |
+| 代码层内核 | **禁触进程级状态**（`process.env`/`process.cwd`/`process.chdir` 与机器身份级读取 `homedir()`/`hostname()`/`userInfo()`/`process.execPath`（2026-10-10 扩面）——run 隔离不变量的机检半边:进程状态只许组合根〔cli.ts 命令入口/mcp-server.ts serve+startRun 入口〕一次读取折进 run 级 HostConfig,内核运行期只消费载体;含模块顶层可变状态禁令） | `check-process-state.mjs` | `^anc-run-isolation`（ARCHITECTURE,单机版架构总条款） |
 | 全层文本文件 | **禁含 NUL 等控制字节**（grep 判二进制后全 grep 系工具链对该文件失明——守卫/审计/人工排查集体瞎；2026-08-13 实撞：shell 写入把字面 NUL 带进 parser.ts,review 时"代码在场"险被误判"缺失"） | `check-text-integrity.mjs` | `^anc-meta-guard-text-integrity` |
 | 设计层 | 同上 + 模块对外接口清单【封闭】 | `scan.py` + `cross_compare.py`（模块边界违规） | `^anc-meta-module-spec` |
 | 设计层 | 公开出口须有说明注释 | `cross_compare.py`（出口注释违规） | 同上 |
@@ -55,6 +55,7 @@
 | 设计层 | **模块架构工程链审计**（src `@module:` 集合 ⊆ Doctree 索引/ARCHITECTURE/module-principles §7 三处架构视图） | `check-module-arch-audit.mjs`（缺名即红；`check:fast` 内，2026-08-06 准入，原 G10） | `^anc-meta-module-arch-audit`（概念上游=必备件④） |
 | 测试层 | 测试真实通过 | `vitest run`（872 例） | — |
 | 测试层 | **e2e 测真结果、核真过程**（端到端断言最终结果之外，必须查实际执行日志核验过程轨迹）；**正反例成对**（行为变更的测试必须正例+反例成对——豁免外溢/拦截漏放/修复误伤只有反例测得出；判定/守卫类代码无反例即不完整；2026-08-10 上溯立源：--answer 豁免零测试、#iter 修复只正例两连实撞后入法） | `e2e-execution.test.ts` hoplog 断言 + `carrier-live-e2e` readTerminalEvidence 用 HopLog 单一解析器核验真实 YAMLL 块键 + mcp-server HopLog 恒开断言（G11 2026-08-07 大部销账；余量见台账）；正反例=评审义务（机检不可达——"哪些行为算变更、边界钉哪"是语义判断），语义审计 C→T 维度顺带核 | `^anc-meta-layer-test`（概念层测试原则） |
+| 测试层 | **决策分支带变异证明**（写测试的批次就要证明测试能拦住改坏：把决策分支——改变授权结论／风险分类／数据完整性／文件系统后果的——故意改坏,对应测试须红、恢复须绿;呈现分支不要求变异也不写断言原文的测试;粒度是行为不是语法;终止条件是存活项分类完毕不是清零;2026-10-11 上溯立源：commit 安全分析批次 review 穷举"每一侧"烧 25 小时、1400 次变异、6 次阅卷,收获集中在第一轮按行为选点那 50 个测试——todo/0157） | 当前=评审义务（开发批次的 commit message 或 todo 卡列变异名→红在哪个用例;工程链 review 面三只抽查）;机检方向=变异核证固化为 spec（todo/0157 第 5 条,run20.py / gen20.py / match.cjs 雏形）,成件后挂 `check:mutation` 按 diff 改动行自动选决策分支、四步齐全即绿 | `^anc-meta-layer-test`（概念层第四条测试原则） |
 
 ### 1b. 跃迁守卫（层与层之间是否忠实传达）
 
@@ -65,7 +66,7 @@
 | **D→C** | **改代码前设计先行**（时序，不只是存在性） | `check-design-first.sh` | ✅ 绿（2026-08-01 修了路径假阴性） |
 | **C→T**（代码→测试） | 每个代码锚点有测试覆盖 | `cross_compare.py` 代码→测试覆盖 | ⚠️ 基线 189/204 |
 | **C→T** | **行/分支覆盖率不许变差**（锚点覆盖之外的量化底线；概念上游=`^anc-meta-layer-test` 合理覆盖率原则，2026-08-07 上溯立源） | `vitest --coverage` + `check-coverage-baseline.mjs` 基线比对（2026-08-03 准入，原 G7） | ✅ 基线 src 行 92.5% / 分支 87%（权威=`audits/baselines/coverage-baseline.json`,本格随其人工上调同步——2026-08-17 上调锁三元+walker 批成果;数字以文件为准防两处漂移） |
-| **全链** | 追溯卡片与各层实际一致 | `cross_compare.py` 无效引用 / 状态标记 + **`check-anchor-baseline.mjs` 基线比对（变差即红，2026-08-03 准入）** | ✅ 基线锁定 27 / 36（`audits/baselines/anchor-baseline.json`，锚定 822b031） |
+| **全链** | 追溯卡片与各层实际一致 | `cross_compare.py` 无效引用 / 状态标记 + **`check-anchor-baseline.mjs` 基线比对（变差即红，2026-08-03 准入）** + **明细基线比对**（2026-10-08 todo/0133 准入：`audits/baselines/anchor-detail-baseline.json` 存 orphans / 两张 missing 的 id+file 对集合,当前出现基线没有的条目即红点名——数字持平但新孤儿锚混入的形态此前两道闸都漏,`^anc-meta-ci-detail-baseline`;负向验证=造一个散文行锚实红） | ✅ 基线锁定 27 / 36（`audits/baselines/anchor-baseline.json`，锚定 822b031） |
 
 ### 1c. 宪法级原则的守卫（穿透全链）
 
@@ -104,7 +105,7 @@ Agent 建模块必须按序收齐八件、**一次改动交付**，不许散落�
 | 守卫 | 守什么契约 |
 |---|---|
 | `check-hopissues.mjs` | 跨项目议题通道开工扫描（`../hopissues/` 两数:他方 fixed 待本方复验逐条点名——先复验再开新工/报给本方 open+reopen 计数;通道库缺席显式失败不静默跳过——README 接入义务①,规则权威=hopissues/README.md,`^anc-meta-hopissues-scan`;2026-08-17 准入,负向验证=改路径探缺席 exit 1） |
-| `check-driver-carriers.mjs` | Codex carrier 静态纪律（禁用 CC 原语、main 不内嵌执行循环、文件完整）+ CC/Codex 稳定协议签名 parity（`^anc-driver-codex-rule-parity`）+ **driver last_sync 一致性**（实改未刷即红——手工纪律三撞升守卫,`^anc-driver-lint-last-sync`;git 不可用显式跳过明说） |
+| `check-driver-carriers.mjs` | Codex carrier 静态纪律（禁用 CC 原语、main 不内嵌执行循环、文件完整）+ CC/Codex 稳定协议签名 parity（`^anc-driver-codex-rule-parity`）+ **三载体 hop-ops.md 字节同文**（`^anc-cli-hop-ops-parity`,2026-10-08 todo/0133 准入,负向验证=改一份实红）+ **driver last_sync 一致性**（实改未刷即红——手工纪律三撞升守卫,`^anc-driver-lint-last-sync`;git 不可用显式跳过明说） |
 | `carrier-live-e2e.mjs` | CC/Codex 真实宿主进程、subagent 执行体归属、终态业务结果与凭证不落盘（`^anc-driver-live-e2e`）；有费用，opt-in |
 | `hoplog-fuzz.mjs` | hoplog 写入路径穷举——每场景真跑 HopLog + js-yaml 解析，暴露 YAMLL 崩溃点 |
 | `validate-run-yamll.mjs` | 一次真实 run 的所有 main.yaml 逐块 YAMLL 合法性（复用 fuzz 的 validateYamll 语义） |
@@ -303,6 +304,9 @@ Agent 建模块必须按序收齐八件、**一次改动交付**，不许散落�
 | 工具·语义审计 | anchor-audit **块二**（按模块分批 LLM 判忠实；产物 `semantic_audit_summary.yaml` 带时间戳）——anchor-audit spec 实为三块编排壳：块一 scan+比对=机检（日常 `check:audit` 已跑）/块二语义审计（G3 节奏的真对象）/块三 fix=写操作（经人确认） | ✅ 节奏闸 2026-08-08 挂 release ④a（核块二产物） |
 | 工具·e2e 驱动+hoplog 分析 | `carrier-live-e2e.mjs`（readTerminalEvidence 逐步骤核验） | ✅ |
 | 工具·release 闸 | `release.sh` ④（凭证硬闸）+ ④a（审计节奏，提示不拦——2026-08-11 作者降级）。**发版无关面黑名单（2026-08-26 作者两轮定形："不要因为不影响 release 的内容阻断 release"→分拦放；"应该走黑名单，安全点"→缺省拦、显式豁免）**：单一黑名单 `NONRELEASE_RE` 枚举**确认不影响发版产物**的路径（`todo/ docs/ hop_tasks/ audits/ tests/ scripts/audit/ TRACEABILITY.md Doctree.md ARCHITECTURE.md AGENTS.md CLAUDE.md .playwright-mcp/ vitest.config.ts maintainers/`（TODO.md 已随卡目录化退役删除,2026-08-30;vitest.config.ts 2026-09-04 b5a145d3 加入,本行 2026-09-13 补记） + 检查单自身 `scripts/release.sh`——它不被 E2E 测,它的验证就是当次发版执行本身;AGENTS/CLAUDE 是 agent 工程约定件,2026-08-26 黑名单首跑即拦 AGENTS.md 后作者定补入;scripts/audit/ 是语义审计工具面——不进 tarball〔files 字段无 scripts/〕不进 version commit,与 tests/·audits/ 同类,2026-09-01 发版首拦审计 spec 在飞改动后作者定补入〔"这个是不是不应该阻碍发版"〕;`.gitignore` 是仓库追踪面配置——不进 tarball〔npm 打包不含它,pack 用 files 白名单〕不影响 dist 产物,2026-09-01 同日第二拦实锤补入:上一条修复恰改了 .gitignore 一行,④ E2E 凭证闸对"凭证..HEAD 差集"按黑名单判,.gitignore 不在名单内即要求重跑 13 分钟 live:core——而该 diff 对发版产物零影响,重跑买到的信息为零,正是 2026-08-26 立黑名单要防的原形态;`maintainers/` 是维护者内部操作面整目录——不进 tarball〔files 白名单无它〕不影响 dist 产物,原单条 RELEASING.md 2026-09-04 快照制首跑实拦补入〔快照制批改了它一行使凭证差集含它被拦〕,2026-09-13 RELEASING.md 迁入 maintainers/ 后单条收编为整目录），**名单外一切路径（含未来新增的未知路径）缺省按影响发版对待**——白名单会漏放新路径,黑名单只会误拦（误拦补名单一行,漏放是带伤发版）。两处消费：**① 工作区检查**——快照制下降级为警告不拦（发的是快照,主区并行改动不在本次发版内——原黑名单分拦放语义随之退役,脏区仅列出留痕）;**④ E2E 凭证闸**——凭证 commit 须 ==发版快照 SNAP,或为其祖先且 `凭证..SNAP` 的 diff 路径**全部**落在名单内才放行（列出放行清单留痕;快照制 2026-09-04 起基准从 HEAD 改 SNAP——移动靶病根除,权威 [[release-engineering#^anc-release-snapshot]]）,任一名单外路径即拦重跑 live:core（2026-08-26 实撞:改 release.sh 自身+设计文档一笔提交使凭证落后 HEAD,重跑 13min 买到的信息为零）。连带 ⑥ `npm version` 改 `--no-git-tag-version`+手工 commit+tag（npm version 自带全树干净检查,与 ① 分拦放冲突;只提交版本双文件,tag 形态不变,断点续发零影响） | ✅ |
+| 工具·release 守卫族 ① 发布防线四断言 | 设计锚 [[release-engineering#^anc-release-boundary-guards]];测试 `guard-scripts.test.ts` describe「发布防线四断言（maintainers/ 不出公开面）」（package.json files 白名单 / github-publish 剔除面 / release.sh NONRELEASE_RE 含 maintainers/ / 公开快照标记）;挂载=`check:fast` 的 vitest（npm test 内常驻,改 release.sh / github-publish.sh / package.json files 即跑）。2026-10-08 todo/0136 补登——release 族三卡此前在本表整体空白,守卫真跑着但"守卫在不在"要翻测试文件才知道 | ✅ |
+| 工具·release 守卫族 ② GitHub 公开快照立基 | 设计锚 [[release-engineering#^anc-release-github-snapshot]];测试 `guard-scripts.test.ts` describe「release.sh registry 轮询时长与 GitHub 快照指路」+ 「GitHub 公开快照远端立基」组（七例：首推立基 / 非 force / 快照自洽标记 / 指路行）;挂载=`check:fast` 的 vitest | ✅ |
+| 工具·release 守卫族 ③ npm 包文档自足 | 设计锚 [[release-engineering#^anc-release-tarball-self-contained]];测试 `guard-scripts.test.ts` describe「npm 包文档自足：用户面文档经打包期清洗后随包分发…」（①清单与 files 对应 / ②prepack-postpack 生命周期 / ③实跑净度零命中 / ④注入件反例——含围栏代码块注释内真锚名泄露防线,2026-10-08 补 / ⑤⑥⑦ 退出码与恢复）;挂载=`check:fast` 的 vitest + release.sh ④b MUST 三条 | ✅ |
 | 工具·阈值同源守卫 | `check-threshold-sync.mjs`（todo/0060——prompt 供给体量阈值"设计写死数字+代码写死常量"双写形态,改常量不改文档无声;映射表 6 组〔RETRY_BASE_INLINE_CHARS/历史行 clip/UPSTREAM_FEEDBACK_GUARD_CHARS/DEFLATE_THRESHOLD/HUMAN_PREVIEW_THRESHOLD/INLINE_PREVIEW_MAX〕,每条钉具体文件+含语境词捕获正则防裸数值误配;两侧不等红,任侧配不到也红〔条款改写/常量改名同属失同源〕;新增阈值=映射表加行+本表随更;挂 check:fast;守卫锚 `^anc-meta-threshold-sync`） | ✅ 2026-09-01 准入四步全过（负向双向:改常量红/改文档红,各复原绿） |
 | 工具·教学供给面对账守卫 | `check-teaching-sync.mjs`（D93 防线一,作者抓"知识供给缺口一直在打地鼠"——教学文档是引擎注册面的手写副本,缺口/教错只能靠真机烧钱发现;move src/dst 毒行漏过五层防线正因教学表虽对但无人核 spec 实装。两面:A=教学签名表逐件对 DefaultToolProvider.list() input_schema〔调用形态位的具名参数名,示意值不判〕;B=教学 hop_python 示例段的工具调用参数名核〔作者点名"示例也非常重要"——教错的示例比不教破坏力更大〕。教学面清单文内登记〔split-patterns/dv-knowledge,扩新教学文档加行〕;依赖 dist 缺失显式失败;挂 check:fast;守卫锚 `^anc-build-teaching-sync`） | ✅ 2026-09-16 准入四步全过（负向:教学表 move 改 src/dst 红复原绿;首跑抓 5 处抽取面误报当场收窄——示意变量值/字段访问不判） |
 | 工具·统一入口命令 | `check:fast` / `check` / `test:e2e:all` / `chain-health` / `release`（§4 时机表逐档对应） | ✅ |

@@ -16,18 +16,18 @@
 
 Give it a document, and it digs out every **factual claim** (verifiable) and every **inferred conclusion** (derived from facts), one by one, hands you a quick-view list, and then verifies them **in parallel** item by item — fact points get external-evidence searches with credibility labels on their sources; inference points get premise tracing plus reasoning-fallacy review — finally converging into a two-dimensional verdict report.
 
-**Warm-up (30 seconds, runnable if you installed `--demo`)**: get a feel with the demo version first — it only checks first-order facts (directly verifiable claims), so the flow is short:
+**Warm-up (30 seconds, runnable once you have run `hopjit setup`)**: get a feel with the demo version first — it only checks first-order facts (directly verifiable claims), so the flow is short. Setup installs it by default as the demo HopAnt `demo-fact-check`, with the sample document in the same directory:
 
 Claude Code command:
 
 ```
-/demo-fact-check 核查 ~/.claude/skills/demo-fact-check/fact-check-sample.md
+/hopspec run ~/.hopjit/ants/demo-fact-check/demo-fact-check.md — check fact-check-sample.md in the same directory
 ```
 
-Codex command (skill installed inside the project):
+Codex command:
 
 ```
-$demo-fact-check 核查 .agents/skills/demo-fact-check/fact-check-sample.md
+$hopspec run ~/.hopjit/ants/demo-fact-check/demo-fact-check.md — check fact-check-sample.md in the same directory
 ```
 
 **This tutorial dissects the full version**, `examples/hop-fact-check.md` (in the project repository, not shipped with the npm package) — because the four advanced pieces this tutorial covers (self-check loop, inference fork, mechanical roll call, two-dimensional verdict) are precisely the ones the demo version cut for brevity. The sample input `fact-check-sample.md` is a short essay on coffee and health that **deliberately buries verifiable fact points and one leap-of-logic inference** — the last paragraph jumps from "coffee doesn't cause cancer" to "pregnant women and heart patients can rest easy". The demo version can't catch this leap (it doesn't handle reasoning); the full version nails it:

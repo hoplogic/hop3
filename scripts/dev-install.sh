@@ -2,16 +2,16 @@
 # 开发期一条命令：重建 dist + 从本库源同步刷新 CC 与 Codex 两套用户级 skill（--force）。
 # 引擎（dist）与两套 driver 一起刷新，消除"源码新、安装副本旧"撕裂。
 # 用法：npm run dev:install                    （默认装到 ~/.claude/skills）
-#      npm run dev:install -- --demo          （附装 /coffee-week 演示 skill）
-#      ./scripts/dev-install.sh [--demo] [目标skills目录]
+#      ./scripts/dev-install.sh [目标skills目录]
+# 演示件已改为 HopAnt（2026-10-06）：setup 缺省装进 ~/.hopjit/ants/,已装的不覆盖。
+# --demo 仍接受但不起作用（与 setup 的隐藏兼容别名同口径,保留一个版本周期）。
 set -e
 cd "$(dirname "$0")/.."
 TARGET="$HOME/.claude/skills"
-DEMO=""
 for arg in "$@"; do
   case "$arg" in
-    --demo) DEMO="--demo" ;;
-    --*)    echo "❌ 未知参数: $arg -- 支持 --demo 与目标目录"; exit 2 ;;
+    --demo) : ;;
+    --*)    echo "❌ 未知参数: $arg -- 只支持目标目录"; exit 2 ;;
     \#*)
       # 防呆：终端复制文档命令时行尾 '# 注释' 被 zsh 当参数传入（zsh 交互式默认不认注释），
       # '#' 曾被当目标目录建出 'hoplogic3/#/'（2026-08-06 实撞）。拒绝并给出提示。
@@ -44,26 +44,32 @@ esac
 
 echo "② 装 skill（源=本库最新 driver/）..."
 # 给人看的输出用 CLI 缺省 YAML（--json 只给机器消费方，2026-08-09 作者指正）
-# demo 恒随刷（已装过才刷,未装不塞）——CC 侧 demo 曾停在 8/6 旧 spec,源 8/8 改文案后两载体
-# spec 漂移(作者问'为什么两个 skill spec 不一样'),根因=--demo 非缺省、装过即冻结。
-if [ -z "$DEMO" ] && [ -d "$TARGET/coffee-week" ]; then DEMO="--demo"; fi
-CODEX_DEMO=""
-if [ -d ".agents/skills/demo-coffee-week" ] || [ -d ".agents/skills/coffee-week" ]; then CODEX_DEMO="--demo"; fi
-node dist/cli.js install-skill --dir "$TARGET" --force $DEMO
-# Codex 正式件用户级 ~/.codex/skills（2026-08-27 作者定"codex 和 cc 看齐"）;demo 恒项目级(装置器内部处理)
-node dist/cli.js install-skill --carrier codex --force $CODEX_DEMO
+# 演示 HopAnt 由 setup 缺省装（已装的跳过——要刷新演示件先 hopjit ant remove <id>）
+# 不带 --carrier / --dir：setup 自动探测本机在场的全部载体逐个装（cc / codex / opencode / cfuse-cc / cfuse-codex,
+# ^anc-cli-carrier-autodetect）——原先只跑 cc 与 codex 两条,cfuse 与 opencode 的 skill 与 MCP 注册从没刷过（todo/0158 第一块,2026-10-11）。
+# 显式传了目标目录（TARGET 非缺省）才按旧形态只装到那个目录。
+if [ "$TARGET" = "$HOME/.claude/skills" ]; then
+  node dist/cli.js setup --force
+else
+  node dist/cli.js setup --dir "$TARGET" --force
+fi
 
 # ③ 版本核对（自动比对，人不用再敲 hopjit --version）
 PKGV=$(node -p "require('./package.json').version")
 BINV=$(hopjit --version 2>/dev/null || echo "不可用")
-CCSTAMP=$(grep -m1 -- '<!-- driver:' "$TARGET/hopspec/SKILL.md" 2>/dev/null || echo "（未找到版本戳）")
 echo ""
 echo "═══ 版本核对 ═══"
 echo "  本库 package.json : $PKGV"
 echo "  全局 hopjit       : $BINV"
-echo "  CC skill 版本戳   : $CCSTAMP"
+# 每个在场载体的 skill 版本戳各读一行（载体 home 与 setup 同一解析:cc ~/.claude、codex ~/.codex、opencode ~/.config/opencode、cfuse ~/.codefuse/engine/{cc,codex}）
+for pair in "cc:$TARGET" "codex:$HOME/.codex/skills" "opencode:$HOME/.config/opencode/skills" "cfuse-cc:$HOME/.codefuse/engine/cc/skills" "cfuse-codex:$HOME/.codefuse/engine/codex/skills"; do
+  name="${pair%%:*}"; dir="${pair#*:}"
+  [ -d "$dir/hop" ] || continue
+  stamp=$(grep -m1 -- '<!-- driver:' "$dir/hop/SKILL.md" 2>/dev/null || echo "（未找到版本戳）")
+  printf '  %-11s skill 版本戳 : %s\n' "$name" "$stamp"
+done
 if [ "$BINV" != "$PKGV" ]; then
   echo "  ⚠️ 全局 hopjit ($BINV) ≠ 本库 ($PKGV) —— 先跑 hash -r 再重查；仍不一致则 npm link"
   exit 1
 fi
-echo "✅ 引擎(dist)与 CC(~/.claude/skills)/Codex(~/.codex/skills) skill 已同步到库内最新 v${PKGV} 。新开会话生效。"
+echo "✅ 引擎(dist)与本机在场载体的 skill 已同步到库内最新 v${PKGV}（载体清单见上方版本戳行）。新开会话生效;MCP 注册状态用 /hop 体检（doctor）核。"

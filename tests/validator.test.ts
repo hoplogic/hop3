@@ -4577,6 +4577,52 @@ G
     }
   });
 
+  // 2026-10-12 语义审计 #22：设计/概念明文列为保留字但 LANG_KEYWORDS 漏的五词——on、fail（概念 ^anc-step-on-fail）、
+  // 失败兜底（i18n 术语表）、工具、禁工具（spec-parser 注记② "入关键词保留字族",代码注释自称保留但集合里没有）
+  it('反例（语义审计 #22）：产出名撞 on / fail / 失败兜底 / 工具 / 禁工具 五词 → V2 error（设计定义的保留集合,代码此前少这五个成员）', () => {
+    for (const kw of ['on', 'fail', '失败兜底', '工具', '禁工具']) {
+      const { errors } = validate(`# T
+
+## Goal
+G
+
+## Outputs
+- r: line  # r
+
+## Steps
+1. [reason] R
+  + → ${kw}: line  # 撞关键词
+
+2. [act] A
+  - ← ${kw}
+  + → r: line  # r
+`);
+      expect(errors.some(e => e.rule === 'V2' && /语言关键词/.test(e.message)), kw).toBe(true);
+    }
+  });
+
+  it('正例（语义审计 #22）：形近非保留词（on_call / failure / 工具箱）不触发关键词闸', () => {
+    for (const kw of ['on_call', 'failure', '工具箱']) {
+      const { errors } = validate(`# T
+
+## Goal
+G
+
+## Outputs
+- r: line  # r
+
+## Steps
+1. [reason] R
+  + → ${kw}: line  # 非关键词
+
+2. [act] A
+  - ← ${kw}
+  + → r: line  # r
+`);
+      expect(errors.some(e => e.rule === 'V2' && /语言关键词/.test(e.message)), kw).toBe(false);
+    }
+  });
+
   it('反例：产出名撞修饰词双语（free/开放/escalatable/可上升）→ V2 error（2026-08-26 补录同批入族）', () => {
     for (const kw of ['free', '开放', 'escalatable', '可上升']) {
       const { errors } = validate(`# T
@@ -4617,6 +4663,53 @@ G
   + → r: line  # r
 `);
     expect(errors.some(e => e.rule === 'V2' && /语言关键词/.test(e.message))).toBe(true);
+  });
+
+  // 2026-10-12 语义审计 #23：enum 成员含 else/其他 是独立散点判定（validator.ts enum 成员判,与变量名撞 else 的关键词闸是两条代码路径）,
+  // 此前零用例——把 some 改 every 无反例会红。本对钉住成员位。
+  // @v: anc-rule-v2
+  it('反例（语义审计 #23）：产出类型 enum(a, else) 与中文 enum(甲, 其他) 各报 V2 "enum 成员含保留字 else"——成员位独立判,不经变量名闸', () => {
+    for (const ty of ['enum(a, else)', 'enum(甲, 其他)', 'enum(else)']) {
+      const { errors } = validate(`# T
+
+## Goal
+G
+
+## Outputs
+- r: line  # r
+
+## Steps
+1. [reason] R
+  + → x: ${ty}  # 成员含统配词
+
+2. [act] A
+  - ← x
+  + → r: line  # r
+`);
+      expect(errors.some(e => e.rule === 'V2' && /enum 成员含保留字 else/.test(e.message)), ty).toBe(true);
+    }
+  });
+
+  it('正例（语义审计 #23）：enum 成员不含 else/其他（含形近的 elsewhere / 其他人）→ 不报该条 V2', () => {
+    for (const ty of ['enum(a, b)', 'enum(elsewhere, other)', 'enum(甲, 其他人)']) {
+      const { errors } = validate(`# T
+
+## Goal
+G
+
+## Outputs
+- r: line  # r
+
+## Steps
+1. [reason] R
+  + → x: ${ty}  # 合法成员
+
+2. [act] A
+  - ← x
+  + → r: line  # r
+`);
+      expect(errors.some(e => e.rule === 'V2' && /enum 成员含保留字 else/.test(e.message)), ty).toBe(false);
+    }
   });
 
   // @v: anc-rule-v2 + anc-i18n-keyword-reserved（27轮review:else/其他 收编关键词闸——原散点只拦产出位,
@@ -6262,5 +6355,89 @@ ${steps}
 `));
     const errs = validateSpec(ast!).filter(e => e.rule === 'S16');
     expect(errs.some(e => e.message.includes('无人供给'))).toBe(true);
+  });
+});
+
+// @v: anc-rule-v16 —— Config.dirs 形态与引用（todo/0148）：形态坏 warn / {var} 未声明 error / 相对与 .. error / 合法三形态零警告
+describe('V16 Config.dirs 形态与变量引用', () => {
+  const mk = (configBody: string, inputs = '- target % line  # t\n- out % line  # o') => validateSpec(parseSpec(`# T
+Id: t
+Goal: g
+## Inputs
+${inputs}
+## Config
+${configBody}
+## Steps
+1. [reason] a
+  + → r % line  # r
+`).ast).filter(e => e.rule === 'V16');
+
+  it('正例：绝对路径 / ~ 家目录 / {Inputs 变量} / {hop_env_*} 四种合法写法零 V16', () => {
+    expect(mk('dirs:\n  read: ["/tmp", "~/.hopjit/ants/kb", "{target}", "{hop_env_kb_root}"]\n  readwrite: ["{out}", "~"]')).toEqual([]);
+  });
+  it('反例：{var} 既不在 Inputs 也不是 hop_env_ 前缀 → error 点名', () => {
+    const e = mk('dirs:\n  read: ["{nope}"]');
+    expect(e).toHaveLength(1); expect(e[0].severity).toBe('error'); expect(e[0].message).toContain('{nope}');
+  });
+  it('反例：相对路径 data/x 与 ./x 与 $HOME/x → error（不支持相对路径）', () => {
+    const e = mk('dirs:\n  read: ["data/x", "./x", "$HOME/x"]');
+    expect(e.filter(x => x.severity === 'error')).toHaveLength(3);
+    for (const x of e) expect(x.message).toContain('不是绝对路径');
+  });
+  it('反例：含 .. 段 → error', () => {
+    const e = mk('dirs:\n  readwrite: ["/a/../b"]');
+    expect(e).toHaveLength(1); expect(e[0].severity).toBe('error'); expect(e[0].message).toContain('..');
+  });
+  it('反例：形态坏——dirs 是列表 / read 非列表 / 未知键 / 条目非字符串 → 各 warn 一条,不 error', () => {
+    expect(mk('dirs: ["/a"]').map(e => e.severity)).toEqual(['warn']);
+    expect(mk('dirs:\n  read: "/a"').map(e => e.severity)).toEqual(['warn']);
+    expect(mk('dirs:\n  write: ["/a"]').map(e => e.severity)).toEqual(['warn']);
+    expect(mk('dirs:\n  read: [1]').map(e => e.severity)).toEqual(['warn']);
+  });
+  it('反例：~user 形态 → error 专报文（不是"不是绝对路径"）;正例：{中文变量} 引用中文 Inputs 名零警告', () => {
+    const e = mk('dirs:\n  read: ["~alice/x"]');
+    expect(e).toHaveLength(1); expect(e[0].severity).toBe('error'); expect(e[0].message).toContain('不支持 ~用户名'); expect(e[0].message).not.toContain('不是绝对路径');
+    expect(mk('dirs:\n  readwrite: ["{报告目录}"]', '- 报告目录 % line  # o')).toEqual([]);
+    expect(mk('dirs:\n  readwrite: ["{报告目录}"]', '- out % line  # o').map(x => x.severity)).toEqual(['error']);   // 中文名未声明仍 error
+  });
+
+  it('正例：Config 无 dirs 键 → 零 V16（既有 spec 不受影响）', () => {
+    expect(mk('expansion_max: 3')).toEqual([]);
+  });
+});
+
+// @v: anc-rule-v17 —— 结构化类型的 ask 要有建议值来源（2026-10-08 作者定"yaml/列表型的输入究竟应该怎么交互,至少要给一个建议输入让人来改"）：
+// 前序同名 +→ 或 present_inputs 任一在场零警告;都无 → warn 指路前置备料;标量不核。
+describe('V17 结构化 ask 的建议值来源', () => {
+  const mk = (steps: string, types = '') => validateSpec(parseSpec(`# T
+Id: t
+Goal: g
+${types}
+## Outputs
+- r % text  # r
+## Steps
+${steps}
+`).ast).filter(e => e.rule === 'V17');
+
+  it('反例：ask 声明 yaml 输出,前序无同名产出、无 present_inputs → V17 warn 点名声明与类型并指路（变异：删 V17 挂点本例红）', () => {
+    const w = mk(`1. [ask] 部署配置\n  + → cfg % yaml  # 配置\n2. [reason] 用\n  - ← cfg\n  + → r % text  # r\n`);
+    expect(w.length).toBe(1);
+    expect(w[0].severity).toBe('warn');
+    expect(w[0].message).toContain('"1"'); expect(w[0].message).toContain('cfg（yaml）');
+    expect(w[0].message).toContain('present_inputs'); expect(w[0].message).toContain('前置一个步骤');
+    expect(w[0].message).toContain('先考虑不向人要结构');                          // 2026-10-08 作者补定：报文先劝换设计再给兜底
+  });
+  it('正例：前序步骤 +→ 同名变量 → 零警告（引擎会把它当建议值）', () => {
+    expect(mk(`1. [reason] 推荐配置\n  + → cfg % yaml  # 配置\n2. [ask] 确认配置\n  - ← cfg\n  + → cfg % yaml  # 配置\n3. [reason] 用\n  - ← cfg\n  + → r % text  # r\n`)).toEqual([]);
+  });
+  it('正例：ask 带 present_inputs 指样板 → 零警告', () => {
+    expect(mk(`1. [reason] 样板\n  + → sample % yaml  # 样板\n2. [ask present_inputs=sample] 填配置\n  - ← sample\n  + → cfg % yaml  # 配置\n3. [reason] 用\n  - ← cfg\n  + → r % text  # r\n`)).toEqual([]);
+  });
+  it('正例：标量声明（line / int / enum）不核;列表型与类型面具名类型按结构化核', () => {
+    expect(mk(`1. [ask] 问名\n  + → name % line  # 名\n  + → n % int  # 数\n  + → mode % enum(a,b)  # 模式\n2. [reason] 用\n  - ← name, n, mode\n  + → r % text  # r\n`)).toEqual([]);
+    const w = mk(`1. [ask] 问清单\n  + → items % [line]  # 清单\n2. [reason] 用\n  - ← items\n  + → r % text  # r\n`);
+    expect(w.length).toBe(1); expect(w[0].message).toContain('items（[line]）');
+    const w2 = mk(`1. [ask] 问记录\n  + → rec % Rec  # 记录\n2. [reason] 用\n  - ← rec\n  + → r % text  # r\n`, '## Types\n- Rec:\n    name: line\n');
+    expect(w2.length).toBe(1); expect(w2[0].message).toContain('rec（Rec）');
   });
 });

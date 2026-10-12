@@ -76,14 +76,14 @@ const COMPREHENSION_DEPTH_ERR = '列表推导嵌套超两层（最多两层—�
 const MULTI_OPS = ['==', '!=', '<=', '>=', '//', '**'];   // // 整除、** 幂（Python 对齐 2026-08-10）——先于单字符 / 和 * 匹配
 const SINGLE_OPS = new Set(['+', '-', '*', '/', '%', '<', '>', '=']);
 
-function tokenize(bodyLines: string[], baseLine: number, errors: ParseError[]): Token[] | null {
+function tokenize(bodyLines: string[], baseLine: number, errors: ParseError[], lineNumbers?: number[]): Token[] | null {
   const tokens: Token[] = [];
   const indentStack: number[] = [0];
   let ok = true;
 
   for (let ln = 0; ln < bodyLines.length; ln++) {
     const raw = bodyLines[ln];
-    const absLine = baseLine + ln;
+    const absLine = lineNumbers?.[ln] ?? baseLine + ln;   // 逐行真实行号优先 // @a: anc-rule-act-body-line
 
     // 禁循环：早拦——先掩字符串字面量再搜关键词（hopissues/0079:字符串里的英文 for/while
     // 是数据不是语句,对原始行直搜误拦合法参数〔实撞:subprocess 参数含错误文案
@@ -204,8 +204,9 @@ function tokenize(bodyLines: string[], baseLine: number, errors: ParseError[]): 
     tokens.push({ kind: 'newline', value: '', line: absLine });
   }
   // 收尾 dedent
-  while (indentStack.length > 1) { indentStack.pop(); tokens.push({ kind: 'dedent', value: '', line: baseLine + bodyLines.length }); }
-  tokens.push({ kind: 'eof', value: '', line: baseLine + bodyLines.length });
+  const endLine = lineNumbers && lineNumbers.length > 0 ? lineNumbers[lineNumbers.length - 1] + 1 : baseLine + bodyLines.length;
+  while (indentStack.length > 1) { indentStack.pop(); tokens.push({ kind: 'dedent', value: '', line: endLine }); }
+  tokens.push({ kind: 'eof', value: '', line: endLine });
   return ok ? tokens : null;
 }
 
@@ -352,17 +353,20 @@ class Parser {
     this.expectNewline();
     const then_body = this.parseBlock();
     let else_body: ActStatement[] | undefined;
+    let else_line: number | undefined;
     this.skipNewlines();
     if (this.atKeyword('elif')) {
       // elif 展开为 else_body: [嵌套 IfStmt]
+      else_line = this.peek().line;
       else_body = [this.parseIf()];
     } else if (this.atKeyword('else')) {
+      else_line = this.peek().line;   // @a: anc-rule-act-body-line
       this.next(); // else
       this.expectColon();
       this.expectNewline();
       else_body = this.parseBlock();
     }
-    return { type: 'if', condition, then_body, else_body, line };
+    return { type: 'if', condition, then_body, else_body, ...(else_line !== undefined ? { else_line } : {}), line };
   }
 
   // 表达式优先级：ternary(最低) > or > and > not > cmp > add > mul > unary > postfix > primary
@@ -679,16 +683,19 @@ export function parseActBody(
   bodyLines: string[],
   baseLine: number,
   errors: ParseError[],
+  lineNumbers?: number[],   // 可选,与 bodyLines 等长的逐行真实行号（^anc-rule-act-body-line）
 ): ActBody | null {
   const before = errors.length;
-  const toks = tokenize(bodyLines, baseLine, errors);
+  const toks = tokenize(bodyLines, baseLine, errors, lineNumbers);
   if (!toks) return null;
   const parser = new Parser(toks, errors);
   let statements: ActStatement[];
   try { statements = parser.parseProgram(); }
   catch (e) { if (e === ONE_LINE_ABORT) return null; throw e; }   // 括号跨行定向报错已写入 errors（^anc-step-act-body-one-line）
   if (errors.length > before) return null; // 有解析错误则不产出 body
-  return { statements, source_location: { line_start: baseLine, line_end: baseLine + bodyLines.length } };
+  const lineStart = lineNumbers?.[0] ?? baseLine;
+  const lineEnd = lineNumbers && lineNumbers.length > 0 ? lineNumbers[lineNumbers.length - 1] + 1 : baseLine + bodyLines.length;
+  return { statements, source_location: { line_start: lineStart, line_end: lineEnd } };
 }
 
 // ---------------------------------------------------------------------------
@@ -913,8 +920,9 @@ function serializeExpr(expr: ActExpr, inFstring = false): string {
 
 // ---------------------------------------------------------------------------
 // 判定 body 是否含工具调用（callee 不在内置白名单 = 工具调用，需 caller 执行）。
-// CLI next 据此分流：无工具 body 引擎消化，含工具 body 交 caller。
-// 见 design/hop-cli.md ^anc-cli-next-drives-body。 // @a: anc-cli-next-drives-body
+// 引擎 advance 据此分流（engine.ts 消化路径）：无工具 body 引擎直接解释,含工具 body 走 tool_request 交 caller。
+// 原锚 anc-cli-next-drives-body 已废止（hop-cli.md 历史说明）,语义迁到引擎侧——2026-10-12 语义审计 #1 改挂。
+// 见 design/exec-engine.md ^anc-exec-tool-request。 // @a: anc-exec-tool-request
 // ---------------------------------------------------------------------------
 
 export function bodyHasToolCall(body: ActBody): boolean {

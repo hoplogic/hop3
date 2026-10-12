@@ -255,20 +255,26 @@ describe('persistence', () => {
       expect(result.status).toBe('ok');
     });
 
-    it('branch with selection preserved on resume', () => {
+    it('branch with selection preserved on resume（todo/0168 后夹具改为引擎自己求值选路,不再借 selectBranch 预选）', () => {
       const engine = new ExecutionEngine();
       const init = engine.initExecution(BRANCH_SPEC, MINIMAL_HOST_CONFIG, { stateDir: tmpDir });
       if (init.status !== 'ok') return;
       const instanceDir = join(tmpDir, init.instance_id);
 
-      engine.selectBranch('1', '1.1', 'test');
+      // 引擎进入 branch 按条件选中 1.1（条件 always）,停在 1.1.1 running——这就是"已选路"的账
+      const first = engine.nextStep();
+      expect(first.status).toBe('step_ready');
+      if (first.status !== 'step_ready') return;
+      expect(first.step_id).toBe('1.1.1');
+      expect(engine.getStepStates().get('1.2')).toBe('skipped');
 
-      // Resume
+      // recover：已选路的 branch 保留选择不重评估,悬空 running 的叶子重置后再次停在 1.1.1
       const resumed = ExecutionEngine.recover(instanceDir);
       const next = resumed.nextStep();
       expect(next.status).toBe('step_ready');
       if (next.status !== 'step_ready') return;
       expect(next.step_id).toBe('1.1.1');
+      expect(resumed.getStepStates().get('1.2')).toBe('skipped');
     });
 
     it('resumed engine continues to persist', () => {

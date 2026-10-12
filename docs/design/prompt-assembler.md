@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-09-29T02:00+0800
+	last_sync: 2026-10-08T23:22+0800
 	note: PromptAssembler 组件定义 + Token Budget + 层序 L0-L6（对齐概念层 2026-08-24 重构：受众公理立根，旧 L1p/L2b/L2c/L2d 命名废除——L1p 并入 L3、L2d 并入 L2、旧 L6 输出约束并入 L5、L2b/L2c 改 L6 修正指令）。内容分级（决策/契约/说明）+ 关键决策章。
 %%
 
@@ -33,9 +33,9 @@
 | Token Budget 管理 | 契约+说明 | `anc-exec-token-budget` |
 | L2 知识（含 doc-ref/hop_env） | 契约 | `anc-exec-knowledge-retrieval` / `anc-exec-doc-ref-injection` / `anc-exec-hop-env-table` |
 | L3 轨迹与位置 | 契约（展示规则）+说明（示例） | `anc-exec-l3-display-rules` / `anc-exec-l3-branch` / `anc-exec-l3-loop` / `anc-exec-onfail-context` |
-| L4 输入材料渲染 | 契约 | `anc-exec-inputs-render` / `anc-exec-inputs-deflate` |
-| L5 当前节点 | 契约 | `anc-exec-l5-node-impl` / `anc-exec-l5-task-first` / `anc-exec-tool-manifest-source` / `anc-exec-tool-manifest-supply` |
-| L6 修正指令（重试/上游反馈） | 契约 | `anc-exec-l2c-retry-feedback`（锚名沿革，语义=L6） |
+| L4 当前节点之一：本步输入材料渲染 | 契约 | `anc-exec-inputs-render` / `anc-exec-inputs-deflate` |
+| L4 当前节点 | 契约 | `anc-exec-l5-node-impl` / `anc-exec-l5-task-first` / `anc-exec-tool-manifest-source` / `anc-exec-tool-manifest-supply` |
+| L5 修正指令（重试/上游反馈） | 契约 | `anc-exec-l2c-retry-feedback`（锚名沿革，语义=L5 修正指令） |
 | 修订场景短 prompt（已废除,锚存废除记录）+弱模型档修订短 prompt | 契约 | `anc-exec-revision-prompt` / `anc-exec-revision-short-weak` |
 | 超预算处理 | 契约 | — |
 | 激进压缩模式 | 决策+契约 | — |
@@ -44,14 +44,22 @@
 
 ## 定位【契约】 ^anc-struct-prompt-assembler
 
-> **模块版本**：prompt-assembler `v0.30.2`（2026-09-29）。本版=工具清单重试轮追加句按步骤类型分道补登设计（^anc-exec-tool-manifest-supply 第 6 面,代码零改动,行为随 step-dispatcher v0.40.0 已落地）。上版 v0.30.1=L4 工具清单的外挂件描述行带上注册面 notes（多行时续行缩进 4 格）、返回行从 output_schema 渲染（料源在 Composite list(),todo/0122,见 ^anc-exec-tool-manifest-supply 第 1 面）。上版 v0.30.0（2026-09-28）=交付格式规则在中文描述的步骤里追加"键名后的冒号用半角"一句（标准态与修订短 prompt 两处同罩,判据=步骤 summary 加执行说明正文〔去掉引擎追加的重试反馈段〕含中文字符;见 ^anc-exec-format-example-structural 下"半角冒号提示"段,与 [[step-dispatcher#^anc-exec-output-fullwidth-key-colon]] 同批次）。上版 v0.29.0=HopSchema 声明形态的分隔符从 `:` 换成 `%`（L0 声明例、L1 Outputs 行、子任务交付输出行、replan 上下文 Required outputs 行），与赋值形态统一（todo/0109 第 4 步，权威 ^anc-exec-l0-worldview-impl ③）。上版 v0.28.0=L6 执行过程类失败加第四类"客户端等待超时"（原因以 `CLIENT_TIMEOUT:` 开头,来源 [[step-dispatcher#^anc-exec-api-retry]] v0.35.0,todo/0117）：说实话"这一轮是等模型回复等超时了，不是产出问题"，不套形态指引。上版 v0.27.0=L6 执行过程类失败（工具调用次数用完、同一工具调用原地打转、执行证据机核拒收）不再套形态指引,按原因说实话并给对路的做法（T9 sdc×qwen3.8-27b 第五次复测实撞）。上版 v0.26.0=L6 机械错误形态指引遇到失败原因里的"正文疑似工具调用"附加提示时,形态指引用去掉提示的原因渲染、提示段整段追加在末尾（todo/0110 probe 3,来源 [[step-dispatcher#^anc-exec-text-toolcall-hint]]）。上版 v0.25.0=L6 触发条件补"loop 内按轮生效"+打回意见渲染三处修正（去掉容器记账包装、烧尽原因取最后一次失败原文、输入被外面重做时不给上一轮产出基准）（todo/0107,权威 [[exec-engine#^anc-exec-retry-feedback-iter-scope]]）。上版 v0.24.0 inline 预览只给有 read 工具的步骤（todo/0115 A 案）。上版 v0.23.0 角色档 Bash 纪律句按本步工具面条件化。0.x 未承诺稳定。
+> **模块版本**：prompt-assembler `v0.32.5`（2026-10-12 语义审计 #12 收链尾：出口表登 `formatKnowledgeEntry`——dispatcher lack_of_info 补检索条目与 prompt.ts 四来源条目共用一个渲染函数,check:audit 模块边界校验要求跨模块 import 的符号在出口表内）。上版 v0.32.4（2026-10-12 语义审计 #8：^anc-exec-token-budget BudgetConfig 小节删 `l2PerSource`——代码只有 total 一字段,份额是函数内常量,设计跟代码）。上版 v0.32.3（2026-10-12 概念对账批次：全文层序引用从 L0-L6 改为与实现一致的 L0-L5——分级表 / 定位节 / 出口表 / HopSop 第 5-6 步 / 易变面清单 / 预算表 / 三个区块节标题（输入材料节标题改"L4 当前节点之一：本步输入材料",当前节点 L5→L4,修正指令 L6→L5）;决策 1 早在 2026-08-31 记了前移,正文其余处漏改;概念文档《Prompt组装参考》同次对齐,作者定"和目前实现对齐"）。上版 v0.32.2（2026-10-11 todo/0161：^anc-exec-tool-manifest-supply 第 5 条扩到 check——无 body 的 check 声明了工具时 L4 清单与 reason 同一过滤（basic 与 special 一律按声明列）,零声明不组清单;与 step-dispatcher ^anc-exec-reason-tools 下发面同源）。上版 v0.32.1（2026-10-11 语义审计 0156 C 类：^anc-exec-l5-node-impl 要件 1 与正反例从旧箭头形态（`- ←` 输入行 / `+ →` 输出行 / "← 你的输出"定位句）改写为代码与测试现行的人话标签四段形态（本步任务 / 本步要产出 / 本步输入材料 / 交付格式）,与同文件 ^anc-exec-l5-task-first 对齐;AssembledContext 结构表 node_decl / instruction / output_schema 三行注释同步去箭头）。上版 v0.32.0（2026-10-08 commit 批准改为安全分析:^anc-exec-inputs-render 的第二个使用点（commit 自动研判材料）撤掉,renderInputEntries 保留导出但模块外暂无消费方,HOPSCHEMA_SEP 的模块外消费方改为安全分析 prompt 的动作清单行）。上版 v0.31.2（2026-10-08 hopissues/0127：三处 yamlDump 降级分支改带 YAML_DUMP_OPTS——缺省 lineWidth 80 让多行字符串成折叠标量,21K 知识卡在 prompt 里折行 185 处、空行翻倍,模型照抄写回逐轮改坏;列表元素兜底档小值即触发是第二受害面）。上版 v0.31.1（2026-10-08 发版前八项修复批工程链 review 修复：^anc-exec-tool-manifest-supply 第 5 条"basic 恒列"随 todo/0129 B8 改实——reason 步 L4 清单按声明列,basic 不再恒列（dispatcher 下发面 2026-09-18 已改,清单漏改;批次二改了 prompt.ts 没改本文,设计先行红线在归属模块断了一截,本版补齐）。上版 v0.31.0（2026-10-08 commit 自动研判:renderInputEntries 导出、HOPSCHEMA_SEP 进对外符号表、PromptAssembler.buildInputMeta 改公开,研判材料与执行 prompt 同一输入渲染,见 ^anc-exec-inputs-render 第二个使用点）。上版 v0.30.3（2026-10-07 todo/0146 工程链 review 修复批次：^anc-exec-context-mode 写明 HOPJIT_CONTEXT_MODE 设为空串视同未设,CLI 与 MCP 驱动工具取值同一判断;CLI 侧 cli.ts 由 `??` 改 `||`）。上版 v0.30.2（2026-09-29）。上版内容=工具清单重试轮追加句按步骤类型分道补登设计（^anc-exec-tool-manifest-supply 第 6 面,代码零改动,行为随 step-dispatcher v0.40.0 已落地）。上版 v0.30.1=L4 工具清单的外挂件描述行带上注册面 notes（多行时续行缩进 4 格）、返回行从 output_schema 渲染（料源在 Composite list(),todo/0122,见 ^anc-exec-tool-manifest-supply 第 1 面）。上版 v0.30.0（2026-09-28）=交付格式规则在中文描述的步骤里追加"键名后的冒号用半角"一句（标准态与修订短 prompt 两处同罩,判据=步骤 summary 加执行说明正文〔去掉引擎追加的重试反馈段〕含中文字符;见 ^anc-exec-format-example-structural 下"半角冒号提示"段,与 [[step-dispatcher#^anc-exec-output-fullwidth-key-colon]] 同批次）。上版 v0.29.0=HopSchema 声明形态的分隔符从 `:` 换成 `%`（L0 声明例、L1 Outputs 行、子任务交付输出行、replan 上下文 Required outputs 行），与赋值形态统一（todo/0109 第 4 步，权威 ^anc-exec-l0-worldview-impl ③）。上版 v0.28.0=L6 执行过程类失败加第四类"客户端等待超时"（原因以 `CLIENT_TIMEOUT:` 开头,来源 [[step-dispatcher#^anc-exec-api-retry]] v0.35.0,todo/0117）：说实话"这一轮是等模型回复等超时了，不是产出问题"，不套形态指引。上版 v0.27.0=L6 执行过程类失败（工具调用次数用完、同一工具调用原地打转、执行证据机核拒收）不再套形态指引,按原因说实话并给对路的做法（T9 sdc×qwen3.8-27b 第五次复测实撞）。上版 v0.26.0=L6 机械错误形态指引遇到失败原因里的"正文疑似工具调用"附加提示时,形态指引用去掉提示的原因渲染、提示段整段追加在末尾（todo/0110 probe 3,来源 [[step-dispatcher#^anc-exec-text-toolcall-hint]]）。上版 v0.25.0=L6 触发条件补"loop 内按轮生效"+打回意见渲染三处修正（去掉容器记账包装、烧尽原因取最后一次失败原文、输入被外面重做时不给上一轮产出基准）（todo/0107,权威 [[exec-engine#^anc-exec-retry-feedback-iter-scope]]）。上版 v0.24.0 inline 预览只给有 read 工具的步骤（todo/0115 A 案）。上版 v0.23.0 角色档 Bash 纪律句按本步工具面条件化。0.x 未承诺稳定。
 >
-> 定位边界：对内提供 AssembledContext 组装与 L0-L6 单一渲染源，EngineAccessor 是其与 engine 的收窄接口边界。**逐版演进史归 git log**（升版在下表加一行速览，演进论证归 commit message）；条款细节以正文各锚点条款为权威，下表只记"哪版加了什么、实撞出处在哪"。
+> 定位边界：对内提供 AssembledContext 组装与 L0-L5 单一渲染源，EngineAccessor 是其与 engine 的收窄接口边界。**逐版演进史归 git log**（升版在下表加一行速览，演进论证归 commit message）；条款细节以正文各锚点条款为权威，下表只记"哪版加了什么、实撞出处在哪"。
 
 **版本速览表**（新→旧）：
 
 | 版本 | 内容一句话 | 要点与实撞出处 |
 |---|---|---|
+| v0.32.4 | BudgetConfig 删 l2PerSource | 2026-10-12 语义审计 #8：设计写两字段代码一字段,份额常量化无配置需求,设计跟代码 |
+| v0.32.3 | 全文层序引用对齐实现 L0-L5 | 分级表 / 定位节 / 出口表 / HopSop / 易变面 / 预算表 / 三节标题从 L0-L6 旧编号改 L0-L5（决策 1 已记 2026-08-31 前移,正文漏改）;@trace note 保留历史。来源=概念对账批次第 5 条（作者 2026-10-12 定"和目前实现对齐"） |
+| v0.32.2 | check 步 L4 工具清单与 reason 同源 | ^anc-exec-tool-manifest-supply 第 5 条扩到无 body 的 check：声明了工具时按声明列（basic 不恒列）,零声明不组清单;代码 prompt.ts 组装条件与过滤谓词把 check 并入声明制步骤。来源=todo/0161（step-dispatcher v0.46.8 同批） |
+| v0.32.1 | L5 节点契约改写为人话标签形态 | ^anc-exec-l5-node-impl 要件 1 与正反例去掉 `- ←`/`+ →`/"← 你的输出"箭头形态,按代码现行的四段段题（本步任务/本步要产出/本步输入材料/交付格式）重写,与 ^anc-exec-l5-task-first 及 tests/prompt.test.ts「L4 完整节点呈现」用例一致;结构表三行注释同步。来源=语义审计 todo/0156 C9（设计文字旧于 2026-08-31 作者抓"别用←→"后的代码,行为零改动） |
+| v0.32.0 | commit 研判使用点撤掉 | commit 批准改为安全分析,分析材料不含输入值;^anc-exec-inputs-render 第二个使用点改写为撤销说明,renderInputEntries 保留导出。来源=作者 2026-10-08 定"主要出自于安全性判断，而不是正确性判断" |
+| v0.31.2 | yamlDump 降级分支带 lineWidth -1 | ^anc-exec-inputs-render 护栏①②与边角②三处改 `yamlDump(v, YAML_DUMP_OPTS)`;prompt.test 三条行为钉 + 一条源码对账钉。来源=hopissues/0127（hopkb 知识卡被折行改坏） |
+| v0.31.1 | reason 步 L4 清单按声明列 | ^anc-exec-tool-manifest-supply 第 5 条:reason 步 basic 不再恒列,与 [[step-dispatcher#^anc-exec-reason-tools]] 下发面同源;代码 prompt.ts L4 过滤 `!isReasonStep && basic`。来源=todo/0129 B8（批次二改码未改设计,review 面一抓） |
+| v0.31.0 | 输入材料渲染开放给 commit 自动研判 | renderInputEntries 导出、HOPSCHEMA_SEP 进对外符号表、buildInputMeta 改公开;研判材料的输入值与执行 prompt 同一 HopSchema 形态（来源=作者 2026-10-08 定 commit 批准改自动研判优先） |
 | v0.30.2 | 工具清单重试轮追加句按步骤类型分道补登 | ^anc-exec-tool-manifest-supply 新增第 6 面:retryRound 信号=重试轮且步骤类型不是 reason,reason 步重试轮清单按首轮形态出。代码零改动——行为随 step-dispatcher v0.40.0 已落地,本模块设计当时漏登（变速箱 qwen-flash 适配工程链 review 面一查出） |
 | v0.30.1 | L4 清单外挂件描述带 notes、返回行从 output_schema 渲染 | ^anc-exec-tool-manifest-supply 第 1 面补两条:外挂件返回形状在 Composite list() 渲染进 returns（渲染表权威在 tool-interface）;描述含换行时续行缩进 4 格。实撞=todo/0122（fc×qwen-flash 检索步清单里 web_search 描述只剩 tool_id 后缀、返回"未声明形状",A/B 带上 notes 首发调工具 53/90→67/90） |
 | v0.30.0 | 中文描述步骤的交付格式加半角冒号提示 | ^anc-exec-format-example-structural 下新增"半角冒号提示"段:描述含中文字符才加（不看 language 键）;判定时截掉引擎追加的 schema 反馈段与空响应提醒段（后者提成导出常量 EMPTY_RETRY_NOTE,dispatcher 引用）;标准态与修订短 prompt 同罩。实撞=glm-5.3-flash 全集 6 个任务 33 处全角冒号键行,ppt 格约 29 万 tokens 烧在重试上;作者拍=todo/decision/20260928-输出键行全角冒号.md |
@@ -68,15 +76,15 @@
 | v0.20.0 | L5 节点段序契约 | ^anc-exec-l5-task-first——任务先行/产出承接任务/材料垫后/格式短句化+工具清单挪 L4 前作环境背景段。实撞=作者两抓"任务描述不清晰""没说清楚怎么生成输出全靠猜"+Qwen3.8 七轮控制变量实验立据 |
 | v0.19.1 | L6 触发条款同步 0073 受众收窄口径等三件 | L4 对象/列表值递归 HopSchema 展开（每层每字段 `名: 类型 = 值`，解释项逐层在场）+inline $preview 通道扩对象档（hopissues/0064——JSON.stringify 与裸 YAML dump 均从值位绝迹） |
 
-**① 自身定位**：PromptAssembler 是 HopJIT 的上下文组装组件——把 ExecutionEngine 的运行时状态（Spec、步骤状态、变量、执行链）组装成 L0-L6 结构化上下文（AssembledContext），作为单步 LLM 调用的唯一 user message 来源。HopSpec 每步是独立 API 调用，无对话历史，AssembledContext 必须自包含地承载该步推理所需的全部信息。（解释性类比：类似编译器的代码生成阶段——把内部 IR/状态翻译成目标平台可执行的最终形态。）
+**① 自身定位**：PromptAssembler 是 HopJIT 的上下文组装组件——把 ExecutionEngine 的运行时状态（Spec、步骤状态、变量、执行链）组装成 L0-L5 结构化上下文（AssembledContext），作为单步 LLM 调用的唯一 user message 来源。HopSpec 每步是独立 API 调用，无对话历史，AssembledContext 必须自包含地承载该步推理所需的全部信息。（解释性类比：类似编译器的代码生成阶段——把内部 IR/状态翻译成目标平台可执行的最终形态。）
 
 ```
-struct: PromptAssembler
+HopType: PromptAssembler
   Id: prompt-assembler
   Fields: （无，通过依赖注入获取 ExecutionEngine 状态和 KnowledgeProvider）
   Specs:
-    - assemble_reason_context   # L0-L6 context 组装（reason 步骤）
-    - assemble_check_context    # L0-L6 context 组装（check 步骤）
+    - assemble_reason_context   # L0-L5 context 组装（reason 步骤）
+    - assemble_check_context    # L0-L5 context 组装（check 步骤）
     - assemble_act_context      # 执行指令组装（act 步骤）
     - assemble_adaptive_context # 失败分析 + 重规划上下文
 ```
@@ -95,19 +103,22 @@ struct: PromptAssembler
 
 | 符号 | 种类 | 出口文件 | 用途（谁依赖） | 稳定性 |
 |---|---|---|---|---|
-| `PromptAssembler` | 类 | prompt.ts | L0-L6 context 组装（engine 持有并调 assemble_*） | stable |
+| `PromptAssembler` | 类 | prompt.ts | L0-L5 context 组装（engine 持有并调 assemble_*） | stable |
 | `EngineAccessor` | 类型 | prompt.ts | PromptAssembler↔engine 的收窄接口边界（engine 实现它） | stable |
 | `formatPromptText` | 函数 | prompt.ts | AssembledContext → 完整 prompt 文本（engine 渲染 step_ready;renderPromptParts 的平文本拼接） | provisional |
-| `renderPromptParts` | 函数 | prompt.ts | L0-L6 单一渲染源（stable/volatile 两组区块——dispatcher system/messages 与 formatPromptText 共用,两线合一 ^anc-obs-record-at-boundary） | provisional |
+| `renderPromptParts` | 函数 | prompt.ts | L0-L5 单一渲染源（stable/volatile 两组区块——dispatcher system/messages 与 formatPromptText 共用,两线合一 ^anc-obs-record-at-boundary） | provisional |
 | `actRoleKind` | 函数 | prompt.ts | [act free] 角色档选择器（free→act_free/其余→act;engine hoplog 线+dispatcher 请求线共用,见 [[step-dispatcher#^anc-exec-act-free-role]]） | provisional |
 | `roleGuideText` | 函数 | prompt.ts | 角色档指引文本单档提取（dispatcher executeActWithTools system 尾块注入——standalone 真实请求的角色分道半边,同上契约） | provisional |
+| `renderInputEntries` | 函数 | prompt.ts | L4 输入材料 HopSchema 赋值形态渲染。v0.31.0 为 commit 自动研判材料导出;v0.32.0 起 commit 批准改为安全分析、不再读输入值,模块外暂无消费方,保留导出供后续需要同一渲染形态的调用点使用 | provisional |
+| `HOPSCHEMA_SEP` | 常量 | prompt.ts | HopSchema 条目名与类型之间的分隔符 `' % '`（dispatcher 渲染 commit 安全分析 prompt 的动作清单行时用,与执行 prompt 同一分隔符,[[step-dispatcher#^anc-exec-commit-analyzer]]） | provisional |
 | `formatHumanContext` | 函数 | prompt.ts | 人通道 context deflate（engine 渲染 paused） | provisional |
 | `stepDeliversReadTool` | 函数 | prompt.ts | 本步下发的工具面里有没有 read——inline 预览分道判定,resolveInputs 与 engine doc-ref 注入两个使用点共用（[[step-dispatcher#^anc-exec-llm-inline-context]] v3） | provisional |
 | `injectKnowledgeContext` | 函数 | prompt.ts | L2 知识检索注入（dispatcher 调 + 记 HopLog sources） | provisional |
 | `SCHEMA_KICK_MARKER` | 常量 | prompt.ts | schema 校验打回行内反馈标记——dispatcher 生产侧与短卷消费侧同源共享（^anc-exec-revision-short-weak 例外保真②,2026-09-18 review 抓两侧硬编码后提出） | provisional |
 | `buildTextToolCallHint` | 函数 | prompt.ts | 产出被 schema 打回时,识别最后一轮正文里疑似写成文字的工具调用并生成条件式附加提示（dispatcher 调——见 [[step-dispatcher#^anc-exec-text-toolcall-hint]]；识别器与标记常量留在 prompt.ts 内部） | provisional |
-| `ACT_EVIDENCE_GATE_PREFIX` | 常量 | prompt.ts | 执行证据机核拒收文案的开头——dispatcher 抛错时引用,L6 重试反馈靠它认出机核拒收、不套形态指引（两侧同源共享,见 ^anc-exec-l2c-retry-feedback 材料段"执行过程类失败"条,v0.27.0） | provisional |
+| `ACT_EVIDENCE_GATE_PREFIX` | 常量 | prompt.ts | 执行证据机核拒收文案的开头——dispatcher 抛错时引用,L5 重试反馈靠它认出机核拒收、不套形态指引（两侧同源共享,见 ^anc-exec-l2c-retry-feedback 材料段"执行过程类失败"条,v0.27.0） | provisional |
 | `EMPTY_RETRY_NOTE` | 常量 | prompt.ts | 空响应重发时追加在指令尾的提醒文案——dispatcher 重发时引用,半角冒号提示的"描述是不是中文"判定靠它切掉引擎自己追加的中文尾巴（两侧同源共享,见 ^anc-exec-format-example-structural "半角冒号提示"段,v0.30.0） | provisional |
+| `formatKnowledgeEntry` | 函数 | prompt.ts | @knowledge 单条知识的 yaml 条目渲染（`- 来源:` / `作用:` / `内容: \|`,作用句按来源类型给缺省句）——dispatcher lack_of_info 补检索追加处与 prompt.ts 四来源渲染同一渲染函数,两侧同形态（^anc-exec-knowledge-retrieval,2026-10-12 语义审计 #12） | provisional |
 
 > **内部（表外即内部）**：`BudgetConfig`/预算常量、各 `build*`/`reassemble*` 私有组装方法、`truncateToChars` 等 helper。
 
@@ -131,13 +142,13 @@ trait（按职责分两组）：
 
 **④ 核心 impl 的主要 HopSpec 逻辑**：
 ```
-# impl assemble_context（L0-L6 上下文组装——恒走全量组装,修订短 prompt 已废除见修订场景节废除记录）
+# impl assemble_context（L0-L5 上下文组装——恒走全量组装,修订短 prompt 已废除见修订场景节废除记录）
 2. [act] 组装 L0 世界观与区块地图（按步骤类型裁戒律）+ L1 任务契约（带受众定位句）
 3. [act] 组装 L2 知识（@knowledge 检索 + doc-ref，yaml 条目化渲染）
 4. [act] 组装 L3 轨迹与位置——依赖驱动树状展示 + 位置末行当前步骤本体
-5. [act] 组装 L4 输入材料（每变量元信息头+围栏；大值 $file 卸载）+ L5 当前节点（完整节点形态含输出声明）
-6. [act] 组装 L6 修正指令（重跑轮才有：上游反馈+重试反馈按三段结构渲染〔点名段/材料段/行动框架段,见 L5 渲染框架条款〕,基准走留存缺省;首跑空）
-7. [check] 总量超预算 → 按 L3迭代→L3进度→L2 顺序裁剪（L0/L1a/L5/L6 意见不裁剪;L6 基准超大走 $file 卸载）
+5. [act] 组装 L4 当前节点（五段：步骤行 / 本步操作指引 / 本步任务 / 本步要产出 / 本步输入材料〔每变量 HopSchema 赋值条目,大值 $file 卸载〕/ 交付格式）
+6. [act] 组装 L5 修正指令（重跑轮才有：上游反馈+重试反馈按三段结构渲染〔点名段/材料段/行动框架段,见修正指令渲染框架条款〕,基准走留存缺省;首跑空）
+7. [check] 总量超预算 → 按 L3迭代→L3进度→L2 顺序裁剪（L0/L1a/L4/L5 意见不裁剪;L5 基准超大走 $file 卸载）
    > 最小上下文（L0+L5+最小L4）仍超预算 → 返回 CONTEXT_OVERFLOW，交 Dispatcher
 ```
 
@@ -148,7 +159,7 @@ trait（按职责分两组）：
 概念权威 [[../concepts/HopSpec V3 Prompt组装参考#^anc-exec-prompt-audience]]。prompt 的唯一读者是**零先验、无状态、单次调用**的 LLM，每个区块必须自答三问（是什么/与你这步什么关系/怎么用）。落到渲染层的两条禁令：
 
 1. **人读形态不序列化**：spec 源文件里给作者/维护者看的内容不进 prompt——设计出处注记（`> 壳形态沿用 v1…设计权威 docs/design/…^anc-*`）、doc-ref 装配说明（"全局知识对所有步骤注入"）在渲染 L1 Constraints/Goal 时剥除（识别依据：`^anc-` 锚点引用、`[[…]]` 装配声明、`>` 引导的出处注记行）；
-2. **记账视角不外露**：错误码（CHECK_FAILED）、重试计数（"第 N 次"）、解析器调试信息（"命中标题：xxx"）不进任何区块正文——L6 修正指令剥记账框架（见该节）、L2 doc-ref 标题剥调试尾巴。
+2. **记账视角不外露**：错误码（CHECK_FAILED）、重试计数（"第 N 次"）、解析器调试信息（"命中标题：xxx"）不进任何区块正文——L5 修正指令剥记账框架（见该节）、L2 doc-ref 标题剥调试尾巴。
 
 **观测不变式**（与 [[spec-observability#^anc-obs-llm-response]] 对偶）：HopLog 出现 `llm:` 块 = 该步真实发生了 LLM 调用。body 直执步不记 `llm.prompt`——组装产物未发送就不落账，防制造执行通道假象。
 - 实撞：作者走查被"[ACT BODY]"prompt 误导质疑执行通道；豁免面=act/commit/check 三类 body 步——check 半边 2026-08-31 H3 补：check body 引擎消化零 LLM,复用模式曾被记完整 prompt 含判官角色档,probe 实锤观测误导,旧修只罩了 act/commit。
@@ -181,7 +192,7 @@ trait（按职责分两组）：
    - ④**你是谁**：只执行一个叶子步骤，指向 L5，本消息是全部信息；
    - ⑤**你的输出去哪**：机器解析成变量，对齐 L5 声明；
    - ⑥**区块地图**（见下条）；
-2. **区块地图在 L0 内给出且不迟到**（2026-08-30 作者抓地图落 L2 之后"读完 L0 依然一头雾水"后改）：静态列 L0-L6 各一句话定性,本次缺席的区块行内标"（本次无）"——**静态地图+缺席标注**取代按实有动态生成;地图不撒谎（缺席有标注）与地图不迟到（恒在 L0 内）同时满足。
+2. **区块地图在 L0 内给出且不迟到**（2026-08-30 作者抓地图落 L2 之后"读完 L0 依然一头雾水"后改）：静态列 L0-L5 各一句话定性,本次缺席的区块行内标"（本次无）"——**静态地图+缺席标注**取代按实有动态生成;地图不撒谎（缺席有标注）与地图不迟到（恒在 L0 内）同时满足。
    - **渲染位置随之迁稳定面**（L0 全段含地图皆静态,入 stableSections——原动态地图挂易变面首致物理落点在 L2 后,是迟到病根）；
    - **修订场景地图随场景裁剪**（2026-08-31 review 抓回归——修订短 prompt 复用公共 L0 时静态七层地图列着 L1/L3/L4,而这些区块在短 prompt 里按 ^anc-exec-revision-prompt 刻意不存在,且短 prompt 无勘误行机制:地图撒谎。修法=buildL0Worldview 按场景出图:revision 档地图只列实有区块〔L0/上一版基准/L6 修正工单/修订规则〕——最小修,短 prompt 构成本体不动〔其存废与 Constraints 是否加回归 F15 作者对齐,修复不夹带立场〕）；
 3. **L0 恒定化——类型专属指引全部挪 L4 就地渲染**（2026-09-01 作者两拍："现在 L0 根据不同的节点，有不同的表述，是不是对 llm cache 不友好"+"具体要做的事情应该挪到 L4, 在 L0 泛泛的说一下就行"——原 roleGuideOf 按 step_type 出七档各含具体操作指引且整体进稳定块打 cache 断点，步骤类型一换稳定块前缀变形 cache 全失：省当次 token 的裁剪砸了跨请求缓存，省小头砸大头。本条是 2026-08-31 check 细则挪 L4 的同方向收尾——那次只挪了 check 一档）：
@@ -213,13 +224,13 @@ trait（按职责分两组）：
    - **供给侧的另一半在同批补齐**：standalone 工具面新增 `run_script`（契约 [[tools/run-script]]）——0110 的病有两个面，教学面（本条：不教没有的东西）与供给面（run_script：把真能力接上）各治一半，两条都落地这张卡才算销；
    - **实现形态**：`roleGuideOf(stepType, allowShellCommands)` 第二参布尔——`renderPromptParts` 从 `ctx.tool_manifest` 的档位算（指引档=true），`roleGuideText(stepType, allowShellCommands)` 由 dispatcher 传（standalone 恒 false——它手上恒有注册面）。两线仍同源，条件化参数一路穿到底，不在任一线上另写一份文字。
 
-**正反例**：reason 步 prompt 含世界观四句与全区块地图、不含 Bash 纪律=正；开场路由表列 L1-L6 六层而实际含 L2 知识区块未列=反（地图撒谎）；工具清单只有文件读写十一件而角色档教 Bash 命令纪律=反（教学许诺了供给面没有的能力，todo/0110 实撞形态）；standalone 的步骤挂了 `run_script` 而角色档教起管道与链式=反（`run_script` 的接口写不出管道，同一种许诺换了个工具名）。
+**正反例**：reason 步 prompt 含世界观四句与全区块地图、不含 Bash 纪律=正；开场路由表列 L1-L5 五层而实际含 L2 知识区块未列=反（地图撒谎）；工具清单只有文件读写十一件而角色档教 Bash 命令纪律=反（教学许诺了供给面没有的能力，todo/0110 实撞形态）；standalone 的步骤挂了 `run_script` 而角色档教起管道与链式=反（`run_script` 的接口写不出管道，同一种许诺换了个工具名）。
 
 ---
 
 ## 关键决策【决策】
 
-### 决策 1：层序 L0-L6（2026-08-24 作者定重编，取代旧 6 层）
+### 决策 1：层序 L0-L5（2026-08-24 作者定重编 L0-L6 取代旧 6 层;2026-08-31 输入材料并入当前节点、层号前移为 L0-L5——下表 L4 两行记这次合并）
 
 | 层 | 名称 | 承载内容 | 决策理由 |
 |----|------|---------|---------|
@@ -280,10 +291,10 @@ trait（按职责分两组）：
 
 （维持 v0.5 语义，层名按新序）复用模式下每步 `step_ready.context` 把 L1 静态段 + L2 spec 级逐字节重发，跨步不变却每步重发。`context_mode` 可配置精简：
 
-- **`full`（默认）**：每步全量渲染 L0-L6，完全自包含——compact / 跨进程 resume 不断链；
-- **`minimal`（opt-in）**：非首步跳过跨步不变段（L1 的 Goal/Types/Outputs/骨架 + L2 spec 级），保 L0 世界观（轻量恒定）、L1 Constraints（安全约束 ~100B 便宜保险）、L3 位置、L2 步骤级、L4/L5/L6。首步仍全量。首步边界=`hasAnyDone`。
+- **`full`（默认）**：每步全量渲染 L0-L5，完全自包含——compact / 跨进程 resume 不断链；
+- **`minimal`（opt-in）**：非首步跳过跨步不变段（L1 的 Goal/Types/Outputs/骨架 + L2 spec 级），保 L0 世界观（轻量恒定）、L1 Constraints（安全约束 ~100B 便宜保险）、L3 位置、L2 步骤级、L4/L5。首步仍全量。首步边界=`hasAnyDone`。
 
-精度链：`HOPJIT_CONTEXT_MODE` 环境变量 > StateFile.context_mode > 默认 `full`。自包含权衡与"为何不做发一次跳过"论证同 v0.5（minimal 假设 CC 连续记得首步静态段，compact/resume 场景用 full）。
+精度链：`HOPJIT_CONTEXT_MODE` 环境变量 > StateFile.context_mode > 默认 `full`。环境变量设成空串视同未设,由下一级决定——CLI 与 MCP 驱动工具取值都用"非空才算数"的判断（`||`,不用 `??`）:两个入口返回同一份响应是契约,空串在一边挡住 `--context-mode` 参数、在另一边不挡,同一 run 换入口就换了渲染模式（2026-10-07 todo/0146 review）。自包含权衡与"为何不做发一次跳过"论证同 v0.5（minimal 假设 CC 连续记得首步静态段，compact/resume 场景用 full）。
 
 ---
 
@@ -311,17 +322,17 @@ doc-ref 是 L2 知识的**确定性变体**（概念层 2026-08-24 起归属 L2�
 （维持 v0.5 分区原则，层名更新）prompt 按**稳定面在前、易变面在后**排布——
 
 - **稳定面**（同 run 逐字节恒定）：L0 世界观（世界观四句+戒律——区块地图含动态成分时拆到易变面首）+ workspace_dir + L1（Goal/Constraints/Types/Outputs/骨架）+ L2-spec（spec 级知识/doc-ref/hop_env 值表）；
-- **易变面**（随步/随轮变化）：L0 区块地图（若动态）+ L2-step（步骤级知识/doc-ref）+ L3 轨迹与位置 + L4 输入 + L5 节点 + L6 修正指令（垫尾——近因效应+缓存双收益）；
+- **易变面**（随步/随轮变化）：L0 区块地图（若动态）+ L2-step（步骤级知识/doc-ref）+ L3 轨迹与位置 + L4 当前节点（含输入材料）+ L5 修正指令（垫尾——近因效应+缓存双收益）；
 - 字段拆分沿用：task_context / position_context / spec_knowledge_context / knowledge_context 分立。
 
 协议中立：分区让 OpenAI 自动前缀缓存直接受益；Anthropic 显式断点见 [[step-dispatcher#^anc-exec-cache-control]]。**prompt 文本不是对外契约**——重排改变 hoplog llm.prompt 与测试基线属预期代价（作者确认 2026-08-16；2026-08-24 层序重编同此）。
 
-## AssembledContext（L0-L6 组装结果）【契约】 ^anc-exec-prompt-assembly
+## AssembledContext（L0-L5 组装结果）【契约】 ^anc-exec-prompt-assembly
 
 层级编号对齐概念层（[[../concepts/HopSpec V3 Prompt组装参考#^anc-exec-prompt-layers]]）。
 
 ```
-struct: AssembledContext
+HopType: AssembledContext
   Id: assembled-context
   Fields:
     - task_context % text        # L1：任务契约——Goal + Constraints + Types + Outputs + Steps 骨架（跨步恒定——稳定面,见 ^anc-exec-cache-affinity）
@@ -332,17 +343,17 @@ struct: AssembledContext
     - hop_env_table % text       # 可选。L2 hop_env 值表（^anc-exec-hop-env-table）
     - progress_summary % text    # L3 轨迹半边：根到当前步骤的树状结构（branch 折叠+命中标记）
     - iteration_history % text   # 可选。L3 续：loop 迭代历史
-    - retry_feedback % text      # 可选。L6：重试反馈（人话修订工单形态,见 L6 节;激活态 on_fail 子树内步骤恒缺席——掐口见 ^anc-exec-onfail-context）
+    - retry_feedback % text      # 可选。L5 修正指令：重试反馈（人话修订工单形态,见修正指令节;激活态 on_fail 子树内步骤恒缺席——掐口见 ^anc-exec-onfail-context）
     - retry_context % yaml       # 可选。L5 打回轮供给——{rejected_by, check_failed_origin, prior_outputs}（来源 check 点名+核对象清单+留存产出,见 ^anc-exec-l2c-retry-feedback;2026-09-06 review 补登——字段随 2026-08-31 批入代码,本表漏行）
-    - upstream_feedback % text   # 可选。L6：上游反馈（call 边界传递,先于重试反馈渲染）
+    - upstream_feedback % text   # 可选。L5 修正指令：上游反馈（call 边界传递,先于重试反馈渲染）
     - tool_manifest % text       # 可选。L4 工具清单（无 body act 的实发工具面,见 ^anc-exec-tool-manifest-supply;2026-09-06 review 补登——字段随 0054 批入代码,本表漏行）
     - shell_commands_available % bool  # 可选。本步工具面里有没有"能自由写命令行"的工具——角色档 Bash 纪律句按它条件化（^anc-exec-l0-worldview-impl 第 6 条,todo/0110 候选 A）。复用模式（引擎无注册面,执行者是自带 Bash 的 caller）=true;standalone=false,挂了 run_script 也是 false
     - fail_context % text        # 可选。L3 尾：on fail 兜底步失败上下文（仅激活态 on_fail 子树内步骤,见 ^anc-exec-onfail-context）
     - inputs % yaml              # L4：输入材料——← var 实际值字典,null = None（渲染契约 ^anc-exec-inputs-render）
     - input_meta % yaml          # L4：输入元信息——{名: {type, description, type_closure?}}（组装期从声明处预计算:产出步 + → 注释/文件头 Inputs 说明——渲染层保持纯函数不回访 engine;type_closure 可选=该变量声明类型的字段类型闭包（类型名→字段名→字段类型,collectTypeDeclClosure 算好带来）,对象值递归渲染时逐层查字段声明类型用）
-    - node_decl % yaml           # L5：当前节点声明形态——{step_id, step_type, summary, input_names}（渲染层拼节点行与 ← 清单用;output_schema 已单列）
-    - instruction % text         # L5：执行说明正文（节点行/←/→ 由渲染层按 node_decl 补齐,见 ^anc-exec-l5-node-impl）
-    - output_schema % [OutputDecl]  # L5：输出声明——+ → 类型结构（渲染进 L5 节点内,不再独立成层）
+    - node_decl % yaml           # L5：当前节点声明形态——{step_id, step_type, summary, input_names}（渲染层拼步骤行用;output_schema 已单列）
+    - instruction % text         # L5：执行说明正文（渲染为「本步任务」段;步骤行由渲染层按 node_decl 补齐,见 ^anc-exec-l5-node-impl）
+    - output_schema % [OutputDecl]  # L5：输出声明——渲染为「本步要产出」段的 `- 名（类型）——生成指引` 条目与交付格式例（渲染进 L5 节点内,不再独立成层）
     - revision_short % bool        # 可选。弱模型档修订短卷标志（^anc-exec-revision-short-weak——short 档×reason 打回重试轮组装期置位,渲染层见之走短卷分支;2026-09-18 review 面一抓 struct 漏行补——本表第三次同型漏,新增字段本表同批登为执行义务）
     - constraints_text % line      # 可选。L1 Constraints 单独抽出（经 stripAssemblyNotes 剥装配注记——短卷保留安全红线,其余 L1 撤下;与 revision_short 成对在场）
 ```
@@ -386,8 +397,8 @@ trait: OnFailContextSupply
     - 激活态 on_fail 子树内的步骤,上下文多一段"此前失败情况"（哪步/第几轮/原因文本,人话渲染）
   Constraints:
     - 判定=步骤祖先链上有激活态（onFailActive）的 on_fail 节点;无则恒不供给（非兜底步零影响零成本）
-    - 数据源双形态合并,盖全两类失败场景：retryHistory（容器有重试历史——**近 4 轮窗口**的 attempt+failure_reason,更早轮次不渲染〔与 L6 修正指令历史条数封顶同哲学:体量靠条数封顶〕）∪ stepFailReasons（容器内 failed 态子步的 reason——retry=0 与确定性失败场景 retryHistory 为空,真机探针实证,单靠它必漏;耗尽轮失败同样只在此源——耗尽时直接触发激活不入 retryHistory,review 变异实证）;两源都空时供给"（容器失败,无失败详情记录）"兜底行,不静默缺席。渲染参数两件：单条原因超 **2000 字符**截断（与 L6 历史行 4000 是两个阈值,不混用）;源②与源①按**首 80 字符包含**判重去重（同因文本后到行被丢——去重面丢"哪步"信息属已知取舍,以免同一判词重复轰炸）。升层指引记录（借 retryHistory 载体、【升层指引】前缀）渲染时行首定性词为"升层指引"不作"重试失败"——问路不是失败,行首定性跟随记录本性
-    - 渲染落 L3 轨迹区块尾部——失败史是"已发生的事实",与轨迹同语义;不落 L6（L6 是修正指令语义:兜底不是修正是善后,措辞错位——L6 的行动框架"逐条落实意见"对兜底步是误导）;不复用 buildRetryFeedback（打回工单形态,对修正者说话）。**同一误导的另一半也要掐**（review 面二实抓:契约首版只管住 fail_context 自己不进 L6,retry 耗尽主场景里既有 retry_feedback 通道照样给兜底步递 L6 打回工单,"逐条落实"与本段"不要试图修复"同屏打架）：**激活态 on_fail 子树内的步骤不渲染 L6 修正指令**——组装掐口对 getOnFailContext 非空的步骤 retry_feedback 置空,失败信息只经 fail_context 单通道、单措辞供给
+    - 数据源双形态合并,盖全两类失败场景：retryHistory（容器有重试历史——**近 4 轮窗口**的 attempt+failure_reason,更早轮次不渲染〔与 L5 修正指令历史条数封顶同哲学:体量靠条数封顶〕）∪ stepFailReasons（容器内 failed 态子步的 reason——retry=0 与确定性失败场景 retryHistory 为空,真机探针实证,单靠它必漏;耗尽轮失败同样只在此源——耗尽时直接触发激活不入 retryHistory,review 变异实证）;两源都空时供给"（容器失败,无失败详情记录）"兜底行,不静默缺席。渲染参数两件：单条原因超 **2000 字符**截断（与 L6 历史行 4000 是两个阈值,不混用）;源②与源①按**首 80 字符包含**判重去重（同因文本后到行被丢——去重面丢"哪步"信息属已知取舍,以免同一判词重复轰炸）。升层指引记录（借 retryHistory 载体、【升层指引】前缀）渲染时行首定性词为"升层指引"不作"重试失败"——问路不是失败,行首定性跟随记录本性
+    - 渲染落 L3 轨迹区块尾部——失败史是"已发生的事实",与轨迹同语义;不落 L5（L5 是修正指令语义:兜底不是修正是善后,措辞错位——修正指令的行动框架"逐条落实意见"对兜底步是误导）;不复用 buildRetryFeedback（打回工单形态,对修正者说话）。**同一误导的另一半也要掐**（review 面二实抓:契约首版只管住 fail_context 自己不进 L6,retry 耗尽主场景里既有 retry_feedback 通道照样给兜底步递 L6 打回工单,"逐条落实"与本段"不要试图修复"同屏打架）：**激活态 on_fail 子树内的步骤不渲染 L6 修正指令**——组装掐口对 getOnFailContext 非空的步骤 retry_feedback 置空,失败信息只经 fail_context 单通道、单措辞供给
     - 措辞对善后者说话："此前失败情况（供你善后引用,如实转述,不要试图修复）"——兜底步的职责边界（清理/降级/上报）由 spec 作者的步骤描述定,供给段不越位指挥。段头这句是使用指引不是事实陈述,与 L3"只展示已发生的事实"的字面有张力——豁免理由:它是区块自答"怎么用"的元信息（受众公理三问之三）,与 L4 输入材料的"元信息头"同性质,不算把指令混进事实
     - 载体=AssembledContext 可选字段 fail_context?: string——复用模式 step_ready 载荷与 standalone renderPromptParts 同源双吃（与 tool_failure 通道"两模式同点"同构;协议向后兼容:driver 不读新键零影响）
 ```
@@ -396,9 +407,11 @@ trait: OnFailContextSupply
 
 **压缩策略**（维持 v0.5）：依赖节点全文+每层近 5 同级全文取并集；其余 `✓ step_id: output_names` 单行；嵌套 loop 最内层详情、外层折叠进容器行。
 
-## L4 输入材料渲染【契约】 ^anc-exec-inputs-render
+## L4 当前节点之一：本步输入材料渲染【契约】 ^anc-exec-inputs-render
 
 概念权威 [[../concepts/HopSpec V3 Prompt组装参考#^anc-exec-inputs-render]]。渲染要件（`formatPromptText` L4 段）：
+
+**commit 批准不再使用本渲染**（v0.32.0）。v0.31.0 曾让 commit 自动研判材料里的输入值走 `renderInputEntries`;2026-10-08 commit 批准改为安全分析（[[exec-engine#^anc-exec-commit-approval]]）,分析材料只有 body 与动作清单,不含输入值,这个使用点撤掉。`PromptAssembler.buildInputMeta` 保持公开成员,取法不变。
 
 **0. 分隔符恒 `%`，不得用 `:`**（2026-09-22 作者定根因"`:` 有二义性，hopschema 不应该用 `:` 和 yaml 冲突了"）。渲染面每一行的名与类型之间恒写 ` % `（前后各一个半角空格）：`名 % 类型 = 值` / `名 % 类型 =|（N 字符）` / 嵌套结构头行 `名 % 类型`。
 
@@ -421,7 +434,7 @@ trait: OnFailContextSupply
            basis % text = '第十三条原文'
      ```
    - **字段类型来源**：变量声明类型能解析到 Types 声明（TypeDecl 闭包，组装期经 `collectTypeDeclClosure` 算好随 `input_meta.type_closure` 带给渲染层——渲染层保持纯函数）就用声明字段类型；解析不到（无声明/yaml 通用型/字段超集）按运行时值推断：boolean→bool、整数→int、其余 number→float、单行短字符串→line、其余字符串→text、嵌套结构递归。推断类型是给读者的标注，不做校验，推错无害；
-   - **护栏与兜底**：两档护栏形态不同——①嵌套超 6 层：该子树降级 `yamlDump` 块并注明（防病态深嵌套烧栈）；②单值渲染超 INLINE_PREVIEW_MAX（20000）字符：整值换 `yamlDump` 块形态并注明（**不减量**——体量控制归上游 deflate/$preview 通道，此档只管换形态防病态 HopSchema 展开）；
+   - **护栏与兜底**：两档护栏形态不同——①嵌套超 6 层：该子树降级 `yamlDump` 块并注明（防病态深嵌套烧栈）；②单值渲染超 INLINE_PREVIEW_MAX（20000）字符：整值换 `yamlDump` 块形态并注明（**不减量**——体量控制归上游 deflate/$preview 通道，此档只管换形态防病态 HopSchema 展开）。**两档与下条②的 `yamlDump` 一律带 `YAML_DUMP_OPTS`（lineWidth -1 / noRefs）**——多行字符串出字面块逐行原样;缺省参数会折行并把段间空行翻倍,模型照抄写回即改坏原文（hopissues/0127 hopkb 8 张知识卡实损,2026-10-08 修;规则权威 [[shared-providers#^anc-config-yaml-dump-opts]]）；
      - 渲染异常兜底回 `JSON.stringify` 单行——故障路径不是正常形态，不炸渲染即可；兜底自身的 `JSON.stringify` 必须在 try 内做（循环引用值 stringify 自身就抛——review 抓原实现在 try 之前先 stringify，声称罩循环引用的兜底实际够不着），stringify 也抛时渲染安全字面 `= [非可序列化值]`；
    - **边角行为四件**（如实登记，非另立形态）：
      - ①null/undefined 字段 `= None` 接法（与顶层 null 同字面）；
@@ -437,15 +450,15 @@ trait: OnFailContextSupply
 
 正反例：两个多行变量各自围栏、边界机械可辨=正；`skill_content: ---\nname:...` 平铺接 `prev_header: title:...`=反（旧形态）。
 
-## L5 当前节点【契约】 ^anc-exec-l5-node-impl
+## L4 当前节点【契约】 ^anc-exec-l5-node-impl
 
 概念权威 [[../concepts/HopSpec V3 Prompt组装参考#^anc-exec-l5-node]]。渲染要件：
 
-1. **完整节点形态**：区块题"当前节点（你要执行的步骤）"；首行=步骤行 `<step_id> [<step_type>] <summary>`；次行 `- ← <名清单>（实际值见 L4）`（无输入省略）；再 `+ → <名> % <类型>  # <说明>` 逐行，尾缀定位句"← 你的输出：字段名类型照此，不得多不得少"；后接执行说明正文（`>` 全文）；
+1. **完整节点形态（人话标签——2026-08-31 作者抓"解释很丑,别用←→"后，`←`/`→` 源码记号不外发给执行者）**：区块题"当前节点（你要执行的步骤）"（层号前移后渲染为 `═══ L4. 当前节点（你要执行的步骤） ═══`，见上方层表 L4 行）；首行=步骤行 `<step_id> [<step_type>] <summary>`；步骤行之后先插"─── 本步操作指引 ───"子块（按步骤类型取角色档，^anc-exec-l0-worldview-impl）；随后按 ^anc-exec-l5-task-first 的段序渲染四个带加粗段题的段：`**本步任务**`（=执行说明正文 instruction）→ `**本步要产出**`（每字段一行 `- <名>（<类型>）——<生成指引>`，生成指引取声明的 `#` 说明，没有说明时写"按任务描述产出"；无输出声明整段省略）→ `**本步输入材料**`（HopSchema 赋值形态条目，渲染契约 ^anc-exec-inputs-render；无输入整段省略）→ `**交付格式**`（用本步真实字段名现生成的 YAML 例 + 短句规则，其中一条是"字段名、类型、数量恰如上方'本步要产出'清单——不得多也不得少"）。旧形态的 `- ← <名清单>` 输入行、`+ → <名> % <类型>  # <说明>` 输出行与"← 你的输出"定位句都不再渲染：输入名单由材料段条目自带，输出声明由产出段承接，定位句的内容并入交付格式规则；
 2. **旧 L6 输出约束区块废除**：output_schema 渲染进本区块（引擎校验逻辑不变，只改渲染归属）；
 3. **body 步骤**：ACT BODY 段照旧附于执行说明内（"严格按此 hop_python 逻辑执行"）——仅无 body 回退 LLM 循环的 act 才实际发送本 prompt；带 body 步不发送也不落账 llm.prompt（观测不变式）。
 
-正反例：4.2 的 L5 首行 `4.2 [reason] 生成/修订头部契约` 带 ← 与 + → 齐全=正；L5 只有裸描述正文、输出声明在别处=反（旧形态）。
+正反例：4.2 的节点区块首行 `4.2 [reason] 生成/修订头部契约`，其后四个段题齐全、产出条目形如 `- h（yaml）——契约`=正；渲染出 `- ← a` / `+ → h` 这类箭头行=反（旧箭头形态，tests/prompt.test.ts「正例：首行步骤行含[类型],输入/输出人话标签在场且 ←/→ 源码记号不外发」的变异实证：渲染改回箭头该例必红）；只有裸描述正文、输出声明在别处=反（更早的旧形态）。
 
 ### 节点段序=任务→产出→材料→格式,产出承接任务【契约】 ^anc-exec-l5-task-first
 
@@ -537,7 +550,7 @@ trait: OnFailContextSupply
    - 渲染范围：仅无 body 的 act 步渲染（通道承接面所在——代码判 `stepType !== 'commit'`，但清单只对无 body act 组装，函数内 commit 分道系防御性残留：B7 error 后无 body commit 生产不可达，见 [[llm-error-handling]] 台账 S1 废止记录），通道指引档（复用模式）不渲染此句（复用模式的对应教条在 driver step-execution-rules，caller 经 `--failure`/tool_failure 键承载——两载体同批补自救优先半句）；
    - 滥用防线不受影响：谎报判据"报了 tool_failure 但该步 tool 块零 failure"照旧成立（自救的失败调用同样入 tool 块，对账面只增不减）。
 
-5. **reason 步清单同供**（2026-09-01 作者抓"这个教学缺口就该补——留着过年?"后即补）：L4 清单组装条件扩 reason（仅 standalone——`getToolDefs()` 有注册面才组，复用模式 reason 不渲染指引档：caller 的 reason 自带工具面，教条归 driver 文件既有两处）；渲染内容与无 body act 全同构（basic 恒列+special 按节点声明+调用方式行+tool_failure 教条+work_zone 写盘行——reason 有文件工具面，写域同款）。
+5. **reason 与 check 步清单同供**（2026-09-01 作者抓"这个教学缺口就该补——留着过年?"后即补 reason;2026-10-11 todo/0161 check 并入,作者定"check 工具可能要读文件,留个口子"）：L4 清单组装条件扩 reason 与无 body 的 check（仅 standalone——`getToolDefs()` 有注册面才组，复用模式不渲染指引档：caller 自带工具面，教条归 driver 文件既有两处）；渲染内容与无 body act 同构,只差 basic 一项：**act 步 basic 恒列 + special 按节点声明;reason 与 check 步 basic 与 special 一律按声明列**（[[step-dispatcher#^anc-exec-reason-tools]] 2026-09-18 修订后 reason 全按声明下发——`reason tools: read` 只下发 read,清单若仍列全部 basic 就与下发面失同源;todo/0129 B8 补齐;check 同一过滤,代码 prompt.ts L4 过滤 `(!声明制步骤 && basic) || grantAll || 声明命中`,声明制步骤=reason 或 check）;其余（调用方式行+tool_failure 教条+work_zone 写盘行——有文件工具面，写域同款）全同。零声明的 reason / check 不组清单（请求 tools 为空,清单也不渲染,与下发面同源）。
    - 缺口病理：^anc-exec-reason-tools 落地时只接了下发面〔dispatcher 经 API tools 参数把工具给了 reason〕没接供给面〔L4 清单组装条件写死 `act && !body`〕：standalone reason 的 prompt 零工具清单零 tool_failure 教条，模型有工具可用却不知道有什么、怎么调、失败了怎么办——"清单与下发面同源"承诺（本锚第 1 条）对 reason 落空，coffee-week 实抓形态的半边复发；reason 检索故障时无人教出口=硬凑产出静默幻觉，恰是 tool_failure 线要治的病。
 
 6. **重试轮追加句按步骤类型分道**（执行证据机核的第二个使用点落在本模块,契约权威 [[step-dispatcher#^anc-exec-act-evidence-gate]]"适用范围"段与"随批半件"段）：清单头的"任务不需要工具时严格禁止调用"之后,重试轮追加一句"但本轮带着修复反馈——反馈要求修改盘面的,必须真调工具落实……另起一行顶格写 `no_change: 原因`"。这句只对 act 步渲染：
@@ -548,9 +561,9 @@ trait: OnFailContextSupply
 
 正反例：清单每件带 `返回:` 行且 act 步头部有 work_zone 写盘行=正；只有参数无返回形状、或 LLM 写文件撞 WORK_ZONE_ONLY 后 prompt 里找不到合法写盘位置=反（后者即 0056 实撞形态）；standalone reason 步 prompt 含工具清单与 tool_failure 教条=正、零清单（下发面有工具供给面无字）=反（第 5 面实撞形态）；复用模式 reason 步不渲染指引档=正。
 
-## L6 修正指令【契约】 ^anc-exec-l2c-retry-feedback
+## L5 修正指令【契约】 ^anc-exec-l2c-retry-feedback
 
-> 锚名沿革：锚 id 保留 `anc-exec-l2c-retry-feedback`（五层链稳定标识不因区块改名断链），语义自 2026-08-24 起=L6 修正指令。
+> 锚名沿革：锚 id 保留 `anc-exec-l2c-retry-feedback`（五层链稳定标识不因区块改名断链），语义自 2026-08-24 起=修正指令区块（当时编号 L6,2026-08-31 层号前移为 L5）。
 
 - **触发条件**：本步是重跑参与者（判据权威=exec-engine 受众收窄条款,hopissues/0073——本步 step_start≥2 次,或本步自己有失败记录,或本步有 escalate 升层史;三者皆无=本步纯首跑不渲染,**即使所在容器有 retry 历史**;**容器在 loop 内时按轮生效**（todo/0107,2026-09-24——权威 [[exec-engine#^anc-exec-retry-feedback-iter-scope]]）:只取本轮起点之后写入的失败记录,三项判据只数本轮起点之后的事件;本轮起点只由 loop 轮进划——外层容器重试把内层 loop 重新进入不算新一轮,重建前被打回过的意见照旧列出;前几轮的记录与事件一概不算,新一轮里的步骤不渲染前几轮的反馈,打回轮基准 prior_outputs 随之不供给——旧口径"位于重试中容器内即渲染"正是 0073 实撞的受众错位:容器内首次执行的无关步骤被灌 stale 打回工单。注意两个"首跑"的区分:本条判的是**本步**首跑,与整容器首跑是两回事）。
   - **check 与 commit 步恒不渲染 L5——retry 与 upstream 两半边同掐**（check=2026-08-31 作者定 A 案;commit=同日 S2 补掐;upstream 半边=同日 H1 补掐）。打回轮恒供给（rejected_by 点名/prior_outputs 基准）同随 L5 对 check 步不渲染；
@@ -561,7 +574,7 @@ trait: OnFailContextSupply
 - **渲染框架（2026-08-31 全 HopSchema 化重写——作者三抓:①"你上一轮的产出"误导〔多步骤容器里重跑的当前步未必是被打回产出的产出者〕改泛指"上一轮的产出";②三段堆砌"被打回"重复两遍、基准值 """ 围栏与全文格式体系脱节——"写的很乱,值也应该用 hopschema 方式来展示";③"打回意见也应该是 hopschema 方式展示"。2026-08-24 原四要素语义全保留,形态收拢为三段、值全走 HopSchema 条目）**：区块题"修正指令（本轮必须逐条落实）"。三段结构：
 
   1. **点名段**（一句话,打回事实唯一陈述位）："上一轮的产出被步骤 <check步id>（<summary>）核验打回；本次核验看的是: <该 check 的 ← 输入变量名清单>"——主语恒"上一轮的产出"不用"你"（误导当前步）;来源步 id 与核对象清单按 R3 围栏取（见下条）;点名条件不满足时（R3 围栏任一道不过）点名段整句不渲染——宁缺毋滥,不点错名,也不留无信息的泛指句;
-  2. **材料段**（HopSchema 条目组,与 L4 输入材料同构——短值 = 后/长值 =| 缩进块,读者一套格式认知读全文）：
+  2. **材料段**（HopSchema 条目组,与 L4 本步输入材料同构——短值 = 后/长值 =| 缩进块,读者一套格式认知读全文）：
      - `- 上一轮产出.<变量名>: <类型> =|（N 字符）  # 本轮修改的基准` + 缩进块值（当前重跑步骤输出声明的留存值逐条,多输出逐条目;≤500 字 inline,超阈 $file 卸载路径+节选,卸载不可用如实全文——体量分档沿革与留存缺省机制见下"基准取用"条）;
      - `- 打回意见: text =|（N 字符）  # 逐条落实,一条不许漏` + 缩进块值（意见原文——剥 CHECK_FAILED 前缀与"第 N 次"计数框架〔记账词汇零行动价值且把修订单带歪成"你出了个错"〕;累计史在场时并入意见值前部（"此前已被打回过的意见（都要保持落实,不许改好又改回去）"引导行+逐条列出——独立条目形态曾议,并入实现更简且语义同块;机械错误与网络类失败的分层措辞不变——非 CHECK_FAILED 起因不进"打回意见"条目,按既有形态指引/照常执行措辞走）;
      - **机械错误原因里带"正文疑似工具调用"附加提示时的渲染**（todo/0110 probe 3,来源 [[step-dispatcher#^anc-exec-text-toolcall-hint]]）：算子级重试用完时 dispatcher 在失败原因末尾追加一段以 `TEXT_TOOLCALL_HINT_MARKER` 标记行起头的条件式提示。
@@ -580,7 +593,7 @@ trait: OnFailContextSupply
        - 非 CHECK_FAILED 原因的分派顺序（HopSop）：
 
          ```
-         # Spec: L6 非判定打回原因的渲染分派
+         # Spec: L5 修正指令非判定打回原因的渲染分派
          Id: l6-noncheck-reason-render
          Inputs:
          - reason % text  # getActiveRetryFeedback 的当前失败原因原文
@@ -603,9 +616,9 @@ trait: OnFailContextSupply
   - ②本次 getActiveRetryFeedback 的 reason 本身以 CHECK_FAILED 起因（机械失败/网络失败轮点名整个不渲染——同屏"被步骤 X 打回"与"引擎错误照常执行"互相矛盾的旧形态废除）。
 - **基准取用**（留存缺省+声明覆盖,机制不变）：缺省=重试回滚不清变量的留存值（渲染器取当前重跑步骤输出声明的留存值,多输出逐条）;**本步输入被外面重做过就不给基准**（todo/0107,2026-09-24 作者拍乙案"看输入有没有被重做"）：自本步上一次完成（事件流里本步最后一条 step_done）之后,本步某个输入变量的产出步骤又完成过一次,且那个产出步骤不在本步最近的重试容器（subtask/case）子树内 → 整个基准不渲染。理由：基准是"在上一版基础上改"的那一版;输入在容器外被重做（如外层容器重试把草稿整份重建）,上一版就是对着旧材料做的,拿来当基准会把旧材料上的修改搬到新材料上（实撞形态：重建后新草稿发送挪到第 4 步,基准里旧修错记录"第3步加发送前人工确认"被照抄回去）。容器内的重做（如同一修检事务里体检步每轮重跑）不算,基准照给。产出步骤按 spec 静态查找：输出声明里有同名变量的步骤;本步从未完成过、或输入找不到产出步骤（如 for-each 循环变量）→ 不据此掐基准。体量分档 500 chars inline/超阈卸载/卸载不可用如实全文（作者两定沿革:先"阈值小点别淹没工作"再"2000 太多直接降 500"）。
 - **渲染位置**（维持 2026-08-23 作者定）：prompt 最尾（近因效应+语义归位+缓存三收益）。上游反馈先、重试反馈后。
-- **L6 上游反馈（call 边界传递,D41）**：引擎持 `upstreamFeedback`（call 站点发起子 runSpec 前读父层 getActiveRetryFeedback 写入），非空即渲染"上游修正意见"条目（先于本地打回意见，全 HopSchema 化批改条目形态），对子 spec 除 check/commit 外全部步骤注入（H1——判官与不可逆步不吃历史意见,受众分道同 retry 半边）。
+- **L5 上游反馈（call 边界传递,D41）**：引擎持 `upstreamFeedback`（call 站点发起子 runSpec 前读父层 getActiveRetryFeedback 写入），非空即渲染"上游修正意见"条目（先于本地打回意见，全 HopSchema 化批改条目形态），对子 spec 除 check/commit 外全部步骤注入（H1——判官与不可逆步不吃历史意见,受众分道同 retry 半边）。
   - 体量纪律（v0.7.1,作者两定"2000 也太少"+"历史 800 也太少"）：**当前打回意见（fb.reason）零截断**——它是子层作业的完整依据,截了=子层对着残单干活;历史行单条 4000（dr16 实测工单全文 max 3101,体量靠 5 条封顶控制不靠切行）;跨层拼接累积总量保护线 24000 chars 尾部截留（防深递归逐层拼接无界增长的护栏,非单份工单预算）。
-- **与 adaptive 的分工**（维持）：L6 服务带反馈重跑；adaptive 重规划走 `assemble_adaptive_context`。
+- **与 adaptive 的分工**（维持）：L5 修正指令服务带反馈重跑；adaptive 重规划走 `assemble_adaptive_context`。
 
 ## 修订场景短 prompt（已废除,2026-08-31 作者定"废除啊,只用标准态"）【契约】 ^anc-exec-revision-prompt
 
@@ -656,7 +669,7 @@ trait: OnFailContextSupply
 | L1a 契约（Goal/Constraints/Types/Outputs）| **不可降级** | 零截断——超大（>10K chars）仅 HopLog warn，绝不切（切一条约束=行为越界种子） |
 | L1b 骨架 | 结构可压 | 已是压缩形态；超大折叠远端子树（保留当前路径），记 warn |
 | L5 节点（含输出声明）| **不可降级** | 零截断 |
-| L6 修正指令 | **不可降级** | 意见文本零截断（v0.7.1 升格,2026-08-24 作者定——dr16 实撞:上游判定器守"问题清单一次列全"纪律,工单 3101 字符被旧 300 tokens 上限截到 1200,6 项缺陷只剩 2 项传给修错轮,修不全必多烧整轮,省的 token 远小于代价;旧上限的"高价值小体量天然自限"假设已被一次列全纪律打破）。超大（>8000 chars）仅 HopLog warn 提醒判定器精简工单,绝不切（dr16 实测工单 max 3101,余量 2.6 倍——响了先看判定器是否啰嗦）;上游反馈同批升格（作者同日两定:"2000 也太少"+"历史 800 也太少,input context 很大根本用不完"）：**当前打回意见零截断**,历史行单条 200/400→**4000**（dr16 实测工单全文 max 3101——切行即丢意见正文,"一次看全所有已撞过的墙"在历史条目上才真兑现;体量靠 5 条封顶控制,不靠切行）,跨层累积总量保护线→**24000 chars**（尾部截留维持——护栏防深递归逐层拼接无界增长,≈6K tokens 对百 K 级窗口用得起）；**上一版产出基准不截尾**——超大走 $file 卸载（截了基准=修订对着残版做,概念层"不摘要不改写"同款要求） |
+| L5 修正指令 | **不可降级** | 意见文本零截断（v0.7.1 升格,2026-08-24 作者定——dr16 实撞:上游判定器守"问题清单一次列全"纪律,工单 3101 字符被旧 300 tokens 上限截到 1200,6 项缺陷只剩 2 项传给修错轮,修不全必多烧整轮,省的 token 远小于代价;旧上限的"高价值小体量天然自限"假设已被一次列全纪律打破）。超大（>8000 chars）仅 HopLog warn 提醒判定器精简工单,绝不切（dr16 实测工单 max 3101,余量 2.6 倍——响了先看判定器是否啰嗦）;上游反馈同批升格（作者同日两定:"2000 也太少"+"历史 800 也太少,input context 很大根本用不完"）：**当前打回意见零截断**,历史行单条 200/400→**4000**（dr16 实测工单全文 max 3101——切行即丢意见正文,"一次看全所有已撞过的墙"在历史条目上才真兑现;体量靠 5 条封顶控制,不靠切行）,跨层累积总量保护线→**24000 chars**（尾部截留维持——护栏防深递归逐层拼接无界增长,≈6K tokens 对百 K 级窗口用得起）；**上一版产出基准不截尾**——超大走 $file 卸载（截了基准=修订对着残版做,概念层"不摘要不改写"同款要求） |
 | L4 输入 | 可无损卸载 | deflate：>4096 chars 值写 work_zone + $file 指针（决策 5） |
 | L2 知识 | 可降级可卸载 | 逐源平摊（见 L2 节），片段边界截、卸载优先、丢弃留痕 |
 | L2 doc-ref | 可降级可卸载 | 大节 $file 卸载；总量压力下后于 knowledge 处置（作者显式>自动检索），处置=卸载非丢弃 |
@@ -673,7 +686,7 @@ trait: OnFailContextSupply
 
 ### BudgetConfig
 
-`total`（10000）、`l2PerSource` 维持。`l2cRetryFeedback` 废除（v0.7.1——L6 修正指令升格不可降级后无预算档,超大仅 warn 线 8000 chars,见上表 L6 行）。`ResourceLimits.max_context_tokens` 覆盖 `total`；同一键兼作工具循环模型窗预检线（×0.8 触发压缩降级,见 [[step-dispatcher#^anc-exec-toolloop-ctx-degrade]]——预检管的是工具循环 messages 累积,本组件预算管的是单发组装,两面同源一键）。
+`total`（10000）是 BudgetConfig 唯一字段;L2 逐源份额 0.4 / 0.3 / 0.2 / 0.1 是 formatKnowledgeContext 内常量,不进 BudgetConfig（2026-10-12 语义审计 #8：设计原写 `l2PerSource` 字段代码从未有过,份额没有配置化需求,设计跟代码）。`l2cRetryFeedback` 废除（v0.7.1——修正指令升格不可降级后无预算档,超大仅 warn 线 8000 chars,见上表 L5 行）。`ResourceLimits.max_context_tokens` 覆盖 `total`；同一键兼作工具循环模型窗预检线（×0.8 触发压缩降级,见 [[step-dispatcher#^anc-exec-toolloop-ctx-degrade]]——预检管的是工具循环 messages 累积,本组件预算管的是单发组装,两面同源一键）。
 
 ### L2 知识检索【契约】 ^anc-exec-knowledge-retrieval
 

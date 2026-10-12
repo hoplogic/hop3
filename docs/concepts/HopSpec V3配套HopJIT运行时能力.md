@@ -1,9 +1,9 @@
 %% @trace
 	id: hopjit-runtime
-	source: [[HopSpec V3核心规范]], [[HopAnt概念-双态组件模型]], [[HopSpec V3扩展-事务与补偿]], [[HopSpec V3扩展-有序思考与渐进固化]]
+	source: [[HopSpec V3核心规范]], [[HopAnt概念]], [[HopSpec V3扩展-事务与补偿]], [[HopSpec V3扩展-有序思考与渐进固化]]
 	source_id: hopspec-v3-core, cyant-concept, hopspec-v3-tx-rollback, hopspec-v3-progressive-solidification
 	type: extend
-	last_sync: 2026-08-25T09:55+0800
+	last_sync: 2026-10-06T17:21+0800
 	note: HopJIT 引擎的运行时能力，配套核心规范及所有扩展。2026-07-02 增 ^anc-exec-milestone 里程碑判据（澄清当前 v0/目标 v1，偏差三义分流）；v1/v2/v3 特性清单移设计层 [[../design/roadmap]]
 %%
 
@@ -97,7 +97,7 @@ HopSpec 的执行需要两种资源：**推理智能**（reason/check 步骤的 
 1. **确定性流控**：同一 spec + 同一输入序列 → 同一状态轨迹
 2. **HopLog 记录一致，记录分界=执行能力归属**：HopLog 在两种模式下记录同样的**引擎侧事件**（步骤状态流转、变量输入输出、暂停决策），流控轨迹可还原。执行内幕（LLM 交互、工具调用明细）由执行者记录：独立模式执行在引擎侧，HopLog 全量记录；复用模式执行在 caller 侧，由 caller 生态的观测工具记录（如 ccglass 记录 CC 会话），两份记录通过 instance_id 关联
 3. **CITL 暂停点一致**：confirm 在两种模式都产生 `paused` 状态——引擎 `next` 遇 confirm 一律返回 `status: paused`（含 presented_data + response_options），不降级为普通 step_ready。差别仅在决策注入通道：复用模式 caller 用 CLI 注入（每命令独立进程，注入即落盘），独立模式在暂停点回调 caller。commit 不在此列——授权由前序 confirm 建立，commit 直接执行（见 [[HopSpec V3核心规范#^anc-step-commit]]）
-4. **沙箱语义一致，强制力分级**：SandboxConfig 的边界定义相同。独立模式由 ToolProvider **强制**拦截；复用模式下 caller 持有自己的工具，沙箱是**契约**——caller（如 CC）读取 SandboxConfig 自律遵守，HopJIT 无法技术强制。选择复用模式即信任 caller
+4. **沙箱语义一致，强制力分级**：SandboxConfig 的边界定义相同（两个路径域 work_zone / workspace 的写权限,与 store 数据面的两 schema 写权限,见 [[HopSpec V3核心规范#^anc-exec-store]]）。独立模式由 ToolProvider **强制**拦截；复用模式下 caller 持有自己的工具，沙箱是**契约**——caller（如 CC）读取 SandboxConfig 自律遵守，HopJIT 无法技术强制。选择复用模式即信任 caller
 5. **暂停必有恢复闭环**：每个 CITL 暂停点必须存在恢复路径——caller 任何时候注入决策，执行都能从暂停点继续。paused 是合法的稳定状态，可以无限期等待；引擎**绝不替 caller 做决策**——不可逆操作的授权只能来自 caller，没有"超时默认批准"。暂停任务的终结由**系统级垃圾回收**承担：超期未完成的执行实例被 GC 清理（终态 cancelled）——GC 回收资源，不做业务决策
 6. **执行节奏归引擎**：driver 是哑应答体——它**只**在引擎指定的 **caller 介入点**（reason/check 需推理、confirm 需决策、act/commit 的**引擎够不着的单个工具调用**需 caller 工具）应答，干完即交回。**act/commit 的 hop_python body 一律由引擎解释执行**（复用模式亦然）——引擎逐行推进，工具调用按执行主体原则分派（2026-09-05：引擎自有 provider 命中即直执入账；文件工具等不再外发），撞到 provider 外的工具（caller 会话专属：MCP/宿主能力）才暂停发 `tool_request`（工具名+已求值参数），caller 只执行**这一个工具**并交回结果，body 的编排逻辑、中间变量、输出组装全在引擎手里。为什么：把整个 body 文本交给 LLM"忠实执行"，工具实现半径必然膨胀（2026-08-04 实证：`count_outliers(z_threshold:3)` 被顺带实现整套 IQR 通道——编排忠实但语义膨胀，产出 shape 随执行 LLM 漂移）；caller 连 body 都看不见，膨胀就没有落点——"无推理、确定性"从纪律约束升为**结构保证**。跨进程恢复用**确定性重放**：state 记录本步已完成的工具结果序列（tool_journal），新进程从头重放 body、撞第 N 个工具调用查 journal——有则代入继续，无则发 tool_request；body 除工具调用外纯确定性，重放零副作用、天然崩溃安全。**何时推进、哪些中间步由引擎自己消化（纯计算 body、容器进入/推进、分支选择等纯状态机转移）、推进到哪个介入点停，全由引擎决定，driver 无节奏选择权**。这是原则 1（确定性流控）在 driver 交互层的延伸——若 driver 能自由选择推进时机/粒度，控制流就部分回到了善变的 LLM 手里，违背"控制流不归 LLM"。落地：driver 交活与领取下一指令是**一次原子往返**（见 [[#^anc-exec-advance-to-caller]]），引擎在这个往返里把节奏定死
 
@@ -191,7 +191,7 @@ HopSpec 有两个层次的状态，过去只定义了步骤级，实例级一直
 
 ### 执行沙箱
 
-沙箱模型定义见 [[HopAnt概念-双态组件模型#^anc-config-sandbox-model]]（四种资源类型：filesystem / network / runtime / database）。
+沙箱模型定义见本文 [[#^anc-config-sandbox-model]]（四种资源类型：filesystem / network / runtime / database）。
 
 HopJIT 在运行时负责强制沙箱边界：
 - **StepDispatcher**：act 步骤调用 `requires_commit=true` 的工具时自动拦截，返回 COMMIT_REQUIRED 错误
@@ -241,6 +241,335 @@ HopJIT 在运行时负责强制沙箱边界：
 - 存入：有序思考成功后，自动存为候选
 - 固化流转：动态 → 候选 → 验证 → 沉淀 → 降级 的状态管理
 - 版本管理：同一任务的 Spec 随经验迭代演进
+
+## 四维度能力模型（概念探索阶段） ^anc-exec-capability-model
+
+> 本节 2026-10-06 自 [[HopAnt概念]] 迁入（作者定甲案：HopAnt 文档只讲实体与生命周期,引擎给 spec 供能力的内部模型归本文）。锚点随节原名迁移,追溯链不断。本节描述的是**引擎侧**的能力供给结构,仍在概念探索阶段;与之对应的设计层是 [[../design/shared-providers]]（Provider 三件套）;实装现状（2026-10-04 清查）：Capability 对应 ToolProvider 已有,Knowledge 只有接口,Data 与 Identity 零实装。
+
+### 四维度能力模型 ^anc-struct-cyant
+
+HopSpec 定义逻辑（做什么、怎么做）,引擎在四个维度上给 Spec 供能力与记忆（用什么做、状态存在哪）。一个 HopAnt 实体的 spec 跑起来时,就是运行在这四维度之上：
+- **提供能力**：工具集、API、知识库、推理能力——Spec 中的 `act`/`call` 实际调用的是 HopAnt 提供的能力
+- **记录状态**：跨 Spec 执行的持久状态（记忆、配置、累积数据），实例各自持有
+
+**Spec 不感知供能力的是谁**：Spec 照常写 Goal/Inputs/Outputs/Steps,四维度的具体绑定由部署配置给（HopAnt 实体里是入口 spec 头 + 本机适配记录,见 [[HopAnt概念#^anc-struct-hopant-layout]]）,不是语法的事。
+
+四个维度各答一问：去哪找知识？能用什么工具？数据存在哪？以谁的身份执行？关注点分离,各自一个 HopType。
+
+> **Knowledge vs Data 判定原则**：只要是**知识**（术语、术语关系、Spec 逻辑、文档语义），走 KnowledgeLayer；不是知识的**结构化信息**（数据库表、API 返回、配置状态），走 DataLayer。四个维度不是严格正交（Knowledge 和 Data 在数据源层面可能重叠），而是关注点分离——检索语义 vs 查询结构。v1 聚焦三类知识：术语、术语关系、Spec 逻辑。
+
+#### 四维度的组合与两个顶层契约
+
+```
+HopType: HopAnt
+  Id: cyant
+  Fields:
+    - knowledge % KnowledgeLayer    # 知识检索能力
+    - capability % CapabilityLayer  # 工具与执行环境
+    - data % DataLayer              # 数据访问
+    - identity % IdentityLayer      # 身份与权限
+  Specs:
+    - run_spec    # 通过 ExecutionEngine 执行 HopSpec
+    - introspect  # 返回自身能力摘要（可用工具/知识域/权限范围）
+```
+
+四个维度各是一个 HopType;顶层两个契约（run_spec / introspect）是 HopTrait,下面用 HopSpec 结构写（它们是运行层契约,不是设计记法）：
+
+```
+# Spec: 执行 HopSpec
+Id: run_spec
+Goal: 在当前实例的能力和权限上下文中执行指定 Spec，支持 HITL 挂起/恢复
+
+Inputs:
+- spec_id % line            # 要执行的 Spec 标识
+- inputs % yaml             # Spec 的输入参数
+- execution_id % line       # 恢复执行时传入（首次执行为空）
+- options % yaml            # 执行选项（超时/重试/日志级别，可选）
+
+Outputs:
+- execution_id % line       # 本次执行标识（用于恢复）
+- status % enum(completed, waiting_human, failed, timeout)
+- result % yaml             # completed 时：Spec 执行结果（Outputs 的值）
+- checkpoint % yaml         # waiting_human 时：当前步骤、等待的 check 内容、已有上下文
+- trace % yaml              # 执行轨迹摘要（步骤序列/耗时/工具调用记录）
+
+Constraints:
+- Spec 必须已注册或可解析
+- 执行受当前 IdentityLayer 的权限约束
+- 执行环境受 CapabilityLayer.sandbox 约束（沙箱由宿主环境注入，见下）
+- 超时由 options 或 CapabilityLayer.resource_limits 决定
+- waiting_human 时执行状态必须可序列化持久化，凭 execution_id 可恢复
+- completed / failed / timeout 为终态，不可恢复
+```
+
+```
+# Spec: 自省能力
+Id: introspect
+Goal: 返回当前实例的能力摘要,供其他实例发现和选择协作对象
+
+Inputs:
+- scope % enum(all, knowledge, capability, data, identity)  # 查询范围（默认 all）
+
+Outputs:
+- specs % [line]            # 可执行的 Spec 列表
+- tools % [line]            # 可用工具列表
+- knowledge_domains % [line] # 知识域标识列表
+- permissions % yaml        # 权限摘要
+
+Constraints:
+- 只返回当前身份有权查看的信息
+- 不泄露内部实现细节（如 API key、内部路径）
+```
+
+| 维度 | 职责 | 核心问题 |
+|------|------|---------|
+| **KnowledgeLayer** | 知识检索与积累 | 步骤执行时去哪里找上下文知识？ |
+| **CapabilityLayer** | 工具与执行环境 | 能用什么工具、在什么沙箱内？ |
+| **DataLayer** | 数据访问与持久化 | 结构化数据从哪来、往哪存？ |
+| **IdentityLayer** | 身份与权限 | 谁在执行、以谁的身份调 API、边界在哪？ |
+
+#### 与执行引擎五组件的关系
+
+四维度是能力供给面,执行引擎是消费它们的机器：
+
+```
+四维度能力模型
+  ├─ KnowledgeLayer   ← PromptAssembler 从这里动态检索知识
+  ├─ CapabilityLayer  ← StepDispatcher 从这里获取工具和沙箱
+  ├─ DataLayer        ← ExecutionEngine 从这里读写数据
+  ├─ IdentityLayer    ← 所有 API 调用以这里的身份进行
+  │
+  └─ .run_spec()      → ExecutionEngine + StepDispatcher + PromptAssembler
+                        （执行基础设施是 HopAnt 调用 Engine 的内部实现）
+```
+
+HopJIT 执行引擎由 5 个组件构成,是 `run_spec` 的内部实现：
+
+- **SpecParser**：将 HopSpec 文本解析为 AST，校验验证规则 ^anc-struct-spec-parser
+- **ExecutionEngine**：执行状态机——管理步骤状态、变量命名空间、retry/adaptive、失败升级（函数级 fail） ^anc-struct-exec-engine
+- **PromptAssembler**：为 reason/check 步骤组装 6 层 prompt context（L1 Spec 契约 → L6 输出约束） ^anc-struct-prompt-assembler
+- **StepDispatcher**：步骤分派——按类型路由执行（reason→调 LLM、act→调工具、confirm→暂停等待） ^anc-struct-step-dispatcher
+- **HopCLI**：Agent 与执行引擎的交互接口（init / next / done / fail / status） ^anc-struct-hop-cli
+
+
+#### 四维度逐个定义
+
+##### KnowledgeLayer（知识） ^anc-layer-knowledge
+
+**HopTrait（Hop契约）**：
+
+```
+# Spec: 检索相关知识
+Id: retrieve
+Goal: 根据查询从已注册知识源中检索相关片段
+
+Types:
+  KnowledgeFragment:
+    - source_id % line              # 来自哪个知识源
+    - content % text                # 片段内容
+    - relevance % enum(high, medium, low)  # 相关度
+
+Inputs:
+- query % text              # 检索查询
+- max_results % int      # 最大返回条数（默认 10）
+
+Outputs:
+- fragments % [KnowledgeFragment]   # 检索结果列表
+
+Constraints:
+- 按相关度降序排列
+- 去重（同一来源同一段落不重复）
+```
+
+**HopType**（2026-08 分离形态存量,成员另起 `# Spec:` 块;现行聚合写法见 [[HopType体系#^anc-hoptype-block]]）：
+
+```
+HopType: KnowledgeLayer
+  Id: knowledge-layer
+  Types:
+    KnowledgeSource:
+      - id % line                     # 知识源标识
+      - type % enum(file_glob, grep, rag)  # v1 三种知识源类型
+      - config % yaml                 # 类型相关配置（路径/endpoint/索引名）
+  Fields:
+    - sources % [KnowledgeSource]   # 已注册的知识源
+  Specs:
+    - retrieve     # impl trait
+```
+
+v1 最小集：一个 `retrieve` trait 就够。知识源的类型和检索策略由 KnowledgeSource 自身决定——注册时声明，retrieve 时路由。
+
+**HopJIT 映射**：PromptAssembler 的 L2 知识上下文层由 KnowledgeLayer 驱动，双路径注入：主动路径（Spec `@knowledge` 声明预检索）和被动路径（`lack_of_info` 触发补充检索，标注来源步骤）。详见 [[HopSpec V3核心规范#^anc-exec-prompt-assembly]]。
+
+##### CapabilityLayer（能力） ^anc-layer-capability
+
+**HopTrait（Hop契约）**：
+
+```
+# Spec: 执行工具调用
+Id: execute_tool
+Goal: 在沙箱约束内执行指定工具
+
+Inputs:
+- tool_name % line          # 工具名称
+- tool_args % yaml          # 工具参数
+
+Outputs:
+- result % text             # 执行结果
+- success % bool            # 是否成功
+
+Constraints:
+- 工具必须在已注册列表中
+- 执行受沙箱策略约束（路径/命令/网络）
+- 超过 resource_limits 时拒绝执行
+```
+
+**HopType**（2026-08 分离形态存量,成员另起 `# Spec:` 块;现行聚合写法见 [[HopType体系#^anc-hoptype-block]]）：
+
+```
+HopType: CapabilityLayer
+  Id: capability-layer
+  Fields:
+    - tools % [ToolDef]             # 可用工具注册表（待细化）
+    - sandbox % SandboxConfig       # 沙箱配置（由宿主环境注入，见下）
+    - api_clients % [ApiClient]     # LLM 和外部 API 客户端（待细化）
+    - resource_limits % yaml        # 资源限制（token 预算/工具调用上限/超时）
+  Specs:
+    - execute_tool    # impl trait
+    - list_tools      # 返回当前可用工具及其 schema
+    - register_tool   # 动态注册新工具
+```
+
+**HopJIT 映射**：替代 StepDispatcher 硬编码的 Bash/Read/Write 工具——act 步骤通过 `CapabilityLayer.execute_tool()` 调用注册的工具，工具副作用级别由 `requires_commit` 声明，执行范围由沙箱配置约束。
+
+**沙箱与宿主环境**：sandbox 由宿主环境（如 Claude Code）在实例化时注入，定义 act 步骤能安全触及的资源边界。沙箱覆盖四种资源类型： ^anc-config-sandbox-model
+
+**① 受控文件目录（filesystem）**： ^anc-config-sandbox-filesystem
+- workspace_dir：宿主分配的工作区子目录，act 步骤可自由写、删、试验
+- read_access：三级读取控制——allowed（可自由读）、denied（禁止，如密钥文件）、confirm_required（需 confirm 后读取）
+- workspace 外的写/删/移动 = commit 级别
+
+**② 网络访问（network）**： ^anc-config-sandbox-network
+- web search / fetch 按域名可信分级，宿主配置可信域名白名单
+- 可信域名内的只读查询（search/fetch）= act 级别
+- 不可信域名或有副作用的网络操作（POST/PUT/发邮件）= commit 级别
+
+**③ 已安装库与工具（runtime）**： ^anc-config-sandbox-runtime
+- 声明当前环境可用的运行时能力：uv python / TypeScript / PDF 解析 / OCR 等
+- act 步骤可调用已声明的库执行本地计算（在 workspace 内）
+- 安装新库、修改系统依赖 = commit 级别
+
+**④ 数据库（database）**： ^anc-config-sandbox-database
+- 临时库（temp_databases）：act 步骤可自由读写——临时库可重建，重做安全
+- 只读库（readonly_databases）：act 步骤可查询，写入需 commit
+- 未声明的数据库：全部禁止访问
+- schema 变更（CREATE/DROP/ALTER）：始终需要 commit
+- 典型场景：agent 在临时库做数据清洗（act），验证通过后写入生产库（commit）
+
+**工具副作用声明**：每个工具注册时声明 `requires_commit`——标记该工具是否有不可逆副作用。act 步骤中 `requires_commit=true` 的工具调用被 StepDispatcher 自动拦截。Spec 作者可选择在 commit 前放置 confirm 步骤来保护不可逆操作。 ^anc-exec-requires-commit
+
+安全模型的核心原则：**act 步骤内一切操作可安全重做**（workspace 内自由试验 + 只读外部访问 + 本地计算），commit 步骤的安全性由 Spec 流程保障（作者显式设计 confirm 保护），而非运行时自动审批。 ^anc-exec-sandbox-principle
+
+##### DataLayer（数据） ^anc-layer-data
+
+**HopTrait（Hop契约）**：
+
+```
+# Spec: 查询数据
+Id: query_data
+Goal: 从已注册数据源执行结构化查询
+
+Inputs:
+- source_id % line          # 目标数据源
+- query % text              # 查询表达式（SQL / 文件路径 / API 请求）
+
+Outputs:
+- rows % yaml               # 查询结果
+- row_count % int        # 结果行数
+
+Constraints:
+- 只读操作，不修改数据源
+- 查询超时由 DataSource 配置决定
+```
+
+**HopType**（2026-08 分离形态存量,成员另起 `# Spec:` 块;现行聚合写法见 [[HopType体系#^anc-hoptype-block]]）：
+
+```
+HopType: DataLayer
+  Id: data-layer
+  Fields:
+    - connections % [DataSource]    # 数据源注册（待细化）
+    - schema_cache % yaml           # 已知数据结构缓存（待细化）
+    - state_dir % line              # .hopstate/ 路径
+  Specs:
+    - query_data   # impl trait
+    - persist      # 持久化执行产物（超越 vars.json 的 KV）
+    - discover     # 发现数据源 schema
+```
+
+**HopJIT 映射**：替代 vars.json 的扁平 KV——步骤可查询数据库、读写结构化文件、与外部数据服务交互。
+
+##### IdentityLayer（身份） ^anc-layer-identity
+
+**HopTrait（Hop契约）**：
+
+```
+# Spec: 获取服务凭证
+Id: get_credential
+Goal: 按服务标识获取身份凭证（API key、ak/sk、token 等）
+
+Inputs:
+- service_id % line         # 目标服务标识（'tavily' / 'openai' / 'anthropic' 等）
+
+Outputs:
+- credential % yaml         # 凭证信息（type + values）
+
+Constraints:
+- 凭证不可日志明文输出
+- 未注册服务返回 null，调用方决定是否 fail
+```
+
+**HopType**（2026-08 分离形态存量,成员另起 `# Spec:` 块;现行聚合写法见 [[HopType体系#^anc-hoptype-block]]）：
+
+```
+HopType: IdentityLayer
+  Id: identity-layer
+  Fields:
+    - credentials % yaml            # 服务凭证注册表（service_id → Credential）
+    - llm % ModelEngine             # LLM 绑定配置 ^anc-config-model-engine
+  Specs:
+    - get_credential  # impl trait：按 service_id 查找凭证
+    - list_services  # 列出已注册的可用服务
+    - authenticate   # 验证身份（API key 有效性/用户 session）（v2+）
+    - audit_log      # 记录操作审计日志（谁/何时/做了什么/以谁的身份）（v2+）
+```
+
+**ModelEngine 细化**：
+
+```
+- ModelEngine:  # LLM 多模型绑定配置
+  - default_service % line  # 默认 LLM 服务标识（如 'anthropic'）
+  - default_model % line  # 默认模型（如 'claude-sonnet-4-6'）
+  - routing_rules % [ModelRoute]  # 按步骤类型/标注路由到不同模型
+
+- ModelRoute:  # 模型路由规则
+  - match % line  # 匹配条件：step_type 值（reason/check/act）
+  - service % line  # 目标服务标识
+  - model % line  # 目标模型名
+```
+
+**路由优先级**（从高到低）： ^anc-exec-model-routing
+
+1. 步骤级 `@model` 标注——步骤 `>` 指令区声明 `@model service/model`，最高优先级
+2. Spec 级 `Config.model`——整个 Spec 的默认模型
+3. `ModelEngine.routing_rules`——按 step_type 匹配的全局规则（如 reason→DeepSeek, check→Claude）
+4. `ModelEngine.default_model`——兜底默认
+
+典型场景：reason 步骤用 DeepSeek V4 Pro 做主推理（成本低、速度快），check 步骤用 Claude 做独立核验（交叉验证，避免模型自我一致性偏差）。
+
+**HopJIT 映射**：替代 config.json 的单 api_key 硬编码——步骤调用外部服务（搜索 API、外部 LLM 等）时通过 `get_credential(service_id)` 获取凭证。工具的副作用级别由 ToolDef.requires_commit 声明，act 步骤中自动拦截不可逆工具，IdentityLayer 专注凭证管理。ModelEngine 管理 LLM 调用的模型选择和路由。
+
+**凭证传递**：HopJIT 以 CLI 子进程方式被宿主启动，通过继承环境变量获取凭证——`ANTHROPIC_AUTH_TOKEN`（CC 本地代理） 或 `ANTHROPIC_API_KEY`（直连），加 `ANTHROPIC_BASE_URL`（代理网关）和 `ANTHROPIC_MODEL`（当前模型）。多服务路由时按 `{SERVICE_ID}_API_KEY` + `{SERVICE_ID}_BASE_URL` 模式扩展。YAML 配置文件（`~/.hopjit/config.yaml`）作为 fallback 和路由规则存储。
 
 ## 里程碑分期与偏差判据 ^anc-exec-milestone
 

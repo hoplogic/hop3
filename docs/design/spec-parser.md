@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-09-29T16:01+0800
+	last_sync: 2026-10-10T21:06+0800
 	note: SpecParser 组件定义 + impl Specs。内容分级（决策/契约/说明）+ 54 条验证规则契约锚点 + 输入防护与类型校验决策
 %%
 
@@ -30,14 +30,14 @@
 | 声明区文法警告（W1）/ HopSchema 分隔符双文法并收（W2）与转换核 | 契约 | `anc-rule-decl-zone-warn` / `anc-rule-schema-sep-dual` / `anc-rule-schema-sep-convert` |
 | 验证规则·结构（S1-S16） | 契约 | `anc-rule-s1` … `anc-rule-s16` |
 | 验证规则·控制流（C1-C8） | 契约 | `anc-rule-c1` … `anc-rule-c8` |
-| 验证规则·变量（V1-V9） | 契约 | `anc-rule-v1` … `anc-rule-v9` |
+| 验证规则·变量（V1-V17） | 契约 | `anc-rule-v1` … `anc-rule-v10` / `anc-rule-v16`（Config.dirs 形态与引用）/ `anc-rule-v17`（结构化 ask 建议值来源） |
 | 验证规则·特殊步骤（P1-P14） | 契约 | `anc-rule-p1` … `anc-rule-p11` |
 | 验证规则·集合锚点 | 契约 | `anc-rule-all` / `anc-rule-v3-all` |
 | 规则覆盖说明 | 说明 | — |
 
 ## 定位【契约】 ^anc-struct-spec-parser
 
-> **模块版本**：spec-parser `v0.44.1`（2026-10-01 工程链 review 修复：《已批准命令》段四处收口——只认 ## 段头形〔内联形 parse error〕/引号未闭合 parse error/joinArgvPrefix 包回规则明确可逆边界〔两种引号都含抛错〕/回写位置 Config 后;删"放 Steps 后 parser 不认"的失实断言）。上版 v0.44.0（2026-09-30）。本版新增 spec 段 `## 已批准命令`/`## Approved Commands`——一行一个 argv 前缀,解析进 header.approved_commands,是本 spec 的任务级命令白名单（todo/0132 承接 hopissues/0114,作者定"hopspec 强的地方是根据任务来批准,而不是放开一个大口子"）;首项 hopjit 解析期拒。契约 ^anc-rule-approved-commands。含 parser+validator 两 src 文件。0.x 未承诺稳定。HopSpec markdown 语法 + 54 条验证规则是稳定契约——改语法、加破坏性规则、既有规则改档升严，都须经决策交代（概念层或实撞驱动的作者拍板，账面可溯）。
+> **模块版本**：spec-parser `v0.46.6`（2026-10-11 todo/0161：注记② 工具授权与禁用条目的宿主从 act / reason 扩到 check——checkAttrGate 对 check 步放行两类条目,其余类型照拒;作者定"check 工具可能要读文件,留个口子"）。上版 v0.46.5（2026-10-09 子卡 C/E review 修复：出口表加 `B2_BUILTIN_FILE_TOOLS`（hopant 头对账的内建剔除名单改用它,消掉第三份十一件手抄）与 parser 两个条目识别函数 `toolSigName` / `splitArgvPrefix`（hopant reconcileHeader 改写面定位要删的条目行,复用 parser 文法不自写正则——review 抓中文工具名与带引号命令"报删实未删"）。上版 v0.46.4（2026-10-09 act body 语句行号改为 spec 文件真实行号——commit 安全分析批次 review 发现旧算法漏数步骤行与 body 之间的非指令行,^anc-rule-act-body-line）。上版 v0.46.3（2026-10-09 B2 内置工具签名核对加第四判:write / edit_file / move / remove 的 keep 字面量不是非负整数 → error——commit 安全分析批次 review 修复,^anc-rule-b2）。上版 v0.46.1（2026-10-08 V17 报文改为先劝换设计再给兜底——作者补定"尽力避免问人 yaml/列表这种设计"。上版 v0.46.0（2026-10-08 作者定：新验证规则 V17——ask 声明结构化输出而前序无同名 `+ →` 且无 present_inputs → warn"人将凭空填结构",^anc-rule-v17。上版 v0.45.1（2026-10-07 dirs 批 review：V16 ③ 加 ~user 专报文、② 字符集与 parser 标识符同源含中文。上版 v0.45.0（2026-10-07 todo/0148：新验证规则 V16——Config.dirs 形态 warn / `{var}` 未声明 error / 相对路径与 `..` error,^anc-rule-v16。上版 v0.44.2（2026-10-06 出口表加 `sectionSpans` 只读段切分——hopant 批 review 修复批,headerHash 复用 parser 段识别）。上版 v0.44.1（2026-10-01 工程链 review 修复：《已批准命令》段四处收口——只认 ## 段头形〔内联形 parse error〕/引号未闭合 parse error/joinArgvPrefix 包回规则明确可逆边界〔两种引号都含抛错〕/回写位置 Config 后;删"放 Steps 后 parser 不认"的失实断言）。上版 v0.44.0（2026-09-30）。本版新增 spec 段 `## 已批准命令`/`## Approved Commands`——一行一个 argv 前缀,解析进 header.approved_commands,是本 spec 的任务级命令白名单（todo/0132 承接 hopissues/0114,作者定"hopspec 强的地方是根据任务来批准,而不是放开一个大口子"）;首项 hopjit 解析期拒。契约 ^anc-rule-approved-commands。含 parser+validator 两 src 文件。0.x 未承诺稳定。HopSpec markdown 语法 + 54 条验证规则是稳定契约——改语法、加破坏性规则、既有规则改档升严，都须经决策交代（概念层或实撞驱动的作者拍板，账面可溯）。
 > - **逐版演进史归 git log**（升版在下表加一行速览，演进论证归 commit message）；规则细节以正文各条款为权威，下表只记"哪版加了什么、实撞出处在哪"；
 > - 仅三件契约的权威落点不在正文条款而在表后注记（call callee 位插值收取／节点体工具授权与禁用条目文法／number 类型除名）。
 
@@ -45,6 +45,11 @@
 
 | 版本 | 内容一句话 | 要点与实撞出处 |
 |---|---|---|
+| v0.46.6 | 工具授权 / 禁用条目宿主扩到 check | 注记② checkAttrGate 对 check 步放行 `- 工具:` 与 `- 禁工具:`,与 reason 同一套声明制（todo/0161,作者定 check 留读文件口子;step-dispatcher v0.46.8 / spec-ast v0.10.8 同批） |
+| v0.46.5 | 出口表加 B2_BUILTIN_FILE_TOOLS 与 toolSigName / splitArgvPrefix | 子卡 C/E review 修复（2026-10-09）;合入时与 commit 安全分析 review 修复批次的 v0.46.2 / v0.46.3 撞号,顺延为 .5（修复批次两条顺延为 .3 / .4） |
+| v0.46.4 | act body 语句行号精确（修旧近似算法） | ^anc-rule-act-body-line——旧算法"步骤行号 + body 在 instruction 数组里的下标"漏数 `- ←`/`+ →`/空行,commit 安全分析材料与停点提示里的"第 N 行"指错行;FlatStep 增 instruction_lines,parseActBody 增可选 line_numbers。来源=commit 安全分析批次工程链 review（行号逻辑早于该批次） |
+| v0.46.3 | B2 keep 字面量核对（error） | ^anc-rule-b2 签名核对第④判——keep 字面量须是非负整数,与 KEEP_PARAM 同构;来源=commit 安全分析批次工程链 review（非法 keep 字面量曾被当"keep 定不了"转人工,批准后运行期才报错） |
+| v0.46.0 | V17 结构化 ask 要有建议值来源（warn） | ^anc-rule-v17——作者 2026-10-08"yaml/列表型的输入究竟应该怎么交互,至少要给一个建议输入让人来改"：yaml/列表/类型面输出的 ask,前序无同名产出且无 present_inputs → warn 指路前置备料;标量不核 |
 | v0.43.3 | 公开面表补 repairInlineColonScalars 单行、yaml 解析失败反馈补一条病因 | 公开面表自称封闭集,repairInlineColonScalars 是导出函数此前只在串联原语行里括注,补成独立一行;repairYamlScalars 行的调用点改成逐一列出六处加一处诊断点;checkValue yaml 分支解析失败反馈的常见原因补"值以反引号、@ 或 % 开头要整值加双引号"。来源=变速箱 qwen-flash 适配工程链 review（契约权威 [[step-dispatcher#^anc-exec-output-inline-colon-repair]]） |
 | v0.43.2 | 裸冒号修复加引号时连同续行并入 | repairInlineColonScalars 给报错行加引号时,下面缩进深于键起始列的连续非空行作为同一个值的续行一起并入,续行位置置空行（行数不变）;契约权威 [[step-dispatcher#^anc-exec-output-inline-colon-repair]],ppt qwen-flash 第四跑步 4.1 修订轮实撞（本行由工程链 review 补登——该改动随 step-dispatcher v0.40.1 落码时本表漏行） |
 | v0.43.1 | 裸冒号修复原语加第二种命中形态:值以反引号、@ 或 % 开头 | repairInlineColonScalars 的报错行命中面扩到保留字符开头的值（不论有无冒号加空格）;契约权威 [[step-dispatcher#^anc-exec-output-inline-colon-repair]],ppt qwen-flash 步 4.1 实撞 |
@@ -80,11 +85,11 @@
 - S12/S16/P8 零改动（判定材料不含 callee 字段，收链实证）。serializer 插值形态原样往返。执行侧解引用契约归 [[step-dispatcher#^anc-step-call-dynamic-callee]]。
 
 **注记②：节点体工具授权/禁用条目文法（现行契约）**——
-- **授权条目** `- 工具: 名  # 意图`（`- tools:` 同义，`*` 全量），parser 收进 `ActStep.tool_grants: {name, note?}[]`；文法钉：每行恰一名（逗号多名拒，指路每行一个）／`*` 与具名互斥／仅 act 步收（其余类型此行报错指路）／`工具|tools` 入关键词保留字族（变量名禁用）；
+- **授权条目** `- 工具: 名  # 意图`（`- tools:` 同义，`*` 全量），parser 收进 `ActStep.tool_grants: {name, note?}[]`（ReasonStep / CheckStep 同形并排）；文法钉：每行恰一名（逗号多名拒，指路每行一个）／`*` 与具名互斥／**仅 act / reason / check 步收**（其余类型此行报错指路——act 自 0054,reason 自 2026-09-01,check 自 2026-10-11 todo/0161 作者定"check 工具可能要读文件,留个口子";confirm / ask / commit / 容器步仍拒）／`工具|tools` 入关键词保留字族（变量名禁用）；
 - **禁用条目** `- 禁工具: 名  # 为什么禁`（`- deny_tools:` 同义，概念权威 [[../concepts/HopSpec V3核心规范#^anc-step-tool-deny]]），parser 收进 `ActStep.tool_denies: {name, note?}[]`（ReasonStep 同形并排）；文法钉与授权行同族，但两处有意不同：
   - **禁 `*`**（全量禁=零工具面，真要如此逐件列名——防手滑废掉整个工具面；授权 `*` 有正当场景，禁用没有）；
   - **同名既授又禁当场拒**（checkAttrGate 比对 tool_grants×tool_denies 交集，冲突=笔误或想不清，写时红点名工具名，不做运行期静默偏一边）；
-  - 相同点：每行恰一名（逗号拒）/空名拒/仅 act/reason 步收——三钉与授权行逐字同族；`禁工具|deny_tools` 入关键词保留字族；lang 转换通道两处随扩（关键词映射表＋条目行转换正则）；
+  - 相同点：每行恰一名（逗号拒）/空名拒/仅 act / reason / check 步收（check 自 todo/0161 同批随扩）——三钉与授权行逐字同族；`禁工具|deny_tools` 入关键词保留字族；lang 转换通道两处随扩（关键词映射表＋条目行转换正则）；
 - 两类条目的收取块同位纪律：先于 RE_LIST_ITEM 族判，防被复合展开条目收编。
 
 **注记③：number 类型除名（现行契约）**——数字类型只有 int/float（作者定"和python一致"）。number 曾在 BUILTIN_TYPES 事实流通但概念层原子类型表无户口；除名后拒收报文经类型清单自然指路；number 仍占保留字位，防旧写法 `x: number` 静默变身变量引用；examples/教程/测试 fixture 全量随改，概念层原子类型表后追明文。
@@ -118,14 +123,17 @@
 | `serializeSpec` | 函数 | parser.ts | AST→markdown（engine L2e 引用检测的 rawSource 降级源——load 恢复实例无原文,子串检测是合法用途,禁的是重建;见 [[prompt-assembler#^anc-exec-hop-env-table]]） | provisional |
 | `serializeFragment` | 函数 | parser.ts | 步骤树→裸片段文本（无头无节标题,parseFragment 对称逆——tools 树编辑四件 spec_is_fragment 模式调,见 [[tools/spec-tree-tools#^anc-exec-builtin-edit-tree-tool]]） | provisional |
 | `convertSpecKeywords` | 函数 | parser.ts | 关键词语言转换行级手术（hopjit lang 命令消费,[[i18n#^anc-i18n-language-config]]——2026-09-04 review 抓 language 批漏登出口表补） | provisional |
+| `toolSigName` / `splitArgvPrefix` | 函数 | parser.ts | Tools 段签名行取工具名（`- 名(…)` 形态,中文名同认;非签名行返回 undefined）/ 已批准命令条目按引号切词（`{tokens, unclosed}`）——parseSpec 内部本就用它们识别条目,2026-10-09 导出给 hopant reconcileHeader 改写面复用：删条目时按 parser 同一文法判"这一行是不是要删的那个条目",不自写正则（review 实锤：自写 `[A-Za-z_]` 开头正则漏中文工具名、`\S+` 取首项漏带引号命令,ReconcileReport 报删了正文没删） | stable |
+| `sectionSpans` | 函数 | parser.ts | 只读段切分：spec 全文 → `{kind, startLine, endLine}[]`（薄包装 identifySections,不解析段内容、不报错）。消费方 hopant 的 headerHash（[[hopant#^anc-hopant-stamp]]——parser 认什么段头它就认什么,中英段头与内联形同律;2026-10-06 hopant 批 review 抓自写段头正则漏中文头后补出口） | provisional |
 | `convertSchemaSeparators` | 函数 | parser.ts | HopSchema 名/类型分隔符 `:`→` % ` 行级手术（hopjit schema-sep 命令消费,由 parseSpec 的 colon_separators 记录驱动,见 ^anc-rule-schema-sep-convert） | provisional |
+| `B10_READ_TOOLS` / `B2_BUILTIN_NOTIFY_TOOLS` / `B2_BUILTIN_FILE_TOOLS` | 常量 | validator.ts | 读类工具名集合 / 内置通知工具名集合 / 内置文件与树编辑与 run_script 名单（引擎恒注册零声明）——静态校验 B10 / B2 规则的名单,exec-engine 的 commit 动作清单提取复用它们判"读类不进清单""通知一律需要人确认",与静态校验同源不另抄名单（[[exec-engine#^anc-exec-commit-action-facts]],2026-10-08 commit 安全分析批次补出口）;B2_BUILTIN_FILE_TOOLS 与 B2_BUILTIN_NOTIFY_TOOLS 另被 hopant collectBodyUsage 消费为"内建不是注册面工具"的剔除名单（[[hopant#^anc-hopant-pack]],2026-10-09 review 把 hopant 自抄的十一件名单换成本常量） | provisional |
 
 > **内部（表外即内部）**：各规则的私有校验函数（walkVariableScope 等）、正则常量。
 
 **③ 主要 traits 与主要成员**：
 
 ```
-struct: SpecParser
+HopType: SpecParser
   Id: spec-parser
   Fields: （无）
   Specs:
@@ -305,6 +313,56 @@ parser 在构建 AST 时（`flatToStepNode` 阶段及头部 `Constraints:` 处�
 - **写回**——serializer 在 instruction 前输出 `> @src ...`（与 @model 同批写回——两标注是语义子句,丢失后 re-parse 锚点/路由漂移）;往返二次稳定;
 - validate 对 src_ref 零判定（消费方=hopbuild 对账工具链,引擎只运载）。
 
+## act body 语句行号【契约】 ^anc-rule-act-body-line
+
+act body 每条语句（AssignStmt / CallStmt / IfStmt 等,[[spec-ast#^anc-ast-act-body]]）的 `line` 字段是该语句在 spec 文件里的**真实行号**（1 起算;片段模式=片段文本内的行号）,不是近似值。
+
+**为什么必须精确**：`line` 不只用于报错定位,还直接展示给人和安全分析模型:
+- commit 安全分析材料的 body_lines 每行带的行号（[[exec-engine#^anc-exec-commit-approval]]）;
+- commit 动作清单 CommitAction.line 与模型回传的 cited_lines（[[exec-engine#^anc-exec-commit-action-facts]]）;
+- dispatcher 给模型的提示里"第 N 行"的说法（[[step-dispatcher]] commit 安全分析 prompt）。
+
+行号偏了,人按"第 N 行"去 spec 文件里找,看到的是另一句。
+
+**旧实现的偏差来源**（2026-10-09 commit 安全分析批次工程链 review 发现,行号逻辑早于该批次）：旧算法是 `步骤行行号 + body 首行在 instruction 数组里的下标`。instruction 数组只收 `>` 行（标题风还收标题下的段落与裸围栏行）,步骤行与 body 之间的 `- ←` / `+ →` / 空行 / `%%` 行都不进数组,所以每多一行这类内容,body 语句行号就少算一行。例:步骤行在第 20 行,其后一行 `- ←`、一行 `+ →`、然后 `> ```hop_python` 在第 23 行,body 首句实际在第 24 行,旧算法给出 20 + 2 = 22。inline 风 body 中间夹空行时,空行被跳过,其后各句再少算一行。
+
+**类型约定**：
+
+```
+HopType: FlatStep                     # parseStepSection 的扁平步骤中间结构（模块内部,不入 AST）
+  Fields:
+    - instruction % [line]            # 步骤的指令行（`>` 行去前缀、标题风段落行、标题风裸围栏行）
+    - instruction_lines % [number]    # 与 instruction 等长、逐项对应:该指令行在 spec 文本里的 1 起算行号
+    - source_location % SourceLocation  # 步骤行位置
+```
+
+**能力契约**（act-body 模块对外函数,登在 [[act-body#^anc-struct-act-body]] 出口表）：
+
+```
+HopType: ActBodyParser
+  Members:
+    - parseActBody(body_lines, base_line, errors, line_numbers?) -> ActBody | null
+      # body_lines % [line]        hop_python 源行,已去掉 `> ` 前缀或按围栏缩进 de-indent
+      # base_line % number         line_numbers 缺省时用:第 ln 行（0 起）的行号 = base_line + ln
+      # errors % [ParseError]      解析错误追加到此
+      # line_numbers % [number]    可选,与 body_lines 等长:逐行的真实行号;给了就按它取,不再用 base_line 推算
+      # 语句与记号的 line 取所在源行的行号;body 的 source_location = 首行行号 .. 末行行号 + 1（即闭栏行）
+```
+
+**关键逻辑（parseActBodyFromFlat）**：
+
+```
+1. 每次向 FlatStep.instruction 追加一行时,同时向 instruction_lines 追加该行的 1 起算行号（五个追加点:标题风开栏行、标题风闭栏行、标题风围栏内的 body 行、`>` 指令行、标题风段落行）
+2. bodyLines, bodyStartIndex = extractHopPythonFence(instruction)   # bodyStartIndex 是 body 首行在 instruction 里的下标;body 行在 instruction 里连续
+3. [条件(bodyLines 为空值)] 返回,无 body
+4. line_numbers = instruction_lines[bodyStartIndex : bodyStartIndex + len(bodyLines)]
+5. body = parseActBody(bodyLines, line_numbers[0], errors, line_numbers)
+```
+
+同一行号来源的第二个使用点:指令级围栏未闭合的 parse error（^anc-rule-unclosed-fence）报开栏行,行号取 `instruction_lines[bodyStartIndex - 1]`（开栏行在 instruction 里紧挨 body 首行之前）,同样不再用步骤行号加下标推算。
+
+测试判据:步骤行与 body 之间夹 `- ←` / `+ →` 行、inline 风 body 中间夹空行、if / else 嵌套三种写法下,每条语句的 `line` 都等于该语句在 spec 文本里的行号（按原文逐行查找比对,不写死数字）。
+
 ## 表层表述变种解析（标题风）【契约】 ^anc-rule-surface-heading-flavor
 
 概念见 [[../concepts/HopSpec V3核心规范#^anc-surface-heading-flavor]]。step ID 是唯一树结构权威，表层排版对机器无意义——parser **双读**两种表层风味（内联紧凑风 + 标题风），解析出结构相同的 AST。解析规则分四组：
@@ -434,7 +492,7 @@ trait: SchemaSeparatorDualGrammar
 **类型约定（HopType）**：
 
 ```
-struct: SchemaColonSeparatorRecord     # SpecHeader.colon_separators 的元素（src/ast-types.ts）
+HopType: SchemaColonSeparatorRecord     # SpecHeader.colon_separators 的元素（src/ast-types.ts）
   Id: schema-colon-separator-record
   Fields:
     - line % int        # 1 起算的真实行号（片段模式=片段文本内的行号）
@@ -742,6 +800,26 @@ convertSchemaSeparators(text) → {text, changed_lines, unmatched_lines}:
   - ③ collect 仅可出现在 for-each 形态 loop。unitVar 由子句注册进命名空间（同 itemVar：定义点=子句，children 可写、引擎轮末收集复位）。
   - 三子条全实装（validator.ts V10 块；①2026-09-01 todo/0051 补装）。 ^anc-rule-v10
 
+**Config.dirs 声明形态与变量引用（V16，2026-10-07 todo/0148）**：
+
+- V16：`Config.dirs` 的形态与引用在 validate 期核——起跑前就能知道,不等 INIT_FAILED：
+  - ① 形态须是 `{read?: [line], readwrite?: [line]}`——键外多余项、值非列表、列表项非字符串 → **warn**（与 `requires_commands` 坏形态同一处理：按缺席处理,起跑期 resolveDeclaredDirs 再拒一次）;
+  - ② 列表项形如 `{名字}` 时,名字须在 `Inputs` 声明、或以 `hop_env_` 开头 → 否则 **error**（引用了不存在的变量,起跑必败）;
+  - ③ 列表项是相对路径（不以 `/`、`~`、`{` 开头）或含 `..` 段 → **error**（概念定"不支持相对路径、含 .. 一律拒"——这是写法错不是环境错,validate 期就报）;`~` 开头但不是 `~` 或 `~/…`（如 `~alice/x`）→ **error** 专报文"~ 只表示当前用户家目录,不支持 ~用户名"（与引擎起跑报文同句,分工：validator 先报、引擎兜底）;
+  - ② 补充：`{名字}` 的名字字符集与 parser 的标识符判据同源（含中文标识符——HopSpec 中文标识符是一等公民）,引擎 resolveDeclaredDirs 用同一判据;
+  - 展开、存在性核、授权归引擎起跑（[[exec-engine#^anc-exec-dirs-grant]]）,validator 只看文本形态。
+  - 正反例：合法三形态零警告 / `dirs: [a, b]`（非映射）warn / `read: "/x"`（非列表）warn / `{nope}` 未声明 error / `data/x` 相对 error / `/a/../b` error / `{hop_env_kb}` 零警告。 ^anc-rule-v16
+
+**结构化类型的 ask 要有建议值来源（V17，2026-10-08 作者定）**：
+
+- V17：ask 步骤声明了结构化类型的输出（`yaml`、列表 `[T]`、或类型面里的具名类型）时,validate 期核它有没有建议值来源——**warn**（只提示不拦）：
+  - 来源两种,任一在场即不警：①该 ask 之前（文档序）有某步 `+ →` 声明了**同名**变量——运行期引擎把前序产出的值当建议值随停点载荷送出（[[step-dispatcher#^anc-exec-hitl-presentation]] 建议值供给条）;②该 ask 带 `present_inputs`——spec 作者指定了呈给人看的样板;
+  - 两者都没有 → warn 报文："ask 步骤 X 声明了结构化输出 <名>（<类型>）,前序没有同名产出、也没有 present_inputs——执行时人要凭空写出整个结构。先考虑不向人要结构：前置步骤备好让人确认、拆成几个标量 ask、或用 enum 选;确实要的话前置一个步骤产出同名变量（引擎会自动当建议值呈给人改）,或用 present_inputs 指一个样板"（报文先劝换设计再给兜底——概念 ^anc-step-ask 2026-10-08 作者定"尽力避免问人 yaml/列表这种设计,除非没有其他更好的选择"）;
+  - 标量类型（line / text / markdown / int / float / bool / enum）不核——人填一个值不需要样板;
+  - 为什么只 warn 不 error：这是可用性缺口不是语义错误,spec 照样能跑;而且运行期 driver 对无建议值的结构化 ask 会如实告诉人要给完整结构并列字段名,不会静默;
+  - 为什么静态就核：前序同名产出与 present_inputs 都是写 spec 时就定的,写的时候提醒比跑起来人对着空白发愣强（作者 2026-10-08："yaml/列表型的输入究竟应该怎么交互,至少要给一个建议输入让人来改"）。
+  - 正反例：`[reason] → cfg % yaml` 后接 `[ask] + → cfg % yaml` 零警告 / `[ask present_inputs=sample] + → cfg % yaml` 零警告 / 无前序同名无 present_inputs 的 `[ask] + → cfg % yaml` warn / `[ask] + → name % line` 零警告（标量不核）。 ^anc-rule-v17
+
 ### 特殊步骤规则（P）
 
 **call 与 confirm/ask 形态（P1/P3/P7/P12/P13/P14）**：
@@ -835,7 +913,8 @@ convertSchemaSeparators(text) → {text, changed_lines, unmatched_lines}:
       - ①具名参数名不在合法集 → **error** 点名指路（报文带该工具全部合法参数名——"move 没有 src 参数,它的参数是 from/to"）;
       - ②必填参数缺席 → **error** 点名缺谁;
       - ③位置参数（无名实参）→ **error**（内置工具件恒具名调用,`move(a, b)` 形态运行期装 Record 全丢——B2 报文教 `move(from: a, to: b)` 形态）;
-    - 三判只对签名表成员生效,表外调用走既有分档不受影响。
+      - ④keep 实参是字面量而不是非负整数 → **error**（只核 write / edit_file / move / remove 四件;-1、1.5、"3"、True 都拒,0 与正整数放行;变量与表达式运行前不可知,不核）。与 tools.ts KEEP_PARAM 的 `{type: integer, minimum: 0}` 同构,运行期 execute 的 keep 校验是同一判据（[[tools/file-tools#^anc-exec-file-keep-recycle]]）。2026-10-09 commit 安全分析批次 review 补：非法 keep 字面量此前通过静态校验,commit 安全分析把它当"keep 定不了"转人工,人批准后运行期才报错——不用跑就能判的错要在写 spec 时报出来;
+    - 四判只对签名表成员生效,表外调用走既有分档不受影响。
   - **内置通知件名单**（dingtalk_notify/notify 两件）→ 认得,不报。
     - 两员来源各异:dingtalk_notify=tools-notify.ts 注册面 wire 名,notify=tools-composite.ts specs 表的渠道中立 tool_id 映射〔R10 review 纠源:原并称"tools-notify 注册面同源"对 notify 半边指错源〕;
     - 恒注册零声明,requires_commit 恒真而 commit body 直执是既定形态,0089 批次 commit 档需认它们防误拒;同源一致性由 tools.test.ts 对账组第四行机检——姊妹三名单同款防线。

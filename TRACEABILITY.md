@@ -63,7 +63,7 @@ LLM 推理步骤——分析、判断、决策，产出新知识
 ActStep 沙箱约束——act 步骤无不可逆副作用，操作范围限于 SandboxConfig（路径白名单 + 命令黑名单）
 
 - [[spec-ast#^anc-step-act-sandbox-constraint]] ← 权威源
-  - ast-types.ts `ActStep` — @a: anc-step-act, anc-step-act-sandbox-constraint（与 anc-step-act 共享代码行）
+  - ast-types.ts `ActStep` — @a: anc-step-act, anc-step-act-sandbox-constraint （与 anc-step-act 共享代码行）
     - engine.test.ts @v: anc-step-act-sandbox-constraint — act 步骤沙箱语义测试 ✅
 
 ### anc-step-commit ✅
@@ -148,12 +148,19 @@ CITL 数据收集——暂停向 caller 请求业务数据值，落到 +→ 声�
 HITL 介入点统一表达——paused 自包含介入请求（question/output_schema/default_value/options）。confirm 答审批、ask 答数据值。question 与 instruction 受众分流（2026-08-25 #34：question=给人的问题面只由 summary 构成,instruction=驱动侧作业指引独立字段不拼进 question——作者实抓人被迫读机器指令）。ask 零映射拒收（2026-08-25 hopissues/0031：mapAskOutputs 走完全部声明输出无有效值〔undefined 或 null——review 复核抓漏 JSON 通道无 undefined 空值恰产 null〕→ ASK_ANSWER_EMPTY 走 SCHEMA_MISMATCH 拒收,不写表不记 hitl 卡保留;部分映射放行;设计 step-dispatcher §ask answer 零映射条款,代码 engine.completeStep ask 分支;测试面〔@v: 同锚〕零映射拒/null 双形态拒/部分映射放行/approve 快捷不误杀四组）
 
 - [[HopSpec V3核心规范#^anc-exec-hitl-presentation]] ← 权威源
+  - 2026-10-07 hopissues/0119 扩面：ask 应答映射四分支（顶层键命中 / 信封内键命中 / approve 快捷 / 单值灌满）+ 文本型声明收对象/数组 ASK_ANSWER_SHAPE 拒收（写入路径判,比对路径不拒）;review 修复批 2026-10-08 +3 例（text/markdown 拒收〔变异 TEXT_DECL_TYPES 去 markdown 红〕/ 信封部分命中放行·文本型 null 不撞 SHAPE·混合先撞 SHAPE〔变异删 !== null 排除红〕/ 幂等重发同信封 ALREADY_DONE、坏形态重发 STALE_RESUBMIT 不出 SHAPE） — @v: anc-exec-hitl-presentation
+  - engine.ts ask 停点载荷 `default_values` 按声明名分键（每个声明前序同名产出当建议值;`default_value` 保留只给第一个声明向后兼容）+ cli-types.ts ExecutionPaused.presented_data.default_values?（2026-10-08 作者定"至少要给一个建议输入让人来改"——结构化 ask 的建议值供给;来源规则 a 案 + driver 义务见设计建议值供给条;配套 validator V17 见 anc-rule-v17 卡） — @a: anc-exec-hitl-presentation
+    - engine.test.ts 0119 组 +1（两声明各有前序值 → default_values 两键 + default_value 仍只首键 / 只一个有 → 只含那一键 / 都无 → 字段缺席;变异:删 default_values 拼装红） — @v: anc-exec-hitl-presentation
+  - engine.ts completeStep ask 分支 ASK_ANSWER_FLOOD 拒收（2026-10-08 作者定"拒收并说明原因"：两个以上声明被同一个对象灌满——信封内对象键与全部声明名零交集时的形态——在 SHAPE 之后、EMPTY 之前判;定性防御性兜底,多声明结构化 ask 不是推荐写法） — @a: anc-exec-hitl-presentation
+    - engine.test.ts 0119 组 +3 例（反:两 yaml 声明收零交集信封对象 → FLOOD 拒且报文说明原因、分键重交放行〔变异:删灌满判据红〕;正:单 yaml 声明不经本闸、两声明顶层分键放行、显式各写一份同值放行;判序:文本+yaml 混合先报 SHAPE 不报 FLOOD） — @v: anc-exec-hitl-presentation
   - [[hop-cli#^anc-cli-execution-paused]] — ExecutionPaused 升级（question/output_schema/default_value）
     - cli-types.ts ExecutionPaused — @a: anc-cli-execution-paused, anc-exec-hitl-presentation
   - [[step-dispatcher#^anc-exec-hitl-presentation]] — ask answer 落值契约
     - engine.ts nextStep confirm/ask paused 组装 — @a: anc-exec-hitl-presentation
     - engine.ts mapAskOutputs — @a: anc-step-ask, anc-exec-hitl-presentation
-    - prompt.ts buildRolePrefix confirm/ask 角色 — @a: anc-exec-hitl-presentation
+    - engine.ts mapAskOutputs 分支①b（信封内按声明名分家的对象按键采用）+ completeStep ask 分支 ASK_ANSWER_SHAPE 拒收（line/text/markdown 声明收对象/数组 → SCHEMA_MISMATCH 不写表卡保留;2026-10-07 hopissues/0119——多输出 ask 照驱动模板的信封形态提交,整对象灌满每个声明,下游拼成 [object Object] 败因漂移两步） — @a: anc-exec-hitl-presentation
+      - engine.test.ts "ask 信封应答按声明名分拆与文本型拒收（hopissues/0119）" 5 例（正:信封对象分拆〔probe 场景一〕/顶层直配与单声明 {value} 不变/approve 快捷不变/yaml 声明收对象放行;反:line 收对象拒且卡保留可重交/line 收数组拒——变异重放:删分支①b→分拆例红,shapeBad 恒 undefined→两拒收例红） — @v: anc-exec-hitl-presentation
+    - （2026-10-12 语义审计 #13 清账：原行"prompt.ts buildRolePrefix confirm/ask 角色"所指函数已被 buildL0Worldview 取代,且 L0 世界观是零参数恒定文本、不做介入请求组装;prompt.ts:2204 的 @a 挂位残留一并删,本锚代码落点只在 engine 的 paused 组装与 mapAskOutputs）
       - engine.test.ts "ask 步骤" — @v: anc-exec-hitl-presentation
       - dispatcher.test.ts "resume confirm approve maps to bool" — @v: anc-exec-hitl-presentation
 
@@ -234,9 +241,9 @@ parallel = callee 并发申报（自包含/无共享写）+ 步骤级异步派�
 - [[HopSpec V3核心规范#^anc-step-parallel]] ← 权威源（2026-08-10 统一模型改写：申报+执行+三形态覆盖）
   - [[parallel-execution#^anc-exec-parallel-dispatch-model]] — §U1 派发与收齐语义（现行设计权威）
   - [[spec-ast#^anc-step-parallel]] — 字段迁移待落（SubtaskStep.parallel 保留、CallStep.parallel 新增、LoopStep.parallel 废除）
-    - ast-types.ts 两容器字段 + ast-helpers.ts `isParallelContainer`/`getForEach` 谓词 — @a: anc-step-parallel（旧口径，P0 迁移改造）
-    - parser.ts 属性文法解析（for-each 短语摘取+逗号风属性）— @a: anc-step-parallel（旧口径；P0 补 call 属性尾巴+loop 头拒绝）
-      - parser.test.ts "subtask parallel"/"loop for-each with parallel attr" — @v: anc-step-parallel（P0 随迁移改造，正反例矩阵行 8/9）
+    - ast-types.ts 两容器字段 + ast-helpers.ts `isParallelContainer`/`getForEach` 谓词 — @a: anc-step-parallel （旧口径，P0 迁移改造）
+    - parser.ts 属性文法解析（for-each 短语摘取+逗号风属性）— @a: anc-step-parallel （旧口径；P0 补 call 属性尾巴+loop 头拒绝）
+      - parser.test.ts "subtask parallel"/"loop for-each with parallel attr" — @v: anc-step-parallel （P0 随迁移改造，正反例矩阵行 8/9）
       - validator.test.ts "S4 rejects retired parallel type"（退役负向）— @v: anc-rule-s4
 
 ### anc-exec-gather ✅（2026-08-11 P0+P0.5+P2+P1 全交付+真机九场景验收：统一模型主线完结；余 run_status 树状进度归 mcp-server 增强）
@@ -253,6 +260,7 @@ parallel = callee 并发申报（自包含/无共享写）+ 步骤级异步派�
       - dispatcher.test.ts 全灭三例（正:3/3 全灭实例 failed 携派发数;反:1/2 部分失败列表变短语义不动;反:空输入 0 派发 completed 合法）+既有三例期望随语义更新（5522 解引用 1/1 全灭/0018 围栏全失败/超时 1/1 全灭——均 completed→failed,变异核证 if(false) 短路 failStep 恰全灭正例红复原绿） — @v: anc-exec-parallel-allfail
     - engine.ts deliverReapedOutputsAlongChain/deliverReapedFailureAlongChain/findLoopAncestorId/pendingChainFeeds+engine-traverse.ts propagateCompletion 待喂账兑现 — @a: anc-exec-parallel-reap-chain
       - engine.test.ts parallel 续链收割 5 例（收集清单齐/失败走兜底/编号互异——探针转正;+D1 晚收割钉〔末元素孤儿〕+双收集对钉〔双重喂送:翻倍与幻影 null〕——两轮阅卷实抓转钉）— @v: anc-exec-parallel-reap-chain
+      - engine.test.ts "正例（0162）：pending_chain_feeds 写盘后新引擎 load 回填——隔壳形态首个并行子实例失败投回壳后 load,待喂账仍在;新进程里兜底走完、第二项收割,收集清单仍是 [FALLBACK, PATH-B]（账丢了兜底产物就不进清单）"（todo/0162 跨进程往返;变异核证：注释掉写出行或回填行各红）— @v: anc-exec-parallel-reap-chain
     - validator.ts validateCollectChain（S16 断链静态检测,作者补拍）— @a: anc-rule-s16
       - validator.test.ts S16 4 例（断链点名/链齐放行/直挂放行/无人供拒）— @v: anc-rule-s16
   - [[parallel-execution#^anc-exec-parallel-inflight]] — §U2 在飞记账（StateFile.inflight，随原子写+load 通道）
@@ -268,6 +276,7 @@ parallel = callee 并发申报（自包含/无共享写）+ 步骤级异步派�
   - [[exec-engine#^anc-exec-call-reinit-clean]] — 子实例 re-init 净室（2026-08-31 hopissues/0047 修——串行 for-each call 各迭代复用同一 calls/<步骤号>/ 目录,原 init 不清嵌套残留污染下一迭代;语义安全:迭代账全在父账〔completeCallStep loop 级联〕,子目录=单轮已收割作业本,清掉零语义影响保 Python for 串行语义。同日 review 面二抓触发面账实差后条款重述:触发面明写 call 子实例与 parallel worker 都生效〔有意行为——stale 重建=重新 init 从头跑清残留正确〕;**先读后清**次序锁死——首版 rmSync 先于 readChildParams 把父引擎落盘的 params.json 先删后读恒 null,0020 盘面备料通道被静默打死〔当时靠 launch_command 冗余 --params 掩蔽未炸〕,review 抓出当批修;顶层实例不触发。**2026-09-24 hopissues/0098 反转前提**:"子目录=单轮已收割作业本,清掉零语义影响"不成立——父产出可以只存子实例 work_zone 里的文件路径,后轮清目录毁掉前轮成果;循环内串行 call 改为每轮独立子实例目录〔见 anc-exec-call-child-iter-id〕,净室的范围收窄到同一轮重跑）
     - engine.ts initExecution 子实例撞已有目录先读备料再整目录重建（preReadChildParams 先于 rmSync） — @a: anc-exec-call-reinit-clean
       - engine.test.ts 子实例 re-init 净室组（正2:re-init 后 calls/ 嵌套残留被清干净起步/parallel worker 净室先读后清——父落盘 params.json 清盘前取走回填+work_zone 残留照清〔review D1 端到端,修前红修后绿;G3 并入〕;反2:顶层实例 init 不触发清理/有效撞名形态——只带 callStepId 无 parentInstanceId 且目录预存在不清〔review D4 重写,原反例随机 UUID 永不相撞空转,M2 重放红〕）— @v: anc-exec-call-reinit-clean
+      - cli.test.ts "P1 crash-resume" 组 2026-10-08 两例（跑过的子实例 stale_launch 拼 resume 不进净室、从未起过的仍拼 run 进净室——净室触发面收准到"首派发与从未跑过的重起",见 anc-exec-parallel-hitl-queue 卡 stale_launch 行） — @v: anc-exec-call-reinit-clean, anc-exec-parallel-hitl-queue
   - [[parallel-execution#^anc-exec-parallel-kill]] — §U4 主线失败杀活（killed 终态账面权威）
     - engine.ts killInflight + failStep 杀活钩子 — @a: anc-exec-parallel-kill
       - dispatcher.test.ts 矩阵10（killed 不产出不复活）— @v: anc-exec-parallel-kill
@@ -282,6 +291,7 @@ parallel = callee 并发申报（自包含/无共享写）+ 步骤级异步派�
       - dispatcher.test.ts 统一模型 call parallel 名额窗口 3 钉（0086 批直标挂既有组;防重行为面另由 fanout-advisor 卡同批两例罩——标挂彼锚不重挂,引用见彼卡） — @v: anc-exec-parallel-fanout-concurrency
   - [[parallel-execution#^anc-exec-parallel-inflight-reconcile]] — P1 crash-resume 在飞对账（终态补收割/未终态重建;dispatch-lost 超宽限**两模式分道** 2026-08-13 作者批准:独立模式判败〔自派自监 60s 判据成立〕/复用模式降级 stale 交 driver〔真机二撞:主 agent 合法耗时 67s 起 worker 被误杀——引擎判不了 driver 起没起,只有 driver 知道;stale 双载荷 DrainWait+DispatchReady——对账后主线还有活可派时 stale 只挂 drain_wait 就丢;stale_launch=childInstance→launch_command 引擎重拼〔launch_command 不落盘 driver 无从重取,手拼是 fanout 代码化要杀的易错面〕;InflightCall+params 派发时快照〔重拼用现算必错:loop 推进后 itemVar 现值≠派发时值,实测 [21,21]〕〕;报败无目录合成收割容错=stale 的显式判死出口）
     - engine.ts reconcileInflight（dispatchLostPolicy 'fail'/'stale' 分道,DISPATCH_GRACE_SECONDS 启动宽限）+ reapFromChildDir 报败容错 + dispatcher.ts reconcileAndRebuild（独立模式缺省 fail）+ cli.ts advance/reap 传 'stale'（复用模式通道） — @a: anc-exec-parallel-inflight-reconcile
+    - reuse-driver.ts resume 与 reap 对账传 'stale'（MCP 驱动工具走复用模式通道,与 cli.ts 同,todo/0146） — @a: anc-exec-parallel-inflight-reconcile
       - cli.test.ts 对账例（补收割/宽限内不误杀/超宽限降级 stale 后 driver 补起零丢失〔改判 2026-08-13〕/driver 显式报败列表变短/幂等）+ 报成无盘面响亮报错反例 + dispatcher.test.ts 重建 2 例（补收割空转/killed 不复活）+ driver skill stale 处置指令（check-driver-carriers token 钉）— @v: anc-exec-parallel-inflight-reconcile
       - engine.test.ts reconcileInflight 引擎层直钉（0086 批——DISPATCH_GRACE 两分支,与 timeout 卡同批双锚钉同组）— @v: anc-exec-parallel-inflight-reconcile
   - [[parallel-execution#^anc-exec-parallel-timeout]] — P1 单活超时腾名额（缺省不超时，惰性判定；启动窗口让位宽限期）
@@ -289,10 +299,13 @@ parallel = callee 并发申报（自包含/无共享写）+ 步骤级异步派�
       - dispatcher.test.ts 超时 4 例（收割腾名额/未配置永不超时/启动窗口让位/目录已建照判）— @v: anc-exec-parallel-timeout
       - engine.test.ts DISPATCH_GRACE 引擎层两分支钉（0086 批——账龄宽限内保持在飞/超宽限 stale 与 fail 两政策分道;dispatched_at 拨旧实测,重放两向各红）— @v: anc-exec-parallel-timeout, anc-exec-parallel-inflight-reconcile
   - [[parallel-execution#^anc-exec-parallel-abort]] — P1 协作式杀活中断（abort 标志步间检查）
-    - dispatcher.ts requestAbort/aborted 检查点 + kill_list 驱动 — @a: anc-exec-parallel-abort
+    - dispatcher.ts requestAbort/aborted 检查点 + kill_list 驱动 + inflightDispatchers 在飞表（launchParallelSubtask 登记;2026-10-11 语义审计 0156 B2：reconcileAndRebuild 重建的 worker 同样 set、收割 finally delete——此前重建 worker 不在表,父级联 abort 够不到它） — @a: anc-exec-parallel-abort
       - dispatcher.test.ts 中断 1 例（步间返回 failed(aborted) 不执行后续）— @v: anc-exec-parallel-abort
+      - dispatcher.test.ts "正/反：崩溃时点子实例在飞（盘上 running）→ 重建 worker 挂在慢工具上时父级联中止 → 步间止损失败收割;不中止则跑完正常收割"（0156 B2：断重建 worker 的 aborted 位被级联置上 + 账面 killed + 在飞表有它;变异:删 set 行→红） — @v: anc-exec-parallel-abort
   - [[spec-observability#^anc-obs-parallel-reap]] — P1 reap:/settle: 流式块（G11 收割段盲区补全）
     - hoplog.ts recordParallelReap/Settle + engine.ts 收割/终态化记录点 — @a: anc-obs-parallel-reap
+    - hoplog.ts recordParallelSettle 第二参 reaped（settle 块加 `reaped:` 已收清单,空不写;engine.ts settleHostAfterReap 从本宿主 parallel_reap 事件 detail 首词取——2026-10-08 todo/0129 B7,设计定两参代码此前只一参;2026-10-08 发版前八项修复批工程链 review 修复：engine 侧只收形如子实例号的首词〔serial-degraded 不混入,面三缺陷 1 mut-8〕;hoplog 侧 reaped 列表逐项按块缩进写〔B7 写法把 `- x` 行落到 0 列,块内非法 YAML,补比对测试时实抓〕,hoplog v0.9.2） — @a: anc-obs-parallel-reap
+      - dispatcher.test.ts "正例（review 面三缺陷 1 / G3,mut-8）：settle 块的 reaped 清单只收真子实例号——混入 serial-degraded 事件不进清单;hoplog main.yaml 解析精确比对"（parallel-execution ^anc-exec-parallel-reap-log 的 settle 已收清单契约同受此钉——该锚无独立卡,归 todo/0150 拆卡清单） — @v: anc-obs-parallel-reap
       - hoplog.test.ts reap/settle 正反例（时序在轨/零误记;0086 批核认:该组即本锚直钉,engine.test.ts 全灭 warn 组注明间接覆盖关系）— @v: anc-obs-parallel-reap
   - [[spec-observability#^anc-obs-step-done-timing]] — 容器 done 触发点 + worker 掩码祖先豁免（2026-08-30 todo/0022 清账——subtreeRoot 真祖先是 scope 掩码非执行态,propagate 终态化对其记 done/failed 触发孤儿守卫假标记'caller sequence bug'误导复盘;修=propagateAndRecord 跳过掩码祖先,真孤儿守卫语义不变。本行亦补卡上零登记的存量欠账——恰是同批件二反向核抓的形态）
     - engine.ts propagateAndRecord 掩码祖先过滤 — @a: anc-obs-step-done-timing
@@ -334,6 +347,7 @@ LLM 前缀缓存复用（A 分层重排稳定面前置 / B anthropic cache_contr
   - dispatcher.ts DEFAULT 32768 + resolveMaxOutputTokens(serviceId) 四级链摘 CLAUDE_CODE + 两请求点传 service + 两 llm 块记 max_tokens — @a: anc-exec-output-budget
     - dispatcher.test.ts 正例（缺省 32768/provider 级按路由 service 取/resource_limits 覆盖/HOPJIT 恒最高）+ 反例（CLAUDE_CODE 设了不进链）+ 既有 timeout 断言随缺省抬升更新 — @v: anc-exec-output-budget
   - mcp-server.ts ProviderEntry.max_output_tokens + 文法核（正整数拒非法）+ buildEnvSnapshot 快照键 — @a: anc-exec-output-budget
+  - config-load.ts ProviderEntry.max_output_tokens 字段 + parseConfigFile 文法核（2026-10-08 todo/0131 自 mcp-server 搬入） — @a: anc-exec-output-budget
     - mcp-server.test.ts 正例（入库+快照键透传/缺席不注水）+ 反例（-1 与非数字拒）— @v: anc-exec-output-budget
   - hoplog.ts llm 类型 +max_tokens（发送口抄实际请求参数——观测记录点在事实边界）— @a: anc-exec-output-budget
 
@@ -355,6 +369,7 @@ TypeDecl 字段 # 注释入 AST 并按接收端分流（作者定"jit 执行不�
   - runtime-types.ts StateFile.driver_channel / engine.ts driverChannel 字段+persist+load+claimDriverChannel（认领即核对,缺席宽容） — @a: anc-exec-driver-channel
   - cli.ts run/init 建 run 落 cli + submit/reap/advance/abort/resume 五推进入口 claim（status/vars 只读不拦） — @a: anc-exec-driver-channel
   - mcp-server.ts startRun 落 mcp + resumeRun/stopRun claim 转结构化错误（run_status/list_runs 只读不拦） — @a: anc-exec-driver-channel
+  - reuse-driver.ts 七件驱动工具推进入口 claim 与 CLI 同通道 cli（同一 run 可在 MCP 工具与 CLI 回退间切换,todo/0146） — @a: anc-exec-driver-channel
     - cli.test.ts 正例（run 落 cli 同通道照常/旧 run 缺席认领/只读不拦）+ 反例（mcp 标记 run 经 CLI submit 拒 MISMATCH 指路 resume_run 且状态不动）— @v: anc-exec-driver-channel
     - mcp-server.test.ts 反例（cli 建 run 经 MCP resumeRun 拒指路 submit_and_fetch_next 快照不动）+ 正例（mcp 同通道放行/缺席认领/startRun 落 mcp 快照可核）— @v: anc-exec-driver-channel
 - [[hop-cli#^anc-cli-install-skill]] 双名双壳装配（恒装两壳;--mcp 只管配置自举+注册;MCP 壳带 discovery.md 单件——执行协议件是复用壳专属,整目录拷贝会喂废协议）
@@ -412,6 +427,7 @@ spec 树编辑函数组（2026-08-19 作者立项"维护骨干与完整 spec 序
     - tools.ts 四 ToolDef 声明+四执行函数（executeInsertNode/executeReplaceNode/executeReplaceChildren/executeRenumberSteps）+三共享助手+list/execute 接线 — @a: anc-exec-builtin-edit-tree-tool
     - dispatcher.ts assembleReplanEdits 经核心函数拼装（deleteNodeAt/replaceNodeAt/renumberSteps——replan 统一半边,协议校验 parseReplanEdits 不动） — @a: anc-exec-adaptive-pipeline
       - tools.test.ts 树编辑组（正14:replace_children 替换占位重编号含映射剔临时键/insert_node 落位指定序号原位者后移+队列同步/insert_node 末位+1 越界位追加/insert_node 深层落位/insert_node 嵌套层末位+1 追加〔契约2.4例,review G2 补〕/work_items 指向未移步骤不误写〔review D1 正钉〕/syncWorkItems 裸步骤号形态〔review G1 补〕/renumber_steps 修复错位/Provider 四件注册在场/replace_node 占位行本体消失原位接入/replace_node 批量按调用前号定位〔review D7 强化:首片段3步真撞号〕/replaceNodeAt 核心层两阶段直调钉〔review D7:裸片段占号后目标仍按调用前对象命中〕/replace_children root 整树替换〔review D3 补〕/deleteNodeAt 连行带子树移除〔review G3 核心层直测〕/裸片段进出+幂等往返;反13:node_path 不存在响亮拒/insert_node 越界非末位+1 拒/insert_node 缺 node_path 拒/片段 parse error 不编辑且不带半成品〔review G5 补断言〕/缺 fragment 拒/replacements 嵌套目标拒〔主动双向判定〕/replacements 嵌套反序[内,外]同拒〔review D2 补——修前该次序静默吞内层编辑〕/replacements 重复目标拒/replacements 在场忽略单项〔review G4 补〕/replace_node 目标不存在响亮拒〔2026-08-30 review 面四抓卡账漏抄补记〕/replace_children 不收 replacements 缺参拒/spec_is_fragment 无步骤行拒/非布尔拒/deleteNodeAt node_path 不存在拒〔核心层直测〕） — @v: anc-exec-builtin-edit-tree-tool
+    - tools.test.ts 2026-10-10 "execute() 对树工具名的派发:insert_node / replace_node / replace_children / read_spec_tree 各派到自己的实现" 1 例（review 第五次 6.2 阅卷打回后:execute 的 switch 四个 case 标签变异 Z-tool832 / 833 / 834 / 836-case 红） — @v: anc-exec-builtin-edit-tree-tool
 
 ---
 
@@ -433,7 +449,8 @@ spec 树编辑函数组（2026-08-19 作者立项"维护骨干与完整 spec 序
 - [[HopSpec V3核心规范#^anc-tool-two-faces]] ← 概念权威（含规约结构 Tools 段语法+call 扩义三件一批;vault 已回同步）
   - [[tool-interface#^anc-tool-params-notes]] 注册面 params/notes 语义面 ← 设计（v0.6.2——v0.6.1 todo/0050 补装行尾 # 说明回填;v0.6.2 回填算法重写为 params 节窗口定位+节内序位配对+配对安全门〔review 批四缺陷:池化消费偷说明/工具名撞词表/notes 污染/引号数组丢弃〕;再批补空 params 不耗窗+全局窗口对账门〔review B2-1 探针实撞:params:[] 挤位错配/notes 字面块伪窗——伪窗必致供需总量失衡,总数不等整文件弃配〕）
     - tools-registry.ts params 双形态解析+类型词表核+两面参数名一致核+input_schema 机械生成+enrichParamsComments 窗口化回填（窗口定位+序位配对+安全门+空 params 跳窗+全局对账门） — @a: anc-tool-params-notes
-    - mcp-server.ts parseConfigFile 回填接入点（另两读入口:tools 独立文件在 loadToolRegistry 内部;CLI 侧 tool-call 与组合根工厂经 loadProjectToolRegistry〔tools-registry.ts,2026-09-06 review 收敛挪入——CLI 命令文件不再直接接触回填,卡行随实况改〕） — @a: anc-tool-params-notes
+    - ~~mcp-server.ts parseConfigFile 回填接入点~~（2026-10-08 todo/0131 函数搬入 config-load.ts,见下行;历史：另两读入口 tools 独立文件在 loadToolRegistry 内部、CLI 侧经 loadProjectToolRegistry〔2026-09-06 收敛挪入 tools-registry〕）
+    - config-load.ts parseConfigFile 回填接入点（2026-10-08 todo/0131 自 mcp-server 搬入;CLI 侧 tool-call 与组合根工厂改经 config-load loadToolRegistry 两级读取,loadProjectToolRegistry 退役） — @a: anc-tool-params-notes
       - tools-interface.test.ts params/notes 正反例+回填组 ×5+窗口化组 ×5（偷说明/工具名撞词/notes 污染/引号数组/窗口不合弃配）+级联错位组（params:[] 挤位不错配/notes 伪窗不回填,review B2-1 转正） — @v: anc-tool-params-notes
     - tools-composite.ts CompositeToolProvider.list() 声明面补全投影（todo/0122,b708bb91）：描述=注册条目 description,缺席时退回成员自报的描述,notes 换行接在后;returns=成员自报优先,缺席时由 output_schema 渲染（渲染表见 anc-exec-tool-manifest-supply 卡同批行）;tool_id 别名条目同带再接后缀 — @a: anc-tool-params-notes, anc-exec-tool-manifest-supply
       - tools-interface.test.ts「Composite list() 用注册面声明补全描述与返回形状」7 例（只写 notes/description 与 notes 都写/output_schema 渲染/三者都没写如实空串/内置件原样不动/description 缺席退回成员自报〔2026-09-30 工程链 review 补,变异 M5c 删退回转红〕/prompt 与 markdown 中性词〔同批补,变异 M5d 删两项映射转红〕） — @v: anc-tool-params-notes, anc-exec-tool-manifest-supply
@@ -535,7 +552,7 @@ call callee 位插值解引用——`[call {表达式}(映射)]` 执行期把表
   - [[step-dispatcher#^anc-step-call-dynamic-callee]]（Constraints 六条+resolveCalleeId HopSop+知识供给条款+正反例）+ spec-parser.md v0.34.0 收取文法与静态检清单 ← 设计
     - parser.ts 插值形态花括号平衡扫描特判 + buildStep call 分支 `{expr}` 分流（parseExpression 解析/callee_expr_src 原文存留/非法写时 error）+ serializer 回写 `{原文}` — @a: anc-step-call-dynamic-callee
     - ast-types.ts CallStep.callee_expr/callee_expr_src（与 callee_spec_id 互斥恰一） — @a: anc-step-call-dynamic-callee
-    - validator.ts P1 扩员 + V13 collectExprRootVars 断供核 — @a: anc-step-call-dynamic-callee（P1/V13 行并挂 @a: anc-rule-p1/anc-rule-v13）
+    - validator.ts P1 扩员 + V13 collectExprRootVars 断供核 — @a: anc-step-call-dynamic-callee （P1/V13 行并挂的归属锚是 anc-rule-p1 与 anc-rule-v13）
     - dispatcher.ts resolveCalleeId 公共件（静态直返/插值求值/非空字符串收紧）+ handleCallStep/launchParallelCallChild 两消费点接线 — @a: anc-step-call-dynamic-callee
     - engine.ts resolveCalleeToken（复用模式命令占位拼装消费点——dispatch_ready launch_command/call_protocol init_command/buildStaleLaunch 三处;失败处置两形态:dispatch_ready 与 buildStaleLaunch 路径求值失败 warn 落账后拼空 callee 占位 `<CALLEE_SPEC_PATH:>`〔独立模式该失败已先经 launchParallelCallChild 响亮报〕,buildCallProtocol 求值不出整个协议载荷不拼;两形态都决不让 {表达式} 原文漏进命令） — @a: anc-step-call-dynamic-callee
     - prompt.ts L0 叶子类型枚举行 call 半句扩为完整心智模型（知识供给条款落点） — @a: anc-step-call-dynamic-callee
@@ -856,6 +873,15 @@ ErrorCode 枚举——致命/可重试/幂等命中三类
 - [[shared-errors#^anc-error-error-code]] ← 权威源
   - errors.ts `ErrorCode` — @a: anc-error-error-code
   - engine.test.ts @v: anc-error-error-code — ALREADY_DONE/INVALID_STATE 等错误码测试 ✅
+  - errors.ts 枚举补 ADVANCE_ORDER_VIOLATION（设计表 2026-09-06 已登枚举漏加,todo/0129 B10）与 OUTPUT_ABORTED;shared-errors 表补 DIRS_NOT_APPROVED 行（枚举有表漏登）——两向各漏过一次,一致性改机检 — @a: anc-error-error-code
+
+### anc-error-code-table-sync ✅（2026-10-08 todo/0129 A 组 a 案——落点=tests 的 @v:,无 src 代码面;与 anc-meta-threshold-sync 同族"同源比对"守卫）
+
+ErrorCode 枚举与 shared-errors 设计表集合一致由机检守：tests/errors.test.ts 读设计表第一列与枚举逐员双向比对,任一边多出即红点名。两向各漏过一次（2026-09-06 表加 ADVANCE_ORDER_VIOLATION 枚举漏加、2026-10-07 枚举加 DIRS_NOT_APPROVED 表漏登）,2026-09-30 语义审计 ❌ 才抓到。前缀字符串形态的错误码（OUTPUT_TRUNCATED / THINKING_EXHAUSTED / ENDPOINT_UNREACHABLE 等）不在表也不在枚举,不受本核。同批把"接口/枚举层模块 C→T 缺失按 ⚠️"的豁免规则写进 scripts/audit/anchor-audit-knowledge.md 判断标准。
+
+- [[shared-errors#^anc-error-code-table-sync]] ← 权威源（表尾括注,宿主 ^anc-error-error-code）
+  - errors.test.ts "ErrorCode 枚举与 shared-errors 设计表集合一致" 3 例（表→枚举 / 枚举→表 / 表解析真读到码防假绿;文件头 @module: shared-errors——模块首份专属测试） — @v: anc-error-code-table-sync
+    - 落地即抓出两向漏登各一,errors.ts 补 ADVANCE_ORDER_VIOLATION / OUTPUT_ABORTED,shared-errors 表补 DIRS_NOT_APPROVED 行;变异 p10 删枚举值 → 表→枚举例红
 
 ### anc-error-spec-error ✅
 
@@ -894,6 +920,7 @@ StepReady——NextResponse 中"步骤就绪"形态，携带完整执行上下�
 - [[hop-cli#^anc-cli-step-ready]] ← 权威源
   - cli-types.ts `StepReady` — @a: anc-cli-step-ready
   - engine.test.ts @v: anc-cli-step-ready — nextStep 返回 step_ready 形态测试 ✅
+  - 2026-10-07 追注：StepReady 等带 work_zone 的六形态并列加 `workspace_dir`（本 run 工作区根回显）,契约与落点见 anc-cli-workspace-arg 卡
 
 ### anc-cli-execution-paused ✅
 
@@ -928,12 +955,13 @@ StatusResponse——hopjit status 命令响应。2026-09-09 0081 批：execution
 
 - [[hop-cli#^anc-cli-status-response]] ← 权威源
   - cli-types.ts `StatusResponse` — @a: anc-cli-status-response
-  - engine.ts `determineExecutionStatus`/`detectPausedState`/`getStatus` paused 摘要装配 — @a: anc-cli-status-response（0081）
+  - engine.ts `determineExecutionStatus`/`detectPausedState`/`getStatus` paused 摘要装配 — @a: anc-cli-status-response （0081）
   - engine.test.ts @v: anc-cli-status-response — Phase 3 engine getStatus 测试 ✅
     - engine.test.ts "停驻检测卡源"钉（ask 停驻摘要取卡值+消化后离场+陈卡对账不认残卡）— @v: anc-cli-status-response
     - cli.test.ts "status 停驻如实转述（paused 档,0081）"组 4 钉（confirm 停驻正例/消化回 running 反例/aborted 凌驾反例/vars 同口径）— @v: anc-cli-status-response
     - 变异验证 2026-09-09：删 paused 判定分支→正例 3 红反例 2 绿 ✅ 复原→5 绿 ✅;recover 后断 running 存量钉实跑不误伤 ✅
 
+  - 2026-10-07 追注（dirs 批 review D4）：paused 判定加源⑥——Config.dirs 批准停驻（dirs 卡 step_id 恒空串,源③永不命中,首版 status 报 running）;engine.detectPausedState 开头核 checkDirsApproval,paused_step_id 缺席;代码与测试挂 anc-exec-dirs-grant 卡
 ### anc-cli-status-nested-pause ✅
 
 status 对网络暂停与嵌套串行调用子流程里的停点也报 paused（todo/0105,2026-09-25 作者拍甲案"顶层+嵌套都看见"）。实撞:2026-09-21 T5 hb2×Ling,子流程网络暂停,观察方用命令行 status 30 多分钟看到 running。detectPausedState 在 0081 三源之后追加源④（某步 pending 且其最后一条事件是 network_pause）与源⑤（running 的非 parallel call 步→读 calls/<serialCallChildInstance>/ 子快照递归判定,子实例已终态或读失败则跳过;命中时本层调用步号头插进 call_path）。StatusResponse 新增可选 call_path,与 MCP 暂停载荷同语义。不下钻 parallel 子实例（其 run 整体状态归 parallel-execution ^anc-exec-parallel-hitl-queue 第 3 条）。
@@ -956,13 +984,14 @@ ReplanResponse——hopjit replan 命令响应
   - engine.test.ts @v: anc-cli-replan-response — submitReplan 测试 ✅
     - cli.test.ts --replan 跨进程组直标（0086 批挂标——ReplanError 字段级断言挂账未补钉）— @v: anc-cli-replan-response
 
-### anc-cli-branch-request ✅
+### anc-cli-branch-request ⚰️（2026-10-12 todo/0168 作者定"不存在外部选路场景,branch / case 都是显性条件"——撤 `submit_and_fetch_next --branch`,锚存废除记录）
 
-BranchRequest——hopjit branch 命令请求体
+BranchRequest——原 `submit_and_fetch_next --branch <case-id> [--reason]` 的请求体,让调用方替引擎指定 branch 走哪个 case。选路只由引擎进入 branch 时按 case 条件求值（契约 anc-exec-branch-select-internal）。
 
-- [[hop-cli#^anc-cli-branch-request]] ← 权威源
-  - cli-types.ts `BranchRequest` — @a: anc-cli-branch-request
-  - cli.test.ts @v: anc-cli-branch-request — selectBranch 测试 ✅
+- [[hop-cli#^anc-cli-branch-request]] ← 设计权威（废除记录载体）
+  - 代码/测试落点已随废除批全删（原 cli-types `BranchRequest` 类型、cli `--branch` / `--reason` 选项与分支、engine `selectBranch` 公开方法、cli.test "branch selection" 组——墓碑不留活链行,历史形态见 git show 1be506bb）
+
+**废除（2026-10-12）**：两条路径都越过 spec 写明的条件——预选（branch 还 pending 时先指定 case,前序步交付的值可能对应另一支,引擎看到已 running 不再求值）与运行中改选（旧 selectBranch 允许 running 态,把原支叶子改 skipped、新支叶子仍 pending,advanceToCaller 以 No executable step found 失败,todo/0163 补 MCP 六形态测试时实撞）。根因是建库初始化提交里旧"引擎停在 branch 步等 caller 选"模型的残留,统一派发后没撤反被登记成提交形态并配了"调试 / 人工介入"门面。
 
 ---
 
@@ -1007,7 +1036,7 @@ execute 实参名进闸核对（2026-09-16 作者拍,决策页 todo/decision/202
 
 - [[tools/file-tools#^anc-exec-builtin-file-tools]] 实参名进闸条款 ← 设计权威
   - tools.ts execute 进闸段 — @a: anc-exec-tool-arg-gate
-    - tools.test.ts "execute 实参名进闸"三钉（move src/dst 实撞重放拒收带指路/write 缺 content 拒收/合法参数照常执行不误拒） — @v: anc-exec-tool-arg-gate;重放:闸禁用→2 钉红复原绿
+    - tools.test.ts "execute 实参名进闸"三钉（move src/dst 实撞重放拒收带指路/write 缺 content 拒收/合法参数照常执行不误拒） — @v: anc-exec-tool-arg-gate, 重放:闸禁用→2 钉红复原绿
 
 ### anc-step-act-body-comprehension ✅
 
@@ -1110,6 +1139,22 @@ yaml=结构化数据类型（2026-08-20 作者定值模型改判——实撞:exp
       - act-body-validator.test.ts str 结构组（正1:YAML 块式且标量/字符串原语义不变） — @v: anc-type-yaml-structured
       - tools.test.ts 写侧结构组（正1:content 收结构 YAML 块式落盘;反1:字符串原样不二次序列化） — @v: anc-type-yaml-structured
 
+### anc-exec-spec-dir ✅（2026-10-06 todo/0145——作者定工作区=用户项目,HopAnt 自带脚本经已批准命令+subprocess.run 跑、路径由 spec_dir 取;否掉"run_script 也走 spec 目录"的提法：放开到用户项目是开放执行,安全面没审过）
+
+spec_dir(rel?) 实例上下文内置——act/check/commit body 内引用本 spec 文件所在目录下的路径（无参=目录本身,禁 ..）;与 work_zone_path 同族：条件里调用报"需实例上下文",spec 不是从文件加载时 TOOL_EXEC_ERROR 不回退 workspace;**只算路径不开权限**——spec 目录在读权限内（起跑授权 anc-exec-doc-ref-resolve;文件工具读类认这条授权是 anc-exec-tool-path-resolve 第④形态,2026-10-07 review 修复批 D1 补——此前 read(spec_dir(…)) 会被 workspace 外绝对路径判拒,"数据样例经文件工具读"是空承诺;作者定一条读授权覆盖 knowledge/数据样例/将来的 inner_store,不分开授权）不在写权限内,跑脚本仍须已批准命令。两模式注入源同为 dirname(specPath);崩溃恢复 load 从快照 spec_path 回填;parallel 子实例继承父 specPath,call 子实例取 callee 自己的路径。
+
+- [[../concepts/HopSpec V3核心规范#^anc-step-act-body-lang]] 实例上下文内置条款 ← 概念权威;[[../concepts/HopAnt概念#^anc-struct-hopant-layout]]「跑 HopAnt 时的工作区」段 ← 用途来源
+  - [[act-body#^anc-exec-spec-dir]] — 契约/类型/流程三件套;[[hopant#^anc-struct-hopant]] ②c 运行时目录条;[[tools/run-script]] 与 HopAnt 自带脚本的分工段
+    - act-builtins.ts spec_dir 占位项 — @a: anc-exec-spec-dir
+    - act-body-interpreter.ts BodyExecContext.specDir + evalCall 专路 — @a: anc-exec-spec-dir
+    - engine.ts 构造 BodyInterpreter 注入 dirname(specPath) / dispatcher.ts 同款 — @a: anc-exec-spec-dir
+      - act-body-interpreter.test.ts "spec_dir 契约边界"（反:条件侧/无上下文不回退/.. 穿越;正:拼接与无参返目录/真目录端到端——python3 白名单跑 spec_dir 取路径的脚本读 spec_dir 取路径的数据文件,stdout 回传） — @v: anc-exec-spec-dir
+      - dispatcher.test.ts "spec_dir 内置函数（独立模式注入）"（正:带 specPath 起跑 spec_dir() 等于其目录;反:内存态步骤不完成且失败原因点名 spec_dir 不可用） — @v: anc-exec-spec-dir
+      - engine.test.ts "spec_dir 复用模式注入（engine advanceToCaller）"（正:act/check/commit 三种步骤 body 里 spec_dir() 等于 spec 目录 / load 从快照回填后仍为原目录;反:内存态 act 步失败原因点名 spec_dir 不可用） — @v: anc-exec-spec-dir
+      - act-body-validator.test.ts B2 正例：commit 步 body 调 spec_dir / work_zone_path 零 error（实例上下文内置是白名单成员） — @v: anc-exec-spec-dir
+  - 五消费位（核心规范/语法参考/D10/split-patterns/hopbuild v1 primer）各加 `spec_dir(rel?)` 一句 — builtins-doc-sync 钉守（primer 2026-10-07 review 补为第五位,它自称白名单全集且随 npm 分发）
+  - 变异重放（首批）：删 .. 判→红 / 缺 specDir 静默回退→红×5 / dispatcher 不注入→红×5;（review 修复批,对已 commit 的基线重放）engine 不注入→红×2 / dispatcher 不注入→红 / 删 spec_dir 占位项→红 / 放过 ..→红 / 缺 ctx 不抛→红
+
 ### anc-exec-work-zone-path ✅
 
 work_zone_path(rel?) 实例上下文内置——body 内引用本实例 work_zone 涂鸦区路径（无参=根，禁 ..）；条件里调用报"需实例上下文"；返回路径读写放行（.hopstate 禁令唯一豁免，判定=本 run 涂鸦区集合命中,见 anc-exec-work-zone-registry 卡）
@@ -1125,6 +1170,15 @@ work_zone_path(rel?) 实例上下文内置——body 内引用本实例 work_zon
 - 2026-08-30 追注：语义审计实抓 WORK_ZONE_RE 单段不匹配 parallel/call 子实例三段路径（standalone 子实例写自身 work_zone 误拒;复用模式不经此 Provider 未暴露）——正则放宽任意深度修复，isWorkZonePath 正反例钉（三形态放行/伪装名拒），exec-engine 设计"work_zone_<child_step_id>"命名陈述同批勘误为实际布局，todo/0046 闭
 - 2026-09-03 追注：hopissues/0066 实抓判定第三洞——WORK_ZONE_RE 硬编码 .hopstate 字面,--state-dir 名不含该字样(hopkb runtime/hopstate 不带点)时 work_zone_path() 产物被自家绝对路径禁令拒,"引擎一手发路径一手拒路径"。修=判定向发出侧对齐:tools.ts registerWorkZoneRoot 注册面+isWorkZonePath 第三支(注册根前缀),persistence 两实现 getWorkZone 时注册(原始+realpath 双形态——probe 重放实抓只注册 realpath 时 resolvePath 消费点吃原始形态照拒,两消费点各吃一种);字面两支保留存量兼容。tools.test.ts 注册根前缀支三钉(正:注册后 hopkb 实撞形态放行;反:未注册照拒/前缀边界 work_zonefake 不误中),变异实证删支即红。设计 file-tools ^anc-exec-write-scope 三支条款
 - 2026-09-30 追注：todo/0124 判定三支整体退役——字面正则两支让 workspace 外任何含 .hopstate/<x>/work_zone 字面的路径都能读写,模块级注册表让同进程别的 run 互相可读写;改为提供者按 run 持有本实例树的涂鸦区集合,engine.getWorkZone() 做登记路由。契约/类型/流程与全部代码测试落点立独立卡 anc-exec-work-zone-registry;本卡代码面 tools.ts 行改指该卡,tools.test.ts "work_zone 涂鸦区豁免" 用例改为先登记再放行
+
+### anc-exec-write-parent-missing ✅（2026-10-08 hopissues/0120——写类工具父目录缺失报文指路）
+
+commit 步 `write` 目标父目录不存在时只回裸 `ENOENT: no such file or directory, open '…'`,排障者分不清路径写错还是目录没建。卡给二选一（①自动建目录 / ②报文指路）,取②：makedirs 是显式原语,write 隐含建目录让两件工具语义重叠;commit 写域是 workspace,自动建目录等于在不可逆动作里多出一个没写在 body 里的隐式动作。修：write / create / append 三件在 fs 原语抛 ENOENT 且 dirname(resolved) 不存在时改报 `父目录 <绝对路径> 不存在,请先 makedirs 或改用已存在目录（原始错误：…）`;父目录在场的 ENOENT 原文照回;edit_file 预设文件在场走自己的「文件不存在」报文不经本条。
+
+- [[tools/file-tools#^anc-exec-write-parent-missing]] ← 权威源（Constraints 条款 + HopSop 3.1 分支）;[[tools]] 模块版本 v0.25.1
+  - tools.ts withParentDirHint(resolved, fn) + executeWrite / executeCreate / executeAppend 三处包裹 + executeMove 目标侧（源在场才包,源缺席 ENOENT 原文照回——2026-10-08 发版前八项修复批工程链 review 修复 G11） — @a: anc-exec-write-parent-missing
+    - tools.test.ts "反例：write 目标的父目录不存在 → 报文点名父目录并指路 makedirs,文件不落、目录不代建" / "反例：create / append 目标的父目录不存在 → 同一指路报文（三件同链）" / "正例：父目录在场的写入照常;…makedirs 后写成功"（2026-10-08 发版前八项修复批工程链 review 修复 真造 workspace 内坏软链断原文照回——mut-12 抓标题承诺未兑现） / "反例（review 面二 G11）：move 的目标父目录不存在 → 同一指路报文;源不存在原文照回" — @v: anc-exec-write-parent-missing
+  - probe：hopissues/hoplogic3/0120 卡 probe（repro-spec commit 步 write 到 newdir_a/newdir_b/probe.txt）——卡自带 probe.sh 写于 commit 批准闸之前,现行引擎须先批准 commit 再看 failure_reason（drive120.sh 形态）;修后 `TOOL_EXEC_ERROR: tool "write" failed: 父目录 … 不存在,请先 makedirs…` PASS;变异 m1（判据删）m2（append 漏包）两例红
 
 ### anc-exec-write-scope ✅
 
@@ -1142,6 +1196,7 @@ work_zone_path(rel?) 实例上下文内置——body 内引用本实例 work_zon
       - act-body-interpreter.test.ts "写域随 allowCommit 分派"（act→work_zone/commit→workspace 双正例） — @v: anc-exec-write-scope
       - dispatcher.test.ts "allows act step..."（LLM 环 work_zone 信号断言）+ "check body 写 workspace 根 → WORK_ZONE_ONLY 拒"（check 语境直接钉,断言=run failed 且违规文件未落盘） — @v: anc-exec-write-scope
 
+  - 2026-10-07 追注（todo/0148）：commit 写域扩为 workspace ∪ write_access.allowed,act/check 写域不动;落点与测试见 anc-exec-dirs-grant 卡
 ### anc-exec-work-zone-registry ✅
 
 文件工具的 work_zone 沙箱豁免只认本次运行自己的涂鸦区,且**读写分权**（2026-09-30 todo/0124 按 run 登记,作者定"这个任务就应该直接把 work_zone 目录记下来";同日 todo/0126 作者定"可以读,但不应该能写""祖先、兄弟这些都是避免文件的重复 copy"）——写只认当前执行实例的 work_zone（own,engine 每次 getWorkZone() 推送的时序信号,standalone 父子兄弟共用一个提供者时靠它区分"谁在写"）;读认本 run 顶层实例目录（tree）内任意 work_zone 段（按目录布局判,祖先/兄弟/后代一网打尽）,登记根集合只作 tree 缺席的兜底;persistence 报根集合（本实例首位、祖先在后,按 <父>/parallel|calls/<cid>/ 布局上溯）,engine.getWorkZone() 每次调用推 registerWorkZoneRoot + setWorkZoneScope({own, tree}) 给它持有的提供者引用;resolvePath 捷径认读范围,validateFileAccess 读侧认读范围、写侧只认 own;字面正则两支与模块级注册表退役;0124 首版"本实例+祖先读写全放行、后代可写祖先"被 0126 收回,hopbuild2 台账通道随改为各实例写自己的、父读各子合并。触发：hopissues/0112 修复批次独立阅卷第二、三轮实证 workspace 外任何含惯例名字面的路径一次调用即可读写、同进程别的 run 互相可读写（severity high）。
@@ -1165,13 +1220,14 @@ work_zone_path(rel?) 实例上下文内置——body 内引用本实例 work_zon
 
 ### anc-exec-tool-path-resolve ✅
 
-文件工具路径解析与目录边界判定（2026-09-30 hopissues/0112）——判据只问落点不问写法：workspace 相对路径、落在 workspace 内的绝对路径（字面判或真实路径判任一命中）、work_zone 绝对路径三种形态合法，workspace 外绝对路径与含 .. 的路径拒。同批修两处既有逃逸：目录"在内"判定补路径分隔符边界（兄弟目录 /x/proj2 不再算在 /x/proj 内）；校验链取真实路径时目标不存在也解析最近已存在祖先与悬空软链（经软链父目录新建文件不再逃出 workspace）。触发：hopbuild2 翻译产物 commit 步用 split(用户绝对路径) 派生落盘路径被一律拒。
+文件工具路径解析与目录边界判定（2026-09-30 hopissues/0112）——判据只问落点不问写法：workspace 相对路径、落在 workspace 内的绝对路径（字面判或真实路径判任一命中）、work_zone 绝对路径三种形态合法，workspace 外绝对路径与含 .. 的路径拒。**第④形态（2026-10-07 spec_dir 批 review 修复 D1,作者定"不让读,那 knowledge/data/将来的 inner_store 都要再分开授权"）**：read 档（read/search_file/listdir/exists 四件）另认落在 `read_access.allowed` 某目录内的绝对路径（字面或真实路径判任一）——起跑把 spec 所在目录加进 allowed,`read(path: spec_dir("data/a.csv"))` 由此能读;写类与 run_script 走 strict 档不认此形态;放行后 validateFileAccess('read') 仍过 denied/confirm_required 链。同批修两处既有逃逸：目录"在内"判定补路径分隔符边界（兄弟目录 /x/proj2 不再算在 /x/proj 内）；校验链取真实路径时目标不存在也解析最近已存在祖先与悬空软链（经软链父目录新建文件不再逃出 workspace）。触发：hopbuild2 翻译产物 commit 步用 split(用户绝对路径) 派生落盘路径被一律拒。
 
 - [[../concepts/HopSpec V3核心规范#^anc-step-act-body-lang]] 工具组"限沙箱 workspace 内"条款 ← 概念权威（只要求落区，不要求相对写法）
   - [[tools/file-tools#^anc-exec-tool-path-resolve]] 契约 ToolPathResolve + HopType + HopSop（宿主 ^anc-exec-builtin-file-tools Constraints 路径入参条）— 契约/流程
   - [[doc-ref#^anc-exec-doc-ref-resolve]] workspace 一级同判据 — 消费面
   - [[spec-parser#^anc-rule-b10]] 静态侧不放宽、理由改"不可移植" — 相邻规则
     - tools.ts resolveWorkspacePath / isWithinDir / resolveRealDeep + validateReadAccess / validateFileAccess 三个使用点 — @a: anc-exec-tool-path-resolve
+      - tools.test.ts "read_access.allowed 内绝对路径（spec 目录只读）"（正:read/exists/listdir/search_file 对 allowed 内 workspace 外绝对路径放行;反:不在 allowed 内的仍拒 / 写类五件到 allowed 内绝对路径全拒文件不落 / run_script 走 strict 档不把 allowed 内 .py 当可执行脚本 / allowed 内带 .. 仍拒、denied 命中仍拒——变异重放：删 read 档分支→红×2 / read 档不分 mode→红 / run_script 走 read 档→红） — @v: anc-exec-tool-path-resolve
       - tools.test.ts "路径解析：workspace 内绝对路径与目录边界"（内绝对路径读写正例 + 软链别名根真实路径判正例 + 外绝对路径/含 .. 反例 + 兄弟前缀软链读写反例（含直接写兄弟目录绝对路径，断言拒因是解析层契约报文"Absolute path outside workspace…workspace 根"而不是写域闸兜底报文——变异回放：把目录边界判定退回裸前缀比较即红） + 软链父目录新建与悬空软链写反例 + 读侧经软链父目录探测外部不存在文件反例/经内部软链探测正例 + 正常新建嵌套路径与超 40 层新目录正例 + 经软链父目录新建超 40 层目录反例 + 别名目录下相对悬空软链反例 + 软链成环反例 + read allowed 清单兄弟前缀反例） — @v: anc-exec-tool-path-resolve
       - doc-ref.test.ts workspace 内字面绝对路径与相对写法同内容正例 + 软链别名根真实路径形态正例 + 经软链父目录指向外部拒/经内部软链解析正例 + specDir 在场时 workspace 内字面绝对路径按 workspace 落点解析、spec 目录下拼接位置的诱饵文件不抢答正例（变异回放：去掉 spec 目录级"只吃相对形态"的判定即红）/ workspace 外字面绝对路径即使 spec 目录下有拼接诱饵也拒反例（反例=workspace 外字面绝对路径拒，同文件既有两条断言改钉新报文） — @v: anc-exec-tool-path-resolve
 
@@ -1210,6 +1266,7 @@ parse_json(text) 结构解码内置——JSON 文本→结构值,内置工具族
       - config-keys-doc-sync.test.ts 5 钉（前提自检:清单非空含已知键防清空装绿〔第十一轮 review 补 models 点名——原四键漏 models 靠 length 兜〕/正①清单→文档缺键红点名/正②代码→清单未登记键红点名〔扫描键名限 ASCII 标识符——首跑实抓自家注释中文示例字样入面,判据当场收窄〕/反:扫描判据自抓索引形态防正则退化空扫/反:model-models 前缀碰撞双向〔阅卷实锤裸 includes 假绿后补,立卡时钉数误记 4——第十一轮 review 面四抓账实差勘正〕） — @v: anc-ast-config-keys-doc-sync
       - 负向验证两拍:清单删 requires_commands→正②红(2 failed)复原绿;概念层删 requires_commands 记载→正①红(1 failed)复原绿;阅卷两缺陷修毕:@module 锚名 anc-struct-ast→anc-struct-spec-ast(audit 悬空锚 1 即它,修后归零)/正①裸 includes 改名字边界判 keyPresent(阅卷实验实锤:删光 model 记载 includes("model") 被 models 子串吞并恒真——builtins 先例的 strip/strip_fence 边界哲学同款,补 model/models 双向碰撞反例钉,重放阅卷实验转红)
   - 准入四步全齐:①chain-enforcement §1d 登记行/②时机=npm test 内常驻(vitest 全量自然覆盖,无需时机表单列——builtins-doc-sync 同款)/③负向验证两拍(上行)/④本卡
+  - 2026-10-07 追注（todo/0148 + review D18）：ENGINE_CONFIG_KEYS 六键加 `dirs`（2994ae1f 落地时漏登本卡与 spec-ast SpecConfig,review 补）;同文件 DIRS_VAR_REF_RE（dirs `{名字}` 字符集,validator/engine 同用,挂 anc-exec-dirs-grant）
 ### anc-exec-requires-commit ✅
 
 requires_commit——工具副作用声明：true = 仅 commit 步骤可调用，act 步骤自动拦截
@@ -1232,7 +1289,7 @@ IdentityProvider——凭证管理接口（get_credential / list_services）
 
 - [[shared-providers#^anc-provider-identity]] ← 权威源
   - provider-types.ts `IdentityProvider` — @a: anc-provider-identity
-    - dispatcher.test.ts "resolveApiKey" — @v: anc-provider-identity（凭证解析顺序测试）
+    - dispatcher.test.ts "resolveApiKey" — @v: anc-provider-identity （凭证解析顺序测试）
 
 ---
 
@@ -1267,7 +1324,7 @@ ResourceLimits——资源限制（max_tool_iterations / max_context_tokens / ti
 ModelEngine——多模型路由配置（default_service / default_model / routing_rules）
 
 - [[shared-providers#^anc-config-model-engine]] ← 权威源
-- [[HopAnt概念-双态组件模型#^anc-config-model-engine]] ← 概念层
+- [[HopSpec V3配套HopJIT运行时能力#^anc-config-model-engine]] ← 概念层
   - provider-types.ts `ModelEngine` — @a: anc-config-model-engine
     - dispatcher.test.ts @v: anc-config-model-engine — resolveModel 路由测试 ✅
 
@@ -1294,7 +1351,8 @@ thinking 路由五级优先链（2026-08-20 作者拍板形态 B 立 routing_rul
 
 - [[step-dispatcher#^anc-exec-thinking-routing]] ← 设计权威（五级链）；[[shared-providers]] schema 登记
   - provider-types.ts ModelRoute.thinking / dispatcher.ts buildApiRequest 五级链装配 / mcp-server.ts routing_rules 文法核+装配透传 — @a: anc-exec-thinking-routing
-    - dispatcher.test.ts 形态B组(route 声明发参/budget 夹逼)+五级链组(级5 六格分道〔真 act/act free/replan 补钉 2026-09-20 review 批〕/级2 压级5 与压级4/级1 压级2/级3 异答格/级4 两值)+工具循环消费面钉(loopRequest 实发请求带 thinking——F1 修重放锁) — @v: anc-exec-thinking-routing（变招重试组归 anc-exec-thinking-exhausted 卡,2026-09-20 review 批勘正归属）
+  - config-load.ts routing_rules thinking 枚举文法核（2026-10-08 todo/0131 自 mcp-server 搬入） — @a: anc-exec-thinking-routing
+    - dispatcher.test.ts 形态B组(route 声明发参/budget 夹逼)+五级链组(级5 六格分道〔真 act/act free/replan 补钉 2026-09-20 review 批〕/级2 压级5 与压级4/级1 压级2/级3 异答格/级4 两值)+工具循环消费面钉(loopRequest 实发请求带 thinking——F1 修重放锁) — @v: anc-exec-thinking-routing （变招重试组归 anc-exec-thinking-exhausted 卡,2026-09-20 review 批勘正归属）
     - mcp-server.test.ts routing_rules 枚举核（正1:合法值过;反1:枚举外拒） — @v: anc-exec-thinking-routing
 
 ---
@@ -1338,7 +1396,8 @@ thinking 路由五级优先链（2026-08-20 作者拍板形态 B 立 routing_rul
 provider 级思考缺省（0100,2026-09-20 作者问"ling 和 ds 缺省思考状态不一样,以后是不是需要统一"——统一落点=配置层显式化,不在端点）：ProviderEntry 可选 thinking: enabled|disabled——五级链第 4 级,逐模型矫正档（antchat 类"端点缺省关"的服务配 disabled 压回第 5 级 reason 恒开——Ling 开思考费用 ×10,只给重推理步 @thinking on 点名开）。env 键 {SERVICE_ID}_THINKING 随快照披发,dispatcher envOf 消费;加载期枚举核坏值响亮拒。
 
 - [[shared-providers#^anc-config-standalone-schema]] ProviderEntry thinking 行 ← schema 权威；[[../reference/配置参考]] thinking 行 ← 对外文法
-  - mcp-server.ts ProviderEntry.thinking+文法核+buildEnvSnapshot 披发 / dispatcher.ts 五级链级 4 消费 — @a: anc-exec-thinking-provider-default
+  - mcp-server.ts buildEnvSnapshot 披发（ProviderEntry.thinking 字段与文法核 2026-10-08 搬入 config-load.ts,见下行） / dispatcher.ts 五级链级 4 消费 — @a: anc-exec-thinking-provider-default
+  - config-load.ts ProviderEntry.thinking 字段 + parseConfigFile 文法核（2026-10-08 todo/0131 自 mcp-server 搬入;buildEnvSnapshot 披发仍在 mcp-server） — @a: anc-exec-thinking-provider-default
     - mcp-server.test.ts（正1:合法加载+快照披发;反2:枚举外拒/缺席不披假值） — @v: anc-exec-thinking-provider-default
     - dispatcher.test.ts 级4 压级5 — @v: anc-exec-thinking-provider-default
 
@@ -1350,6 +1409,7 @@ provider 级思考缺省（0100,2026-09-20 作者问"ling 和 ds 缺省思考状
 
 - [[step-dispatcher#^anc-exec-thinking-disable-unsupported]] ← 设计权威（HopTrait/HopType/HopSop）；[[shared-providers#^anc-config-standalone-schema]] ProviderEntry 行 ← schema 权威；[[../reference/配置参考]] thinking_disable_unsupported 行 ← 对外文法
   - mcp-server.ts ProviderEntry 字段+文法核（类型/协议）+buildEnvSnapshot 披发 / dispatcher.ts resolveThinkingParam 出口替换+providerEnvOf 共用回退取值+thinkingSummary 共用摘要 — @a: anc-exec-thinking-disable-unsupported
+  - config-load.ts ProviderEntry.thinking_disable_unsupported 字段 + 文法核（类型/协议）（2026-10-08 todo/0131 自 mcp-server 搬入） — @a: anc-exec-thinking-disable-unsupported
     - dispatcher.test.ts「思考关不掉的端点改发 effort low」组（正反成对:级1/2/3/5 各自给出的关在声明与未声明下形态不同;开不替换;缺省 provider 回退首 provider;工具循环实发请求+hoplog effort:low;摘要四形态） — @v: anc-exec-thinking-disable-unsupported
     - mcp-server.test.ts「providers thinking_disable_unsupported」组（正1:true 加载+快照披发;反3:false/缺席不披发、字符串与数字拒、非 anthropic 协议写 true 拒） — @v: anc-exec-thinking-disable-unsupported
 
@@ -1360,10 +1420,11 @@ provider 级思考缺省（0100,2026-09-20 作者问"ling 和 ds 缺省思考状
 ModelEngine 多服务路由——客户端池 + 凭证解析 + 路由解析
 
 - [[step-dispatcher#^anc-exec-model-routing]] ← 权威源
-- [[HopAnt概念-双态组件模型#^anc-exec-model-routing]] ← 概念层
+- [[HopSpec V3配套HopJIT运行时能力#^anc-exec-model-routing]] ← 概念层
   - dispatcher.ts `clients Map` + `getClientForService`（v0.2.1 未知 service fail-fast：非 default 且无凭证抛 UNKNOWN_SERVICE，不静默回退默认后端）— @a: anc-exec-model-routing
   - provider-types.ts `RoutingCategory`+`ROUTING_CATEGORIES`（0008①——类型与加载闸同源,ModelRoute.match.step_type 收窄:replan 合法零强转/confirm 编译期拒）— @a: anc-exec-model-routing
   - mcp-server.ts routing_rules 加载闸（CATEGORIES 引 ROUTING_CATEGORIES 单源）+ ModelEngine 映射点 — @a: anc-exec-model-routing
+  - config-load.ts routing_rules 加载闸（CATEGORIES 引 ROUTING_CATEGORIES 单源,2026-10-08 todo/0131 自 mcp-server 搬入） — @a: anc-exec-model-routing
     - dispatcher.test.ts @v: anc-exec-model-routing — 路由优先级测试 + 未知 service fail-fast ×3（typo 抛错报变量名/default 语义不变/env 有凭证正常建）✅
     - mcp-server.test.ts routing_rules 类别闸正反例（replan 合法/confirm 拒'不在类别表'）✅
 
@@ -1426,6 +1487,7 @@ LogLevel——三级日志（debug ⊇ info ⊇ warn），控制 .hoplog 输出�
   - engine.test.ts @v: anc-obs-log-levels — 缺省 info 落头正例/显式 debug 升级正例/显式 warn 降级反例 ✅
   - mcp-server.test.ts "log_level 配置节（standalone 缺省 info）" — @v: anc-obs-log-levels
   - dispatcher.test.ts @v: anc-obs-log-levels — call 子实例卫星日志 debug/info 两向随父 ✅
+  - dispatcher.test.ts @v: anc-obs-log-levels — call parallel 子实例卫星日志 calls/<ID>/log 的 main.yaml 头 level 随父 debug/warn 两向（"call parallel 六条传递线" 正例④,todo/0165;变异:launchParallelCallChild 不传 logLevel 此钉红） ✅
 
 ### anc-obs-log-retention ✅
 
@@ -1438,6 +1500,7 @@ LogLevel——三级日志（debug ⊇ info ⊇ warn），控制 .hoplog 输出�
     - engine.ts EngineOptions.maxRuns 透传 — @a: anc-obs-log-retention
     - cli.ts `--max-runs` 两命令 + parseMaxRuns 文法核 — @a: anc-obs-log-retention
     - mcp-server.ts StandaloneConfig.log_retention + 文法核 + mergeConfigs 项目级赢 + startRun 透传 — @a: anc-obs-log-retention
+    - config-load.ts HopConfig.log_retention + 文法核 + mergeConfigs 项目级赢（2026-10-08 todo/0131 自 mcp-server 搬入） — @a: anc-obs-log-retention
       - hoplog.test.ts "日志保留上限（max_runs,缺省 3）"（4 存 3 删最老/恰 3 不删与 maxRuns=1 只留本次/异形条目不动/mtime 反序仍按名删/子实例 logDir 不清/非正整数拒/pruneRunDirs 返回值/缺省 info） — @v: anc-obs-log-retention
       - mcp-server.test.ts "log_retention：max_runs 非正整数加载期拒;合法过;mergeConfigs 项目级赢" — @v: anc-obs-log-retention
   - 2026-10-03 hopissues/0116 修复（hoplog v0.7.0）：计数保留把在跑 run 的日志目录删了,下次写日志 ENOENT 整批 failed（hopkb 20 子实例长跑批 2h42m、4000 万 token 在飞进度全失;同机第 3 个顶层 run 的构造器按计数误删）。三修——①`collectLiveRunDirs(stateDir)` 从快照反查未终态 run 的 hoplog_run_dir,`pruneRunDirs` 第三参跳过且不占配额,HopLogOptions.stateDir 由 engine 透传;②`append` 写失败首次重建目录续写+`log_gap: dir_recreated`,再失败 warn 一次后 no-op,run 继续（原裸 appendFileSync 上抛与"日志是核验通道不是执行前提"自述矛盾）;③`HopLog.resume` 目录不在时重建+`log_gap: dir_missing_on_resume`
@@ -1507,8 +1570,12 @@ HopLog YAMLL 嵌套步骤树——步骤块键缩进为 step-id 深度 × 2，�
 - [[spec-observability]] 审计规范 ← 权威源
   - hoplog.ts `AuditEvent` — @a: anc-obs-audit
   - hoplog.ts `audits: AuditEvent[]` — @a: anc-obs-audit
-  - dispatcher.ts, 301 — @a: anc-obs-audit（TODO: 实际记录审计事件）
+  - dispatcher.ts, 301 — @a: anc-obs-audit （TODO: 实际记录审计事件）
     - hoplog.test.ts "audit events" — @v: anc-obs-audit
+  - engine.ts advanceToCaller commit body 执行后写 commit_audit（复用模式,与独立模式共用 commitAuthorizedBy 映射;2026-10-08 v0.54.1）— @a: anc-obs-audit
+  - hoplog.ts `ToolCallRecord` 八字段（name / result / at / args_preview / result_preview / server / duration_ms / discarded_text_blocks——2026-10-12 语义审计 #3 补三个审计字段,此前只五字段,dispatcher 靠内联数组类型写进账）+ dispatcher.ts 两处 toolCallLog 与 flushToolLog 改用该类型 — @a: anc-obs-audit
+    - dispatcher.test.ts "正例（语义审计 #3）：debug 级 + 外部工具带 audit → 落账的 tool 行同时含 args_preview / result_preview / server / duration_ms / discarded_text_blocks（八字段契约在同一条记录上成立）"（变异：删 ...result.audit 展开 → server 断言红） — @v: anc-obs-audit
+    - engine.test.ts "复用模式 commit_audit：人批准(once) → human;人选一律通过 → task_always…;关卡关闭 → policy" — @v: anc-obs-audit
 
 ---
 
@@ -1550,7 +1617,37 @@ DFS 步骤遍历——深度优先搜索下一个可执行步骤，处理容器�
 
 - [[exec-engine]] 传播逻辑 ← 权威源
   - engine-traverse.ts `propagateCompletion` — @a: anc-exec-completion-cascade
-    - engine.test.ts "Subtask container" — @v: anc-exec-completion-cascade（subtask auto-complete 测试）
+    - engine.test.ts "Subtask container" — @v: anc-exec-completion-cascade （subtask auto-complete 测试）
+  - 级联收口的失败判据（有 failed 直接子步未被 retry/on fail 接住 → 容器 failed）归 [[#anc-exec-container-fail-close]] 卡（2026-10-07 hopissues/0121）
+
+### anc-exec-container-fail-close ✅（2026-10-07 hopissues/0121——subtask/case/loop 容器收口的失败判据,与 branch 对齐）
+
+容器全部直接子步到终态且其中有 failed、这次失败没有被本容器 on fail 块消化 → 容器 failed（hoplog 走既有 recordStepFailed "container 'x' failed"）;on fail 已消耗 → done（接住语义）;否则 done。此前 subtask/case/loop 全终态即无条件 done,子步 failed、容器 done、整场 failed 三者同框——退火边界下失败走"未捕获=实例终止"分支调完成级联,级联把容器标 done、hoplog 记 completed（外部 skill 项目真机双证 + 本方 todo/0146 探针 loop 形态自撞）。配套：reapParallelSubtask/reapParallelCall 内核取"首个带 stepFailReasons 的 failed"（容器现在也记 failed 但无明细,键序按文档序容器在叶前,原键序首个会取到容器丢叶子真因）。
+
+- [[exec-engine#^anc-exec-container-fail-close]] ← 契约权威（HopSop 三步 + 不受影响路径清单 + 与 on_fail 第五样的关系）
+  - [[HopSpec V3核心规范#^anc-exec-none-propagation]] ← 概念依据（fail 两去向无第三态）;[[HopSpec V3核心规范#^anc-step-on-fail]] 接住语义
+  - engine-traverse.ts propagateCompletion childFailed / absorbedByOnFail 判（位于退化串行 collect 喂送与输出提升之前,过收齐门） — @a: anc-exec-container-fail-close
+  - engine.ts reapParallelSubtask / reapParallelCall 内核提取带明细优先（与 failCallStep ^anc-exec-callee-kernel 同律;行注双锚指向本卡与 callee-kernel 卡） — @a: anc-exec-container-fail-close, anc-exec-callee-kernel
+  - engine.ts propagateAndRecord 级联到顶即实例终止 + 判顶 `isCascadeTop` + 取叶子真因 `deepestFailedDescendant`（2026-10-12 todo/0167 作者拍甲案——HopSop 第 5 步：newlyDone 里有 failed 且无容器父〔或父已越出 worker 子树根〕的容器 → 未终态步骤 skipped、terminalFailure 指向该容器 reason 带叶子步骤号与原因、recordStepFailure;terminalFailure 已在场〔叶子升级链先到〕不覆盖。此前级联到顶就停,nextStep 把 failed 容器当已终态步跳过,顶层兄弟照跑 run completed——0162 反例实撞,概念 ^anc-exec-none-propagation 否掉的第三态） — @a: anc-exec-container-fail-close
+    - engine.test.ts "容器 fail-close 级联到顶即实例终止（todo/0167）" 6 例（反:0162 原形态——兜底走完但激活集丢失致不登记消耗,容器按步 3 判 failed 纯级联到顶 → run failed、terminal_failure 指向容器 1 且 reason 含叶子 '1.1' 与原因文本、步骤 2 与 3 标 skipped〔变异:到顶终止分支关掉→红 `expected 'step_ready' to be 'failed'`——引擎又去派发步骤 2〕/ 兜底步自己也失败走叶子升级链同终态 / 无兜底 retry=0 直接到顶 reason 带叶子真因;正:兜底消化 → 容器 done 步骤 2 执行 completed / 外层 retry=1 接住复位重跑、耗尽后才终止;边角:for-each 第二轮子容器 failed → loop failed 到顶终止不跳下一轮,partial_outputs.outs=['A'] 已收部分保留）;全量 4209 零连带——没有既有测试依赖"容器 failed 后继续走" — @v: anc-exec-container-fail-close
+    - engine.test.ts "容器收口的失败判据（hopissues/0121）" 7 例（反:retry=2 边界被 markCommitted 退火后子步 failed → 容器 failed、hoplog 容器块 failed、terminal_failure 指子步〔probe 形态〕/ retry=0 耗尽路终态一致 / loop for-each 第二轮子步失败 → loop failed〔0146 自撞形态〕/ case 子步 failed → case failed → branch failed;正:retry 接住重跑成功 → done / on fail 消化 → done〔failed 子步仍在 children,靠 onFailConsumed 豁免〕/ done+skipped 混合 → done——变异重放:childFailed 恒 false→退火例与 loop 例红〔首版退火例写成 retry=0 变异绿——耗尽路 markSubtaskFailed 本就标 failed,改退火形态后红〕,absorbedByOnFail 恒 false→on fail 例红 + 既有 6 例红〔[on fail] 组 3 / 续链收割 1 / 0078 subprocess 组 2〕;review 修复批 2026-10-08 +4 例：on fail 块自身失败 → 容器 failed、on_fail 容器 skipped〔走升级路不经级联步 2〕/ 条件 loop 子步 failed → loop failed〔变异 childFailed 恒 false 红〕/ 退化串行 parallel 耗尽 → 容器 done 主线继续 / 失败容器不提升声明输出;loop 例加 root 本地 ys=[10] 断言〔变异:删 loop 分支失败时 finalizeForEachCollect 红——首版断 getVars 摊平读到 loop scope 缓冲变异绿,改 readLocal root 后红〕） — @v: anc-exec-container-fail-close
+    - dispatcher.test.ts review 修复批 +2："fail-close × 杀活"（subtask 内 parallel 在飞、兄弟主线 failed → 在飞 killed、容器收口 failed、run failed——收齐门在主线 failStep 路径不可达〔先杀活〕,属防御性判据,本例钉可达语义）/ "0121 配套 call 侧"（call parallel callee 内 subtask 退火后叶子 commit 失败 → 父 parallel_reap 带叶子真因;变异 call 侧内核回退键序首个红） — @v: anc-exec-container-fail-close, anc-exec-callee-kernel
+    - dispatcher.test.ts "正例（0121 配套）parallel 子实例内 subtask 边界退火后叶子 commit 失败 → 父收割 parallel_reap 带叶子 ENOENT 真因"（变异:内核回退键序首个→事件变 child failed 占位,红;首版 retry=0+fail() 叶子形态走的是耗尽路且单项全灭 PARALLEL_ALL_FAILED,改两句 commit 偶数项败后形态正确） — @v: anc-exec-container-fail-close, anc-exec-callee-kernel
+  - probe：hopissues/hoplogic3/0121 卡 probe（repro-spec subtask retry=2 内成功 commit + 必败 commit）——卡自带 probe.sh 写于 commit 批准闸之前,现行引擎须逐张批准 commit 再看终态（修复批 drive 脚本形态）;修后 step_states["1"]=failed、hoplog 容器块 failed、exit 0
+
+### anc-exec-branch-select-internal ✅（2026-10-12 todo/0168 作者定"不存在外部选路场景,branch / case 都是显性条件"——撤 branch 提交形态）
+
+branch 走哪个 case 只由 next_step 进入 branch 时对各 case 条件按当时变量求值决定（handleBranchEntry：命中 case 标 running,其余 case 整树 skipped）;调用方不能替引擎选 case——复用模式驱动面没有 `branch` 提交形态（七种）,CLI 没有 `--branch`,MCP `submit_and_fetch_next` 没有 `branch` 字段;`engine.selectBranch` 公开方法整个退役（引擎内部写账从不经它）。驱动面对不认识的提交键 INVALID_ARG 结构化拒收并列出七种合法形态（SDK 的 zod 对象 schema 对未知键是剥除不是拒收,拒收由 driverSubmit 自己做）。
+
+- [[exec-engine#^anc-exec-branch-select-internal]] ← 契约权威（规则 / 为什么两条路径 / 根因 / 退役面 / 与崩溃恢复的关系）
+  - [[HopSpec V3核心规范#^anc-step-branch]] ← 概念依据（case "被 branch 按条件选中激活",概念层从未写过外部可选）
+  - [[hop-cli#^anc-cli-branch-request]] 废除记录;[[mcp-server#^anc-mcp-reuse-driver-tools]] 八种提交形态改七种
+  - reuse-driver.ts `SUBMIT_MODES` 七种 + `driverSubmit` 未知提交键 INVALID_ARG 拒收 — @a: anc-exec-branch-select-internal
+  - cli.ts `submit_and_fetch_next` modes 列表七种（`--branch` / `--reason` 选项删,commander 报未知选项） — @a: anc-exec-branch-select-internal
+    - mcp-server.test.ts "反例（todo/0168）：submit_and_fetch_next 没有 branch 提交形态——调用方传 branch=2.1 试图替引擎预选 case → INVALID_ARG 结构化拒收,报文点名 branch 并列出七种合法形态;引擎账上 branch 步仍 pending、两个 case 都没被动过"（变异：SUBMIT_MODES 加回 branch → 红;未知键守卫关掉 → 红） — @v: anc-exec-branch-select-internal
+    - mcp-server.test.ts "正例（todo/0168）：选路只由引擎按 case 条件求值——前序步交付 mode=slow 后,引擎进入 branch 命中 2.2：账上 2.2 running / 2.1 skipped（含 2.1.1）,下一介入点停在 2.2.1" + "反例（todo/0168）：submit_and_fetch_next 的工具 schema 没有 branch / reason 字段,工具说明写的是七种形态" — @v: anc-exec-branch-select-internal
+    - cli.test.ts "submit_and_fetch_next 没有 --branch（todo/0168）" 2 例（正：跨进程 run 传 mode=slow 交付步 1 后引擎命中 2.2 停 2.2.1、2.1 skipped;反：传 --branch 2.1 由 commander 报 unknown option 退出非零,引擎账一字未动） — @v: anc-exec-branch-select-internal
+    - engine.test.ts "branch 选路只由 case 条件求值,没有外部选择入口（todo/0168）" 2 例（正：mode=slow 命中 2.2 账面四态;反：engine 与 ExecutionEngine.prototype 都没有 selectBranch） — @v: anc-exec-branch-select-internal
 
 ### anc-exec-completeness ✅
 
@@ -1589,7 +1686,7 @@ DFS 步骤遍历——深度优先搜索下一个可执行步骤，处理容器�
       - engine.test.ts 兜底步失败上下文三例+review 补钉（两源皆空兜底行/walk 跳过 on_fail/升层指引前缀/耗尽场景兜底步无 retry_feedback/掐口） — @v: anc-exec-onfail-context
       - prompt.test.ts FULL_CTX 哨兵表 fail_context 键+L3 区块内位置断言（review 变异3实证渲染层零保护后补） — @v: anc-exec-onfail-context
 
-> 2026-09-06 0078 批追注：兜底步失败上下文供给（新契约 [[prompt-assembler#^anc-exec-onfail-context]]——兜底步此前只见"哪步败"不见"为何败",check 判词零注入真机探针实证,R5 两路语料独立提出）。供给三件:runtime-types AssembledContext.fail_context / engine.getOnFailContext（激活判定+双源合并 retryHistory∪stepFailReasons+两源空兜底行）/ prompt 组装填充+渲染落 L3 尾（不落 L6 修正指令语义;措辞对善后者）。全部 @a: anc-exec-onfail-context。新增 @v: 三例（retry=0 判词经 stepFailReasons 在场〔0078 probe 同款判据〕/非兜底步恒 undefined/retry 耗尽逐轮原因在场）;变异核证超预期:注掉源② retry=0 例与耗尽例双红——耗尽轮失败不进 retryHistory 直接激活,两场景判词全靠源②,"单源必漏"两例分别实证。
+> 2026-09-06 0078 批追注：兜底步失败上下文供给（新契约 [[prompt-assembler#^anc-exec-onfail-context]]——兜底步此前只见"哪步败"不见"为何败",check 判词零注入真机探针实证,R5 两路语料独立提出）。供给三件:runtime-types AssembledContext.fail_context / engine.getOnFailContext（激活判定+双源合并 retryHistory∪stepFailReasons+两源空兜底行）/ prompt 组装填充+渲染落 L3 尾（不落 L6 修正指令语义;措辞对善后者）。全部 @a: anc-exec-onfail-context 。新增 @v: 三例（retry=0 判词经 stepFailReasons 在场〔0078 probe 同款判据〕/非兜底步恒 undefined/retry 耗尽逐轮原因在场）;变异核证超预期:注掉源② retry=0 例与耗尽例双红——耗尽轮失败不进 retryHistory 直接激活,两场景判词全靠源②,"单源必漏"两例分别实证。
 
 ### anc-step-act(free 档) / anc-rule-b7 / anc-exec-act-free-role ✅
 
@@ -1639,6 +1736,8 @@ DFS 步骤遍历——深度优先搜索下一个可执行步骤，处理容器�
 - [[exec-engine]] 重试机制 ← 权威源
   - engine.ts `submitReplan` + `writeReplanCandidate`（候选文件落盘——提报沉淀文件半边,2026-08-13 销设计-代码不一致:§replan 步骤6 早有文件条款代码只发审计事件） — @a: anc-exec-retry-adaptive
     - engine.test.ts "adaptive replan" + "replan 候选文件落盘" 3 例（@trace 头+原文落盘/v1 v2 并存不覆盖/无 specPath 跳过不拦） — @v: anc-exec-retry-adaptive
+  - engine.ts submitReplan 退化检测（熔断机制第 3 项——新 children ≥ 上次 2 倍记 [replan-inflation] replan 事件 + hoplog warn 仍接受;只对 adaptive 判——proactive 在更早分支已返回,2026-10-08 发版前八项修复批工程链 review 修复 删掉恒真的 `!proactive` 条件〔面三 G9 死条件〕;2026-10-08 todo/0129 B3 补实装,设计自立文起零实装被 2026-09-30 语义审计抓） — @a: anc-exec-retry-adaptive
+    - engine.test.ts "正例：第二次 replan 步数 ≥ 上次 2 倍 → 记 [replan-inflation]…仍接受" / "反例：步数未到 2 倍不记;首次 replan 无基线不记（proactive 提交在更早分支返回,走不到膨胀检查——不在本例造）"（标题 2026-10-08 发版前八项修复批工程链 review 修复 改实,原标题"proactive 不记"断言体没造 proactive 路径） — @v: anc-exec-retry-adaptive
 
 ### anc-exec-replan-proactive ✅（2026-08-26 /hop 随手化批）
 
@@ -1666,7 +1765,9 @@ DFS 步骤遍历——深度优先搜索下一个可执行步骤，处理容器�
 subprocess.run 的 hopjit 恒拒名单：被执行的步骤内容不得反过来驱动执行引擎（自嵌套执行必坏状态账——双执行/自收割/递归实例）。恒拒优先于 commands 白名单——argv[0] 是 hopjit 或路径尾段是 hopjit 一律拒,白名单写了也不放行且配置加载即 fail-fast（白名单管"哪些外部命令可用",hopjit 不是外部命令是执行语境本身）。拒绝报文带三条正道指引（跑别的 spec 用 [call]/不可逆动作走注册工具的 commit 步骤/执行状态是引擎的账步骤不查）。三落点：解释器运行期恒拒/standalone 配置加载拒/复用模式 readProjectCommands 拒（该函数其余形态钝感回空,唯此响亮——静默剔除会让作者误以为生效）。
 
 - [[act-body#^anc-exec-subprocess-deny-hopjit]] ← 设计权威（v0.18.0,挂 subprocess.run 类型约定节）
-  - command-exec.ts runWhitelistedCommand 恒拒判定（2026-09-22 随命令执行原语抽出迁入本文件,原在解释器内——判定随原语走,故 run_script 天然同受恒拒管,不需要第二份实现） / mcp-server.ts loadStandaloneConfig commands 校验 / cli.ts readProjectCommands 校验 — @a: anc-exec-subprocess-deny-hopjit
+  - command-exec.ts runWhitelistedCommand 恒拒判定（2026-09-22 随命令执行原语抽出迁入本文件,原在解释器内——判定随原语走,故 run_script 天然同受恒拒管,不需要第二份实现） — @a: anc-exec-subprocess-deny-hopjit
+  - ~~mcp-server.ts loadStandaloneConfig commands 校验 / cli.ts readProjectCommands 校验~~（2026-10-08 todo/0131 两份收敛进 config-load.ts parseConfigFile,见下行）
+  - config-load.ts parseConfigFile commands 校验（2026-10-08 todo/0131——mcp-server 与 cli 两份校验收敛为此一份;cli readProjectCommands 退役,复用模式 loadReuseConfig 对该错原样抛 CONFIG_ERROR） — @a: anc-exec-subprocess-deny-hopjit
     - act-body-interpreter.test.ts 反例 2（裸名 hopjit 白名单含也拒/路径形态尾段判定绕不过——变异核证:撤恒拒判定反例红）+ mcp-server.test.ts 配置反例 1+正例 1（含 hopjit 加载拒/git+npx 干净名单不误伤）+ cli.test.ts 反例 1（项目级 hopjit.yaml 两形态拒） — @v: anc-exec-subprocess-deny-hopjit
 
 ### anc-cli-notify-reuse ✅（2026-08-31 作者定"给/hop 加一个钉钉通知功能",同日三 A 拍定终形:停点+终态都通知/渠道随话语走零配置文件/无撤回等待——0052 复用模式半边）
@@ -1691,6 +1792,7 @@ subprocess.run 的 hopjit 恒拒名单：被执行的步骤内容不得反过来
   - tools-notify.ts sendDingtalk 发送执行体（@a 行注释形态,review 面四抓 JSDoc 内标注等效缺席后迁出） — @a: anc-tool-dingtalk-sop
     - tools-composite.ts BUILTIN_MEMBERS 数组遍历装配 — @a: anc-exec-builtin-member-table
     - mcp-server.ts notify 键+mergeConfigs+RunEntry.notifyRequested+startRun 摘取+maybeNotify+notify 文法闸 — @a: anc-mcp-notify-hook
+    - config-load.ts HopConfig.notify 键 + mergeConfigs + notify 文法闸（2026-10-08 todo/0131 自 mcp-server 搬入） — @a: anc-mcp-notify-hook
       - tools.test.ts "NotifyToolProvider 钉钉通知" 工具面 2 例（webhook 缺席带指引零网络/text 空拒——原卡多记"requires_commit 声明"一例,该断言实在 tools-interface.test.ts,review 面四对账后改实） — @v: anc-tool-dingtalk-notify
       - tools.test.ts 发送执行体 3 例（markdown+at+无签名/text+加签 URL/拒收归一带原因） — @v: anc-tool-dingtalk-sop
       - tools-interface.test.ts 并集 18（成员表装配面） — @v: anc-exec-builtin-member-table
@@ -1705,7 +1807,7 @@ subprocess.run 的 hopjit 恒拒名单：被执行的步骤内容不得反过来
 
 - [[exec-engine]] 幂等分流条款+dfs running 叶子条款+recover SOP loop 豁免行 ← 设计权威（同批先行）
   - engine.ts completeStep 分流（比对在归一后进行,review D1 修——recoverOutputValues+normalizeOutputsToFixpoint 与写入侧同套;报文点名 running 叶子/查无报下一 pending,review D2/D3 修） — @a: anc-cli-idempotency, anc-exec-stale-resubmit
-    - engine.ts recoverDanglingRunning loop 豁免 — @a: anc-exec-crash-recovery（该函数区既有锚,豁免行随卡归 stale-resubmit 双卡制:行为账在本卡,锚在 crash-recovery）
+    - engine.ts recoverDanglingRunning loop 豁免 — @a: anc-exec-crash-recovery （该函数区既有锚,豁免行随卡归 stale-resubmit 双卡制:行为账在本卡,锚在 crash-recovery）
     - engine-traverse.ts dfs running 叶子拦截 — @a: anc-exec-stale-resubmit
       - engine.test.ts "resume 保循环账（hopissues/0050）" 2 例（三轮 recover 三者俱存+running 无账悬空 loop 回拨〔review F1 改造:原 pending 形态豁免判据不可达,现形态=变异 C 恒豁免的重放钉〕）——变异:撤 loop 豁免红,恢复绿 — @v: anc-exec-crash-recovery
       - engine.test.ts "错位递交拒收（hopissues/0049）" 6 例（异值拒三判据/同值无值幂等 ok 含 WAITING 指路断言〔review F4 补〕/dfs 层独立钉〔M3 变异全绿实锤后补,重放红〕/声明型逐字节重发幂等〔review D1 钉=变异 A 重放〕/容器内叶子点名〔review D2 钉〕/无 running 报 pending〔review D3 钉〕）——变异:撤分流红/撤 dfs 拦截红/比对弱化红,恢复绿 — @v: anc-exec-stale-resubmit
@@ -1713,6 +1815,7 @@ subprocess.run 的 hopjit 恒拒名单：被执行的步骤内容不得反过来
   - engine.ts completeAndAdvance ALREADY_DONE 短路（hopissues/0056 作者拍 B 案,2026-09-01——幂等重发不进 advance:零状态变化的请求没有推进可言,直返结构化 ok+欠账指引〔点名口径与 STALE_RESUBMIT 同源,经公共 helper findWritebackTarget 两处共用〕;原借道 WAITING_WRITEBACK 的 failed 壳回执自相矛盾,driver 按"failed=终态"教条误伤合法重发;A 案〔新增 waiting status〕以范畴错误判死——waiting 描述引擎全局状态不是这次递交的结局。**本三行曾被并行会话 01d1e6da 误删,工程链 review F1 恢复**） — @a: anc-exec-stale-resubmit, anc-cli-idempotency
     - engine.test.ts "0056 B 案"钉（同值/无值重发经 completeAndAdvance 直返 ok+ALREADY_DONE+含'幂等重发'与点名步 2;重发后照常交步 2 推进账面无污染;变异:短路块 if(false) 红复原绿——原"WAITING 指路断言"钉随 B 案改定为本钉） — @v: anc-exec-stale-resubmit
   - cli.ts submit_and_fetch_next 普通输出/answer 路由归位 completeAndAdvance 真身（fed0ed33——原手拼 completeStep+advanceToCaller 绕开短路,probe 实跑抓假绿:引擎层钉全绿而真 CLI 幂等重发仍借道 failed 壳;函数头注释本就写 completeAndAdvance,代码归位;工程链 review F2 补登本行） — @a: anc-exec-stale-resubmit
+  - reuse-driver.ts submit_and_fetch_next 同样路由到 completeAndAdvance 真身（MCP 驱动工具与 CLI 同序,todo/0146） — @a: anc-exec-stale-resubmit
     - cli.test.ts 0056 组 2 钉+answer 重发钉（真 CLI 子进程起步——直喂引擎的钉护不住路由层;同值/无值重发回执+重发后照常走完+confirm --answer 重发同判〔review F5 补,与 --output 共享同一代码行〕;变异:路由改回手拼红复原绿） — @v: anc-exec-stale-resubmit
   - driver 两载体教条补幂等回执与 WAITING_WRITEBACK 消费指引（CC=step-execution-rules.md 异常处理节;Codex=execution-rules.md 新节——ALREADY_DONE=不是错误按点名交欠步/STALE_RESUBMIT=步号记错/WAITING_WRITEBACK=不是 run 失败不得按终态处理;此前零供给,0056 危害面正是 driver 无教条可依） — skill 文字面,审计归 driver 纪律面
 
@@ -1737,6 +1840,7 @@ hopjit notify CLI 命令当日实装当日退役：作者三连纠——①"不�
 serializer 输出行三形态分写：复合输出（fields 非空）写展开头+缩进字段子行（原 `name: yaml` 丢 fields）;裸名引用（type 空串=更新/引用既有变量）写裸名不带冒号（原 `name: ` 尾冒号,re-parse 误认复合头 type 漂移成 yaml——fuzz 基线 loop-branch 实锤）;常规声明 `name: type` 照旧。同族同批：act body f-string 插值内字符串字面量写单引号（inFstring 参数透传,非模块状态——^anc-run-isolation 机检拦顶层可变量后改形态）,原双引号与 f-string 外层撞栏 re-parse 必炸（hop-fact-check/hop-deep-research 实撞）。
 
 - [[spec-parser#^anc-rule-serialize-output-forms]] ← 设计权威（v0.26.0,三形态+f-string 单引号条款）
+  - errors.ts ErrorCode.ADVANCE_ORDER_VIOLATION 枚举值（设计表 2026-09-06 已登、枚举 2026-10-08 todo/0129 B10 补——表与枚举一致由 errors.test 机检） — @a: anc-exec-advance-order-invariant
   - parser.ts serializeSpec 输出行三形态分写 / act-body-parser.ts quoteSingle+inFstring 透传 — @a: anc-rule-serialize-output-forms
     - parser.test.ts 往返 3 钉（裸名输出仍裸名 AST 等价/复合输出保 fields AST 等价/f-string 索引取键往返零错误） — @v: anc-rule-serialize-output-forms
 
@@ -1774,8 +1878,9 @@ HopSchema 分隔符双文法并收：spec 源文件里"名字 分隔符 类型"�
   - [[exec-engine#^anc-exec-subtask-free-expand]]（Trait+Type 三字段+行为契约六条+Sop 四步）+ [[spec-parser#^anc-rule-s5]] 豁免条款 + B7 两宿主条款 ← 设计权威
     - ast-types SubtaskStep.free / parser 宿主表+构造+serializer 写回 / validator S5 豁免 / engine-traverse expand 信号 / engine nextStep 消费+submitReplan 展开物两闸（EXPANSION_NO_CHECK/EXPANSION_HAS_COMMIT）/ cli-types AdaptiveNeeded 扩 reason+expansion_context — @a: anc-step-subtask-free, anc-exec-subtask-free-expand, anc-rule-s5
       - parser.test.ts "[subtask free] 到步展开档" 3 例（空双绿往返/全中文/非 free 空照拒） — @v: anc-step-subtask-free, anc-rule-s5
-      - engine.test.ts 可配化+续批 5 钉（缺省20拒文携指引/缺省恰20锁定〔review 变异C实锤缺省无钉后补——count=19放行,改缺省即红〕/配2第3次拒/非法0回缺省放行/授权放行一次计数照涨）+ validator.test.ts config 规则正反 2 钉 + cli.test.ts 跨进程 --extend-expansion 1 钉 — @v: anc-exec-subtask-free-expand;review 六缺陷修五（常量迁 ast-types 两侧同源消 validator 字面脱钩/新增块 @a: 补齐/陈旧注释"上限10"两处刷/driver 两载体补"授权归真人"句——第六项 flag 单独给静默无效属 commander 惯例不修）;standalone 续批当日销账（作者定"关键特性不应该等所谓的真需求再补"）:engine.pauseForExpansionExtend（复用 escalate 暂停全套——卡语义"继续还是收手",context 携计数/上限/被拒计划）+resumeFromEscalation subtask 形态分支（只清待答不碰 retryHistory——容器仍在 initial_plan 等待态）+dispatcher 授权账 expansionExtendGranted（resume 记→handleAdaptive 消费:guidance 喂重生成 prompt+携 extendExpansion 提交,消费即清;进程内存活,跨进程丢账=下轮重问不破坏）+EXPANSION_LIMIT 拒因结构化判据转暂停不烧 replanAttempts;dispatcher.test.ts standalone 全链 1 钉（撞限→暂停卡→应答→携授权重生成落地,断言授权消费即清+计数照涨+prompt 吸收方向）;二轮 review 七缺陷修六（subagent 机械核对:变异 A/B 各红一钉,变异 C 删分支 794 绿存活实锤分支无钉,纯内存探针 OOM 实锤活缺陷）——[高]纯内存实例短路死循环修:escalateCardMemo 内存副本兜底盘卡缺席（call 子实例活路径,待答态跌落 adaptiveNeededSubtask 每轮真 LLM 调用且熔断失效）;[中]收手语义修:收手词面精确短语（收手/停止/stop/abort——答案语面是协议面非嗅探）→failStep deterministic 收口不进 retry 阶梯（原任何应答都变授权,人说收手仍多烧一次;failStep 放行 initial_plan 等待态 pending 容器并清等待槽——probe 抓等待态失败被复活）;[中]subtask 分形态分支补钉（retryHistory 不塞升层指引——变异 C 击杀面上锁）;[低]授权消费时序改"展开真放行才清账"（其它拒因保留授权重试,不浪费刚批的授权）+catch 清残账;[低]测试注释"盘卡半边CLI钉覆盖"失实修+@v 借位补独立标记;[低中]Sop 分叉5 改两模式形态（复用=报文重交/standalone=暂停卡含收手路）;新增纯内存短路/收手收口/分支语义三钉,全量 2275 绿
+      - engine.test.ts 可配化+续批 5 钉（缺省20拒文携指引/缺省恰20锁定〔review 变异C实锤缺省无钉后补——count=19放行,改缺省即红〕/配2第3次拒/非法0回缺省放行/授权放行一次计数照涨）+ validator.test.ts config 规则正反 2 钉 + cli.test.ts 跨进程 --extend-expansion 1 钉 — @v: anc-exec-subtask-free-expand, review 六缺陷修五（常量迁 ast-types 两侧同源消 validator 字面脱钩/新增块 @a: 补齐/陈旧注释"上限10"两处刷/driver 两载体补"授权归真人"句——第六项 flag 单独给静默无效属 commander 惯例不修）;standalone 续批当日销账（作者定"关键特性不应该等所谓的真需求再补"）:engine.pauseForExpansionExtend（复用 escalate 暂停全套——卡语义"继续还是收手",context 携计数/上限/被拒计划）+resumeFromEscalation subtask 形态分支（只清待答不碰 retryHistory——容器仍在 initial_plan 等待态）+dispatcher 授权账 expansionExtendGranted（resume 记→handleAdaptive 消费:guidance 喂重生成 prompt+携 extendExpansion 提交,消费即清;进程内存活,跨进程丢账=下轮重问不破坏）+EXPANSION_LIMIT 拒因结构化判据转暂停不烧 replanAttempts;dispatcher.test.ts standalone 全链 1 钉（撞限→暂停卡→应答→携授权重生成落地,断言授权消费即清+计数照涨+prompt 吸收方向）;二轮 review 七缺陷修六（subagent 机械核对:变异 A/B 各红一钉,变异 C 删分支 794 绿存活实锤分支无钉,纯内存探针 OOM 实锤活缺陷）——[高]纯内存实例短路死循环修:escalateCardMemo 内存副本兜底盘卡缺席（call 子实例活路径,待答态跌落 adaptiveNeededSubtask 每轮真 LLM 调用且熔断失效）;[中]收手语义修:收手词面精确短语（收手/停止/stop/abort——答案语面是协议面非嗅探）→failStep deterministic 收口不进 retry 阶梯（原任何应答都变授权,人说收手仍多烧一次;failStep 放行 initial_plan 等待态 pending 容器并清等待槽——probe 抓等待态失败被复活）;[中]subtask 分形态分支补钉（retryHistory 不塞升层指引——变异 C 击杀面上锁）;[低]授权消费时序改"展开真放行才清账"（其它拒因保留授权重试,不浪费刚批的授权）+catch 清残账;[低]测试注释"盘卡半边CLI钉覆盖"失实修+@v 借位补独立标记;[低中]Sop 分叉5 改两模式形态（复用=报文重交/standalone=暂停卡含收手路）;新增纯内存短路/收手收口/分支语义三钉,全量 2275 绿
       - engine.test.ts "subtask free 到步展开" 6 例 + "三轮review修复" 7 钉（再吐语义不退化/终身禁commit真实时序/死支check不算/EXPANSION_LIMIT/aborted拒收/缺值null+missing/expansionCount持久）+ cli.test.ts 跨进程 1 例 — @v: anc-exec-subtask-free-expand
+      - engine.test.ts "正例（0162）：expansion_count 写盘后新引擎 load 回填——Config expansion_max: 1 下首次展开后 load,新进程里第二次到步展开被拒 EXPANSION_LIMIT（计数清零则会放行）"（todo/0162 跨进程往返——此前"expansionCount 跨进程持久"一例只比对私有字段,本例改为断行为：新进程里熔断真的生效;变异核证：注释掉写出行或回填行各红）— @v: anc-exec-subtask-free-expand
       - validator.test.ts "subtask free 静态面适配" 4 钉（空free=P8把关点+豁免不外溢/P10零误报/free×parallel互斥拒） — @v: anc-rule-p8, anc-rule-p10
   - driver 消费:hop-skill 两载体占位节终形（"写 subtask free,到步引擎自己停下来要计划"）
 
@@ -1872,6 +1977,7 @@ hop_python 命令行白名单调用：函数名就叫 `subprocess.run`（"写是
 - [[../concepts/HopSpec V3语法参考#^anc-step-subprocess-run]] ← 概念权威（使用面正反示例并排——正例三形态/反例五形态各带后果一句;vault 已回写）
   - [[act-body#^anc-exec-subprocess-run]]（Trait+Type 五条+Sop 五步+工程偏差三条）+ [[sandbox#^anc-config-sandbox-runtime]] runtime.available 语义升格条款 ← 设计权威
     - act-body-parser.ts parsePostfix 特例+parseCallArgs kwargs 双形态 / act-builtins.ts 占位项（B2 认名,条件路径拒调） / act-body-interpreter.ts evalSubprocessRun 专路（白名单核/参数拒收含 timeout 非法早失败/journal 重放/spawnSync 三因指路） / engine.ts 接线（注入/completeStep 完成清〔两模式同点,F3〕/advanceToCaller 清〔幂等〕/重试清×2/持久化/恢复/getCmdJournalFor 读口） / runtime-types.ts cmd_journal 键 / validator.ts B2 专项（禁参+双位置） / cli.ts readProjectCommands+buildHostConfig 装配 / dispatcher.ts executeActBody 注入 / mcp-server.ts commands 键+形状核+mergeConfigs 并集+两消费点 effectiveConfig — @a: anc-exec-subprocess-run
+    - config-load.ts HopConfig.commands 字段 + parseConfigFile commands 文法核 + mergeConfigs 并集去重（2026-10-08 todo/0131 自 mcp-server 搬入;cli buildHostConfig 改经 applyReuseConfig 装 sandbox.runtime.available,readProjectCommands 退役） — @a: anc-exec-subprocess-run
       - act-body-interpreter.test.ts 9 钉 + act-body-parser.test.ts 5 钉 + act-body-validator.test.ts B2 专项 3 钉 + dispatcher.test.ts 独立模式接线 2 钉 + engine.test.ts cmd_journal 账 1 钉 + mcp-server.test.ts commands 通路 2 钉（明细见各批散文追注） — @v: anc-exec-subprocess-run
 - 消费面：examples/mutation-verify/（变异核证固化 spec——首个真实消费方，git/npx/ln 全走白名单引擎直执，bb38b76 真机全链 completed）
   - 消费面:变异核证固化 spec（工程链 review 提纯件面三将来态——本件的首个消费方）;todo/0033 随批闭卡
@@ -1888,22 +1994,25 @@ hop_python 命令行白名单调用：函数名就叫 `subprocess.run`（"写是
     - tests/guard-scripts.test.ts 判据回归 1 钉（丢通则句即红——review 抓卡宣称落空钉挂 distill 锚下,补双锚归属） — @v: anc-exec-reuse-worktree-act
   - 三轮 review 修四（机械核对:变异 A 红恢复绿/变异 B 白天窗口绿如实注明"不能证伪修复,真凭证=0035 闭卡窗口内 probe"）:[中]@v 宣称落空补标注+连带修前批 02d4633 挤出的 B2 行中锚（审计双红回绿有改善）;[中低]判据中间地带补归类规则（持久但不入 git 的文件〔hop_tasks 提纯件实例〕归"照旧"侧——worktree 对 gitignored 物理不可用,误伤面天然小,软纪律即可）;[轻]引文出处修准（"概念层原文"实为教程 03 对照表,概念权威改引语法参考"无不可逆外部副作用"句）;[轻]Sop 两边角（基线=已检出分支名被拒须 commit 号或 -b/合入撞主区脏=并行提示先核对不 force）。缺口记录:Codex 丢句无专项反例（旁证在场低危）/正例六 token 共用非专项（可接受）
 
-### anc-exec-reuse-distill ✅（落点=driver 载体产物：driver/hop-skill.md 提纯节+查现货步 × 两载体——非 src/tests，同 driver 卡惯例；2026-08-28 作者两连定"总结成可复用的hopspec"+"已有的哪些可以复用"）
+### anc-exec-reuse-distill ✅（落点=driver 载体产物：driver/hop-skill.md 总结节+查现货步 × 三载体——非 src/tests，同 driver 卡惯例；2026-08-28 作者两连定"总结成可复用的hopspec"+"已有的哪些可以复用";**2026-10-10 todo/0155 作者定"总结成 hopant,而且应该有项目级 hopant 位置"——动作名提纯→总结,产物由 hop_tasks/specs/ 裸 spec 改为经 ant_pack 直接落项目级 HopAnt 根 hop_tasks/ants/<id>/,查现货并入分派节读两张 HopAnt 索引,hop_tasks/specs/ 退役**）
 
-/hop 提纯与现货复用一对机制（生产/消费半边,driver 行为面零引擎改动）：distill=干完的活→hop_tasks/specs/<语义名>.md 成品 spec(作者定"根再开目录太污染"——/hop 一切住 hop_tasks/:活跃/archive//specs/ 三分区,随 hop_tasks/ 整目录不入 git)——原料两形态（作者定"不只是针对跑过的hop任务"）:hop 任务=拿终态不拿初版（Steps=replan 写回生效版/展开物读引擎账〔复盘豁免口〕/背景处置记录供泛化）,对话直干的活=对话执行轨迹（步骤类型现判——轨迹无标注,commit/check 此刻按升格要点判;验证面如实降档:check 是"该有"非"验过"）,四动作（参数化/结构固化——未走到的分支标"未经实跑验证"/把关强化——check 打回缺口写死进判据/语境泛化）,验收=validate 0 error+[[原任务]]回指+**用户过目确认才落定**（发布性质:写错被反复复制）;触发从宽（作者定"有总结的意思就主动"——总结/沉淀/固化即触发,distill 子命令降为指定对象显式形态;没干完的活说总结=给进展汇报不误触）。查现货=升格流程插步（分流→消歧→**查现货**→才从头写）:扫 hop_tasks/specs/ 标题+Goal,命中恒以现货为底稿实例化新任务卡走 /hop 全套（生命周期走查抓缝改定——直接跑提纯件=无卡/list 不列/中断接不上,与"恒享全套"冲突;同类=零改动照抄+填参）,目录不存在静默跳过;**"直接开"口子**（作者定——话语带"直接开/别查现货"即跳查径直建卡,分流消歧不随跳）;查前先提示一行"我先看看已有的流程里有没有可复用的——想跳过就说直接开"（作者定——不静默:口子不提示=形同没留）;"哪些可以复用"即列清单;修订提纯件同过目（发布性质覆盖修订,不入 git 改坏无回滚=挂账代价）。与 hopbuild 分工:彼=NL skill→spec 翻译器,此=实跑轨迹→spec 提纯器,同产成品不同原料。
+/hop 总结成 HopAnt 与现货复用一对机制（生产/消费半边,driver 行为面零引擎改动）：distill=干完的活→四动作改出草稿→validate→用户过目→ant_pack(out=<项目>/hop_tasks/ants) 就地成为活的项目级 HopAnt（2026-10-10 起;此前落 hop_tasks/specs/<语义名>.md 裸 spec——作者定"根再开目录太污染"——/hop 一切住 hop_tasks/:活跃/archive//ants/ 三分区,随 hop_tasks/ 整目录不入 git,要给人走分享）——原料两形态（作者定"不只是针对跑过的hop任务"）:hop 任务=拿终态不拿初版（Steps=replan 写回生效版/展开物读引擎账〔复盘豁免口〕/背景处置记录供泛化）,对话直干的活=对话执行轨迹（步骤类型现判——轨迹无标注,commit/check 此刻按升格要点判;验证面如实降档:check 是"该有"非"验过"）,四动作（参数化/结构固化——未走到的分支标"未经实跑验证"/把关强化——check 打回缺口写死进判据/语境泛化）,验收=validate 0 error+[[原任务]]回指+**用户过目确认才落定**（发布性质:写错被反复复制）;触发从宽（作者定"有总结的意思就主动"——总结/沉淀/固化即触发,distill 子命令降为指定对象显式形态;没干完的活说总结=给进展汇报不误触）。查现货=升格流程插步（分流→消歧→**查现货**→才从头写）:扫 hop_tasks/specs/ 标题+Goal,命中恒以现货为底稿实例化新任务卡走 /hop 全套（生命周期走查抓缝改定——直接跑提纯件=无卡/list 不列/中断接不上,与"恒享全套"冲突;同类=零改动照抄+填参）,目录不存在静默跳过;**"直接开"口子**（作者定——话语带"直接开/别查现货"即跳查径直建卡,分流消歧不随跳）;查前先提示一行"我先看看已有的流程里有没有可复用的——想跳过就说直接开"（作者定——不静默:口子不提示=形同没留）;"哪些可以复用"即列清单;修订提纯件同过目（发布性质覆盖修订,不入 git 改坏无回滚=挂账代价）。与 hopbuild 分工:彼=NL skill→spec 翻译器,此=实跑轨迹→spec 提纯器,同产成品不同原料。
 
 - [[reuse-mode-prompt-flow#^anc-exec-reuse-distill]] ← 权威源（Trait+Type 四动作表+行为契约五条+Sop 五步;落点性质同文档头注——driver 行为锚,src 覆盖缺失属预期）
-  - driver/hop-skill.md 六动作（distill 提纯节+查现货升格插步+出口提示）/ driver/codex/hop-skill.md 同批 adapt（description 补 distill 触发面）
-    - check-driver-carriers.mjs 六动作 parity（两载体 distill/提纯/hop_tasks/specs//查现货/总结 五 token 齐备） — @v: anc-exec-reuse-distill
+  - driver/hop-skill.md 六动作（distill 总结节+查现货升格插步+出口提示）/ driver/codex/hop-skill.md 同批 adapt（description 补 distill 触发面）;2026-10-10 三载体 §6 改"总结：干完的活 → 一个 HopAnt"（落定=ant_pack 到 hop_tasks/ants / 修订同过目 / 出口提示改"总结成 HopAnt"）、§0 查现成流程改读两张 HopAnt 索引、用法表与 hop_tasks 布局图改 ants/、教程 04 与 README 第四例同改
+    - check-driver-carriers.mjs 六动作 parity（三载体 distill/总结/hop_tasks/ants/查现货 token 齐备;2026-10-10 '提纯' 与 'hop_tasks/specs/' 退役） — @v: anc-exec-reuse-distill
     - tests/guard-scripts.test.ts "/hop distill 六动作 parity" 判据回归（正1反2:CC 丢查现货/Codex 丢 hop_tasks/specs/,替身仓库变异） — @v: anc-exec-reuse-distill
+  - driver/hop-skill.md + codex/opencode 同款：总结节「过目的形态」句后固定确认问句"按此封装成 Hop 流程元件？"条款;"落定 = 封成项目级 HopAnt""封完顺手"两处机制说明改全名（2026-10-12 作者抓"封吗？——这是啥鬼话"）;check-driver-carriers.mjs token 列表加该句 — @a: anc-exec-reuse-distill
+    - tests/guard-scripts.test.ts "正/反：三载体 hop-skill.md 任一丢固定确认问句\"按此封装成 Hop 流程元件？\" → exit 1 点名该载体;三份都在不报"（变异：守卫 token 列表删掉该句 → 该用例红;恢复绿,.claude/tmp-review/fix-distill-wording/mut/progress.md） — @v: anc-exec-reuse-distill
 
-### anc-exec-call-child-persist ✅（2026-08-29 作者定"为啥不落盘,可能比较大啊"——MemoryPersistence 缺省翻案;0830 工程链review修七:parallel落盘钉+stale-paused重入队钉双补锁两处变异存活面,rebuild缺悬空态复位的真bug当场修〔paused分支原死代码——盘上暂停ask是running态,runSpec撞WAITING_WRITEBACK直接failed〕,设计parallel侧旧文三处随批清,同锚重复段删,U4b钉@v:补双锚;挂账:深嵌套布局钉/子暂停卡端到端钉/rmSync核证——低危待场景）
+### anc-exec-call-child-persist ✅（2026-08-29 作者定"为啥不落盘,可能比较大啊"——MemoryPersistence 缺省翻案;0830 工程链review修七:parallel落盘钉+stale-paused重入队钉双补锁两处变异存活面,rebuild缺悬空态复位的真bug当场修〔paused分支原死代码——盘上暂停ask是running态,runSpec撞WAITING_WRITEBACK直接failed〕,设计parallel侧旧文三处随批清;2026-10-07 hopissues/0126 起 paused 分派判据改按子实例 state.json 在场、不再删目录,原"rmSync 核证"挂账随之退役,同锚重复段删,U4b钉@v:补双锚;挂账:深嵌套布局钉/子暂停卡端到端钉/rmSync核证——低危待场景）
 
 standalone call/parallel 子实例状态落盘随父：父有 instanceDir → 子 stateDir=<父instanceDir>/calls|parallel（与复用模式子实例布局同构零新布局）;父纯内存 → 子随之（"无跨进程"假设在纯内存宿主真成立）。原"Dispatcher 驱动完整生命周期无需跨进程"论证的四坑：①deflate 大值无 work_zone（作者点破口——大产出全量占内存+全量内联 prompt 双重放大）②子实例暂停卡不落盘 server 重启即蒸发③崩溃后子实例从零重跑④最重:子实例已执行 commit 崩溃后退火标记随内存死,resume 重跑=commit 重放（复用模式靠子盘 state.json 传播退火,standalone 此防线原整个不存在）。连锁修二（落盘通电暴露的既有洞——纯内存时代不可达）：U4b paused 恢复分派判据"目录在=stale"失效 → 改按退火标记（无 commit 重派发+残目录清场/有 commit 续跑——不可重跑的正是第④坑形态）;stale 重建 runSpec 三态补 paused 分支（原 else 当失败收割,U4b 重启钉 vals=[] 实锤,probe 定位）。
 
 - [[step-dispatcher#^anc-exec-call-child-persist]] ← 设计权威（四坑论证+行为契约四条;persistence.md MemoryPersistence 条目同批翻案注记;parallel-execution U4b 第6条分派判据随改）
-  - dispatcher.ts 三处子引擎创建传 stateDir（call/parallel call/parallel subtask）+ reconcileAndRebuild 三态补 paused 分支 / engine.ts reconcileInflight paused 分派改退火标记判据+残目录清场 — @a: anc-exec-call-child-persist
+  - dispatcher.ts 三处子引擎创建传 stateDir（call/parallel call/parallel subtask）+ reconcileAndRebuild 三态补 paused 分支 / engine.ts reconcileInflight paused 分派（2026-08-29 按退火标记+残目录清场;2026-10-07 hopissues/0126 起按子实例 state.json 在场判、不删目录、在场翻 inflight 入 stale;2026-10-08 review 修复批 buildStaleLaunch 对 state.json 在场的子实例拼 resume 不拼 run——跑过的子实例不再进 re-init 净室,已执行 commit 不重放） — @a: anc-exec-call-child-persist
     - dispatcher.test.ts "call 子实例状态落盘随父" 正反 4 钉（父落盘→子 state.json+work_zone 在盘〔坑①④代表断言〕/父纯内存→子随之现状保留/parallel worker 落盘〔契约条2,0830 review 补——锁变异A2:删 stateDir 传参此钉红〕/stale 重建遇 paused 重入队〔连锁修②,0830 review 补——锁变异C:删 paused 分支此钉红;顺手实锤该分支原死代码,rebuild 补 recoverDanglingRunning〕）;mcp-server.test.ts U4b 重启钉（连锁修①击杀面,@v: 双锚）— @v: anc-exec-call-child-persist
+    - dispatcher.test.ts "call parallel 六条传递线（launchParallelCallChild,todo/0165）" 正例⑥（两轮派发落 calls/1.1.1 与 calls/1.1.2,ID=<call 步骤号>.<轮次>〔dispatchParallelCall〕,不落 parallel/ 命名空间;各有 state.json 与回填派发入参的 vars.json,卫星日志在父 run 目录 calls/<ID>/log;变异:不传 stateDir 五钉红、callStepId 改裸步骤号五钉红） — @v: anc-exec-call-child-persist, anc-exec-parallel-subinstance
 
 ### anc-exec-dynamic-spec-gate ⏳（2026-08-26 设计已改定,实装待批次二）
 
@@ -1921,7 +2030,9 @@ commit 退火——**判据=边界 retry 的重跑范围是否盖到某次已执
     - runtime-types.ts StateFile.committed_steps 双形态联合 — @a: anc-exec-commit-anneal
     - dispatcher.ts settleCallOutcome 同界记账+四类 worker 终态回调携 committed — @a: anc-exec-commit-anneal
       - dispatcher.test.ts settleCallOutcome 同界 3 例 — @v: anc-exec-commit-anneal
+      - dispatcher.test.ts "call parallel 六条传递线（launchParallelCallChild,todo/0165）" 正例①（callee 执行过 commit → 子 state.json committed_steps 含该步,父收割后父 state.json 登记派发步 1.1 带轮次快照 {1:1};变异:reapParallelCall 不传 committed 此钉红） — @v: anc-exec-commit-anneal
     - cli.ts --child-instance/--failure-child 消化点读子 committed_steps（markCommitted 调用零改——签名不变实证） — @a: anc-exec-commit-anneal
+    - reuse-driver.ts submit_and_fetch_next 的 child_instance/failure_child 消化点同读子 committed_steps（与 cli.ts 同序,todo/0146） — @a: anc-exec-commit-anneal
     - cli.test.ts call 同界记账端到端（断言适配新持久化形态） — @v: anc-exec-commit-anneal
       - engine.test.ts "commit 退火" 既有 10 例全保留 + 重跑范围矩阵组 ×6（行一轮内不焊死/行二外层照退火 commitCount 恰 1——重构主件,修前实测 3 次/行三同轮照拦;边界:嵌套 loop 外层轮推进不焊死内层/跨进程恢复判定一致/旧 string[] 恢复恒退火;变异:撤轮次比对红 3〔退回焊死〕、撤前缀判红 3〔退火全失〕;CA-1 探针黑盒复跑修前 3 次→修后 1 次） — @v: anc-exec-commit-anneal
 
@@ -1971,7 +2082,7 @@ requires_commit 拦截——act 步骤执行时，若工具声明 requires_commi
 - [[step-dispatcher]] requires_commit 设计 ← 权威源
   - provider-types.ts `AuthAction` — @a: anc-exec-requires-commit
   - provider-types.ts `requires_commit: boolean` — @a: anc-exec-requires-commit
-  - dispatcher.ts — @a: anc-exec-requires-commit（act 步骤拦截逻辑）
+  - dispatcher.ts — @a: anc-exec-requires-commit （act 步骤拦截逻辑）
     - dispatcher.test.ts "requires_commit enforcement" — @v: anc-exec-requires-commit
 
 ---
@@ -2068,6 +2179,7 @@ L1 = 契约（Goal/Constraints/Types 字段级/Outputs）+ 静态步骤骨架（
     - prompt.ts buildTaskContext（Types 字段级+骨架渲染）+ for-each 子句渲染 — @a: anc-exec-l1-skeleton
       - prompt.test.ts L1a 断言组（Goal/Constraints/Types 字段级/骨架层级）+ 激进压缩保契约例 — @v: anc-exec-l1-skeleton
 
+    - prompt.test.ts "worker 子实例的 L1 骨架与身份标注（语义审计 #9 #10 #11）" 正例 #10（子树裁剪骨架形态——2026-10-12 补,此前 worker 侧骨架零断言） — @v: anc-exec-l1-skeleton
 ---
 
 ### anc-exec-context-mode ✅
@@ -2090,7 +2202,7 @@ context 精简档（full/minimal）——minimal 非首步砍 L1 静态段（Goa
 
 SpecParser——解析与序列化 HopSpec v3 markdown
 
-- [[HopAnt概念-双态组件模型#^anc-struct-spec-parser]] ← 权威源
+- [[HopSpec V3配套HopJIT运行时能力#^anc-struct-spec-parser]] ← 权威源
   - [[spec-parser#^anc-struct-spec-parser]] — struct 定义
     - parser.ts `parseSpec` — @a: anc-struct-spec-parser
       - parser.test.ts "parseSpec" — @v: anc-struct-spec-parser
@@ -2125,13 +2237,14 @@ MCP server 协议壳——standalone 执行面（2026-08-06 作者拍板 MCP 方
 
 - [[mcp-server#^anc-struct-mcp-server]] ← 权威源（决策 1-4：MCP 形态/CLI 缓做/opt-in=注册/HITL v1 完整；v0.2.1 起含根锚点继承声明——必备件①样板：概念前提 anc-exec-dual-mode/anc-exec-hitl-presentation + 元规范义务 + 配置事实权威）
   - mcp-server.ts `HopjitMcpCore` + `buildServer` + bin `hopjit-mcp` — @module: mcp-server
-    - mcp-server.test.ts — @v: anc-config-standalone-schema, anc-mcp-key-isolation, anc-mcp-tools, anc-mcp-run-lifecycle（含顶层/provider 明文 key 拒绝、env 缺失不泄值、resume 状态机与五工具注册面）
+    - mcp-server.test.ts — @v: anc-config-standalone-schema, anc-mcp-key-isolation, anc-mcp-tools, anc-mcp-run-lifecycle （含顶层/provider 明文 key 拒绝、env 缺失不泄值、resume 状态机〔含 commit 批准停点〕与注册工具集——独立模式六件 + 复用驱动七件 + approve_commit + approve_dirs + server_status,共 16 个,2026-10-07 todo/0146 review D49 改正原"五工具"旧述）
   - [[mcp-server#^anc-mcp-tools]] 工具面契约（start_run/run_status/resume_run/list_runs/stop_run + 并发上限 + 工具面预检）
     - mcp-server.ts `collectSpecTools` / `buildServer` — @a: anc-mcp-tools
   - [[mcp-server#^anc-mcp-key-isolation]] key 隔离（env 引用解引用、报名不报值、spec_path 不搜索）
     - mcp-server.ts `providerToHostConfig` — @a: anc-mcp-key-isolation
   - [[shared-providers#^anc-config-standalone-schema]] StandaloneConfig 实现行为契约（**对外文法权威已迁 [[docs/reference/配置参考#^anc-ref-config-contract]]**——2026-08-13 作者定对外契约的权威属对外文档,新类别 anc-ref-*;工具面文法半边 ^anc-ref-tool-servers;纯文档契约无代码锚义务,实现经本行为契约落码）
     - mcp-server.ts `loadStandaloneConfig`（fail-fast；YAML/JSON 同 schema；明文 key 明确拒绝；两级合并 mergeConfigs） — @a: anc-config-standalone-schema
+    - config-load.ts parseConfigFile（全部逐文件文法核）/ mergeConfigs / validateMergedRefs / loadHopConfig（原 mcp-server 三函数 2026-10-08 todo/0131 原样搬入;mcp-server `loadStandaloneConfig` 改薄包装） — @a: anc-config-standalone-schema
     - mcp-server.ts ProviderEntry.auth 鉴权头档（可选枚举 api-key|bearer 文法核 fail-fast + buildEnvSnapshot 经 {SID}_AUTH 键透传 + providerToHostConfig 贯穿 HostConfig.auth;bearer=SDK authToken 通道发 Authorization: Bearer——只认此形态的网关实测百炼 claude-code-proxy） — @a: anc-config-standalone-schema
     - dispatcher.ts getClientForService bearer 分支（显式 service 路由按 {SID}_AUTH 分双臂,apiKey 置 null 防双头）+ defaultClient 构造按 HostConfig.auth 同分双臂（缺省 provider 路径生效面——2026-09-18 review 抓漏装补） — @a: anc-config-standalone-schema
     - provider-types.ts HostConfig.auth 字段（providerToHostConfig 贯穿→defaultClient 消费——缺省路径生效面的类型半边） — @a: anc-config-standalone-schema
@@ -2145,10 +2258,13 @@ MCP standalone 配置消费与凭证预检——default_model 复用统一解析
 - [[mcp-server#^anc-mcp-config]] ← 权威源
 - [[shared-providers#^anc-config-standalone-schema]] ← schema 权威
   - mcp-server.ts `resolveStandaloneDefaultModel` / `snapshotProviderKeys` / `HopjitMcpCore.startRun`（+workspace_dir 第四参）/ `preflightProviderKeys` / `providerToHostConfig`（沙箱锚绝对路径） — @a: anc-mcp-config
+  - config-load.ts validateMergedRefs（routing_rules 引用核;default_model 引用核经 resolveDefault 回调由 mcp-server 的 resolveStandaloneDefaultModel 注入——2026-10-08 todo/0131） — @a: anc-mcp-config
   - provider-types.ts `ResourceLimits.max_concurrent_runs` 字段（0084 M1,五批review R1 补结构化行——散文追注扫描器不认） — @a: anc-mcp-config
   - engine.ts `getRestoredWorkspaceDir`（restore 钉根） — @a: anc-mcp-run-restore
     - mcp-server.test.ts @v: anc-mcp-config — 空模型片段、大小写 service、直接调用缺 secondary key、源/派生 env 碰撞、serve fail-fast ✅
     - mcp-server.test.ts workspace_dir 2 例（不存在即拒零状态/显式传入折进 run 作业根过闸） — @v: anc-mcp-config
+    - mcp-server.test.ts 2026-10-10 "HOPJIT_CONFIG 未设 → 配置路径回退到 <HOME>/.hopjit/config.yaml" 1 例（review 第五次 6.2 阅卷打回后补;子进程 env 合并不能删键,回退侧实际未测到——todo/0152 G18） — @v: anc-mcp-config
+    - mcp-server.test.ts "mcp 组合根装配线删一行必红（todo/0164）" 6 例（2026-10-11：routing_rules 的 thinking 透传断实发请求参数 thinking.type / 裸模型名引用的 service 归一断实发 max_tokens 取 {SID}_MAX_OUTPUT_TOKENS / providers[0].auth 贯穿断实发请求头 Authorization: Bearer 与 x-api-key 两档 / 沙箱缺省拒读基线断 body read .env 与 secret.key 被拒且报文含 Read denied / 显式 workspace_dir 断快照 host_context 三处同锚 / tool_servers 注册文法错断 start_run 返回 TOOLS_FILE_INVALID 结构化码;模型客户端经 globalThis.fetch 打桩抄实发请求,零网络。七条装配线逐条变异各红一次,记录在 todo/0164 处置记录） — @v: anc-mcp-config
     - 2026-09-10 0084 批一追注：M1 并发 run 上限配置化（resource_limits.max_concurrent_runs 缺省 4——原裸常量;@a: 两处 provider-types/mcp-server,@v: RUN_LIMIT 组 0084 双钉）;M2 mergeConfigs 补 language+en|zh 文法核（@v: language 配置节组双钉）;M3 buildModelEngine 公共化 startRun/restore 同调（@a: anc-exec-model-routing,@v: restore M3M4 钉）;M4 restore env 换重读面+language 打底。变异两拍:删合并行 language 钉红/判定改回常量 M1 双钉红,各复原绿
 
 ### anc-struct-spec-ast ✅
@@ -2157,7 +2273,7 @@ spec-ast 模块——类型契约层（最稳，语言身份）。types.ts 按�
 
 - [[spec-ast#^anc-struct-spec-ast]] ← 权威源（含拆分表 + 模块版本）
   - ast-types.ts / ast-helpers.ts — @module: spec-ast；types.ts barrel re-export
-    - ast-helpers.test.ts / ast-runtime.test.ts — @v: anc-struct-spec-ast（文件头 @module 行标注）
+    - ast-helpers.test.ts / ast-runtime.test.ts — @v: anc-struct-spec-ast （文件头 @module 行标注）
 
 ### anc-struct-act-body ✅
 
@@ -2165,14 +2281,14 @@ act-body 模块——hop_python 受限编排语言（parser/interpreter/builtins
 
 - [[act-body#^anc-struct-act-body]] ← 权威源
   - act-body-parser.ts / act-body-interpreter.ts / act-builtins.ts — @module: act-body
-    - act-body-parser.test.ts / act-body-interpreter.test.ts / act-body-validator.test.ts / act-body-reuse.test.ts — @v: anc-struct-act-body（各文件头 @module 行标注）
+    - act-body-parser.test.ts / act-body-interpreter.test.ts / act-body-validator.test.ts / act-body-reuse.test.ts — @v: anc-struct-act-body （各文件头 @module 行标注）
 
 ### anc-meta-line-length-guard ✅（落点=scripts 的 @a:；验证=准入负向验证实录（301 字行 warn 点名/恢复绿,2026-09-21 批三随批），无独立 *.test.ts——同 anc-meta-hopissues-scan 报告型守卫先例）
 
 设计文档行长纪律守卫：docs/design 散文区（排除代码围栏与表格行）单行 >300 字 warn 点名——todo/0098 作者拍 300 字线（"300字,一行啊!"），批一至批三 601+ 处超长单行清零后的防复发线。warn 档 exit 恒 0（拆行是纪律不是正确性；量回涨升红须重走准入四步）。
 
 - [[chain-enforcement#^anc-meta-line-length-guard]] — 映射表登记行（判据 300 字与排除面同源）
-  - scripts/check-line-length.mjs — @a: anc-meta-line-length-guard（package.json check:fast 挂载）
+  - scripts/check-line-length.mjs — @a: anc-meta-line-length-guard （package.json check:fast 挂载）
 
 ### anc-meta-hopissues-scan ✅（落点=scripts 的 @a:；验证=准入负向验证实录（见卡内），无独立 *.test.ts——同 anc-meta-ci-baseline 先例）
 
@@ -2181,7 +2297,7 @@ act-body 模块——hop_python 受限编排语言（parser/interpreter/builtins
 [[chain-enforcement#^anc-meta-hopissues-scan]] 是其在本库的契约投影点。
 
 - [[chain-enforcement#^anc-meta-hopissues-scan]] ← 权威源（本库投影;判据源=外库 README,随其演进）
-  - scripts/check-hopissues.mjs — @a: anc-meta-hopissues-scan（check:fast 挂载,2026-08-17 准入四步齐）
+  - scripts/check-hopissues.mjs — @a: anc-meta-hopissues-scan （check:fast 挂载,2026-08-17 准入四步齐）
     - 负向验证 2026-08-17：改路径探通道缺席→exit 1 ✅；在场报数→exit 0 ✅
     - 负向验证 2026-09-22（"待本方复验"改按 frontmatter `from` 认归属后补跑,隔离临时目录造卡实跑）：
       他库 fixed 卡 `from: hoplogic3`→点名为待复验 ✅（防过度收窄:本方真欠的活不得漏）;
@@ -2204,18 +2320,19 @@ act-body 模块——hop_python 受限编排语言（parser/interpreter/builtins
 发布防线四断言——maintainers/（涉内部源维护者文档）"不出公开面"由四处独立声明兑现（github-publish INCLUDE_DIRS 出闸/github-verify MISS_EXPECTED 验闸/release.sh NONRELEASE_RE 凭证差集闸/package.json files tarball 出口），任一静默漂移其余不报警。守卫形态=静态文本断言（发布脚本不被 vitest 跑，与 anc-release-snapshot 同款成例）。
 
 - [[release-engineering#^anc-release-boundary-guards]] ← 设计权威（四断言判据+变异重放判据）
-  - github-publish.sh:16 INCLUDE_DIRS / github-verify.sh:30 MISS_EXPECTED / release.sh:109 NONRELEASE_RE 三处防线声明行 — @a: anc-release-boundary-guards（package.json files 第四面 json 载体无注释位,由钉4直判）
+  - github-publish.sh:16 INCLUDE_DIRS / github-verify.sh:30 MISS_EXPECTED / release.sh:109 NONRELEASE_RE 三处防线声明行 — @a: anc-release-boundary-guards （package.json files 第四面 json 载体无注释位,由钉4直判）
     - tests/guard-scripts.test.ts "发布防线四断言" 4 例（INCLUDE_DIRS 不含 maintainers/MISS_EXPECTED 数组体按词含 maintainers〔取括号内数组体判——首拍实撞行尾注释字样致 toContain 整行假绿,硬化后重放〕/NONRELEASE_RE 含 maintainers\//files 不含 maintainers 与 RELEASING）— @v: anc-release-boundary-guards
     - 变异重放 2026-09-13：INCLUDE_DIRS 偷加→钉1红 rc=1 恢复绿 ✅ / MISS_EXPECTED 删项→硬化后钉2红 rc=1 恢复绿 ✅ / NONRELEASE_RE 删项→钉3红 rc=1 恢复绿 ✅（输出件 /tmp/claude-502/observer-0088-audit/guard-*.txt）
     - 2026-09-26 起前两例（读 github-publish.sh 与 github-verify.sh）带公开快照标记跳过：这两个脚本在快照剔除清单里，公开仓 clone 下来读文件报 ENOENT；内网标记恒不成立，照读照红（todo/0094，规则见 anc-release-github-snapshot）
 
 ### anc-release-tarball-self-contained ✅（2026-10-02 作者三轮对焦立——"仅用 npm 安装的 agent 要能自给自足"→"国内访问 GitHub 不方便"→"发布版本不应留工程链内部信息,D 系列不打进 npm"）
 
-npm 包文档自足——用户面文档（入口五件 + 概念层 15 + 教程用户系列 14〔00、01×4 载体、02-10〕+ D10 = 35 份,清单权威 scripts/pkgdocs-manifest.json）打包期清洗后随包分发：prepack 原地替换（备份 .pkgdocs-backup/）、postpack 字节级恢复;九步清洗（@trace 头/全局真引用与真锚名/遮蔽代码区/设计层残余/卡号与内部标注/残句收尾/还原/README 与导读专项/净度验收七样+NUL+词表）,围栏按 CommonMark 识别,代码段里讲语法的 `[[文档路径#章节]]`、`^anc-*` 原样保留而真锚名在代码注释里也删;不改任何链接为 GitHub 绝对地址。
+npm 包文档自足——用户面文档（入口六件〔2026-10-03 +agent-instructions-template.md,todo/0139 挂钩②改形态〕+ 概念层 15 + 教程用户系列 14〔00、01×4 载体、02-10〕+ D10 = 36 份,清单权威 scripts/pkgdocs-manifest.json）打包期清洗后随包分发：prepack 原地替换（备份 .pkgdocs-backup/）、postpack 字节级恢复;九步清洗（@trace 头/全局真引用与真锚名/遮蔽代码区/设计层残余/卡号与内部标注/残句收尾/还原/README 与导读专项/净度验收七样+NUL+词表）,围栏按 CommonMark 识别,代码段里讲语法的 `[[文档路径#章节]]`、`^anc-*` 原样保留而真锚名在代码注释里也删;不改任何链接为 GitHub 绝对地址。
 
 - [[release-engineering#^anc-release-tarball-self-contained]] ← 设计权威（两分发面边界决策 + HopType PkgDocsManifest + HopTrait PkgDocsLifecycle〔三模式 Inputs/Outputs/失败条件 + ensures + preserves 四条,v0.3.1 从散文改写〕+ HopSop CleanPkgDoc 九步 + 守卫七条）
   - scripts/build-pkgdocs.mjs（shieldCode/stripCode〔清洗与验收同一把尺〕/cleanDoc/purityViolations/cleanAll/inPlace/restore）+ scripts/pkgdocs-manifest.json + package.json prepack（恒 `npm run -s build` 开头）/postpack + release.sh ④b MUST 三条 + driver 三载体 hop-skill.md :121 指路包内路径（耦合点,review 面四抓漏环后登） — @a: anc-release-tarball-self-contained
     - tests/guard-scripts.test.ts "npm 包文档自足" 7 例（①清单项在场/②files 含清单项不含排除前缀/③实跑 --out 净度零命中+散文独立核两样/④反例注入七样经同一函数清掉且代码段示例保留、清单内双链转相对链接/⑤真仓库 --in-place→--restore 字节级还原备份不留/⑥release MUST 与 prepack/postpack 串接）— @v: anc-release-tarball-self-contained
+      - ④ 注入件追加围栏代码块形态（```yaml 内 `# 注释 ^anc-config-model-engine`——HopAnt:327 实撞,泄露防线不是可读性规则;③ 与 purityViolations 先剥围栏再查锚名,这条规则坏了原形态也全绿,须直接断言输出围栏内不含该锚名且占位 `^anc-x` 与围栏保留;2026-10-08 todo/0136 ②,chain-enforcement §8 release 守卫族三行同批补登） — @v: anc-release-tarball-self-contained
     - 变异重放 2026-10-02：删锚点兜底替换行→③⑤红 恢复绿 ✅;删 files 的 tutorials 项（首稿整目录形态）→②红 ✅。首稿行尾锚点规则单删被兜底掩盖不红——冗余规则非守卫缺口,记此（当日重放未留输出件,review 面四抓——该两条不可复核,以 2026-10-03 入库的日志为准：audits/quality/2026-10-03-pkgdocs-review-工程链review变异日志/ 含面三 28 份 log + 修复批 12 次重放表）
     - 独立阅卷三轮（subagent 对 34/35 份逐份 diff）：首轮必修 39 处（doc-ref 语法示例被吞 17/锚点定义换词悬挂 13/残句 8/README 残留 1）→ 第二轮抓根因（正则围栏状态机被行内 ``` 翻转致核心规范后半篇 102 处锚点未清 + 占位符 NUL 残留）→ 围栏解析重写为 CommonMark 规则后第三轮复核 28/29 消（报告入库 audits/quality/2026-10-02-pkgdocs-review-发布件清洗三轮阅卷/round-{1,2,3}.md）
     - 2026-10-03 工程链 review（hop_tasks 包文档批工程链review）：四面抓 19 修 5 不修——高位两条：prepack 覆盖作者 eb81fa6b 执行位修复（无测试锁,面三 M27 删 tsc 仍绿）/ 净度验收散文剥离仍是旧正则致三份概念文档 685 行散文从未被检（面三探针实证）;变异 28 处红 14 绿 14,全绿中 6 处经 --out 实跑证非等价。修复批补测试见下行
@@ -2239,7 +2356,7 @@ GitHub 公开快照发布——远端是权威、本地快照仓是纯派生物�
 prompt 供给体量阈值代码-设计同源守卫——四组阈值"设计写死数字+代码写死常量"双写形态,改常量不改文档不会红、文档说谎无声（LLM 错误处理战役 review 面二缺口）。映射表 6 组（RETRY_BASE_INLINE_CHARS=500/历史行 clip 4000/UPSTREAM_FEEDBACK_GUARD_CHARS=24000/DEFLATE_THRESHOLD=4096/HUMAN_PREVIEW_THRESHOLD=5000/INLINE_PREVIEW_MAX=20000）,每条钉具体文件+含语境词捕获正则（防裸数值误配——同数值他处出现不误报）;两侧值不等红,任侧 pattern 配不到也红（条款改写没跟上/常量改名同属失同源,报文指路更新映射表）。新增阈值=映射表加行+chain-enforcement §8 表随更。
 
 - [[chain-enforcement]] §8 映射表登记行 ← 权威源
-  - scripts/check-threshold-sync.mjs — @a: anc-meta-threshold-sync（check:fast 挂载,2026-09-01 准入四步齐）
+  - scripts/check-threshold-sync.mjs — @a: anc-meta-threshold-sync （check:fast 挂载,2026-09-01 准入四步齐）
     - 负向验证 2026-09-01 双向：改常量不改文档（RETRY_BASE_INLINE_CHARS 500→600）→exit 1 点名两值两落点 ✅ 复原绿；改文档不改常量（shared-types DEFLATE_THRESHOLD 4096→8192）→exit 1 ✅ 复原绿
 
 ### anc-step-act-body-dict-key ✅
@@ -2280,7 +2397,7 @@ py-sandbox 模块——Python 语法沙箱（2026-09-23 新增,核心层）：�
 
 - [[py-sandbox#^anc-struct-py-sandbox]] ← 权威源（定位/文件构成/边界/跨模块关系/模块版本 + ^anc-struct-py-sandbox-exports 封闭出口六员）
   - py-sandbox.ts — @module: py-sandbox;scripts/pysb/pysb_check.py（随包发布,package.json files + release.sh tarball 资产核对清单登记）
-    - py-sandbox.test.ts — @v: anc-struct-py-sandbox（文件头 @module 行标注）
+    - py-sandbox.test.ts — @v: anc-struct-py-sandbox （文件头 @module 行标注）
 
 ---
 
@@ -2290,17 +2407,17 @@ py-sandbox 模块——Python 语法沙箱（2026-09-23 新增,核心层）：�
 
 HopAnt 智蚁——双态组件模型的基本单元
 
-- [[HopAnt概念-双态组件模型#^anc-struct-cyant]] ← 权威源
+- [[HopSpec V3配套HopJIT运行时能力#^anc-struct-cyant]] ← 权威源
   - (后续迭代)
 
 ### anc-layer-knowledge / anc-layer-capability / anc-layer-data / anc-layer-identity 🔲 未实现
 
 HopAnt 四维度
 
-- [[HopAnt概念-双态组件模型#^anc-layer-knowledge]] ← 权威源
-- [[HopAnt概念-双态组件模型#^anc-layer-capability]] ← 权威源
-- [[HopAnt概念-双态组件模型#^anc-layer-data]] ← 权威源
-- [[HopAnt概念-双态组件模型#^anc-layer-identity]] ← 权威源
+- [[HopSpec V3配套HopJIT运行时能力#^anc-layer-knowledge]] ← 权威源
+- [[HopSpec V3配套HopJIT运行时能力#^anc-layer-capability]] ← 权威源
+- [[HopSpec V3配套HopJIT运行时能力#^anc-layer-data]] ← 权威源
+- [[HopSpec V3配套HopJIT运行时能力#^anc-layer-identity]] ← 权威源
   - (后续迭代)
 
 ---
@@ -2358,7 +2475,8 @@ program.name('hopjit').version(readPackageVersion()).description('HopJIT executi
     - cli.ts `program.name('hopjit').version('0.1.0').descriptio` — @a: anc-cli-dispatch
     - cli.ts `// run = init + 推进到首个 caller 介入点（引擎 completeAndAdv` — @a: anc-cli-dispatch
     - cli.ts `// 节奏归引擎，见 design/exec-engine.md ^anc-exec-advance` — @a: anc-cli-dispatch
-      - cli.test.ts — @v: anc-cli-dispatch
+    - cli.ts submit_and_fetch_next `--branch` 路由（329856d6 owner_id 改名用整词替换误伤 `opts.branch`→`opts.owner`,0ae302a3 改回;追注于 2026-10-07 spec_dir 批 review,首批 diff 零追溯） — @a: anc-cli-dispatch
+      - cli.test.ts — @v: anc-cli-dispatch （`--branch` 两例在 :475 / :3279 附近锁住路由）
 
 ---
 
@@ -2399,7 +2517,7 @@ return { status: 'ok', code: ErrorCode.ALREADY_DONE, message: 'Step already comp
       - cli.test.ts resolveInstance 组（正:错号报新码+指路/空目录如实;反:目录在文件坏仍 CORRUPT_STATE_FILE 不误迁——变异三处全精确命中红点,7e77660b review 面三实证） — @v: anc-cli-instance-resolve
 
 
-  - 2026-09-11 0086 续账③修:run --call-parent 父实例号补 resolveInstance 在场校验——设计全通路收纯承诺(2026-09-01)点名本通路而实现漏网,错号父实例静默建 state/<错号>/calls/<ci> 野目录树零报错(probe 实抓;init --parent 同批已修本入口漏);钉 2(错号 INSTANCE_NOT_FOUND 拒不建野目录/真父照常);重放:删闸→反例红复原绿 — @a: anc-cli-instance-resolve;cli.test.ts 两钉 — @v: anc-cli-instance-resolve
+  - 2026-09-11 0086 续账③修:run --call-parent 父实例号补 resolveInstance 在场校验——设计全通路收纯承诺(2026-09-01)点名本通路而实现漏网,错号父实例静默建 state/<错号>/calls/<ci> 野目录树零报错(probe 实抓;init --parent 同批已修本入口漏);钉 2(错号 INSTANCE_NOT_FOUND 拒不建野目录/真父照常);重放:删闸→反例红复原绿 — @a: anc-cli-instance-resolve, cli.test.ts 两钉 — @v: anc-cli-instance-resolve
 
 ---
 
@@ -2412,6 +2530,12 @@ export function output(data: unknown): void {
     - driver 双载体模板 + scripts/check-driver-carriers.mjs — 机器命令必须显式 `--json` — @v: anc-cli-json-io
       - cli.test.ts — 输出分流、安装副本与生成命令回归 — @v: anc-cli-json-io
 
+  - 2026-10-07 todo/0146 probe 3 追注:submit_and_fetch_next 的 --output/--answer 解析结果须是 JSON 对象,否则调引擎前 INVALID_ARG 拒、状态不动（实撞 --answer '"approve"' 让引擎抛 TypeError）。变异:守卫置 false → 两条用例变红,复原变绿
+    - cli.ts submit_and_fetch_next 的对象守卫（--output/--answer 解析后非对象 → INVALID_ARG,报文给正确形态） — @a: anc-cli-json-io
+      - cli.test.ts "submit_and_fetch_next 非对象提交 → INVALID_ARG（调引擎前拒,状态不动）" 组（反:裸字符串/数组/null 三形态各拒且确认点仍停;正:拒后改对象形态照常推进） — @v: anc-cli-json-io
+    - reuse-driver.ts driverSubmit 的同一守卫（MCP 侧,todo/0146 review D1——null 与数组曾让 confirm 被当同意推进） — @a: anc-mcp-reuse-driver-tools
+      - mcp-server.test.ts "反例：answer/output 解析后不是 JSON 对象（字符串、数字、null、数组）→ INVALID_ARG,confirm 停点不动;正确形态照常推进" — @v: anc-mcp-reuse-driver-tools
+
 ---
 
 ### anc-cli-list ✅
@@ -2422,19 +2546,69 @@ export function output(data: unknown): void {
     - cli.ts `// list <dir>：扫目录列可执行 spec（无状态纯函数）。判定规则见 design/ho` — @a: anc-cli-list
       - cli.test.ts — @v: anc-cli-list
 
-  - 2026-09-11 0086 续账②修:list 设计目录排除硬编码正斜杠→path.sep（win32 反斜杠路径失效,0057 家族漏网点;posix 行为不变）;钉:design 子目录 spec 形态被排+普通目录照列;变异:排除整删→钉红复原绿 — @a: anc-cli-list;cli.test.ts list 设计目录排除组 — @v: anc-cli-list
+  - 2026-09-11 0086 续账②修:list 设计目录排除硬编码正斜杠→path.sep（win32 反斜杠路径失效,0057 家族漏网点;posix 行为不变）;钉:design 子目录 spec 形态被排+普通目录照列;变异:排除整删→钉红复原绿 — @a: anc-cli-list, cli.test.ts list 设计目录排除组 — @v: anc-cli-list
 
 ### anc-cli-pack ✅
 
 hopjit pack——把 hopskill spec 打包成独立具名 CC skill（薄包装三段式：触发/参数引导/执行委托；驱动协议单一权威在 hopspec skill 不内嵌）
 
 - [[hop-cli#^anc-cli-pack]] ← 权威源（2026-08-04 产品形态决策方案 A；2026-08-06 v0.5.0 补 --assets 数据资产条——缺失即拒，走参数不走 spec 文法因 concepts 只读；2026-08-31 v0.25.0 补 ^anc-cli-pack-version-floor 前置段版本声明——hopissues/0051,作者拍"只提示+给升级命令"；2026-09-04 v0.27.0 资产条扩目录形态——hopissues/0069 多文件 skill 语料实锤,目录条目整树递归拷入保持相对路径结构）
-    - cli.ts packSpec() + pack 命令（carrier-aware 薄包装，与 install-skill --demo 共用单一实现；资产条目文件/目录双形态分流）— @a: anc-cli-pack
+    - cli.ts packSpec() + pack 命令（carrier-aware 薄包装，pack 命令与 setup --plus 共用单一实现；资产条目文件/目录双形态分流;Id 改写经 rewriteSpecId,`Id:` 与 `标识:` 两种关键词都认〔2026-10-06,原只认 Id: 致中文标识件改名失效〕）— @a: anc-cli-pack
+    - hop-admin.ts `rewriteSpecId`（2026-10-10 todo/0154 从 cli.ts 搬出——pack 命令的 Id 改写与 antPack / installDemoAnts 共用,cli.ts import 它） — @a: anc-cli-pack
     - cli.ts packSpec 内 packVersion 取 readPackageVersion 单点+两载体模板版本行 — @a: anc-cli-pack-version-floor
       - cli.test.ts "pack"（CC 回归 + Codex `$skill` 布局/委托 + 资产/错误路径 + 目录资产整树拷入钉〔嵌套子目录保持结构;变异核证:目录分支删除恰该钉红 1/9〕）— @v: anc-cli-pack
       - cli.test.ts 前置段版本声明例（两载体产物含 版本>=X.Y.Z 与升级命令,X.Y.Z 断言与包 package.json 全等——单点一致钉;变异重放:packVersion 改死字面量 1 红） — @v: anc-cli-pack-version-floor
 
-  - 2026-09-15 0092 修:--skill-version 选项注入薄包装 frontmatter version 行（原恒缺——HopSpec 头无 version 槽翻译期即丢,pack 无源可继承,消费方读空回退 unknown 致任务归属丢失;未传不写行且 note 提示,不设缺省值编造比缺席更误导;全链版本槽属语法面另案）— @a: anc-cli-pack;cli.test.ts 两钉（注入两载体/未传 note 提示）— @v: anc-cli-pack;重放:注入行清空→正例红复原绿
+  - 2026-09-15 0092 修:--skill-version 选项注入薄包装 frontmatter version 行（原恒缺——HopSpec 头无 version 槽翻译期即丢,pack 无源可继承,消费方读空回退 unknown 致任务归属丢失;未传不写行且 note 提示,不设缺省值编造比缺席更误导;全链版本槽属语法面另案）— @a: anc-cli-pack, cli.test.ts 两钉（注入两载体/未传 note 提示）— @v: anc-cli-pack, 重放:注入行清空→正例红复原绿
+
+### anc-cli-pack-shell ✅（2026-08-15 作者定壳层原则——hopbuild 自举实撞三连沉淀;交付段代码落点 2026-10-08 todo/0129 B5 补,此前只有设计条款）
+
+薄包装 SKILL.md 的内容契约：参数引导只列用户真有信息的参数 / 内务零披露 / @trace note 只写定位句 / **交付段**（列 spec Outputs 各交付物+呈现口径,与 Outputs 严格对齐——壳的参数段对齐 Inputs,交付段对齐 Outputs,两头都不悬空）/ 四段式触发·参数·执行委托·交付一屏内。设计写定后 packSpec 模板一直只读 header.inputs 不读 header.outputs——2026-09-30 语义审计 d2c 抓,todo/0129 B5。
+
+- [[hop-cli#^anc-cli-pack-shell]] ← 权威源（宿主 ^anc-cli-pack）
+  - cli.ts packSpec 交付段（deliverSection：读 ast.header.outputs 逐项列名+类型+注释,无 Outputs 写兜底句;CC 与 Codex 两模板都在「执行」后「用户注意力」前）;knowledgeNote 删除位注释（2026-10-08 todo/0151 作者定删——壳里连知识文档文件名也不点,内务零披露条） — @a: anc-cli-pack-shell
+    - cli.test.ts "doc-ref 知识文档随包拷入" 末两断言（SKILL.md 不含"判据知识文档"与知识文件名;变异:knowledgeNote 恢复到 CC 模板 → 红） — @v: anc-cli-pack-shell
+    - cli.test.ts "交付段：两载体壳都含「## 交付」段,逐项列 spec Outputs 名+类型+注释（与 Outputs 严格对齐）;无 Outputs 的 spec 写兜底句"（doc-review 两项 synthesis / decision_output 带类型与注释、段序在「执行」后、Codex 壳同、无 Outputs 兜底句） — @v: anc-cli-pack-shell
+
+### anc-cli-install-skill-demo-ants ✅（2026-10-06 作者定——"demo skill 方向错了，以后都应该是 hopant，由于 hopant 是安装在 hop 下，所以 demo 可以缺省就装""demo 保留前缀";todo/0142）
+
+setup 第 7 项职责：由包内三份演示原件（examples/coffee-week.md、examples/fact-check-demo.md、examples/syntax/confirm-commit.md）生成 HopAnt `demo-coffee-week` / `demo-fact-check` / `demo-rename`（入口 spec 的 Id/标识 改写为 HopAnt id,数据资产同目录）,经 hopant 模块 planInstall/applyInstall 装进 `~/.hopjit/ants/`。与载体无关,每次 setup 调用只装一次;已装的跳过不覆盖（`--force` 也不覆盖——用户可能改过）;失败只进 `demo_note` 不让 setup 失败;`--demo` 退为隐藏无作用参数保留一个版本周期;不再往任何载体 skill 目录写演示件。
+
+- [[hop-cli#^anc-cli-install-skill-demo-ants]] ← 设计权威（DemoAntInstaller 能力契约 + installDemoAnts 的 HopSop）;[[hopant]] CLI 承接节 v0.2.2 记第二个调用方
+  - cli.ts rewriteSpecId（`Id:`/`标识:` 首行值改写,pack 与演示件共用）+ DEMO_ANTS 三件表 + installDemoAnts（存在即跳过附 note/临时目录生成/planInstall+applyInstall/失败记 note/finally 删临时目录）— @a: anc-cli-install-skill-demo-ants
+  - hop-admin.ts `rewriteSpecId`（2026-10-10 todo/0154 从 cli.ts 搬出——antPack 与 installDemoAnts 共用,cli.ts import 它） — @a: anc-cli-install-skill-demo-ants, anc-cli-pack
+  - cli.ts setup 命令：`--demo` 改 commander 隐藏 Option;全部载体装完后调 installDemoAnts(pkgRoot, homedir()) 一次,顶层响应 `demo_ants` / `demo_note`;旧 DEMO_SET+packSpec 循环删除 — @a: anc-cli-install-skill-demo-ants
+    - cli.test.ts 进程内两例（缺省装到 $HOME/.hopjit/ants 且载体 skill 目录无 demo-*、`<cwd>/.agents/skills` 不生成;传 `--demo` 结果相同）;该 describe 块 HOME/CLAUDE_CONFIG_DIR/CODEX_HOME/OPENCODE_CONFIG_DIR 全部改指临时目录 — @v: anc-cli-install-skill-demo-ants
+    - cli.test.ts 子进程三例（首装三件齐+Id/标识已改写+资产+inner_store+index;改动后 `--force` 重跑不覆盖、demo_note 含"已装，跳过"与 remove 指引;`--demo` 接受且 `setup --help` 不显示它）— @v: anc-cli-install-skill-demo-ants
+    - cli.test.ts 单元三例（rewriteSpecId 两种关键词/只改首个;pkgRoot 缺失三条失败 note 不抛;部分预装时只装缺的、用户文件不动）— @v: anc-cli-install-skill-demo-ants
+    - 变异重放:rewriteSpecId 正则去掉"标识"分支 → 3 例红,复原绿
+  - scripts/carrier-live-e2e-lib.mjs installCarrierSkill：setup 的 env 把 HOME/CODEX_HOME/CLAUDE_CONFIG_DIR/OPENCODE_CONFIG_DIR 指到 `<workspace>/.e2e-home/`;codex:demo 场景改为 `$hopspec run` 一次性家目录里的 demo-coffee-week 入口 spec（设计 [[carrier-live-e2e]] 场景矩阵 codex:demo 行与隔离节）
+    - tests/carrier-live-e2e.test.ts codex:demo 命令例（prompt 含一次性家目录下入口 spec 路径,不含旧 `$demo-coffee-week`）
+
+### anc-config-yaml-dump-opts ✅（2026-10-08 hopissues/0127——引擎内 js-yaml dump 统一带 lineWidth -1 / noRefs,prompt 里的多行原文不再被折行改坏）
+
+js-yaml `dump` 缺省 `lineWidth: 80` 把含空格的长字符串写成折叠标量 `>`,在 80 列附近的空格处折行、段间空行翻倍。prompt 渲染的三处 yamlDump 降级分支（整值超 INLINE_PREVIEW_MAX / 列表元素超 120 字符含空格 / 嵌套超 6 层）都用缺省参数——模型看到的知识卡原文已是折过的样子,改写步照抄写回,下一轮再折一次,逐轮叠加（hopkb 8 张卡实损,最重 200~300 处句中硬折,零失败信号）。修：常量 `YAML_DUMP_OPTS = { lineWidth: -1, noRefs: true }`,src/ 内十处 yamlDump 调用一律带它（三处 prompt 降级 + str() + contentToText + dispatcher 收窄 + cli 三处 + hopant 一处）;对账钉锁住"新增裸调即红"。
+
+- [[shared-providers#^anc-config-yaml-dump-opts]] ← 权威源（规则 / 原因 / 覆盖面六处表 / 为什么是常量不是包装函数 / 测试面）;[[prompt-assembler#^anc-exec-inputs-render]] 护栏与兜底条随注
+  - provider-types.ts `YAML_DUMP_OPTS` 常量 — @a: anc-config-yaml-dump-opts
+  - prompt.ts 整值降级 / 列表元素兜底 / 嵌套超层降级三处 `yamlDump(…, YAML_DUMP_OPTS)` — @a: anc-config-yaml-dump-opts
+  - act-builtins.ts `str()` / tools.ts `contentToText` / dispatcher.ts 收窄产物序列化 / cli.ts YAML 输出与配置写盘三处 / hopant.ts 适配戳写盘 — @a: anc-config-yaml-dump-opts
+  - hop-admin.ts `writeOwnerId` 的 config.yaml 写盘（2026-10-10 todo/0154 随 ant share 从 cli.ts 搬出） — @a: anc-config-yaml-dump-opts
+    - prompt.test.ts "钉4 正例（0127 主灶）：21K 多行字段整值降级后,prompt 里每一行原样可见、段间空行数不变" / "钉5 正例（0127 第二受害面）：195 字符含空格的列表元素兜底档整行原样,不出 `- >-`" / "钉6 正例（0127 第三处）：7 层嵌套子树降级块里的多行字符串出字面块逐行原样" / "对账钉（0127 立规）：src/*.ts 里每一处 yamlDump( 调用第二参都是 YAML_DUMP_OPTS" — @v: anc-config-yaml-dump-opts
+  - 变异三处（去掉三处降级的 YAML_DUMP_OPTS）各自对应钉红,对账钉同红;复原绿（/tmp/claude-502/observer-0127/replay.txt）
+  - probe：hopissues/hoplogic3/0127 卡 probe.sh（零 LLM：21K 多行字段 + 195 字符列表元素经 formatPromptText 后逐行比对）修前 BUG_REPRODUCED（missing_lines=185）,修后 PASS
+
+### anc-cli-opencode-tools-gate ✅（2026-10-08 todo/0134 作者拍 b 案——opencode 注册 enabled:true + tools 节关独立模式专属工具）
+
+opencode 载体 setup 写 `mcp.hopjit.enabled: true`,并在同一用户级配置的顶层 `tools` 节把独立模式专属五件 `hopjit_start_run / hopjit_run_status / hopjit_resume_run / hopjit_list_runs / hopjit_stop_run` 写 false。翻 2026-09-15 的 enabled:false（防 LLM 自决调 start_run 劫持复用模式）：todo/0146 后复用模式需要 server 活着（驱动七件与 run_approved_command 走 MCP 工具）,同一开关管两类工具;opencode 官方文档核实全局 `tools` 配置支持按 `<server>_<tool>` 关闭且 server 保持开启,于是 server 开着只关会劫持的五件。关闭清单列死为 `OPENCODE_DISABLED_TOOLS`（= 注册面 − 驱动七件 − 批准三件 − server_status）;tools 节逐键 jsoncModify 只补缺席或非 false 的键,用户其他键不动;mcp.hopjit 已存在整条跳过且不碰 tools 节;permission_note 撤「把 enabled 改 true」句。
+
+- [[hop-cli#^anc-cli-opencode-tools-gate]] ← 权威源（opencode 载体条款 --mcp 注册分支：翻案依据 / 关哪些 / 幂等与用户键 / standalone 怎么开）;[[hop-cli#^anc-cli-install-skill-permission]] 其他载体小节 note 口径随更;[[shared-providers]] 出口表 `OPENCODE_DISABLED_TOOLS` 行
+  - provider-types.ts `OPENCODE_DISABLED_TOOLS` 常量 — @a: anc-cli-opencode-tools-gate
+  - cli.ts setup opencode 分支（enabled:true + tools 节逐键写 false + mcpNote）/ permissionNote opencode 句 — @a: anc-cli-opencode-tools-gate
+    - cli.test.ts "install-skill --carrier opencode --mcp 写 opencode.json 的 mcp.hopjit（正例）"（enabled true / tools 恰五键 false / 复用面键不写 / note 点名）+ "setup --carrier opencode（review 面三 G7,mut-17）：首装时独立模式专属键在场但为 true → 写成 false"（判据是值不为 false 不是键在场;2026-10-08 发版前八项修复批工程链 review 修复）+ "setup --carrier opencode：tools 节已有用户键 → 只补缺席的五键,用户键原样;重跑幂等（反例:不覆盖）"（保留注释 / 用户键与已 false 键不动 / 用户改 true 后重跑不翻回）+ "反例：opencode 载体不写 CC 放行文件…note 含工具名与 tools 节说明" — @v: anc-cli-opencode-tools-gate
+    - cli.test.ts 2026-10-11 已有条目三分（作者抓"普通用户会手工翻么？这是 hopjit 自己的 mcp service"）："正例：opencode 已有 mcp.hopjit 是 hopjit 自己写的旧形态（command hopjit-mcp + enabled:false）→ setup 升级为 enabled:true 并补 tools 节五键,其余键与用户键不动" + "反例：opencode 已有 mcp.hopjit 是用户自配（command 不是 hopjit-mcp）且 enabled:false → setup 不动它,tools 节也不写";hopjit doctor 组 "反：opencode 载体 enabled:false（hopjit 自己写的旧形态）→ mcp_registered warn,hint 指路重跑 setup 不叫用户手工改文件"。变异证明：ownStale 判定改恒 false → 正例红;判定去掉 command 条件 → 反例红;两条恢复后 3 例绿（记录 .claude/tmp-review/fix-oc-enabled/mut/progress.md） — @v: anc-cli-opencode-tools-gate
+    - mcp-server.test.ts tools/list 对账例追加：OPENCODE_DISABLED_TOOLS ⊆ 注册面、与复用模式所需十一件零交集、两集合恰好瓜分注册面（mcp-server 新增独立模式工具时红） — @v: anc-cli-opencode-tools-gate
+  - driver/opencode/hop-skill.md 分派节「已注册但驱动工具不可见」与放行段 / driver/opencode/SKILL-mcp.md「独立模式工具不可用」排查段 / docs/tutorials/04 opencode 句 — 教学同口径
 
 ### anc-cli-install-skill-permission ✅（2026-10-01 作者定——"核心是通过安装和 /hop 完成对 coding agent 的教育,对用户尽可能傻瓜化,不浪费人的注意力";hopissues/0114 零弹窗半边的安装侧）
 
@@ -2444,6 +2618,9 @@ CC 载体 install-skill 自动把 `mcp__hopjit__run_approved_command` 写进 `<c
 
 - [[hop-cli#^anc-cli-install-skill-permission]] 契约（落点/幂等/其他载体/响应两字段）
   - cli.ts `ensureCcPermission`（七形态——顶层非对象/permissions 非对象/allow 非数组三支 review 后改不写只 note）+ install-skill 调用点（判据显式枚举 cc/cfuse-cc,review 抓 carrierFamily 把 opencode 归 cc 系致误写）+ output permission_written/permission_note — @a: anc-cli-install-skill-permission
+  - hop-admin.ts `ccPermissionMissing(cwd)`（2026-10-10 todo/0154 从 cli.ts 搬出——放行缺口只读半边;cli.ts `ensureCcPermission` 写半边不动,import 它） — @a: anc-cli-install-skill-permission
+  - provider-types.ts HOPJIT_ALLOWED_TOOLS 常量（放行清单 = 注册的全部工具,含 approve_commit;todo/0146 由一个工具扩为清单） — @a: anc-cli-install-skill-permission
+    - mcp-server.test.ts 放行清单对账测试（清单与注册工具集完全相等且含 approve_commit,新增工具漏登即红） — @v: anc-cli-install-skill-permission
     - cli.test.ts "install-skill 缺省傻瓜化（0132 后续）"（缺省写放行恰一条/已有 allow·deny·other 时追加不覆盖/二跑 null+未改动且只一条/坏 JSON 不写文件原样/codex 不写只指路;变异去'已含不动'→二跑例红） — @v: anc-cli-install-skill-permission
 
 ### anc-cli-install-skill-single-entry ✅（2026-10-01 作者定——"现在安装时会装好几个 hop 家族的 skill,也要考虑避免 coding agent 的认知混乱";作者方案：缺省 hop 一个入口,内涵 hopspec 执行、按需分派 hopbuild/hopfix,hopspec-mcp 也经 hop）
@@ -2461,19 +2638,307 @@ CC 载体 install-skill 自动把 `mcp__hopjit__run_approved_command` 写进 `<c
 
 - [[hop-cli#^anc-cli-carrier-autodetect]] 契约（探测判据/去重/回落/响应形态）
   - cli.ts `detectCarriers()` + install-skill 载体选择三支 + `installOne` 按载体循环 + 多载体响应拼装 — @a: anc-cli-carrier-autodetect
+  - hop-admin.ts `detectCarriers(ctx)`（2026-10-10 todo/0154 从 cli.ts 搬出;cli.ts 的 setup / firstRunHint 经 adminContext() 调） — @a: anc-cli-carrier-autodetect
     - cli.test.ts "install-skill 载体自动探测" 组（detectCarriers 正反例与顺序;CLAUDE_CONFIG_DIR 重定向去重;两载体零参数双装与顶层取首;零在场回落 cc 与显式 --carrier 不碰他方;--dir 不探测） — @v: anc-cli-carrier-autodetect
   - USAGE.md §2 / README 安装节 / AGENT-GUIDE §二 — 用户面口径
 
-### anc-cli-postinstall ✅（2026-10-03 作者定——"只需要 npm i -g @hoplogic/hopjit,其他的都应该让 /hop 去搞定"）
+### anc-struct-config-load ✅（2026-10-08 todo/0131——复用模式配置改两级合并;作者 2026-09-30 拍形态 1 新建模块,定旧口径"复用模式不做配置合并"是 agent 自拟）
 
-package.json `postinstall: node dist/postinstall.js` 装包即装 skill（等价零参数 install-skill,不带 --force）;四种环境跳过（HOPJIT_SKIP_SKILL=1 / CI / sudo 下 root / 源码仓自身装依赖或 dist 缺席）与任何异常都只向 stderr 打一行指路,退出码恒 0;`HOPJIT_POSTINSTALL=1` 让 install-skill 跳过项目级两件（CC .mcp.json 注册、settings.local.json 放行）,由 /hop 首次在项目里跑时补。
+config-load 模块——两级配置（系统级 `~/.hopjit/config.yaml` + 项目级 `hopjit.yaml`）读取、逐文件文法核、逐键合并、合并后引用核,独立模式与复用模式共用的唯一一份实现（适配层）。此前复用模式只读项目级三个单键,系统级一个键都不读——`setup --plus` 写进系统级的 websearch / playwright 在复用模式用不上。模块不读进程状态：家目录、项目根、HOPJIT_CONFIG 由组合根算成 ConfigPaths 传入。`StandaloneConfig` 改名 `HopConfig`,mcp-server 保留别名再导出一版。
 
-- [[hop-cli#^anc-cli-postinstall]] 契约（不问只探/四跳过/项目级两件延后/首次 /hop 补）
-  - src/postinstall.ts 钩子入口 + cli.ts `postinstallSkipReason()` 纯函数 + install-skill `projectScope` 两处跳过 — @a: anc-cli-postinstall
-    - cli.test.ts "install-skill 载体自动探测" 组（HOPJIT_POSTINSTALL=1 不写项目级两件且 note 说明;postinstallSkipReason 四跳过各命中、装包形态 null、真 root 不经 sudo 照装;dist/postinstall.js 真跑源码仓路径跳过退出码 0 不写 skill;package.json 钩子登记） — @v: anc-cli-postinstall
-  - driver/hop-skill.md + codex/opencode 副本「0. 分派」节前置检查（项目里没 .mcp.json/hopjit 条目就跑一次 install-skill 补） — 协议面
-  - scripts/check-layer-imports.mjs LAYER 表登记 postinstall（层 2,hop-cli 模块） — 守卫登记
-  - 真机面：干净 HOME 下 `npm install -g <tgz> --foreground-scripts` 实跑一次（2026-10-03 本批：cc+codex 双装、HOPJIT_SKIP_SKILL/CI 两跳过均按契约）— 归 test:live:smoke 候选,本批手工验
+- [[config-load#^anc-struct-config-load]] ← 权威源（定位/边界/关系/模块版本 v0.1.1 + ^anc-struct-config-load-exports 封闭出口表：类型 3 + 函数 8;2026-10-08 发版前八项修复批工程链 review 修复——根锚点继承声明、边界句改实、HopType ConfigLoader + 三 HopSchema 新节 ^anc-struct-config-load-types、两段 HopSop 去类型标）
+  - config-load.ts — @module: config-load（文件头）;HopConfig 类型注释行 — @a: anc-struct-config-load
+  - mcp-server.ts import 行 + loadStandaloneConfig 薄包装 + StandaloneConfig 别名 — @a: anc-struct-config-load
+    - config-load.test.ts — @v: anc-struct-config-load （文件头 @module 行标注）
+  - scripts/check-layer-imports.mjs LAYER 表登记 config-load（层 2） — 守卫登记
+  - Doctree 设计层表+模块索引+src 表 / ARCHITECTURE 组件表 / module-principles §2 适配层行+§7 盘点 — 三视图
+  - 旧口径改写七处：hop-cli 配置通路段 v0.45.0 / act-body v0.27.2 / 配置参考 :228 / i18n ^anc-i18n-language-config / exec-engine 注册件装配条款①② / tools 出口表 loadProjectToolRegistry 退役 v0.26.0 / shared-providers 配置契约节与 ^anc-config-hop-env v0.17.4;mcp-server 出口表 mergeConfigs 行 deprecated-reexport v0.24.0
+
+### anc-struct-config-load-exports ✅（2026-10-08 todo/0131）
+
+config-load 出口：类型 3（`HopConfig` / `ProviderEntry` / `ConfigPaths`）+ 函数 8（2026-10-08 发版前八项修复批工程链 review 修复 统一件数口径——此前卡写七件/八件与出口表 9 行不一致）;`configPaths(homeDir, projectDir, explicitPath?)` 路径唯一一处;`parseConfigFile(path, required, homeDir)`;`mergeConfigs(sys, proj)`;`validateMergedRefs(config, resolveDefault?)`;`loadHopConfig(paths, {requireProviders, resolveDefault?})`;`loadReuseConfig(paths)`;`loadToolRegistry(paths, projectDir)`;另 `applyReuseConfig(hostConfig, config)` 消费面（落 ^anc-config-reuse-consume）。
+
+- [[config-load#^anc-struct-config-load-exports]] ← 权威源
+  - config-load.ts configPaths / parseConfigFile / validateMergedRefs 三出口注释行 — @a: anc-struct-config-load-exports
+  - cli.ts adaptConfigPaths 改调 reuseConfigPaths→configPaths;reuse-driver.ts runDepsGate 改调 configPaths（"路径怎么来"真成唯一一处,2026-10-08 发版前八项修复批工程链 review 修复） — @a: anc-struct-config-load-exports
+  - hop-admin.ts `adaptConfigPaths(ctx)` 改调 configPaths(ctx.home, ctx.cwd, ctx.env.HOPJIT_CONFIG)（2026-10-10 todo/0154 从 cli.ts 搬出;cli.ts runDepsGate 改调 reuseConfigPaths 同源） — @a: anc-struct-config-load-exports
+    - config-load.test.ts "configPaths：路径怎么来只有这一处"（正:缺省两级 / 反:显式路径单文件） — @v: anc-struct-config-load-exports
+
+### anc-struct-config-load-types ✅（2026-10-08 发版前八项修复批工程链 review 修复——面一抓 config-load 设计零 HopType/HopSchema）
+
+config-load 的接口签名与数据形状：HopType ConfigLoader（八出口函数签名,各参数 `名 % 类型 # 说明`,无自持状态）+ HopSchema ConfigPaths / HopConfig / ReuseConfigResult 三个纯数据形状。设计先行底线"能力契约写成 HopType 成员函数签名"在新模块上的兑现;代码落点与出口表共用（签名即出口）。
+
+- [[config-load#^anc-struct-config-load-types]] ← 权威源（HopType 块 + 三 HopSchema 块）;与 ^anc-struct-config-load-exports 出口表同对象两视图（表管稳定性与消费者,块管签名与参数语义）
+  - config-load.ts `HopConfig` / `ConfigPaths` 两接口注释行（HopSchema 的 TS 真身;八出口函数签名落点归出口表卡） — @a: anc-struct-config-load-types
+    - config-load.test.ts "configPaths：路径怎么来只有这一处"（ConfigPaths 三字段 toEqual 精确比对——HopSchema 形状钉） — @v: anc-struct-config-load-types
+
+### anc-config-two-level-merge ✅（2026-10-08 todo/0131）
+
+逐键合并规则表（八行各带为什么）+ loadHopConfig HopSop 六步：providers 按 service_id、routing_rules 按 step_type、tool_servers 按 name 同名项目级整条替换（条目相对路径基准=声明所在文件目录）;default_model / notify / log_level / log_retention / language / revision_prompt 单值项目级在场即赢;env、resource_limits 逐键合并项目级赢;commands 并集去重;owner_id 不合并;HOPJIT_CONFIG 单文件不合并;两级全缺席独立模式抛、复用模式返空。
+
+- [[config-load#^anc-config-two-level-merge]] ← 权威源（规则表 + HopSop）;[[shared-providers#^anc-config-standalone-schema]] 语义源
+  - config-load.ts mergeConfigs 注释行 / loadHopConfig — @a: anc-config-two-level-merge
+    - config-load.test.ts "两级合并逐键规则" 9 例（正:只系统级在场五键全生效且 _base_dir=~/.hopjit / 单值项目级赢+env、resource_limits 逐键 / commands 并集去重 / tool_servers 同名整条替换+_base_dir 各随文件;反:HOPJIT_CONFIG 单文件不合并 / 两级全缺席两模式分叉 / 独立模式 providers 空抛且 resolveDefault 回调被调 / owner_id 不合并 / ~ 按传入 homeDir 归一） — @v: anc-config-two-level-merge
+
+### anc-config-reuse-consume ✅（2026-10-08 todo/0131）
+
+复用模式消费面与容错两档：`applyReuseConfig` 把 commands → sandbox.runtime.available、language → language 与 hop_env.hop_env_language、env → hop_env 底层（绝对路径值同扩 read allowed）、resource_limits → resource_limits 装进 HostConfig,cli 与 reuse-driver 两个复用模式组合根共用;`loadReuseConfig` 对 commands 含 hopjit 原样抛 CONFIG_ERROR,其余加载错误回空配置带一条 warning（stderr 一行）;tool_servers 坏条目在 `loadToolRegistry` 调 parseToolServers 时响亮抛。
+
+- [[config-load#^anc-config-reuse-consume]] ← 权威源（消费表 + 不消费清单 + loadReuseConfig **分文件容错** HopSop readOne 六步——2026-10-08 发版前八项修复批工程链 review 修复：项目级纯注释模板曾把系统级一起丢成零配置〔面二 E 回归〕;parseConfigFile 空文件/纯注释按零配置、tool_servers 条目须为映射〔面二 F〕;工具面项目根取 HostConfig.workspace_dir 四处同口径〔面二 A〕）;[[hop-cli]] 配置通路段 / [[act-body#^anc-exec-subprocess-run]] 配置通路条 / [[i18n#^anc-i18n-language-config]] 消费面
+  - config-load.ts loadReuseConfig / loadToolRegistry / applyReuseConfig — @a: anc-config-reuse-consume
+  - cli.ts import 行 + buildHostConfig 两级装配 + reuseConfigPaths + 工具工厂 loadToolRegistry（回调接 hc,按 hc.workspace_dir）+ tool-call loadToolRegistry + runDepsGate 第三参 workspaceDir — @a: anc-config-reuse-consume
+  - config-load.ts parseConfigFile 空文件/纯注释零配置判 + tool_servers 条目映射核;tools-composite.ts makeEngineToolProviderFactory loadRegistry 回调改接 HostConfig（2026-10-08 发版前八项修复批工程链 review 修复） — @a: anc-config-reuse-consume
+  - reuse-driver.ts import 行 + buildHostConfig 两级装配 — @a: anc-config-reuse-consume
+  - mcp-server.ts 工具工厂 loadToolRegistry（两级） — @a: anc-config-reuse-consume
+    - config-load.test.ts "复用模式容错两档与消费面" 12 例（2026-10-08 发版前八项修复批工程链 review 修复 +5 改 1：反:系统级坏 YAML + 项目级好 → 项目级保留 warning 点名〔改〕/ 正:项目级纯注释模板 + 系统级 zh/[git] 仍生效零 warning〔面二 E 回归〕/ 正:空文件零配置 + 两级都坏两条 warning 各点名 / 反:tool_servers null 条目 STANDALONE_CONFIG_INVALID 点名下标且 loadReuseConfig 折 CONFIG_ERROR、非数组同拒〔面二 F〕/ 正:applyReuseConfig read allowed 去重〔G8 mut-3〕;既有:commands 标量与 language 坏值钝感 / commands 含 hopjit 响亮抛 / tool_servers 坏条目 loadToolRegistry 抛 / loadToolRegistry 两级合并零注册 undefined / applyReuseConfig 四样装入+绝对路径扩 allowed+resource_limits 合并;反:空配置缺省四样） — @v: anc-config-reuse-consume
+    - cli.test.ts 依赖核组 "正例（review 面二 A）：`run --workspace WS` 从别的目录起跑,WS/hopjit.yaml 注册的 in-process 工具过依赖核且 act body 能调到"（变异:runDepsGate/工具工厂改回 process.cwd() 红） — @v: anc-config-reuse-consume, anc-cli-workspace-arg
+    - mcp-server.test.ts 复用驱动组 "正例（review 面三缺陷 3）：复用驱动 run 经 applyReuseConfig 吃两级配置——state.json host_context 带 available=[git] 与 hop_env_language=zh"（三组合根之一此前零测试） — @v: anc-config-reuse-consume
+    - cli.test.ts "复用模式两级配置合并" 6 例（卡 probe 1–4 测试化：系统级 in-process 工具 tool-call 成功 / commands 并集进 available / language 系统级 zh 项目 en 项目赢 / env 系统级进 hop_env 且 params 覆盖、resource_limits 进 HostConfig;反:系统级坏 YAML 钝感 stderr 一行 + 项目级 commands 含 hopjit CONFIG_ERROR / HOPJIT_CONFIG 单文件只用它） — @v: anc-config-reuse-consume
+    - engine.test.ts registerFactoryLikeCli 改经 config-load loadToolRegistry（与 cli 组合根同 import 同形） — 既有 0076 直执面钉随迁
+
+### anc-struct-hopant ✅（2026-10-06 todo/0142 子卡 A——作者定"按照工程链，开始落 hopant 所需的架构、模块、设计、代码和测试，数据 store 相关的先不用管";同日工程链 review 修复批 v0.1.1——原八锚合一卡拆为八张,scan.py 卡头只认首锚,合一形态下 7 锚机检零覆盖,同形态 10-01 已抓过一次）
+
+hopant 模块——HopAnt 实体在引擎侧的第一个模块（适配层）：`~/.hopjit/ants/<id>/` 目录布局;安装（来源=单 ant 目录或 HopAnt 包根 `ants/<id>/`,撞 id 时全或无,来源里 ant 根下的 inner_store/ 与任意深度的 *.orig.md 一律丢弃,bootstrap.js 只标记不执行）;配置适配四项核;适配戳;本机索引。纯函数——home、环境变量表、PATH、归属标识、引擎版本全部由组合根 cli.ts 注入,模块零 process.*、不起子进程。review 修复：headerHash 复用 parser 段识别、两级注册面读取挪 tools-registry、missing 先算不靠引擎报文、adaptState 出口、HopType 签名按规则 3 竖排带 #。
+
+- [[hopant#^anc-struct-hopant]] ← 权威源（定位/关系/不是什么/八条决策/模块版本 v0.3.1 + ^anc-struct-hopant-exports 封闭出口表;②c 运行时目录另立卡 anc-struct-hopant-runtime-dirs）
+  - hopant.ts — @module: hopant（文件头）
+    - hopant.test.ts — @v: anc-struct-hopant （文件头 @module 行标注）
+  - scripts/check-layer-imports.mjs LAYER 表登记 hopant（层 2） — 守卫登记
+  - docs/design/concept-anchor-rules.md 类别表 `anc-hopant-*` 行 + scripts/audit/scan.py CATEGORIES "hopant"（双真值同步;八件单第 3 件,首批漏、131b4566 补） — 锚点类别登记
+  - Doctree 设计层表+模块索引（×17）+src 表+tests 计数 / ARCHITECTURE 复用模式适配表+双态分布表 / module-principles §7 盘点 — 三视图
+
+### anc-struct-hopant-runtime-dirs ✅（伞锚点,落点=act-body ^anc-exec-spec-dir / tools/file-tools ^anc-exec-tool-path-resolve 第④形态 / doc-ref ^anc-exec-doc-ref-resolve 三锚各自的 @a/@v + driver 三载体 hop-skill.md 分派节"工作区是用户的项目目录"条〔f57fc2da 子卡 B 已写〕;本锚无引擎侧专属代码——复用模式工作区=CLI 进程 cwd、独立模式=start_run 的 workspace_dir 参数,两者早已存在;2026-10-06 todo/0145 作者定;2026-10-07 spec_dir 批 review 修复 D6 立锚——此前 ②c 条无自有锚,run-script 与本表只能指整节,子卡 B 接线无锚可挂）
+
+HopAnt 运行时目录四条：工作区 = 用户发起 /hop 时所在的项目目录（复用模式 CLI run 取 cwd 零改动;独立模式由 /hop 起 run 时传 workspace_dir=用户项目——子卡 B 接线）;HopAnt 目录是只读资源目录（起跑把 spec 目录加进读权限,knowledge/ 经 doc-ref 两级基准,数据样例经文件工具 `read(path: spec_dir(…))`,一条读授权覆盖 knowledge/数据样例/将来的 inner_store）;自带脚本 scripts/ 经任务级授权跑（已批准命令 + subprocess.run,全部路径经 argv 传绝对值不依赖 cwd——spec_dir 给自带资源、Inputs 给用户文件、work_zone_path 给临时输出;subprocess.run 不传 cwd）;commit 不写 HopAnt 目录（演化回写归子卡 D）。落点不在 hopant.ts——它是对引擎既有三处能力（engine/dispatcher 的 specPath 注入、tools 的读授权、doc-ref 两级基准）的组合约定。
+
+- [[../concepts/HopAnt概念#^anc-struct-hopant-layout]]「跑 HopAnt 时的工作区」段 ← 概念权威（作者 2026-10-06 确认稿）
+  - [[hopant#^anc-struct-hopant-runtime-dirs]] ← 权威源（②c 四条 + 脚本路径约定）
+  - [[act-body#^anc-exec-spec-dir]] 路径来源 / [[tools/file-tools#^anc-exec-tool-path-resolve]] 第④形态读授权 / [[doc-ref#^anc-exec-doc-ref-resolve]] 起跑授权与两级基准 / [[tools/run-script]] 分工段 — 被组合的三处引擎能力（各有自己的 @a/@v,见各卡）
+  - driver/hop-skill.md:47 / driver/codex/hop-skill.md:51 / driver/opencode/hop-skill.md 分派节第 2 条"工作区是用户的项目目录"（复用模式在项目目录执行 run,工作区=cwd;独立模式 start_run 显式传 workspace_dir） — driver 协议落点（f57fc2da 子卡 B）;引擎侧无专属代码：cli.ts buildHostConfig 取 process.cwd()、mcp-server startRun 的 workspaceDirArg 两处早已存在
+    - act-body-interpreter.test.ts "spec_dir 契约边界" 端到端一例（python3 跑 spec_dir 脚本读 spec_dir 数据）+ tools.test.ts "read_access.allowed 内绝对路径（spec 目录只读）"（读放行/写拒/run_script 不扩） — 行为侧覆盖,@v 挂各自锚
+
+### anc-hopant-home ✅（2026-10-10 todo/0155 作者定"应该有项目级 hopant 位置"——HopAnt 根一级改两级,决策 1 / 9;本卡 2026-10-10 0154+0155 工程链 review D4 重写——0155 批次的卡编辑脚本中途抛错未写盘,卡滞后一天而机检因 (锚,文件) 对已被旧行覆盖报不出）
+
+HopAntHome：两级根 AntRoots `{project: <项目>/hop_tasks/ants, user: <home>/.hopjit/ants}`（antRoots(home, projectDir) 算;user 恒由 antsRoot(home) 构造——removeAnt 备份位靠它上溯）;按 id 查找 resolveAnt 项目级先于用户级、同 id 项目级遮住用户级、不合法 id 经 antDir 抛 HOPANT_BAD_ID;listAnts(roots) 两级合并项目级在前、同 id 两条都在带 scope;listAntsIn(root) 单根;antDir(root, id) / indexPath(root) 第一参改为根;rebuildIndex(root) 空根且无索引时不建目录。antDir 的 id 合法规则：首字符小写字母或数字,其余小写字母/数字/连字符/下划线/点;大写、空、路径分隔符、`..` 抛 HOPANT_BAD_ID。
+
+- [[hopant#^anc-hopant-home]] ← 权威源（HopType HopAntHome 九成员 + HopSchema AntRoots;决策 1 两级与谁落哪级、决策 9 查找序与遮蔽〔agent 自决策 1 推演,commit 1455d173〕）
+  - hopant.ts AntRoots / AntScope / antRoots / antsRoot / antDir(root, id) / resolveAnt / indexPath(root) / listAntsIn / listAnts(roots) / specTitle / rebuildIndex(root)（2026-10-10 两级根,1455d173） — @a: anc-hopant-home
+    - hopant.test.ts "两级根（^anc-hopant-home 决策 1 / 9）"组 10 例（antRoots 两路径 / resolveAnt 项目先、只用户、都没有 null、半拷贝不遮 / listAnts 合并顺序与同 id 两条 / planInstall 跨级不冲突本级冲突 / removeAnt 缺省删项目级·显式 scope·备份位恒用户级 / resolveCalleeSpecPath 三级序 / commitApprovalStorePath 项目级 inner_store / checkRunDeps 项目级 call 通过并递归 / shareAnts 项目级直接分享 / rebuildIndex 空根不建目录）+ review 补：resolveAnt 不合法 id 抛 BAD_ID、antInstall 缺省 scope 落用户级 — @v: anc-hopant-home
+    - hopant.test.ts 路径约定与索引组（正:三路径+合法 id 不抛/listAntsIn 只算含入口 spec 且升序〔ä-ant/Zed/10/9 混排〕;反:BAD_ID 六形态;签名随两级根改为传 root） — @v: anc-hopant-home
+
+### anc-hopant-index ✅
+
+本机索引 ants/index.md：一行一 ant `- <id> — <标题> — <Goal 首行>`,Goal 缺席写（无 Goal）,解析失败写占位不中断;派生物随 install/remove 重建。specTitle 去 parser 保留的 `Spec: ` 前缀,索引与 ant list 共用。
+
+- [[hopant#^anc-hopant-index]] ← 权威源
+  - hopant.ts indexPath/specTitle/rebuildIndex — @a: anc-hopant-index
+    - hopant.test.ts 索引用例（正:三段格式+（无 Goal）占位;反:解析失败条目占位不中断、第二行不进索引;单 ant 安装后索引在场） — @v: anc-hopant-index
+  - hop-admin.ts antPack 的 indexRoot 判定（outDir 等于 roots.project / roots.user 时传给 packAnt）+ hopant.ts packAnt 末尾 rebuildIndex(opts.indexRoot)（2026-10-11 天气总结实撞：pack 直落项目级根索引空表） — @a: anc-hopant-index
+    - cli.test.ts "正例：pack --out <项目级根 hop_tasks/ants> → 该根 index.md 多出这一行,响应 pack.index_rebuilt 是该根;就地 ant list 能列到 scope=project" + "反例：pack 到别处（缺省 <cwd>/ants,不是任何一级 HopAnt 根）→ 不建 index.md,响应 index_rebuilt 为 null（待装目录,索引归 install）"。变异证明：indexRoot 判定改恒 undefined → 正例红;改恒传 outDir → 反例红;恢复后 2 例绿（.claude/tmp-review/fix-pack-index/mut/progress.md） — @v: anc-hopant-index
+    - hopant.test.ts 两级根组既有跨级 install 例加断言：装项目级前后用户级 index.md 内容逐字节相同——一级的 rebuildIndex 不碰另一级索引（2026-10-10 0154+0155 工程链 review 缺口 G8 补;applyInstall 只拿到本级根,构造不出"顺带重写另一级索引"的变异,记无可行变异） — @v: anc-hopant-index
+
+### anc-hopant-install ✅
+
+AntInstaller：detectSource（single / package / invalid,两形态同时满足按 package）、planInstall（Id 缺席视为一致;SOURCE_INVALID / SPEC_INVALID / ID_MISMATCH / BAD_ID 四抛）、applyInstall（撞 id 时全或无;跳 ant 根下 inner_store/ 与任意深度 *.orig.md;skipped_local_files 每项 `<id>/<相对路径>`;建空 inner_store;重建索引）、removeAnt（keepStore 挪备份,已有备份先删旧;不存在 false）。
+
+- [[hopant#^anc-hopant-install]] ← 权威源（HopType AntInstaller + InstallPlan / InstallResult）
+  - 2026-10-09 子卡 E：applyInstall 的本机面判法抽成 `isLocalFace(relPath)` 导出（与 shareAnts 共用,概念 ^anc-struct-hopant-layout 的本机面定义只在这一处落码）;行为不变,hopant.test 原 43 例全绿
+  - hopant.ts detectSource/planInstall/applyInstall/removeAnt + InstallPlan/InstallResult 类型 — @a: anc-hopant-install
+  - 2026-10-10 todo/0155 两级根：planInstall(srcDir, root) 第二参改为目标级的根,撞 id 只在本级判（另一级同 id 是合法遮蔽）;InstallPlan.home → root;removeAnt(roots, id, keepStore, scope?) 返回删了哪一级或 null,缺省删 resolveAnt 命中的那级,备份位恒用户级 — @a: anc-hopant-install
+    - hopant.test.ts 来源识别与安装组（正:三判+双形态按 package、单 ant 落盘、包装多个 bootstrap_pending、Id 缺席视为一致、深层 knowledge/inner_store 照拷;反:顶层 inner_store 与任意深度 .orig.md 跳过且 skipped 列出、撞 id 整单拒没撞的也不装、ID_MISMATCH/SPEC_INVALID/SOURCE_INVALID/大写 BAD_ID;正反:removeAnt keepStore 两态+已有备份先删旧+不存在 false） — @v: anc-hopant-install
+
+### anc-hopant-adapt ✅
+
+AntAdapter.adapt 四项核：工具——先按 name/tool_id 算 missing,只把在场工具交 ExecutionEngine.reconcileTools,errors 直取不解析引擎文案;凭证——Tools 段工具所属 server 的 binding.auth_env ∪ providers 的 api_key_env,空白与 undefined 都算缺;命令——已批准命令首项 PATH 实查（恒另查 .exe/.cmd;带路径分隔符直查）;引擎——engine_min_version semver 三段比,current 为 null 或非 semver fail-open。backupOrig 逻辑适配前备份不覆盖。
+
+- [[hopant#^anc-hopant-adapt]] ← 权威源（HopType AntAdapter adapt/backupOrig + AdaptEnv / AdaptReport）
+  - hopant.ts adapt/backupOrig + AdaptEnv/AdaptReport 类型 — @a: anc-hopant-adapt
+  - provider-types.ts STANDARD_TOOL_NAMES（标准工具名单,现只有 web_search——没注册的标准工具进 tools.standard_unregistered 与 notes 不算缺口,hopant.md 决策 7,70780f3d） — @a: anc-hopant-adapt
+    - hopant.test.ts 适配四项组（正:四项全在场 ok 且 required 列全;反:工具未注册 missing+hint 且 errors 不含该工具、多声明参数 errors、凭证空白与 undefined 都缺且无关 server 不算、命令不在 PATH 且带 bootstrap 的 hint 指路、带路径分隔符直查、引擎版本低、null fail-open、patch 位参与、非 semver 不拦、不声明恒 ok;正反:backupOrig 二次不覆盖） — @v: anc-hopant-adapt
+
+### anc-hopant-stamp ✅
+
+适配戳：ownerId `<git 用户名或登录名>-<主机名>`（空格/斜杠换连字符;缺省现算,config.yaml 有 owner_id 则恒用,打包时明示并问要不要改、答过写回——hopant.md 决策 8）;headerHash 复用 parser sectionSpans 取 tools/approved_commands/config 三段（中英段头与内联形同律）sha256 前 12;readStamp/writeStamp inner_store/adapt.yaml（缺字段 null）;needsAdapt 三真一假;adaptState never/stale/adapted 三态归模块。
+
+- [[hopant#^anc-hopant-stamp]] ← 权威源
+  - hopant.ts ownerId/headerHash/readStamp/writeStamp/needsAdapt/adaptState + AdaptStamp — @a: anc-hopant-stamp
+    - hopant.test.ts 适配戳组（正:ownerId 三优先级含斜杠、headerHash 改 Steps 不变改三段任一都变、中文段头/英文别名/内联形改了都变、write/read 往返;反:坏 YAML 与缺字段 null;正反:needsAdapt 三真一假、adaptState 三态含读不出按 stale） — @v: anc-hopant-stamp
+  - parser.ts sectionSpans 只读段切分出口（spec-parser v0.44.2 出口表） — @a: anc-struct-spec-parser
+
+### anc-hopant-errors ✅
+
+全部错误码（BAD_ID / SOURCE_INVALID / SPEC_INVALID / ID_MISMATCH / ID_CONFLICT / NOT_FOUND;2026-10-09 子卡 C/E 加 DOC_MISSING / TARGET_EXISTS / PKG_NAME_REQUIRED / CREDENTIAL_LITERAL / LOCAL_FACE_LEAK）经 hopantError(code, detail) 统一出口,message 固定 `码: 说明`;cli 的 NOT_FOUND 也经它。
+
+- [[hopant#^anc-hopant-errors]] ← 权威源（HopType HopAntErrors + 错误码表）
+  - hopant.ts hopantError 统一出口（码闭合枚举,全部抛出点经它） — @a: anc-hopant-errors
+    - hopant.test.ts 各组按码正则断言（正:合法 id 不抛;反:BAD_ID 六形态与大写 / ID_CONFLICT / ID_MISMATCH / SPEC_INVALID / SOURCE_INVALID;NOT_FOUND 在 CLI 组） — @v: anc-hopant-errors
+    - hopant.test.ts 封装组 / 分享组按五个新码正则断言（DOC_MISSING 三形态 / TARGET_EXISTS 两侧 / PKG_NAME_REQUIRED / CREDENTIAL_LITERAL 带层号与免责句 / BAD_ID 含 owner 空与包名）——2026-10-09 review 修复批补挂 — @v: anc-hopant-errors
+
+### anc-hopant-orchestrate（driver 协议锚点,无代码落点）
+
+/hop 分派先查本机装的 HopAnt（todo/0142 子卡 B,作者 2026-10-07 定）：读 `~/.hopjit/ants/index.md` 一张表,命中即按"现成 spec"一路跑入口 spec;起跑前看 `hopjit --json ant list` 的适配状态,never/stale 先 `ant adapt`;工作区是用户项目,独立模式 start_run 显式传 workspace_dir。纯 driver 协议,无代码锚点;引擎面由下面两张卡（call 寻址、起跑依赖核）承接。
+
+- [[hopant#^anc-hopant-orchestrate]] ← 权威源（hopant v0.3.0 编排节:分派三步）
+  - driver/hop-skill.md + codex/opencode 副本「0. 分派」节"先查本机装的 HopAnt"段 — 协议面
+
+### anc-hopant-callee-resolve ✅
+
+`call <id>` 的目标两级解析：调用方 spec 同目录 `<id>.md` 优先,没有再找 `<antsRoot>/<id>/<id>.md`（只有 HopAnt 入口 spec 可被外部调用,内部子 spec 不行）;id 含路径分隔符或 `..` 直接 null 不碰盘。一份实现,两个模式共用：独立模式经 DirSpecProvider（同层引入）,复用模式经 cli 注册给引擎的解析器闭包。
+
+- [[hopant#^anc-hopant-callee-resolve]] ← 权威源
+  - hopant.ts resolveCalleeSpecPath(callerDir, antsRootDir|null, calleeId) — @a: anc-hopant-callee-resolve
+  - 2026-10-10 todo/0155 两级根：第二参由单根改为 AntRoots | null,查找序 同目录 → 项目级 → 用户级（决策 9）;cli / mcp-server 注册给引擎的闭包按引擎传入的 workspace_dir 算 antRoots — @a: anc-hopant-callee-resolve
+    - hopant.test.ts "call 目标两级解析"组（正:同目录优先、退到已装 HopAnt;反:两处都无、antsRoot 为 null、非法 id、内部子 spec 不可外调） — @v: anc-hopant-callee-resolve
+  - dispatcher.ts DirSpecProvider(baseDir, antsRoot?) 的 pathOf 委托 resolveCalleeSpecPath
+  - 2026-10-10 todo/0155：DirSpecProvider 第二参改 AntRoots（三级寻址）;mcp-server 两处挂载改传 antRoots(homedir(), hostConfig.workspace_dir） — @a: anc-provider-spec-default
+    - dispatcher.test.ts DirSpecProvider 两级寻址例 — @v: anc-hopant-callee-resolve
+  - mcp-server.ts 两处缺省挂载 `new DirSpecProvider(dirname(specPath), antsRoot(homedir()))`
+    - mcp-server.test.ts "HopjitMcpCore 缺省 SpecProvider 两级寻址" — @v: anc-hopant-callee-resolve
+    - mcp-server.test.ts 同组例改装项目级："正例：call 只装在 <workspace_dir>/hop_tasks/ants/ 的 HopAnt（用户级没有）→ run completed,子实例产出回到父"（2026-10-10 0154+0155 工程链 review 缺口 G4 mcp 半边补;重放变异 M21-mcp——两处挂载 roots 改成不存在目录→本例红,恢复绿;用户级寻址仍由 cli.test 既有 "call 已装 HopAnt" 例覆盖） — @v: anc-hopant-callee-resolve, anc-provider-spec-default
+
+### anc-exec-callee-resolver ✅
+
+复用模式下引擎在 init_command / launch_command 里填 callee 的真实路径：cli 进程启动时 `ExecutionEngine.setCalleeSpecResolver` 静态注册解析器（与 setEngineToolProviderFactory 同形,引擎第 1 层不引 hopant）,解析不到或未注册才留 `<CALLEE_SPEC_PATH:id>` 占位,driver 见占位按发现规则自行解析。
+
+- [[exec-engine#^anc-exec-callee-resolver]] ← 权威源（exec-engine v0.51.0-draft）
+  - engine.ts 静态 calleeSpecResolver + set/reset + calleePathToken,init_command 与 launch_command 两处使用 — @a: anc-exec-callee-resolver
+    - engine.test.ts "callee 路径解析器"（注册时填路径;返回 null 或未注册留占位） — @v: anc-exec-callee-resolver
+    - engine.test.ts 同例改断三元组 "解析器收到 [调用方绝对路径, callee id, HostConfig.workspace_dir]" + commit 批准组新例 "账位置解析器收到 [规范化 spec 路径, 实例目录, HostConfig.workspace_dir] 三元组——commit 账与 dirs 账两处调用都传"（2026-10-10 0154+0155 工程链 review 缺陷 D10 补——此前两注册位第三参零测试;重放变异 M11：引擎三处调用的第三参改传空串→两例都红,恢复绿） — @v: anc-exec-callee-resolver, anc-exec-commit-approval, anc-exec-dirs-grant
+  - cli.ts 组合根注册解析器（resolveCalleeSpecPath + antsRoot(HOME)） — @a: anc-exec-callee-resolver
+  - 2026-10-10 todo/0155：引擎调两个注册位时多传第三参 workspace_dir（hostConfig.workspace_dir）,cli / mcp-server 闭包据此算 antRoots——项目级 HopAnt 根随本实例工作区 — @a: anc-exec-callee-resolver, anc-exec-commit-approval
+    - cli.test.ts call-parallel / callproto 例断 launch_command 含真实文件名且无占位 — @v: anc-exec-callee-resolver
+    - cli.test.ts 依赖核组新例 "正例：`run --workspace WS`（WS ≠ 进程 cwd）调只装在 WS/hop_tasks/ants/ 的 HopAnt → 过依赖核,init_command 填 WS/hop_tasks/ants/foo/foo.md 真实路径"（2026-10-10 0154+0155 工程链 review 缺口 G3 + G4 cli 半边补;重放变异 M16：cli 两闭包 roots 改按 process.cwd() 算→本例红〔依赖核过了但 init_command 留占位〕;M21：runDepsGate roots 改不存在目录→本例红 INIT_FAILED;各恢复绿） — @v: anc-exec-callee-resolver, anc-hopant-run-deps
+  - mcp-server.ts 组合根注册解析器（与 cli 同调 resolveCalleeSpecPath,todo/0146 MCP 驱动工具起的 run 同样填真实路径） — @a: anc-exec-callee-resolver
+  - driver 六处占位说明改为"引擎已填路径,残留占位才自行解析"（hopspec-skill.md、两份 step-execution-rules.md、codex execution-rules.md、codex/opencode SKILL.md） — 协议面
+
+### anc-hopant-run-deps ✅
+
+复用模式起跑依赖核 checkRunDeps：入口 spec 的 Tools 段按"标准工具直接过、其余须在两级 tool_servers 注册"判;静态 call 目标（同目录 spec / 已装 HopAnt / 已注册工具名或标准工具名）沿调用链 BFS 递归核,环不死循环;动态 callee 不核;callee 解析出错记 unreadable;入口自身解析出错不抢引擎的报错。缺口带 spec 名与步骤号、hint 指路 `ant install`。
+
+- [[hopant#^anc-hopant-run-deps]] ← 权威源（HopType RunDepsEnv / RunDepsReport）
+  - hopant.ts RunDepsEnv / RunDepsReport / checkRunDeps — @a: anc-hopant-run-deps
+  - 2026-10-10 todo/0155 两级根：RunDepsEnv.home → roots,call 目标按三级找;cli runDepsGate 与 reuse-driver 各按本 run 工作区算 antRoots — @a: anc-hopant-run-deps
+    - hopant.test.ts "复用模式起跑依赖核 checkRunDeps"四例（正两例、反、边界） — @v: anc-hopant-run-deps
+    - cli.test.ts 依赖核组 "正例：`run --workspace WS`（WS ≠ 进程 cwd）调只装在 WS/hop_tasks/ants/ 的 HopAnt → 过依赖核…"（runDepsGate 按 --workspace 算项目级根的端到端例,2026-10-10 0154+0155 工程链 review 缺口 G3 补;变异 M21 使 roots 指向不存在目录→INIT_FAILED 红,恢复绿） — @v: anc-hopant-run-deps
+
+### anc-hopant-pack ✅（2026-10-09 todo/0142 子卡 C——封装：spec → HopAnt 目录,头对账）
+
+概念⑤封装的实装：`packAnt` 把一份 spec（提纯件或 examples 下的 spec）收成 `<out>/<id>/<id>.md` + doc-ref 文件 + assets 的可装目录（不建 inner_store/——安装时建）。核心是**头对账** `reconcileHeader`：`collectBodyUsage` 用 parser AST 遍历带 body 的 act/commit 步骤,收 CallExpr.callee 去掉内建函数/内置文件工具/引擎 special 后的工具名 ∪ tool_grants,与 Tools 段比对少补多删（标准工具 web_search 声明了保留——它在 free 步由调用方落实,正文无调用形态）;收 `subprocess.run` 第一参 list 字面量首项,与《已批准命令》段比对（第一参非字面量记 undetermined 且不删任何命令）;只重写这两段,其余字节不变。act free / reason 步不参与对账。增删进 ReconcileReport 由 /hop 读给用户。
+
+- [[hopant#^anc-hopant-pack]] ← 权威源（HopType AntPacker 封装半边：packAnt 七步 / reconcileHeader 六步 / collectBodyUsage 三步;HopSchema ReconcileReport / PackAntResult;与 hop-cli pack 的分工）;[[../concepts/HopAnt概念#^anc-struct-hopant-lifecycle]] ⑤
+  - parser.ts toolSigName / splitArgvPrefix 导出（改写面条目识别复用 parser 文法,2026-10-09 review 修复批） — @a: anc-hopant-pack
+  - hopant.ts STANDARD_TOOL_SIGNATURES / ReconcileReport / PackAntResult / BodyUsage / isBuiltinCallee（内建名单=ACT_BUILTIN ∪ validator B2 两名单 ∪ NATIVE_FIRST,2026-10-09 review 消掉自抄十一件）/ walkExprCalls / walkStmtCalls / collectBodyUsage（grants 经内建过滤跳 *）/ reconcileHeader（rewriteSection 删顶层条目连带缩进子行）/ packAnt — @a: anc-hopant-pack
+  - cli.ts `ant pack` 子命令（--out 缺省 ants / --id / --assets;调 packAnt 带 rewriteSpecId） — @a: anc-hopant-pack
+  - hop-admin.ts `antPack(ctx, spec, opts)`（2026-10-10 todo/0154 从 cli.ts 搬出;out 缺省 `<ctx.cwd>/ants`,spec 不存在抛 PACK_ERROR;2026-10-11 语义审计 0156 C2：存在但读不出〔EACCES 等〕同样包成 PACK_ERROR 不抛裸系统错——设计 hop-cli ant pack 条早写了"不存在或不可读",代码只核了 existsSync） — @a: anc-hopant-pack
+    - cli.test.ts "正/反（antPack 不可读）：入口 spec chmod 000 → PACK_ERROR 前缀且报文含'读不出';可读时照常产出"（root 下 skip;变异:去 try/catch→红 expected false to be true,实际抛裸 EACCES） — @v: anc-cli-ant, anc-hopant-pack
+  - hopant.ts packAnt 随包文件可读核（2026-10-11 todo/0159：doc-ref 与 assets 存在之外再 accessSync R_OK,读不出收齐一次性抛 HOPANT_DOC_MISSING 带系统 message,核点在 mkdirSync(dst) 之前——此前只核 existsSync,cpSync 阶段抛裸 EACCES 且留半成品目录） — @a: anc-hopant-pack
+    - hopant.test.ts "正/反（0159 随包文件可读核）：doc-ref 文件 chmod 000 → HOPANT_DOC_MISSING 带系统 message 且目标目录不建;--assets 文件 chmod 000 → 同;恢复可读后照常拷入"（root 下 skip;变异:删 unreadable 抛错→红 `but got 'EACCES: permission denied, copyfile'`） — @v: anc-hopant-pack
+    - hopant.test.ts "hopant：封装 packAnt / reconcileHeader / collectBodyUsage" 7 例（正:collectBodyUsage 收 grants∪callee 去内建含嵌套实参 / reconcileHeader 少补多删连带子行且 Steps 段逐字节不动 / 标准工具只声明不使用仍保留 / 零增删原文不变+段缺时插位 / packAnt 写 <id>.md+docs+assets 不建 inner_store;反:undetermined 非空不删命令 / doc 缺不写+目标非空拒+坏 id 拒）;cli.test.ts "ant pack / ant share 子命令" pack 正反两例（缺省 --out ants、--assets、next_step、再 install 成功 / spec 不存在 PACK_ERROR、doc 缺 HOPANT_DOC_MISSING 不建目录） — @v: anc-hopant-pack
+  - [[hop-cli#^anc-cli-ant]] `ant pack` 子命令条 / 命令表行 / AntResponse pack 字段
+  - driver/hop-skill.md + codex/opencode 副本 §6「封装：提纯件 → HopAnt」段;scripts/check-driver-carriers.mjs 六动作 parity token 加 `ant pack`（opencode 同批纳入核验列表）— 协议面
+  - 第一个真实 HopAnt：`examples/ants/hop-fact-check/`（`ant pack examples/hop-fact-check.md --out examples/ants --assets fact-check-sample.md` 生成入库;对账零增删——正文 callee 全内建、free 步 grants 的 web_search 是标准工具;假 HOME 下 install → adapt ok（唯一 note=web_search 标准工具提示,决策 7 不算缺口）→ list adapted → 复用模式 run 到 step_ready 2.3）
+  - 变异 7 处（标准工具不保留 / undetermined 照删 / 删条目不连带子行 / grants 不计入 / packAnt 建 inner_store / 缺 owner 也写包 / owner_id 整文件覆盖）各对应钉红,复原绿（/tmp/claude-502/observer-0142/replay.txt）
+  - tests/guard-scripts.test.ts "反例：opencode 载体丢封装/分享动作 token → exit 1"（check-driver-carriers 三载体 token 守卫的回归用例,6.2 阅卷补） — @v: anc-hopant-pack, anc-hopant-share
+  - 2026-10-09 工程链 review 修复批（卡 hop_tasks/HopAnt封装分享批工程链review）：高危 H-1 授权行内建名未过内建名单（库内五份真实 spec 封装后 adapt 红）→ grants 过滤;`*` 跳过;改写面删条目改用 parser toolSigName / splitArgvPrefix（中文工具名、带引号命令"报删实未删"）;assets 前置核、doc-ref 越界拒、无 Id 行时插入、Tools 段插 Outputs 后、标准工具补标准签名（作者 OK）。hopant.test 封装组 7→13 例,变异重放 16 处红复原绿（/tmp/claude-502/observer-review-0142ce/replay-final.txt）
+
+### anc-hopant-share ✅（2026-10-09 todo/0142 子卡 E——分享：已装 HopAnt → HopAnt 包目录,四核）
+
+概念⑥分享的实装：`shareAnts` 把若干已装 HopAnt 的可分发面收进 `<out>/<name>/{package.json, ants/<id>/…}`。分享前四核任一不过即抛不写：①入口 spec 头与目录一致（在场 / parseSpec 过 / Id==目录名 / doc-ref 文件在目录内）;②无凭证字面量（`findCredentialLiterals`：凭证类键后非环境变量名的值、sk-/ghp_/xox/AKIA/PRIVATE KEY 前缀）;③本机面不进包（拷贝时按 `isLocalFace` 排除——与 applyInstall 同一函数,从那里抽出;写完再扫一遍自检,命中 HOPANT_LOCAL_FACE_LEAK）;④有谱系才写（D 未落地,本版恒无,不造空字段）。package.json 只有 name / version / files: ["ants/"] / hopant: {owner, ants}——不写 dependencies、不写 postinstall 薄壳（本批无 npm 通道）。归属标识：CLI 不问人,`--owner`/`--yes` 缺则 `owner_prompt_required` 返回交 driver 对话里问;成功后写回 config.yaml owner_id（决策 8 写的一侧,此前全仓无写点）。
+
+- [[hopant#^anc-hopant-share]] ← 权威源（HopType AntPacker 分享半边：shareAnts 八步 / findCredentialLiterals / isLocalFace;HopSchema HopAntPackageJson / ShareAntsResult;owner_id 写回归 cli）;[[../concepts/HopAnt概念#^anc-struct-hopant-lifecycle]] ⑥ / [[../concepts/HopAnt概念#^anc-struct-hopant-package]];[[hopant#^anc-hopant-install]] applyInstall 改调 isLocalFace
+  - hopant.ts isLocalFace（从 applyInstall 抽出）/ CredentialHit / CredentialScan / CREDENTIAL_SCAN_DISCLAIMER / KNOWN_SECRET_SHAPES / scanCredentials（三层综合研判,2026-10-09 作者定稿替换 findCredentialLiterals）/ isTextFile / ShareAntsResult / listFilesRec / shareAnts;HopAntErrorCode 加五码 — @a: anc-hopant-share
+  - cli.ts savedOwnerId / writeOwnerId（只改 owner_id 键,yamlDump 带 YAML_DUMP_OPTS）/ `ant share` 子命令（owner 四态：--owner > config 落盘即用不问 > --yes 首机现算 > 首机 prompt;--pkg-version;credential_scan 透传） — @a: anc-hopant-share
+  - hop-admin.ts `savedOwnerId(home)` / `localOwnerId(ctx)` / `writeOwnerId(home, owner)` / `antShare(ctx, ids, opts)`（2026-10-10 todo/0154 从 cli.ts 搬出,login / hostname 从 ctx 取） — @a: anc-hopant-share
+  - hopant.ts shareAnts(roots, ids, …) 2026-10-10 todo/0155 两级根：每个 id 经 resolveAnt 两级找（项目级先）——本项目总结的 HopAnt 不须先装用户级就能分享 — @a: anc-hopant-share
+    - hopant.test.ts "hopant：分享 shareAnts / findCredentialLiterals / isLocalFace" 6 例（正:isLocalFace 五形态 / 单 ant 包字段+本机面不进+checks 四项 / 多 ant 包须 --name;反:凭证字面量两形态拒且不写 / Id 不一致+没装+doc 缺三码 / findCredentialLiterals 直测九行三报）;cli.test.ts share 正反两例（owner 三态+config.yaml 只动 owner_id 键+--yes 用落盘值 / 没装 NOT_FOUND+多 id 缺 name） — @v: anc-hopant-share
+  - [[hop-cli#^anc-cli-ant]] `ant share` 子命令条（owner 三态 / owner_id 写回）/ 命令表行 / AntResponse share 字段 / 退出码条款 owner_prompt_required → 0
+  - 变异 4 处（share 不排除本机面 / 凭证核删 / *_env 豁免删 / 缺 owner 也写包）各对应钉红,复原绿
+  - driver 三载体 §6「分享：HopAnt → 给别人的包」段;check-driver-carriers token `ant share` / `owner_prompt_required` — 协议面
+  - tests/guard-scripts.test.ts "反例：opencode 载体丢封装/分享动作 token → exit 1"（同上,双锚 @v 在 anc-hopant-pack 卡已登,本卡补行——doctor 批 check:audit 实抓） — @v: anc-hopant-share
+    - mcp-server.test.ts 管理工具面组 ant_share 首机例末尾追加段：owner_id 写回后再 share 不带 owner → 不再 owner_prompt_required、包写出（决策 8 "config 有 owner_id 恒用不问"的 MCP 半边,2026-10-10 0154+0155 工程链 review 缺口 G7 补;重放变异 M15b：antShare 的 owner 取值链去掉 savedOwnerId→本例红,恢复绿） — @v: anc-hopant-share
+  - 2026-10-09 工程链 review 修复批：决策 8 被 hop-cli 条文反了（config 有 owner_id 不带旗仍问）→ 四态落盘即用;凭证核按作者拍板重做为三层证据综合研判（L1 厂商形态单独拒不降档 / L2 高熵与 L3 键名提示+值形态单独警告、叠加拒 / 围栏注释示例降档）,扫描面扩到可分发面全部文本文件（含 scripts/ 与 bootstrap.js）,响应加 credential_scan 回执带免责句（五处：概念⑥ / 设计 / 响应 / driver / 错误说明）;owner 空白模块层拒;LEAK 自检抛前删包目录（**LEAK 自检不补直测**：排除逻辑由分享组"inner_store 不在"断言锁住——cpSync filter 去掉 isLocalFace 的变异红,自检只是它的回归保险,阅卷 G4 裁定）。hopant.test 分享组 6→8 例、cli.test 组 4→5 例,变异重放 19 处红复原绿
+
+### anc-cli-run-deps-gate ✅
+
+cli run / init 顶层闸调 checkRunDeps,不过即返回与引擎 INIT_FAILED 同形的响应（status error、error_code INIT_FAILED、errors[] 一条 validate 级、missing_tools / missing_calls / hints）,exit 0,不建实例目录。callMode、parallel 子实例、call worker、parallel worker 不过闸（父层已核）。后果写明：宿主挂的 MCP 未在 hopjit 注册的,过不了闸。
+
+- [[hop-cli#^anc-cli-run-deps-gate]] ← 权威源（hop-cli v0.40.0）
+  - cli.ts runDepsGate + run / init 两处挂点 — @a: anc-cli-run-deps-gate
+    - cli.test.ts "复用模式起跑依赖核（run / init 顶层闸）"四例 — @v: anc-cli-run-deps-gate
+
+### anc-cli-workspace-arg ✅（2026-10-07 作者三问"复用模式下的 cwd 是哪儿来的？在 CC 下用户没有显性的 cwd 感知""运行时是否显示一下 cwd 是啥？或者写在 hoplog 里？""按工程链开工 cwd 的工作"）
+
+复用模式工作区根此前只由 CLI 进程 `process.cwd()` 隐式决定（CC 会话启动目录经 Bash 继承,用户看不见、`cd` 过别处还会变）,决定了也没有一处主动告诉人。本批三件：`run` / `init` 加可选 `--workspace <dir>`（缺省仍 cwd;显式绝对 normalize、相对按 cwd 解析;不存在或非目录 errorExit WORKSPACE_NOT_FOUND,报文形态照 mcp-server start_run——与独立模式 workspace_dir 参数对称）;项目级 hopjit.yaml 的 commands / language 随工作区定位;子实例 launch_command / call init_command 恒带 `--workspace "<父值>"`;带 work_zone 的六响应形态并列回显 `workspace_dir`（engine 单一收口 stampWorkspace）;hoplog 头块 started_at 后记 `workspace_dir:`（toYaml 转义,自愈重建最小 header 同发,resume 读回）。driver 三载体 run 命令显式传会话启动目录并把响应里的 workspace_dir 转告用户。
+
+- [[hop-cli#^anc-cli-workspace-arg]] ← 权威源（HopType CliWorkspaceArg + HopSop 三分叉 + 四条约束;hop-cli v0.42.0）;[[spec-observability#^anc-obs-file-layout]] 头块字段（hoplog v0.8.0）;[[exec-engine#^anc-exec-work-zone]] 六形态并列 / init_command 模板（v0.52.1-draft）;[[parallel-execution]] DispatchReady 条;[[mcp-server#^anc-mcp-config]] workspace_dir 语义源（不改）
+  - cli.ts resolveWorkspaceArg + buildHostConfig(workspaceDir) + readProjectCommands/readProjectLanguage(workspaceDir) + run/init `--workspace` option — @a: anc-cli-workspace-arg
+    - cli.test.ts "--workspace 显式工作区根" 9 例（正:显式→响应/state.json/hoplog 头三处同值且头行紧随 started_at / 不传=cwd / 相对路径绝对化 / init 同款 / hopjit.yaml 随工作区定位 / parallel launch_command 带父值且派发项回显 / resolveWorkspaceArg 单元;反:不存在 WORKSPACE_NOT_FOUND 不建实例 / 指向文件同拒——变异重放：run 忽略参数→红×6 / 不存在不拒→红×2 / commands 仍读 cwd→红） — @v: anc-cli-workspace-arg
+  - engine.ts stampWorkspace（nextStep 包 nextStepRaw,advanceToCaller 三出口;pauseForEscalation / pauseForExpansionExtend 两个 paused 构造器——它们经 completeAndAdvance 非 ok 直返不过前两处,阅卷实抓首发无字段重放有）+ workspaceArg() 拼进 buildDispatchLaunchCommand 两条与 buildCallProtocol init_command + new HopLog 透传 workspaceDir — @a: anc-cli-workspace-arg
+    - engine.test.ts "workspace_dir 回显与子实例继承" 5 例（正:step_ready 与推进后响应带 / dispatch_ready 回显+launch_command 带 / call init_command 带 / escalate 首发 paused 带且与重放一致;反:无 workspace_dir 不回显不抛——变异重放：命令不带→红×2 / 响应不回显→红×2 / paused 构造器不盖章→红） — @v: anc-cli-workspace-arg
+  - hoplog.ts HopLogOptions.workspaceDir + headerWorkspaceDir + header 行 + resume 读回 + writeHeaderMinimal 重发 — @a: anc-cli-workspace-arg
+    - hoplog.test.ts "header workspace_dir 行" 4 例（正:行序与 toYaml 引号 / 自愈重建带 / resume 读回;反:不传不写——变异重放：头不写→红×2 / 最小 header 不重发→红） — @v: anc-cli-workspace-arg
+  - cli-types.ts DispatchReady / ToolRequest / StepReady / ExecutionCompleted / ExecutionFailed / ExecutionPaused 六 interface `workspace_dir?` — @a: anc-cli-workspace-arg
+  - driver/hop-skill.md:47,:176 / codex :51,:174 / opencode :51,:174 分派节第 2 条与 §2 run 命令加 `--workspace <项目根绝对路径>`、响应 workspace_dir 转告用户 — driver 协议落点（carrier lint 过）
+
+### anc-cli-ant / anc-cli-ant-response ✅
+
+CLI 承接 `hopjit ant install|adapt|list|remove|bootstrap|pack|share`：组合根只算两级配置路径（HOPJIT_CONFIG 单文件）交 tools-registry.loadTwoLevelRegistry、取 PATH / env / 引擎版本（getEngineVersion,null fail-open）、归属标识现算;list 三态调 hopant.adaptState;薄壳不写合并规则与三态分支。AntResponse 入响应类型章（HopType 块,status 恒 ok 错误走 stderr;exit code 条款：adapt 有缺口 1 / bootstrap 非零 1）。
+
+- [[hop-cli#^anc-cli-ant]] 契约 + [[hop-cli#^anc-cli-ant-response]] 响应类型（hop-cli v0.38.1）
+  - 2026-10-10 todo/0154 起七个子命令的业务体（取 home / 两级配置路径 / PATH / 归属标识 / 引擎版本后调 hopant,响应对象组装）住 hop-admin.ts 的 `antList` / `antInstall` / `antAdapt` / `antRemove` / `antBootstrap` / `antPack` / `antShare`,机器侧事实经 AdminContext;cli.ts 只剩 `antShell` 薄壳（output / errorExit / 退出码）;mcp-server.ts 另挂 `ant_*` 七个工具（[[#anc-mcp-admin-tools]]） — @a: anc-cli-ant
+  - 2026-10-10 todo/0155 两级根：`ant install` 加 `--scope user|project`（缺省 user）、`ant remove` 加可选 `--scope`,`ant list` 两级合并每行带 scope,`ant adapt / bootstrap / share` 按 id 两级找;hop-admin.ts antInstall(ctx, dir, dryRun, scope) / antRemove(ctx, id, keepStore, scope?) 与 AdminContext.roots;cli.ts adminContext() 装 antRoots(home, cwd),演示件安装仍落用户级 antsRoot(home) — @a: anc-cli-ant, anc-mcp-admin-tools
+  - 2026-10-09 todo/0142 子卡 C/E：五个子命令扩七个——`ant pack` / `ant share`（契约条、命令表行、AntResponse 两形态、退出码条款）;业务锚 anc-hopant-pack / anc-hopant-share 各自立卡,本卡只记命令面
+    - cli.test.ts "ant pack / ant share 子命令（todo/0142 子卡 C/E）" 4 例（pack 正反 / share owner 三态与 owner_id 写回 / share 反例） — @v: anc-cli-ant
+  - cli.ts `ant` 命令族五 action + adaptConfigPaths + localOwnerId — @a: anc-cli-ant
+    - hopant.test.ts CLI 承接组新例 "正/反：install --scope project 落 <cwd>/hop_tasks/ants/;remove --scope user 对只装在项目级的 id 返回 removed:false;remove 不带 scope 删项目级返回 scope:project"（子进程真跑 cli,2026-10-10 0154+0155 工程链 review 缺口 G2 cli 半边补——此前 --scope 旗零测试;重放变异 M8：install 子命令把 opts.scope 固定 'user'、remove 子命令丢 opts.scope→本例红,恢复绿） — @v: anc-cli-ant
+    - hopant.test.ts CLI 承接组（正:install dry-run 不写盘→install→list never→adapt ok 写戳→list adapted→改头 list stale→remove --keep-store kept_store 真→removed false;正反:bootstrap 无脚本 has_bootstrap:false / 非零 returncode 透传 exit 1;反:adapt/bootstrap 未装 id NOT_FOUND 走 stderr exit 1、adapt 有缺口 exit 1 report 在 stdout 不写戳、hopjit.yaml 为列表 TOOLS_FILE_INVALID 响亮拒、空 hopjit.yaml 照跑、HOPJIT_CONFIG 只读它） — @v: anc-cli-ant
+  - tools-registry.ts loadTwoLevelRegistry（两级 tool_servers/providers 读取合并,空文件按无配置、非映射与 providers 非列表抛 TOOLS_FILE_INVALID、项目级赢、enrichParamsComments——tools v0.23.2 出口表） — @a: anc-config-tool-registry
+    - hopant.test.ts 两级注册面组（正:项目级按 name/service_id 大写赢且系统级独有保留、缺席/空文件/纯注释按无配置;反:非映射与 providers 非列表 TOOLS_FILE_INVALID） — @v: anc-config-tool-registry
+  - hop-cli.md 命令表 ant 行 + 分级表锚名 anc-cli-ant / anc-cli-ant-response — 登记面
+
+### anc-cli-postinstall ⏸（撤销记录——2026-10-03 作者定装包即装 skill,2026-10-09 作者定"去掉",todo/0143）
+
+2026-10-03 至 10-09 包里带 `postinstall: node dist/postinstall.js`（等价零参数 setup,四种环境跳过只打一行指路）。撤销原因：npm 12 默认拦截依赖安装脚本,钩子在多数新机器上根本不执行,留着只多一段 npm 警告（还附一条漏包名照抄报 ENOENT 的命令）;npm 官方最佳实践明说安装脚本只该做目标机编译,用它改用户 agent 目录恰是被拦的那类行为;同一件事两个触发点两套跳过逻辑是分叉。撤后装 skill 只剩 `hopjit setup` 一个入口,漏跑由 ^anc-cli-first-run-hint 兜底。本锚保留供历史引用,代码落点归零。
+
+- [[hop-cli#^anc-cli-postinstall]] 撤销记录（原因三条 / 撤后形态 / 删除面清单）
+  - 已删：src/postinstall.ts / cli.ts postinstallSkipReason / setup 里 HOPJIT_POSTINSTALL 的 projectScope 三处分支 / package.json postinstall 字段 / check-process-state 组合根白名单 postinstall.ts / check-layer-imports 表 postinstall 行
+    - cli.test.ts "postinstall 钩子已撤：package.json 无 postinstall 字段;HOPJIT_POSTINSTALL=1 不再改变 setup 行为（项目级两件照写）" — @v: anc-cli-postinstall
+  - driver 三载体「0. 分派」前置检查（项目没注册 hopjit 就跑一次 setup）不变——它本就是首次 /hop 补项目级两件的机制,与钩子无关
+
+### anc-cli-first-run-hint ✅（2026-10-09 todo/0143 修法 2——撤钩子后漏跑 setup 的唯一兜底）
+
+用户只敲了 `npm install -g` 没敲 `hopjit setup`,本包第一个有代码在跑的时机是他下一次敲任何 hopjit 子命令。全局 preAction 钩子调纯函数 `firstRunHint(argv, env, engineVersion)`：豁免 setup / install-skill / --version / --help / 无子命令;`HOPJIT_SKIP_SKILL=1` 或 CI 静音;零载体不提;逐载体读 `<home>/skills/hop/SKILL.md` 版本戳——缺即"未装",戳 ≠ 引擎版本即"落后";有未装 → `[hopjit] /hop 还没装进本机 agent（载体）——运行 hopjit setup`,只落后 → 刷新提示。只写 stderr,`--json` 的 stdout 不动;零状态;不自动装。
+
+- [[hop-cli#^anc-cli-first-run-hint]] ← 权威源（HopType FirstRunHint 七支 HopSop / 挂点 / 与 stale-skill-scan 分工 / 测试面）
+  - 2026-10-09 todo/0139：`doctor` 进 FIRST_RUN_EXEMPT（与 setup 同,体检命令不自己提示自己）;首次运行提示只答"没装 / 落后"两问,全面体检归 [[hop-cli#^anc-cli-doctor]]
+  - cli.ts `firstRunHint` 纯函数 + `installedHopDriverVersion` 读戳 + preAction 钩子写 stderr — @a: anc-cli-first-run-hint
+  - hop-admin.ts `installedHopDriverVersion(ctx, c)`（2026-10-10 todo/0154 从 cli.ts 搬出;cli.ts `firstRunHint` 的 probe 缺省改为闭包经 adminContext() 调它） — @a: anc-cli-first-run-hint
+    - cli.test.ts "首次运行提示" 组 3 例：纯函数七支（豁免 / 版本帮助 / 零载体 / 未装指路 / 静音与 CI 压住 / 全装同版本空 / 落后刷新）/ 真读戳三态 / 跨进程 `--json list` stderr 一行且 stdout 纯 JSON、setup 自身零提示 — @v: anc-cli-first-run-hint
+  - 变异四处（preAction 不写 stderr / 戳正则改坏 / 静音开关删 / setup 豁免删）各对应钉红,复原绿（/tmp/claude-502/observer-0143/replay.txt）
+
+### anc-cli-doctor ✅（2026-10-09 todo/0139 第三块"可用性守卫"——装完 hop 一条命令答"能不能用"的八问,作者定名 doctor）
+
+"装完能不能用"此前只靠真机 E2E 两档,没有一条机检覆盖"新装用户第一次 /hop 的路径"。`hopjit doctor` 把八问一次答完（skill 在场 / 版本 / 菜单可见 / MCP 注册 / 握手 / 放行 / MCP server 模型配置 / 独立模式凭证）,每项 ok|warn|fail|n/a 一行加指路,任一 fail 退 1;只报不改,修归 setup。核心约束"查法=写法"：setup 里与写操作揉在一起的三段判定抽成只读函数 learnStandaloneEntry / readMcpRegistration / ccPermissionMissing,setup 改调它们再写,doctor 调同一份。作者口径：模型配置那问报"MCP server 根本没配置"（fail,原因照 setup 没学到的 note）不是"没凭证"（凭证变量缺是 warn,只影响独立模式）。
+
+- [[hop-cli#^anc-cli-doctor]] ← 权威源（HopType CliDoctor 五成员：learnStandaloneEntry / readMcpRegistration / ccPermissionMissing / readSkillFrontmatter / runDoctor 九步 HopSop;HopSchema DoctorItem / DoctorReport;输出形态与退出码;与 setup 职责表的对应;driver 接线）
+  - 2026-10-10 todo/0154 起 `runDoctor` / `formatDoctorReport` / `learnStandaloneEntry` / `readMcpRegistration` / `ccPermissionMissing` / `readSkillFrontmatter` 与载体探测助手住 hop-admin.ts（锚不变,`runDoctor` 第一参改 AdminContext）;cli.ts 只剩 `doctor` 子命令薄壳与 tests 导入面的转发（下行的 cli.ts 行号是搬家前的）;mcp-server.ts 另挂 `doctor` 工具（[[#anc-mcp-admin-tools]]） — @a: anc-cli-doctor
+  - cli.ts `doctor` 子命令（:2623）+ `runDoctor`（:2531 九步）/ `formatDoctorReport`（:2613）/ `learnStandaloneEntry`（:1193,从 bootstrapStandaloneConfig 抽出）/ `readMcpRegistration`（:1404,从 setup 第 4 项抽出）/ `ccPermissionMissing`（:1363,从 ensureCcPermission 抽出）/ `readSkillFrontmatter`（:2510,行级取键——真机实抓 description 含 ": " 严格 YAML 炸）;`resolveCarrierHome`（:1097）/ `installedHopDriverVersion`（:1147）改为导出;`doctor` 进 FIRST_RUN_EXEMPT（:1126） — @a: anc-cli-doctor
+    - cli.test.ts "hopjit doctor（^anc-cli-doctor）" 组 10 例（:2123 起,嵌在"载体自动探测"内复用 withHome）：正（setup 后八项 ok exit 0）;反（没装 skill fail 且级联 n/a / 戳改旧 warn / frontmatter 删 user-invocable fail / .mcp.json 删 hopjit fail 且握手 n/a / 握手失败 detail=reason hint=fix / 无 providers fail 且 detail 含 note 半句、凭证 n/a / env 缺 warn 不 fail / 零载体六项 fail / opencode enabled:false warn + Codex 构造）;三只读函数 + readSkillFrontmatter 直测;子进程 `--json doctor` exit 1 且 stdout 纯 JSON、无首次运行提示、人读形态同 exit — @v: anc-cli-doctor
+    - cli.test.ts 2026-10-11 "正例 3:正例 1 之后跑 doctor,cc 与 cfuse-cc 的 mcp_registered 都 ok"（查法=写法:doctor 问 4 对 cfuse-cc 认它自己 .claude.json 的 local 级条目;与 setup 写法同一 ccJsonPathOf 解析,todo/0158） — @v: anc-cli-doctor
+  - 变异 19 处（八问判法 / 级联 n/a / exit_code / process.exitCode / FIRST_RUN_EXEMPT / 坏 JSON 算注册 / allow 非数组 / frontmatter 严格 YAML）各红,复原 10/10 绿（/tmp/claude-502/observer-0139-doctor/replay-final.txt）
+  - 真机：本机 CC 载体从项目根跑 `doctor` 28 项（五载体目录在场：cc 全 ok / codex ok / opencode skill v0.16.0 warn + enabled:false warn / cfuse-cc 本项目未注册 fail）;假 HOME 七种状态（没装 / 全好 / 落后 / 未注册 / 未放行 / 无 providers / 凭证缺）各一次输出与设计相符（six.log）;Codex / opencode 用假 HOME 构造 setup 后文件形态验,非真机
+  - [[hop-cli#^anc-cli-install-skill]] 契约头与职责表不动,setup 第 3 / 4 / 5 项的探测半边改调抽出的三函数（写半边由既有 setup 测试覆盖）
+  - hop-cli.md 命令表 `hopjit doctor` 行 / 出口表 bullet 补 runDoctor 等七符号并勘误旧行号与四个漏登导出
+  - driver 三载体 §0 "已注册但工具不可见"分支改为先跑 `hopjit --json doctor`;scripts/check-driver-carriers.mjs parity token 加 `hopjit --json doctor` — 协议面
+
+### anc-cli-hop-ops-parity ✅（2026-10-08 todo/0133 挂账②——driver 三载体 hop-ops.md 同文改机检;落点=scripts 的 @v:,验证=准入负向验证实录）
+
+`driver/hop-references/hop-ops.md`（CC 源）与 codex / opencode 两份 `hop-references/hop-ops.md` 是载体中立件一份内容三处落,此前只靠阅卷手核 md5,check-driver-carriers.mjs 零感知。修：该守卫加两份对 CC 源的字节等值断言,任一份不同即红点名文件;改一份须三份一起改。
+
+- [[hop-cli#^anc-cli-hop-ops-parity]] ← 权威源（装载清单三载体 hop-ops 条的机检句）;[[chain-enforcement#^anc-meta-chain-guards]] 1d check-driver-carriers 行补登
+  - scripts/check-driver-carriers.mjs 三载体 hop-ops.md 字节同文段 — @v: anc-cli-hop-ops-parity
+    - guard-scripts.test.ts "check-driver-carriers 三载体 hop-ops.md 同文判据回归"（正:三份字节相等 exit 0 / 反:只改 opencode 一份 exit 1 点名文件与锚）——2026-10-08 发版前八项修复批工程链 review 修复 补常驻用例 — @v: anc-cli-hop-ops-parity
+    - 负向验证 2026-10-08（准入③）：`echo x >> driver/codex/hop-references/hop-ops.md` → exit 1 点名 `driver/codex/hop-references/hop-ops.md 与 driver/hop-references/hop-ops.md 不同文` ✅;复原后 `Driver carrier lint passed.` ✅
 
 ### anc-cli-hop-dispatch ✅（2026-10-01——用户可见入口收敛后 /hop 要替用户选路;运维规则按需加载是作者定"针对运维场景的特殊规则,普通人用不上,要考虑如何触发"的落点）
 
@@ -2484,9 +2949,23 @@ package.json `postinstall: node dist/postinstall.js` 装包即装 skill（等价
   - driver/hop-references/hop-ops.md（三载体各一份） — 运维按需件
   - cli.ts 三载体 hop 拷贝块加 references/hop-ops.md — @a: anc-cli-hop-dispatch
     - cli.test.ts "install-skill 缺省傻瓜化（0132 后续）" 正例（hop/references/hop-ops.md 在场;hopspec/references 下不在;hop SKILL 含'### 0. 分派'） — @v: anc-cli-hop-dispatch
+  - **2026-10-09 定位改写批追注（todo/0139 第 2 块,作者 2026-09-30 定"/hop 是 hop 系列的总入口"）**：[[hop-cli#^anc-cli-hop-dispatch]] 条尾补「/hop 的定位与 description 契约」段（HopSchema HopSkillDescription 四块：定位与 HopSpec 一句 / 对执行 LLM 的好处三条 / 什么时候用五条 / 排除句;形态约束三条：单物理行〔三处行级解析〕/ ≤1024 字符〔Agent Skills 标准〕/ 无 XML;三载体语言分工）,hop-cli v0.52.0
+    - driver/hop-skill.md（中文 /hop,538 字符）+ codex/hop-skill.md（英文 $hop,1017）+ opencode/hop-skill.md（英文 hop,1015）：description 换定稿、标题改 `— HopSpec 的总入口`、正文开头段换成分行版（HopSpec 一句 / 好处三条 / 场景五条 / 排除句 / 主路一句 / 分派与维护线现状）;现行英文 1042 字符超限一并修正 — 协议面
+    - scripts/check-driver-carriers.mjs 三载体 description 四条核（单行非空含块标量指示符判 / ≤1024 / 无 XML / 含"总入口"或"single entry point"） — @a: anc-cli-hop-dispatch
+      - guard-scripts.test.ts「check-driver-carriers 续接交接判据回归」组 +4 例：正（三份源实测 ≤1024 且含字样,lint exit 0）;反（1100 字符 → 报超限带字符数 / `description: |` 多行 → 报行级读不到 / 丢 single entry point → 点名 opencode）;变异 4 处（删 1024 判 / 删块标量判 / 删字样判 / 整段删）各红,复原 4/4 绿（/tmp/claude-502/observer-0139-entry/replay.txt） — @v: anc-cli-hop-dispatch
+  - driver/hop-skill.md + codex/opencode 同款「读原料用只读文件工具,不走 shell」条（输出纪律节,2026-10-11 作者抓"这些为什么要用 bash？"）;check-driver-carriers.mjs token 列表加 '不走 shell' — @a: anc-cli-hop-dispatch
+    - guard-scripts.test.ts "正/反：三载体 hop-skill.md 任一丢\"不走 shell\"读原料条 → exit 1 点名该载体;三份都在不报"（变异：守卫 token 列表删掉 '不走 shell' → 反例三支全绿,红） — @v: anc-cli-hop-dispatch
+  - driver/hop-skill.md + codex/opencode 同款：分派节"现成 HopSpec 文件"一路加对用户固定开场白"现在有现成的 HopSpec 流程，下面按 HopSpec 运行。"（2026-10-12 作者抓"这个描述也很土"）;check-driver-carriers.mjs token 加该句;RELEASING §4 / CLAUDE / AGENTS 的 `/hopspec run` 旧入口改 `/hop <spec路径>` — @a: anc-cli-hop-dispatch
+    - guard-scripts.test.ts "正/反：三载体 hop-skill.md 任一丢固定开场白…→ exit 1 点名;三份都在不报"（变异：守卫 token 列表删掉该句 → 该用例红;恢复绿,.claude/tmp-review/fix-dispatch-opening/mut/progress.md） — @v: anc-cli-hop-dispatch
+    - docs/tutorials/04 「一句话定位」节 + Doctree hop-skill 行与教程 04 行随源同改 — 派生面
 
 ### anc-cli-install-skill ✅
 
+**2026-10-03 追注（todo/0139 挂钩①）**：响应顶层恒带 `next_step`（一句指令 + 包内 docs/AGENT-GUIDE.md 绝对路径）,postinstall 成功行同带。落点：
+  - cli.ts install-skill 顶层 output 字面量 next_step 键（第二句指路 agent-instructions-template.md,2026-10-03 挂钩②改形态） — @a: anc-cli-install-skill
+    - cli.test.ts "install-skill 载体自动探测" 组：零参数例断 next_step 含 AGENT-GUIDE.md、正则取绝对路径 existsSync 真、results[0] 无此键;显式 --carrier 例同带 — @v: anc-cli-install-skill
+  - hop-admin.ts `StandaloneEntry` / `learnStandaloneEntry(ctx, carrier)` / `resolveOcConfigPath`（内部,review D6 去 export）/ `deepMerge` / `readMcpRegistration(ctx, carrier)` / `detectCcHopjitRegistration(ctx, carrier)`（2026-10-10 todo/0154 从 cli.ts 搬出——setup 的只读探测半边;cli.ts 的 bootstrapStandaloneConfig / setup 注册分支经 adminContext() 调;本行 2026-10-10 0154+0155 工程链 review G13 从别卡搬回本卡——首次搬错落到 anc-driver-codex-dev-rules 卡,6.2 第二轮阅卷抓出） — @a: anc-cli-install-skill
+  - （postinstall.ts 成功行曾同拼 o.next_step——钩子 2026-10-09 撤,见 anc-cli-postinstall 撤销记录）
 **2026-10-01 追注**：MCP 注册与配置自举改缺省即做（作者"缺省安装 mcp"）,`--mcp` 留兼容别名;注册面失败降 note（用户配置损坏仍响亮）;cli.test.ts 缺省傻瓜化组正例钉"不带 --mcp 也注册"。
 
 // install-skill：把包内 driver/ 的 skill 源展开到 .claude/skills/（CC）或 .agents/skills/（Codex）。
@@ -2516,22 +2995,26 @@ package.json `postinstall: node dist/postinstall.js` 装包即装 skill（等价
 
   - [[hop-cli#^anc-cli-install-skill]]
     - [[codex-driver-carrier#^anc-driver-codex-install-layout]] — Codex 安装布局契约
-    - cli.ts install-skill 命令：cc/codex 各展开自身 driver；--demo 调 carrier-aware pack，分别附装 `/coffee-week` / `$coffee-week`；pruneManagedDir 受管清理（--force 档） — @a: anc-cli-install-skill
+    - cli.ts install-skill 命令：cc/codex 各展开自身 driver；pruneManagedDir 受管清理（--force 档）;演示件 2026-10-06 起改装 HopAnt,见 anc-cli-install-skill-demo-ants 卡 — @a: anc-cli-install-skill
       - cli.test.ts 受管清理 3 例（force 清残留报 removed/非 force 不删/不碰受管外——用户文件与其它 skill） — @v: anc-cli-install-skill
-      - cli.test.ts "install-skill"：双载体 driver 布局 + 双载体 demo 三件套 + 幂等/force/JSON 协议 — @v: anc-cli-install-skill, anc-cli-json-io
+      - cli.test.ts "install-skill"：双载体 driver 布局 + 幂等/force/JSON 协议 — @v: anc-cli-install-skill, anc-cli-json-io
       - cli.test.ts CC 跨 scope 感知 3 例（local 级在场跳过指明 scope/user 级同/坏 JSON 与他项目 local 不误报照常写）+ Codex env_vars 联动 2 例（取自举产物 api_key_env 并集/读不到回落缺省对） — @v: anc-cli-install-skill
     - 构建工具两件 codex 随装（hopissues/0052,2026-08-31——修前 codex 分支漏拷 hopbuild/hopbuild2,两载体清单不对等,Codex 用户无 /hopbuild;修=与 CC 分支同源同戳 copyDir+stampSkill;设计"两载体清单对等"条款同批立） — @a: anc-cli-install-skill
       - cli.test.ts codex 布局例扩四断言（hopbuild SKILL.md 在场+版本戳/hopbuild2 SKILL.md+spec.md 抽查;变异重放:删 codex 两段 copyDir 1 红） — @v: anc-cli-install-skill
     - $hop Codex 变体（2026-08-26 作者定"补"——CC 装 hop 而 codex 缺席即载体不对等）：driver/codex/hop-skill.md（CC 六稿 adapt,@trace type=adapt;载体差异三处=触发 $hop/问人对话内/2b 外包按 spawn 能力零降级仪式）→ 装点 .agents/skills/hop/SKILL.md;随批修 CC hop 段双重打戳实证 bug（copyFile 已注入后又手工 stampSkill——装出双行 driver 注释）;守卫 check-driver-carriers 收编（必备清单+frontmatter 检查,禁词面实抓 note 否定句残留一处即修） — @a: anc-cli-install-skill, anc-driver-codex-install-layout
       - cli.test.ts codex 布局例 hop 装点+戳位断言 / cc 布局例 hop 装配断言+戳恰好一枚回归锁（此前 CC hop 装配零断言） — @v: anc-cli-install-skill
+    - 受管目录 manifest 内容不变时不写盘（2026-10-07 todo/0146 probe 3 实撞:CC 沙箱禁写 ~/.claude/skills,已装好项目里 /hop 跑 setup 只为补项目级注册,因无条件重写同内容 manifest 撞 EPERM） — @a: anc-cli-install-skill
+      - cli.test.ts 边界例:manifest 只读时二次 setup 照常 ok 且内容不变 + 内容过期时重写回现行清单;变异:跳写判断置 true→钉红复原绿 — @v: anc-cli-install-skill
 
 ---
     - cli.ts --plus 附装进阶研究件(hop-fact-check/hop-deep-research)+tool_servers 并入 ~/.hopjit/config.yaml（按 server name 判重跳过——用户资产纪律;2026-08-30 作者定"--plus 这样比较简单的"）— @a: anc-cli-install-skill-plus
       - cli.test.ts "--plus 装两 skill+工具配置落位"正例 + "已有同名 server 跳过不覆盖"反例 — @v: anc-cli-install-skill-plus
 
-  - 2026-09-11 0086 续账④修:CC 缺省 model 字面量→ENGINE_DEFAULT_MODEL 同源常量（provider-types 单一事实源;dispatcher 路由兜底同批同改——原两处各写死,引擎升缺省 install 侧静默旧值,设计口径"缺省引擎缺省模型"要求同源）;钉:src 全域 claude-* 字面量残留清零（常量定义处除外）;变异:dispatcher 改回字面量→钉红复原绿 — @a: anc-cli-install-skill;cli.test.ts 缺省模型同源常量组 — @v: anc-cli-install-skill
+  - 2026-09-11 0086 续账④修:CC 缺省 model 字面量→ENGINE_DEFAULT_MODEL 同源常量（provider-types 单一事实源;dispatcher 路由兜底同批同改——原两处各写死,引擎升缺省 install 侧静默旧值,设计口径"缺省引擎缺省模型"要求同源）;钉:src 全域 claude-* 字面量残留清零（常量定义处除外）;变异:dispatcher 改回字面量→钉红复原绿 — @a: anc-cli-install-skill, cli.test.ts 缺省模型同源常量组 — @v: anc-cli-install-skill
 
-  - 2026-09-15 0093 件二:hopfix 进装载清单（壳+流程件副本两载体对等——版本兼容三义务迁移通道进分发面;流程件含"版本迁移对照"知识节〔义务③落点,首批 B2 commit 档对照〕;package.json files 补 skills/hopfix+scripts/hopfix 两条）— @a: anc-cli-install-skill;cli.test.ts 两钉（CC 装出含对照节/Codex 对等）— @v: anc-cli-install-skill;重放:CC 分支装载块删→钉红复原绿
+  - 2026-09-15 0093 件二:hopfix 进装载清单（壳+流程件副本两载体对等——版本兼容三义务迁移通道进分发面;流程件含"版本迁移对照"知识节〔义务③落点,首批 B2 commit 档对照〕;package.json files 补 skills/hopfix+scripts/hopfix 两条）— @a: anc-cli-install-skill, cli.test.ts 两钉（CC 装出含对照节/Codex 对等）— @v: anc-cli-install-skill, 重放:CC 分支装载块删→钉红复原绿
+  - hop-admin.ts ccFamilyRegistration（CC 系载体族内已注册感知,setup 与 doctor 共用）/ writeCcLocalRegistration（往载体自己的 .claude.json 写 local 级条目,只加一键、坏 JSON 响亮失败、文件不存在不建）/ ccJsonPathOf（查写同一路径解析）;cli.ts setup 的 CC 分支按族决策 (a)/(b)（2026-10-11 todo/0158 第一块） — @a: anc-cli-install-skill
+    - cli.test.ts 2026-10-11 "CC 系载体注册按族决策（cc 与 cfuse-cc 同机）" 5 例（正例 1:cc local 已注册 + cfuse-cc 未注册 → 不写 .mcp.json、cfuse-cc 自己的 .claude.json 多出 local 级条目、cc 文件字节不变;正例 2:两个都没注册 → 写一次 .mcp.json、两 .claude.json 不动;反例 1:cfuse-cc 坏 JSON → INSTALL_SKILL_ERROR 响亮退出不写不覆盖;反例 2:两个都已 local 注册 → 什么都不写、两 note 各指 scope;正例 3:doctor 对正例 1 之后的状态两载体 mcp_registered 都 ok）——决策分支变异证明三条:M-0158-i 把"族内已有注册→不写 .mcp.json"改恒假 → 正例 1 / 反例 1 / 正例 3 红;M-0158-ii 把写入目标 home 改成 cc 的 → 正例 1 / 反例 1 / 正例 3 红;M-0158-iii 把坏 JSON 抛错改静默 → 反例 1 红;三条恢复后 5 例绿 — @v: anc-cli-install-skill
 
 ### anc-cli-stale-skill-scan ✅（2026-09-20 hopissues/0096 期望2——作者定"给的不是清理命令,是 hopfix 这样的升级命令":0093 engine_min_version 链管"产物要求引擎太老"方向,本卡补反方向"引擎新了、已装产物太老";实撞=8-14 旧 demo 副本缺 web_search 授权在历史用户级位置静默活着,29 child 全灭 116 次失败提交后才被发现）
 
@@ -2540,6 +3023,14 @@ package.json `postinstall: node dist/postinstall.js` 装包即装 skill（等价
     - cli.ts install-skill 装载后扫描段+响应 stale_notes 接线 — @a: anc-cli-stale-skill-scan
       - cli.test.ts 三合一钉（旧位置本器旧版→点名带版本号/非本器文件→零打扰/文件原样不动——只读不删断言） — @v: anc-cli-stale-skill-scan
       - 重放一拍:认领判据改全认→非本器零打扰断言红复原绿
+    - 2026-10-06 扩面（演示件改 HopAnt）：Codex 族扫描面加 `<cwd>/.agents/skills/`（旧 --demo 项目级落点）;当前目标目录只看 `demo-*` 条目;带本器版本戳的旧 demo skill 不论版本一律报"已废弃,演示件改为 HopAnt"并附路径,不删除 — @a: anc-cli-stale-skill-scan
+      - cli.test.ts 目标目录旧 demo-rename 例（版本戳 v9.9.9 仍报废弃/同目录 hopspec 不报/文件不删）+ 旧位置例断言改为含"已废弃""HopAnt" — @v: anc-cli-stale-skill-scan
+    - 2026-10-07 改判（作者问"这个应该直接升级覆盖吧？"后同意挪走方案）：本器自带件（六件+旧名 hopskill-build+hop-*+demo-*）陈旧副本整目录挪进 `~/.hopjit/stale-backup/<时间戳>/` 并写 RESTORE.txt,失败退回只提示;用户自建件仍只提示指路 /hopfix;Codex `<cwd>/.agents/skills` 下的 hop-* 是 --plus 现行位置,不挪只提示重装;legacy_note 剔除已挪走路径。同批修旧名 hopskill-build 被误判为自建件 — @a: anc-cli-stale-skill-scan （cli.ts moveStaleToBackup + 扫描段）
+      - cli.test.ts 五例改写/新增：旧 demo 挪走+RESTORE 回路/目标目录 demo-* 挪走正式件不动/Codex 旧位置 hopspec 与 hopskill-build 挪走、带戳自建件原地指路 /hopfix、单时间戳目录/备份区被文件占位退回提示/hopfix 旧副本挪走 — @v: anc-cli-stale-skill-scan
+      - 重放一拍:旧名清单清空→hopskill-build 例红,复原绿
+    - 2026-10-07 修误判（同日真机 setup 实撞:opencode 轮把 ~/.claude/skills 当旧位置,挪走了 CC 在用的当前版 hopbuild2）：只有 Codex 的两处历史位置做完整扫描,任何载体的现行安装目录与非 Codex 载体的扫描根只看 demo-*;缺 engine_min_version 指纹只判用户自建件,自带件只看版本 — @a: anc-cli-stale-skill-scan
+      - cli.test.ts 新增两例：opencode 不动 ~/.claude/skills 的自带件只挪旧 demo/Codex 旧位置当前版 hopbuild2 无指纹不挪、当前版自建件缺指纹仍指路 /hopfix;原 CC 旧位置自带件两例改走 Codex 旧位置 — @v: anc-cli-stale-skill-scan
+      - 重放两拍:demoOnly 退回只看目标目录→opencode 例红;指纹判据去掉 !isBundled→hopbuild2 例红;复原绿
 
 ### anc-cli-carrier-home-resolution ✅
 
@@ -2553,6 +3044,7 @@ package.json `postinstall: node dist/postinstall.js` 装包即装 skill（等价
 
   - [[hop-cli#^anc-cli-carrier-home-resolution]]
     - cli.ts Carrier 类型 + carrierFamily/resolveCarrierHome/assertCarrier 三 helper + install-skill/bootstrapStandaloneConfig/detectCcHopjitRegistration/pack 8 处触点 — @a: anc-cli-carrier-home-resolution
+    - hop-admin.ts `Carrier` / `CARRIER_VALUES` / `carrierFamily` / `resolveCarrierHome(ctx, c)`（2026-10-10 todo/0154 从 cli.ts 搬出,载体 home 从 ctx.home / ctx.env 取;cli.ts 保留 assertCarrier 与 setup 触点,经 adminContext() 调） — @a: anc-cli-carrier-home-resolution
       - opencode 载体（2026-09-15,见 todo/0089;2026-09-16 方案C .jsonc + 完整对齐 opencode 配置管理）:resolveCarrierHome 加 opencode 分支（OPENCODE_CONFIG_DIR ?? XDG ~/.config/opencode）;resolveOcConfigPath 检测 candidates [opencode.jsonc, opencode.json, config.json] 第一个存在（对齐 opencode globalConfigFile 三候选,都不存在用 opencode.jsonc）;carrierFamily('opencode')='cc' 复用 CC driver 源（skill 展开走 cc 分支零改动）;bootstrapStandaloneConfig 加 opencode 分支（deep-merge 三文件 opencode 加载顺序 config.json→opencode.json→opencode.jsonc,后者覆盖 .jsonc 优先,与 opencode 加载一致;取 model+provider.<id>.options.baseURL+env[0]+npm〔protocol 忠实照抄 npm 字段,0020 批——原 id 推断降为缺席回退〕,jsonc-parser parse 含注释）;--mcp 注册加 opencode 分支（写 candidates 第一个存在的 mcp.hopjit,jsonc-parser modify/applyEdits 保留注释 + 检测 candidates 三文件查 mcp.hopjit 消除只查一个文件漏其他的静默冲突）;installHint/pack dir 缺省加 opencode — @a: anc-cli-carrier-home-resolution, anc-cli-install-skill
       - cli.test.ts install-skill cfuse-cc/cfuse-codex 目标目录+driver 源复用 2 例 + cc/codex 读环境变量重定向 2 例 — @v: anc-cli-carrier-home-resolution
       - cli.test.ts pack cfuse-cc/cfuse-codex 产物前置段指引 cfuse 路径不含原生 2 例 — @v: anc-cli-carrier-home-resolution
@@ -2615,8 +3107,8 @@ Codex subagent 能力按当次 effective config 做行为握手，不以工具�
   - [[carrier-live-e2e#^anc-driver-live-e2e]] ← 权威源
     - scripts/carrier-live-e2e-lib.mjs — 共享进程、事件归一、真实 HopLog 过程核验、断言与凭证扫描 — @a: anc-driver-live-e2e, anc-driver-live-e2e-isolation, anc-driver-live-e2e-events
     - scripts/carrier-live-e2e.mjs — 场景 CLI 与退出语义 — @a: anc-driver-live-e2e-scenarios, anc-driver-live-e2e-entry
-      - tests/carrier-live-e2e.test.ts — @v: anc-driver-live-e2e, anc-driver-live-e2e-isolation, anc-driver-live-e2e-events, anc-driver-live-e2e-scenarios（真实 HopLog 正向、缺步负向、1/10 精确匹配）
-      - tests/carrier-live-e2e.test.ts — @v: anc-driver-live-e2e-scenarios（Codex 复用场景将委派工具直接暴露、standalone 保持禁用；配置回归不替代真实 delegated 验收）
+      - tests/carrier-live-e2e.test.ts — @v: anc-driver-live-e2e, anc-driver-live-e2e-isolation, anc-driver-live-e2e-events, anc-driver-live-e2e-scenarios （真实 HopLog 正向、缺步负向、1/10 精确匹配）
+      - tests/carrier-live-e2e.test.ts — @v: anc-driver-live-e2e-scenarios （Codex 复用场景将委派工具直接暴露、standalone 保持禁用；配置回归不替代真实 delegated 验收）
   - [[ci-pipeline#^anc-meta-ci-carrier-live]] — opt-in CI 与发版时机
 
 ### anc-driver-codex-dev-rules ✅（落点=driver 载体产物+机检脚本，同 driver 卡惯例）
@@ -2674,15 +3166,24 @@ export interface DatabaseSandbox {
 
 ---
 
+### anc-config-sandbox-workspace-root ✅（2026-10-04 英文文档批一实撞——三翻译 worker 的 [commit] write 全被 `Write outside workspace sandbox` 拒,目标明明在仓库根内）
+
+工作区根起跑定一次、整个 run 不变;HopSpec 体系无"当前目录"概念,一切相对路径只相对工作区根。`HostConfig.workspace_dir`（拼路径基准）与 `sandbox.filesystem.workspace_dir`（写权限边界）恒同一目录、持久化恒绝对路径——原 CLI 侧后者存 `'.'`,续推 `hopjit` 进程按各自 cwd 重新展开,driver cd 进 work_zone 敲 submit 即把边界带偏（MCP 侧 2026-08-20 同款已改,CLI 侧漏）。
+
+- [[sandbox#^anc-config-sandbox-workspace-root]] 契约（生命周期两条 + 正反例）;[[hop-cli#^anc-struct-hop-cli]] 工作区根取值段
+  - cli.ts `buildHostConfig` 两字段同取 `process.cwd()` 绝对路径;validate/pack 的 docRefCtx 同改（单进程语境也不留 `'.'`） — @a: anc-config-sandbox-workspace-root
+    - cli.test.ts "工作区根不随续推命令的进程 cwd 漂移" 正例（起跑在仓库根、从 work_zone 敲 submit 触发 commit 写 docs/out.md → 落仓库根放行;state.json 两字段同值且绝对）+ 反例（同形态写工作区外绝对路径仍拒）;变异两项（回退 `'.'` → 形态断言红;去掉形态断言只留行为断言 → 仍红） — @v: anc-config-sandbox-workspace-root
+
 ### anc-config-sandbox-filesystem ✅
 
 export interface FilesystemSandbox {
 
   - [[sandbox#^anc-config-sandbox-filesystem]]
     - provider-types.ts `export interface FilesystemSandbox {` — @a: anc-config-sandbox-filesystem
-      - tools.test.ts — @v: anc-config-sandbox-filesystem。2026-08-27 #50 扩：denied 基线补 `.hoplog/**`——act free 工具环 LLM 逛日志树 read 几 MB main.yaml 灌爆上下文（dr19 实撞 400 确定性死烧尽子树,同型 21 处;引擎内务区不是作业材料）
+      - tools.test.ts — @v: anc-config-sandbox-filesystem 。2026-08-27 #50 扩：denied 基线补 `.hoplog/**`——act free 工具环 LLM 逛日志树 read 几 MB main.yaml 灌爆上下文（dr19 实撞 400 确定性死烧尽子树,同型 21 处;引擎内务区不是作业材料）
 ---
 
+  - 2026-10-07 追注（todo/0148）：FilesystemSandbox 加可选 write_access.allowed（commit 可写的 workspace 外目录,唯一来源 Config.dirs.readwrite 经授权）与四档边界表,代码与测试挂 anc-exec-dirs-grant 卡
 ### anc-config-sandbox-model ✅
 
 export interface SandboxConfig {
@@ -2718,6 +3219,7 @@ export interface RuntimeSandbox {
   - [[sandbox#^anc-config-sandbox-step-mapping]]
     - dispatcher.ts `// act 步骤中 LLM 仅能从预注册工具列表选择调用——无任意代码执行` — @a: anc-config-sandbox-step-mapping
       - dispatcher.test.ts — @v: anc-config-sandbox-step-mapping
+  - 步骤映射表 2026-10-11 两次改定：0156 A3 reason 行从"纯推理不调工具"改为按声明进工具循环与 act 同能力面（sandbox v0.3.1）;todo/0161 check 行从"不调用工具"改为按声明进工具循环、只读工具面、与 reason 同一套规则、零声明单发纯判定（sandbox v0.3.2,代码落点与测试见 [[#anc-exec-reason-tools]] 卡——作者定"check 工具可能要读文件,这个应该留个口子"）
 
 ---
 
@@ -2754,9 +3256,9 @@ private async callLlmWithRetry(request: any, client?: Anthropic): Promise<Anthro
 
   - [[step-dispatcher#^anc-exec-api-retry]]
     - dispatcher.ts `private async callLlmWithRetry(request: any, clien` + 网络/超时耗尽点挂 NETWORK_ERROR 可读前缀（2026-08-23 作者定,原文案 terminated 对 LLM 零信息量）+ 网络/超时档 6 次×退避封顶 60s（v0.14.1 A 半边,2026-08-25 作者定 A+B——dr17 实撞:旧 2 次总耐受 3 秒,1 分钟网络中断 43 秒烧穿全树） — @a: anc-exec-api-retry
-      - dispatcher.test.ts — @v: anc-exec-api-retry（含 NETWORK_ERROR 前缀正例/限流不误挂反例/6 次档第 7 发成功正例/退避封顶与末次 32s 档正例）
+      - dispatcher.test.ts — @v: anc-exec-api-retry （含 NETWORK_ERROR 前缀正例/限流不误挂反例/6 次档第 7 发成功正例/退避封顶与末次 32s 档正例）
     - prompt.ts buildRetryFeedback NETWORK_ERROR 前缀分流（"照常执行"不发"针对此修正"） — @a: anc-exec-api-retry
-      - engine.test.ts — @v: anc-exec-api-retry（L2c 网络分流正例/普通失败照旧反例）
+      - engine.test.ts — @v: anc-exec-api-retry （L2c 网络分流正例/普通失败照旧反例）
 
 ---
 
@@ -2771,8 +3273,10 @@ private async callLlmWithRetry(request: any, client?: Anthropic): Promise<Anthro
     - mcp-server.ts restoreRun 预检放行网络暂停步（33轮review:预检原只认 confirm/ask,detach 断网暂停跨进程续不了;按免答通道同判据〔network_pause 事件+pending,事件随 state.json 持久化跨进程可判〕放行） — @a: anc-exec-network-pause
     - **端点不可达 fail-fast（hopissues/0106,2026-09-28）**：protocol-openai.ts isEndpointUnreachable（错误链 ECONNREFUSED/ENOTFOUND 看 5 层含 AggregateError.errors）+LlmErrorKind 增 unreachable 档+两 classifyError 先于 network 兜底判+ProtocolClient.endpoint 身份字段 / dispatcher.ts callLlmWithRetry unreachable 首次即抛 ENDPOINT_UNREACHABLE（不退避不进暂停门,走 failStep 到 run failed）+endpointUnreachableMessage 三样报文+两处 client 构造 endpoint 盖章 — @a: anc-exec-network-pause
       - dispatcher.test.ts callLlmWithRetry 内 2 例（ECONNREFUSED cause 链首次即抛+报文三样+零重试 / ENOTFOUND 聚合错同判+ECONNRESET 反例仍走六次档 NETWORK_ERROR）+"端点不可达 fail-fast 全链（0106）"describe 2 例（dead provider 首步→run failed 非 paused 且事件流零 network_pause / 瞬时 fetch failed 反例守卫仍 paused(network)）;变异两拍（谓词恒 false/分道砍除各 3 红,恢复 6 绿） — @v: anc-exec-network-pause
-      - dispatcher.test.ts — @v: anc-exec-network-pause（正2:网络耗尽转 paused 步骤回置非 failed/resume 免答续跑到 completed;反1:worker 网络耗尽仍 failStep）
+      - dispatcher.test.ts — @v: anc-exec-network-pause （正2:网络耗尽转 paused 步骤回置非 failed/resume 免答续跑到 completed;反1:worker 网络耗尽仍 failStep）
       - mcp-server.test.ts 网络暂停步跨进程 resume 放行正例 — @v: anc-exec-network-pause
+    - **曾经连通过的端点不按死端点判（hopissues/0118,2026-10-04,作者问"成功调用现在失败的,为什么不用历史值？"）**：protocol-openai.ts createCachingLookup（按主机名缓存上次解析成功的地址,撞 ENOTFOUND/EAI_AGAIN 用缓存地址顶上,从没解析成功过照传原错）+进程级单例 sharedCachingLookup 接进 longWaitFetchOptions 的 connect.lookup（函数形态 connect 原样不动）+unreachableCode 导出命中错误码 / dispatcher.ts 进程级 reachedEndpoints（键 service_id|base_url,成功应答后记入）+callLlmWithRetry 降档判定（unreachable 且端点连通过且码是 ENOTFOUND/ECONNREFUSED → network 档;EPERM 不降） — @a: anc-exec-network-pause
+      - nonstreaming-long-wait.test.ts "DNS 缓存解析"9 例（正:成功后 ENOTFOUND/EAI_AGAIN 用缓存、两种回调形态、按地址族过滤、接线合入 lookup;反:从没解析成功照传、非解析类错误码照传、缺所需地址族照传、A 不替 B 兜底、调用方 lookup 优先与函数形态 connect 原样）+ dispatcher.test.ts 降档 5 例（正:连通过后 ENOTFOUND/ECONNREFUSED→NETWORK_ERROR 1+7 次调用;反:连通过后 EPERM 首次判死/别的端点成功不算数 127.0.0.1:9999 首次判死/无端点身份首次判死）+全链 1 例（连通过后 ENOTFOUND→run paused(network)）;变异三拍（降档行/缓存顶上行各 3 红） — @v: anc-exec-network-pause
 
 ---
 
@@ -2782,14 +3286,23 @@ private async callLlmWithRetry(request: any, client?: Anthropic): Promise<Anthro
 
 - [[parallel-execution#^anc-exec-parallel-hitl-queue]] ← 语义权威（U4b 六件套）
   - [[step-dispatcher#^anc-exec-parallel-hitl-queue-dispatch]] ← dispatcher 侧机制件
-    - engine.ts markInflightPaused/markInflightResumed + hasInflightFor 计 paused + none 分支吐 drain_wait 计 paused + 杀活门与 killInflight 扩 paused + reconcileInflight paused 账重派发（36轮:清账回 pending 重跑到暂停点,内存态崩溃即灭无从重建队列）+ load 回填 rawSource（重派发需原文,spec_path 重读尽力而为） — @a: anc-exec-parallel-hitl-queue
+    - engine.ts markInflightPaused/markInflightResumed + hasInflightFor 计 paused + none 分支吐 drain_wait 计 paused + 杀活门与 killInflight 扩 paused + reconcileInflight paused 账分派（**2026-10-07 hopissues/0126 改定：分派判据=子实例目录是否在场**——在场一律翻回 inflight 进 stale 续跑到暂停点重新入队,不论有无 commit;不在场〔父纯内存形态〕才清账回 pending 重派发。此前按退火标记分派,无 commit 即清账删目录重派发,对 [loop for-each] × [subtask parallel] 只能按当前游标派最后一项,hopkb 306 组只回 1 组且无任何失败信号）+ load 回填 rawSource（重派发需原文,spec_path 重读尽力而为） — @a: anc-exec-parallel-hitl-queue, anc-exec-call-child-persist
+      - dispatcher.test.ts 0126 组 4 例（正:for-each × parallel 三子实例各停 commit 卡,新 core 批准后 resumeSpec → outs=[2,4,6]〔probe 测试化〕/ ask 停点跨进程恢复子目录不删、两张卡都回队列、逐张答后收齐 / 目录在场的 paused 对账后翻回 inflight 且 advanceToCaller 响应 stale_launch 为各子实例拼 --parallel-child 命令〔复用模式半边〕;守卫:paused 账而子实例无 state.json → 不进 stale、清账、步骤回 pending〔重派发路〕——变异重放:判据改回退火标记→前三例红,paused 不翻 inflight→复用模式例红,删不在场分支→守卫例红） — @v: anc-exec-parallel-hitl-queue, anc-exec-call-child-persist
+      - probe：hopissues/hoplogic3/0126 卡 probe.mjs（零 LLM,两个 HopjitMcpCore 模拟两进程）修后 outs=[2,4,6] collected=3 exit 0
+    - engine.ts buildStaleLaunch 按子实例 state.json 在场分叉：在场拼 `resume --state-dir <父>/parallel|calls --instance <子>`（load 续跑,已执行且已批准的 commit 不重放）,不在场拼 run（**2026-10-08 review 修复批**——面二 probe3b 实证复用模式重起走 re-init 净室重放 commit,作者定"同一个工作的 commit 不能被反复执行,是宪法级原则"）;reconcile 在场支注释改如实（复用模式真链父账不 paused,走 inflight-stale 支汇到同一 stale_launch） — @a: anc-exec-parallel-hitl-queue, anc-exec-call-reinit-clean
+      - cli.test.ts "P1 crash-resume" 组 +2（复用模式端到端：两句 commit 子实例第一句批准执行后停第二张卡,新进程 advance 的 stale_launch 拼 resume、重起后 1.1.2 step_done 仍 1 次、committed_steps 不变、批准后 reap outs=[3]〔变异:删分叉恒拼 run 红〕/ 从未起过的子实例超宽限入 stale 仍拼 run --parallel-child〔变异:恒拼 resume 红〕） — @v: anc-exec-parallel-hitl-queue, anc-exec-call-reinit-clean
+      - mcp-server.test.ts "0126 MCP 真身"（三子实例停 commit 卡,新 core 批准后 resume_run(child_instance) 对 commit 卡 INVALID_STATE〔既有限制如实钉〕,resume_run(step_id=容器步) 崩溃恢复路 recovered_from_crash → outs=[2,4,6]）+ 既有 U4b 重启例注释与标题改"续跑到暂停点" — @v: anc-exec-parallel-hitl-queue, anc-mcp-run-restore
+      - dispatcher.test.ts +1 "0126 补钉"（paused 对账翻回 inflight 后读盘 state.json 全 inflight〔变异:删 persist 红〕）;既有"复用模式半边"例改名"混合形态"并改断 stale_launch 为 resume — @v: anc-exec-parallel-hitl-queue
     - dispatcher.ts pausedChildren 队列 + 两侧入队（subtask/call）+ resume childInstance 路由（**队列 miss 且账上 paused → resumeSpec 重派发接原答,37轮跨进程应答**;重派发无同名卡结构化 rejected 不 throw）+ drain 队列分支 + requestAbortCascade 连坐 — @a: anc-exec-parallel-hitl-queue-dispatch
+      - dispatcher.test.ts "子实例 commit 拒收报文改写"（2026-10-08 commit 安全分析批次：for-each × parallel 子实例停在 commit 卡,未批准就带 child_instance resume → COMMIT_NOT_APPROVED,报文换成父实例 id 并带 child_instance 与指纹（只覆盖 body）,卡仍在队列;在子引擎上批准后同一路由续跑 completed——变异:删父 dispatcher 的报文改写→红） — @v: anc-exec-parallel-hitl-queue-dispatch, anc-exec-commit-approval
+      - dispatcher.test.ts "正/反（U4b 续跑名额）：max_concurrent=2（窗口一路）两张卡先后答 → 第二张续跑等第一张跑完;max_concurrent=3 第二张不等"（2026-10-11 语义审计 0156 B1：resume(childInstance) 续跑前按 launchParallelSubtask 同款等空位,续跑 promise 登进 inflightPromises——变异:删等空位循环→红） — @v: anc-exec-parallel-hitl-queue-dispatch
+      - dispatcher.test.ts "正/反（U4b 杀活连坐·stop_run 路径）：子实例停 ask 入队后父级联中止 → 父 inflight 账该子 killed、队列清空;不中止则仍 paused"（2026-10-11 0156 B3：requestAbortCascade 末尾调 engine.killInflight() 把 paused 子账记 killed——变异:删该调用→红 expected 'paused' to be 'killed'） — @v: anc-mcp-stop-run, anc-exec-parallel-hitl-queue
     - mcp-server.ts runStatus paused_queue + resumeRun child_instance 透传 + running 态队列应答放行 — @a: anc-exec-parallel-hitl-queue
     - cli-types.ts ExecutionPaused.child_instance + runtime-types.ts InflightCall.status 'paused'
       - dispatcher.test.ts U4b 七例（ask 入队应答续跑/多卡全入队逐张答收集齐/杀活连坐零残账/child 不在队结构化拒/call 侧 confirm approve 续跑元素不丢/文件态卡保留应答后 completed/**崩溃恢复重派发重暂停应答 completed**〔36轮〕） — @v: anc-exec-parallel-hitl-queue
       - mcp-server.test.ts U4b 全链两例（paused_queue 两卡全呈→child 路由逐张答→completed 收集 [5,6]/**server 重启后按旧卡应答重派发接原答 completed [5]**〔37轮〕） — @v: anc-exec-parallel-hitl-queue
     - mcp-server.ts resumeRun child_instance 同步前置核对（todo/0105 缺陷 B,兑现 hopissues/0094 期望第 ② 条:队列无卡且在飞账无 paused 项→状态翻转前同步 CHILD_NOT_IN_QUEUE,run 原样 paused）+ dispatcher.ts 导出 childNotInQueueMessage 拒因单一来源 — @a: anc-exec-parallel-hitl-queue
-      - mcp-server.test.ts "0105 B"钉（串行 call 停点带错 child_instance→同步拒、runStatus 仍 paused 载荷不变无 failure→去参重答受理 completed）— @v: anc-exec-parallel-hitl-queue;变异:删核对→本钉红,核对不认在飞账→U4b 重启钉红 ✅
+      - mcp-server.test.ts "0105 B"钉（串行 call 停点带错 child_instance→同步拒、runStatus 仍 paused 载荷不变无 failure→去参重答受理 completed）— @v: anc-exec-parallel-hitl-queue, 变异:删核对→本钉红,核对不认在飞账→U4b 重启钉红 ✅
 
 ---
 - 2026-09-15 hopissues/0094：队列 miss 分支 throw 改结构化拒收（dispatcher 队列路由 else 分支——同函数跨进程恢复分支早按 0016 哲学改过,本分支同族漏改半边——串行 call 停点被误带 child_instance 时一次可修正参数错锤死整个 run,浅拆 probe 二轮实撞 41K tokens 报废;拒收指引带"串行停点去掉 child_instance 重答"修正路）。既有反例钉标题写"结构化拒"断言却钉 rejects.toThrow（标题与断言自相矛盾——钉死的正是病灶）,按标题本义改断言;补串行 call 停点误带参场景钉（拒收→去参重答→completed 全链）。重放:rejected 改回 throw 双红恢复绿 — @v: anc-exec-parallel-hitl-queue
@@ -2806,6 +3319,7 @@ check 升层分派——判 fail 且 gap.escalate===true（四条件机械判:ok
   - engine.ts completeStep 分派+pauseForEscalation+resumeFromEscalation+escalatePending 持久化+nextStep 短路+非授权 warn — @a: anc-exec-check-escalate
   - dispatcher.ts resume 专用消化路（先于 confirm/ask 预检） — @a: anc-exec-check-escalate
   - cli.ts submit --answer 消化路 — @a: anc-exec-check-escalate
+  - reuse-driver.ts submit_and_fetch_next 的 answer 消化路（与 cli.ts 同序,todo/0146） — @a: anc-exec-check-escalate
   - mcp-server.ts resumeRun 恢复预检 isEscalatePaused 放行 — @a: anc-exec-check-escalate
     - engine.test.ts 六例（四条件命中暂停/guidance 消化重跑续行/非授权 warn 走常规失败/纯文本说明槽不升/跨进程待答持久/非待答步拒） — @v: anc-exec-check-escalate
     - mcp-server.test.ts 跨进程 escalate 放行+消化 — @v: anc-exec-check-escalate
@@ -2830,6 +3344,10 @@ check 升层分派——判 fail 且 gap.escalate===true（四条件机械判:ok
   - [[exec-engine#^anc-exec-confirm-answer]]
     - engine.ts `// 见概念 ^anc-step-confirm / 设计 step-dispatcher ^anc` — @a: anc-exec-confirm-answer
       - engine.test.ts — @v: anc-exec-confirm-answer
+  - 2026-10-07 todo/0146 review 决策 2（作者拍板本批次修）:回答取不到决定值（{}、{value:null}、多键无决定键、非对象）→ SCHEMA_MISMATCH,不写变量、仍停在确认点;原先一律当同意写 true
+    - engine.ts completeStep 的 confirm 分支与 extractDecision 非对象守卫 — @a: anc-exec-confirm-answer
+      - engine.test.ts "反例：confirm 回答取不到决定值……→ SCHEMA_MISMATCH,不写变量、仍停在确认点;正例 {value:\"approve\"} 推进" — @v: anc-exec-confirm-answer
+      - mcp-server.test.ts "独立模式 confirm 收到没有决定值的回答 → 拒收:run 回 paused,failure 带 SCHEMA_MISMATCH,不推进到 commit" — @v: anc-exec-confirm-answer
 
 ---
 
@@ -2849,8 +3367,9 @@ private checkBudget(): void {
 
   - [[step-dispatcher#^anc-exec-ctx-watermark]] ← 设计权威
     - dispatcher.ts trackCtxWatermark/getCtxWatermark/超时文案水位提示/两处 llm 块 ctx_input_total + hoplog.ts llm 块类型扩字段 + mcp-server.ts run_status 透出 — @a: anc-exec-ctx-watermark
-      - dispatcher.test.ts "上下文水位观测（0095）"四钉（三项合计峰值取 max 缓存不掩体量/双档告警各一次不重复/未配阈值零告警向后兼容/timeout 带水位提示而 network 不带） — @v: anc-exec-ctx-watermark;重放:trackCtxWatermark 调用禁用→4 钉红复原绿
+      - dispatcher.test.ts "上下文水位观测（0095）"四钉（三项合计峰值取 max 缓存不掩体量/双档告警各一次不重复/未配阈值零告警向后兼容/timeout 带水位提示而 network 不带） — @v: anc-exec-ctx-watermark, 重放:trackCtxWatermark 调用禁用→4 钉红复原绿
 
+    - dispatcher.test.ts "正例（语义审计 #4）：reason 步经 executeReason 落账的 hoplog llm 块含 ctx_input_total,且等于 input_tokens + cache_read_input_tokens + cache_creation_input_tokens 三项合计"（2026-10-12 补,此前落账行为零测试只测透出面;变异：合计去掉缓存两项 → 红） — @v: anc-exec-ctx-watermark
 ---
 
 ### anc-exec-crash-recovery ✅
@@ -2879,10 +3398,11 @@ private checkBudget(): void {
   - runtime-types.ts FailKind +deterministic — @a: anc-exec-deterministic-no-retry
     - engine.test.ts 确定性失败 4 例（正:DEPTH_EXCEEDED 直达兜底 retry=3 一次不烧/CalleeFailure 同款/无兜底直接上浮;反:普通 CHECK_FAILED 照走重跑不误伤） — @v: anc-exec-deterministic-no-retry
   - **2026-09-25 追注（todo/0116,档次判定只看失败原因的开头）**：判据从"整段子串匹配"改为"剥掉封闭清单里的引擎包装前缀后只看开头"——判定打回意见等自由文字里引用了前缀字样不再被当成类别证据（实撞:retry=2 容器第一次判定打回就被当事务级直接失败）；超窗错误在 dispatcher 产生点记 fail_kind='deterministic'。设计权威 exec-engine v0.49.1-draft 3.1b"档次判定只看失败原因的开头"条款、step-dispatcher v0.31.2 上下文溢出行
-    - engine.ts 导出常量 ENGINE_WRAP_PREFIXES / TRANSACTIONAL_PREFIXES / TRANSIENT_PREFIXES 与纯函数 classifyFailReason,handleFailStepRetry 唯一业务调用点 — @a: anc-exec-deterministic-no-retry
+    - engine.ts 导出常量 ENGINE_WRAP_PREFIXES / TRANSACTIONAL_PREFIXES / TRANSIENT_PREFIXES（2026-10-08 发版前八项修复批工程链 review 修复：OUTPUT_ABORTED: 从 dispatcher 产生点的事务级改入步级瞬态清单,见 anc-exec-output-abort-loud 卡）与纯函数 classifyFailReason,handleFailStepRetry 唯一业务调用点 — @a: anc-exec-deterministic-no-retry
     - dispatcher.ts handleStepReady 失败出口:超窗前缀开头 → failStep 传 'deterministic' — @a: anc-exec-toolloop-ctx-degrade
       - engine.test.ts 确定性失败组新增 4 例（反①判定打回意见引用超窗前缀字样照扣预算重跑/反②引用输出截断前缀字样不白送免扣/正③首次计划包装里的推理烧满剥包装后仍免扣/classifyFailReason 直测含反复剥与包装不在开头不剥）;反①②与直测在基线 b99231fb 上红 — @v: anc-exec-deterministic-no-retry
       - dispatcher.test.ts 正例⑤:reason 步真撞超窗二次失败 → 失败记录类别 deterministic、直达兜底、预算未动;基线上红 — @v: anc-exec-deterministic-no-retry
+      - engine.test.ts "正例（0162）：deterministic_waived 写盘后新引擎 load 回填——OUTPUT_TRUNCATED 首撞免扣后 load,同步骤同前缀二撞照扣预算（记 attempt 1/3 且 retryCounters 减一）,免扣记账没有因换进程被清零"（todo/0162 跨进程往返;变异核证：注释掉写出行或回填行各红）— @v: anc-exec-deterministic-no-retry
       - 变异实证:判定改回子串匹配 → 反①②与直测红;去掉剥包装 → 正③与直测红;去掉产生点记类别（同时或单独去掉引擎侧超窗判据）→ 正⑤红
 
 ### anc-exec-callee-kernel ✅（2026-08-23,dr7 彻查修;同日 D42 单跳摘要修订）
@@ -2890,8 +3410,11 @@ private checkBudget(): void {
 两条规则：①内核提取=首个**带失败明细**的 failed 步骤,非文档序首个 failed（原实现常取到容器——只有状态位,明细在叶子,占位文案遮真因,深链两层后父层全盲;dr7 实录）;②**嵌套失败单跳摘要（D42,作者定"call fail 原因上传只保留一层——step 只有本 spec 的逻辑骨干,根本不知道孙 call 的逻辑;由子 call 总结上升",废同日首版"原封透传根因链全息"——父只认识直接子的接口面,孙层原文对父是陌生词汇）**：内核 reason 是 CalleeFailure 时消化成一跳摘要（调用X失败于其步骤Y已试N次:内层因截200字）再上升,归纳保证每层恒单跳文本;全链细节归 hoplog 卫星目录（上传通道管决策可读,日志通道管全息追溯）;CalleeFailure: 前缀保留（确定性口袋判据不破）。
 
 - [[exec-engine]] 复用模式子实例失败上报第 5 条内核提取条款（含 D42 单跳摘要段） ← 设计权威
-  - engine.ts failCallStep 内核提取（filter failed → find 有记录者 → 回退首个）+ 嵌套 CalleeFailure 消化（JSON 解析→摘要;解析不动截断兜底） — @a: anc-exec-callee-kernel
+  - engine.ts failCallStep 内核提取（filter failed → find 有记录者 → 回退首个）+ 嵌套 CalleeFailure 消化抽成 `summarizeNestedCalleeFailure(reason)`（JSON 解析→摘要;解析不动截断兜底;2026-10-11 语义审计 0156 B4：failCallStep 与 reapParallelCall 失败分支两条收割路径共用,此前并行路只做规则 1 透传孙层 JSON） — @a: anc-exec-callee-kernel
     - engine.test.ts 内核提取正反例（正:容器先于叶子取叶子明细/嵌套失败消化成一跳摘要无双层 JSON 含孙因截断版;反:全无明细回退占位文案如实呈现） — @v: anc-exec-callee-kernel
+    - engine.test.ts "正/反（并行收割路径）：reapParallelCall 失败分支的孙层 CalleeFailure 同样消化成一跳摘要;非 CalleeFailure 前缀原样"（0156 B4;变异:reapParallelCall 改回 kernel = rawKernel→红,父侧事件原文是透传的孙层 JSON） — @v: anc-exec-callee-kernel
+  - engine.ts reapParallelSubtask / reapParallelCall 同律（2026-10-07 hopissues/0121 随批——容器收口判据起容器也记 failed 无明细,parallel 收割路的内核提取从键序首个改带明细优先） — @a: anc-exec-container-fail-close, anc-exec-callee-kernel
+    - dispatcher.test.ts "正例（0121 配套）parallel 子实例内 subtask 边界退火后叶子 commit 失败 → 父收割 parallel_reap 带叶子真因" — @v: anc-exec-container-fail-close, anc-exec-callee-kernel
 
 ### anc-exec-l2c-retry-feedback ✅
 
@@ -2911,6 +3434,7 @@ L2c 重试反馈：subtask 带反馈重跑时把上次失败说明注入 prompt�
       - prompt.test.ts check/commit 恒不吃 L5（retry+upstream 双掐）+ L5 打回轮恒供给 + L5 修正指令工单 + 机械轮不点名无关 check（R3）+ 24000 渲染端尾部截留 — @v: anc-exec-l2c-retry-feedback
       - cli.test.ts init --upstream-feedback 跨进程全链（D22 断链回归防线:state 落盘/advance 供给/check 掐口,真 CLI 进程） — @v: anc-exec-l2c-retry-feedback
       - dispatcher.test.ts call 边界 3 例（父打回后重跑 call 上游反馈含打回原文/递归拼接含祖辈意见/无史无祖辈→undefined 零注入） — @v: anc-exec-l2c-retry-feedback
+      - dispatcher.test.ts "call parallel 六条传递线（launchParallelCallChild,todo/0165）" 正例②（父带上游反馈起 call parallel 子 → 子第一次 LLM 请求 prompt 含打回原文且落"上游修正意见"条目,子 state.json upstream_feedback 同值;变异:launchParallelCallChild 不传 upstreamFeedback 此钉红） — @v: anc-exec-l2c-retry-feedback
 
 ---
 
@@ -3077,6 +3601,24 @@ anc-exec-output-schema-check
 
 ---
 
+### anc-exec-output-abort-loud ✅（2026-10-08 todo/0121——端点非正常停止响亮失败）
+
+截断闸只认 stop_reason=max_tokens;端点以别的原因中途掐断（实撞疑似内容审核：智谱端点半截正文 + usage 全零）时半截输出被当正常产出进 SCHEMA 闸,病因指错重试白烧。修：stop_reason 三分（正常三值与缺席 normal / max_tokens truncated / 其余 aborted）,aborted 在三个消费点解析前抛 `OUTPUT_ABORTED: 端点以 <原值> 原因停止输出…`。**档次 2026-10-08 发版前八项修复批工程链 review 修复 改定为步级瞬态**（前缀入引擎 TRANSIENT_PREFIXES：首撞免扣预算、下轮带"换措辞"反馈重跑同一步、复发照扣;批次一定的事务级越过了作者 2026-09-04 口袋归类判据"根因在本轮输入 → 步级瞬态",审核类停止的根因就是本轮内容）;openai chat/responses 的 finish_reason 原值透传（旧形态非 length 一律映 end_turn,content_filter 被吞成正常收尾）;HopLog llm 块记 stop_reason 原值（缺席 absent）;usage 全零且正文非空记 [usage-zero] warn 旁证。
+
+- [[step-dispatcher#^anc-exec-output-abort-loud]] ← 权威源（classifyStopReason HopSop / aborted 处置 / openai 映射表 / 观测两条）;错误分类表「端点非正常停止」行
+  - errors.ts ErrorCode.OUTPUT_ABORTED 枚举值（2026-10-08 todo/0129 随表枚举对账补入——抛出仍是前缀字符串形态） — @a: anc-exec-output-abort-loud
+  - [[exec-engine#^anc-exec-deterministic-no-retry]] 口袋归类表步级瞬态加 OUTPUT_ABORTED（3.1b 事务级产生点清单改两处）;[[shared-errors]] 错误码表 OUTPUT_ABORTED 行改步级瞬态 + 机检括注改"分界是登不登表"（2026-10-08 发版前八项修复批工程链 review 修复）
+  - engine.ts TRANSIENT_PREFIXES 加 'OUTPUT_ABORTED:' — @a: anc-exec-output-abort-loud
+    - dispatcher.ts 导出 classifyStopReason / outputAbortedMessage / usageZeroWarning;parseStepOutput、pipelineCall、工具循环 tool_use 轮三消费点按三分判;handleStepReady 对 OUTPUT_ABORTED: 不再特判（普通 failStep,引擎按瞬态清单处理——2026-10-08 发版前八项修复批工程链 review 修复）;两处 llm 记录加 stop_reason 与 usage-zero warn — @a: anc-exec-output-abort-loud
+    - protocol-openai.ts 导出 mapChatFinishReason / mapResponsesStop,两处映射改调之 — @a: anc-exec-output-abort-loud
+    - hoplog.ts llm 记录类型加 stop_reason — @a: anc-exec-output-abort-loud
+      - dispatcher.test.ts 非正常停止组 7 例（三分单测 / 反:refusal 半截正文 OUTPUT_ABORTED 不进 SCHEMA / 正:end_turn 与缺席照常解析 / 反:工具循环轮 content_filter 带 tool_use 工具零执行 / 反:pipelineCall refusal / 正:handleStepReady 不记 deterministic、首撞免扣重跑同一步〔改〕/ 反:同一步二撞照扣预算〔新〕/ 观测:工具循环轮 llm 块两条 stop_reason〔G1 mut-16 新〕/ 正:mapResponsesStop incomplete 缺 reason → max_tokens〔G6 mut-6 新〕/ 观测:llm.stop_reason 原值与 absent + usage-zero warn 一条 + 正文空不报） — @v: anc-exec-output-abort-loud
+      - protocol-openai.test.ts +3（反:chat content_filter 原值 / 正:stop 与缺席 → end_turn、tool_calls → tool_use / 反:responses incomplete+content_filter 原值） — @v: anc-exec-output-abort-loud
+  - 变异 9 条中 m5–m9 归本卡：aborted 归 normal 五例红 / 产生点不记 deterministic 一例红 / chat 映射回旧形态一例红 / absent 不写一例红 / 工具循环判删一例红（/tmp/claude-502/observer-fix-pre8/mut1-results.txt）
+  - 待观测（卡 todo/0121 处置记录）：智谱端点掐断时实际回什么 stop_reason 值——落 llm.stop_reason 后真机可见
+
+---
+
 ### anc-exec-output-empty-loud ✅（2026-08-31 doc-review 第十二次验证实撞——正常收尾的空响应静默过关;0054 收编批立卡）
 
 空响应响亮失败——提取病族第四形态：前三形态"内容完好提取层判死",本形态相反"内容真缺提取层放行"（步 20 response="" output_tokens=9 正常收尾,单输出收空串 completed 零报错,空 domain_name 灌下游拼出 DocReviewers//reviewers 残路径;截断闸只认 stop_reason=max_tokens,管不到正常收尾的空）。契约：parseStepOutput 截断判后、取值前,text.trim() 空 → 抛 EMPTY_OUTPUT（含 output_tokens 实数,归因正确——"你没产出任何内容"恰是事实）;边界=只拦全空响应,显式 `键: ""` 空值属合法业务值照收;多输出同罩（否则回退逐行全键 null 被列表宽容度归一空列表静默空转）。**步级重发半边（2026-09-07 hopissues/0072 兑现——首版条款写"触发既有重试通道"但实现直落 executeStep 大 catch failStep 点燃容器:check 步瞬时空喷被当判 false 整容器重跑,叠加聚合账不清零自激死锁,hopkb 309 实例 3 例好实例报废）**：handleStepReady 执行包装层识别 EMPTY_OUTPUT: 前缀步级重发（instruction 附"上一次响应为空"防同因,至多 EMPTY_RETRY_MAX=2 次——首发+重发共三次与 SCHEMA_RETRY_MAX 对齐）,耗尽才 failStep 转容器;闸本体不软化,网络暂停等其它异常原样穿透。
@@ -3109,11 +3651,13 @@ anc-exec-output-schema-check
 
 ### anc-exec-paused-resume ✅
 
-private executeConfirm(step: StepReady): 'paused' {
+confirm 停点由引擎 nextStep 产出（两模式同一载荷）;dispatcher 的 resume 把人的应答注回引擎。
 
   - [[step-dispatcher#^anc-exec-paused-resume]]
-    - dispatcher.ts `private executeConfirm(step: StepReady): 'paused' ` — @a: anc-exec-paused-resume
-      - dispatcher.test.ts — @v: anc-exec-paused-resume
+    - 引擎 `nextStep` 的 confirm 分支（src/engine.ts：question="审批：<summary>" + 人通道 context;2026-10-11 语义审计 0156 B6 定性：dispatcher 原 `executeConfirm` 是不可达死码——引擎对 confirm 步直接返回 paused,dispatcher 永远收不到 confirm 的 step_ready,探针入口 throw 四套件 1826 例零到达,已删并留注释） — @a: anc-exec-hitl-presentation
+    - 调度器 `resume(stepId, answer)` 应答注回 + 升层停点 guidance/value 键回退（src/dispatcher.ts） — @a: anc-exec-paused-resume
+      - dispatcher.test.ts "pause-resume loop" 组（既有 confirm/ask 停答循环例） — @v: anc-exec-paused-resume, anc-exec-resume-semantics
+      - dispatcher.test.ts "正/反：独立模式 confirm 停点 presented_data 带 question=\"审批：<summary>\" 且 context 是 ← 原值（非 LLM 供给面字符串）;ask 停点形态不受影响"（0156 B6：把独立模式 confirm 停点形态钉在 runSpec 返回值上;变异:引擎 nextStep 删 question 行→红 expected undefined to be '审批：批准这份计划'） — @v: anc-exec-paused-resume, anc-exec-hitl-presentation
 
 ---
 
@@ -3154,13 +3698,15 @@ spec 运行时快照内容寻址（2026-09-30 todo/0130,承接 hopissues/0115—
 
 任务卡新段《已批准命令》（`## 已批准命令` ≡ `## Approved Commands`,一行一条 argv 前缀,空白切/引号内不切/首项 hopjit 解析错误/非条目行解析错误）经 parser 进 `header.approved_commands: string[][]` 随快照落盘;hopjit-mcp 第六工具 `run_approved_command(state_dir?, instance_id, argv, cwd?, timeout_sec?, caller_step?)`——**不重建 engine**,纯 readState+readSpec（解引用 0130 引用形态）取清单 → argv 与某行前缀**逐项相等**匹配（不认 hopjit.yaml commands:,拒绝报文列卡上现有前缀并指路在卡上加行,零 hopjit.yaml 字样）→ cwd 缺省 workspace_dir 且必须落在其内 → `runWhitelistedCommand`（hopjit 恒拒/shell:false/ENOENT-ENOBUFS-ETIMEDOUT 分辨全继承,sync 沿用 timeout 兜）→ 账进该 run 的 hoplog 顶层 `command:` 块（`recordCommand`,无视级别恒写;hoplog 关着落实例目录 commands.log）→ 回给调用方 stdout/stderr 各 64KB 截断注明、账记原字节。body 口 `subprocess.run` 白名单 = hopjit.yaml commands ∪ 卡上命令名（`unionApprovedCommandNames`,dispatcher/engine 两注入点）——同一张卡不写两遍;run_script 不并（模型临场跑脚本粒度归项目级,留口）。人工闸（confirm/ask/commit 前置检查）不放宽;与 0071"禁 start_run"并列——走 MCP 的只是命令这一口。概念层同批：语法参考 §1 结构图/区域表 ^anc-rule-approved-commands-section/§5 subprocess.run 前提句/§12 段头表,核心规范结构图与区域表。
 
+**2026-10-09 撤闸追注（todo/0152,作者抓"这个规矩是谁定的？我可没这么定,又是把自己卡死的蠢规矩"）**：cwd 须落 workspace 内的 CWD_OUTSIDE_WORKSPACE 闸是 2026-10-01 d147fbed agent 自写、无作者原话;授权本体是 argv 前缀匹配,cwd 不是授权要素,拦住的全是 worktree / $TMPDIR 正当用法（两批工程链实现 agent 被迫绕走载体 Bash 丢授权账）。撤后 cwd 任意目录,缺省与相对路径基准仍是 workspace_dir。设计 [[mcp-server#^anc-mcp-run-command]]「撤闸记录」段,v0.27.0;mcp-server.ts 删越界判与 tools import、description 改文;测试反例改正例（临时目录照跑且账记）,变异"越界判加回→红"一次;driver 三载体「三种拒绝」改两种。
+
 - [[../concepts/HopSpec V3语法参考#^anc-rule-approved-commands-section]] ← 概念权威（段文法/匹配语义/消费口两处/授权单位是任务）
   - [[spec-parser#^anc-rule-approved-commands]] 段文法与解析——独立卡 [[#anc-rule-approved-commands]]
-  - [[mcp-server#^anc-mcp-run-command]] 契约 RunCommand + HopType 入参返回 + HopSop 八步 + 错误码（自有四码 INSTANCE_NOT_FOUND/APPROVAL_REQUIRED/COMMAND_FAILED/CWD_OUTSIDE_WORKSPACE + 透传 CORRUPT_STATE_FILE;曾列 STATE_READ_FAILED,review 查实死码删） — 契约/流程
+  - [[mcp-server#^anc-mcp-run-command]] 契约 RunCommand + HopType 入参返回 + HopSop 八步 + 错误码（自有三码 INSTANCE_NOT_FOUND/APPROVAL_REQUIRED/COMMAND_FAILED + 透传 CORRUPT_STATE_FILE;第四码 CWD_OUTSIDE_WORKSPACE 2026-10-09 已撤留名;曾列 STATE_READ_FAILED,review 查实死码删） — 契约/流程
     - [[mcp-server#^anc-mcp-tools]] 工具面表加 run_approved_command 行;[[tool-channels#^anc-exec-tool-channels]] 通道⑦;[[i18n#^anc-i18n-glossary]] Approved Commands|已批准命令 — 登记面
     - mcp-server.ts `HopjitMcpCore.runCommand` + `registerTool(RUN_APPROVED_COMMAND_TOOL, …)`（名用 provider-types.ts 常量;四 hint,openWorld 如实 true;拒绝报文 review 后与 description 同口径——归人决定/不自加卡/不绕过） — @a: anc-mcp-run-command
-    - tools.ts `resolveRealDeep` / `isWithinDir` 改出口（cwd 越界判复用,[[tools]] 出口表 v0.23.1） — @a: anc-exec-tool-path-resolve
-      - mcp-run-approved-command.test.ts "run_approved_command 按任务卡授权"（python3 -c 放行+账块字段+resumed_at 在前/curl 拒报文含已批准命令不含 hopjit.yaml/短于前缀拒/无节拒/hopjit 恒拒/cwd 越界拒与相对放行/超时/64KB 截断且账记原字节/非零 returncode 正常/commands.log 兜底/INSTANCE_NOT_FOUND/引用形态解引用/CORRUPT_STATE_FILE,13 例;变异回放：前缀匹配改只比 argv[0]→红 1,去 recordCommand→红 2） — @v: anc-mcp-run-command
+    - tools.ts `resolveRealDeep` / `isWithinDir` 改出口（曾为 cwd 越界判复用,[[tools]] 出口表 v0.23.1;2026-10-09 撤闸后 mcp-server 不再调,出口仍在） — @a: anc-exec-tool-path-resolve
+      - mcp-run-approved-command.test.ts "run_approved_command 按任务卡授权"（python3 -c 放行+账块字段+resumed_at 在前/curl 拒报文含已批准命令不含 hopjit.yaml/短于前缀拒/无节拒/hopjit 恒拒/cwd 任意目录照跑且账记实际 cwd〔2026-10-09 前为越界拒〕与相对放行/超时/64KB 截断且账记原字节/非零 returncode 正常/commands.log 兜底/INSTANCE_NOT_FOUND/引用形态解引用/CORRUPT_STATE_FILE,13 例;变异回放：前缀匹配改只比 argv[0]→红 1,去 recordCommand→红 2） — @v: anc-mcp-run-command
       - mcp-server.test.ts "注册恰好六工具且名称与契约一致"（run_approved_command 四 hint + description 六关键词——条款真身在 ^anc-mcp-run-command,@v: 双挂） — @v: anc-mcp-tools, anc-mcp-run-command
       - mcp-run-approved-command.test.ts review 追加 7 例（timeout 三钳 spy 四值/argv 空/state.json 不可读 CORRUPT/stderr 截断+账/恰等放行/hoplog 目录已删→commands.log/账写失败 account_error） — @v: anc-mcp-run-command
   - [[spec-observability#^anc-obs-command-block]] 执行账块——独立卡 [[#anc-obs-command-block]]
@@ -3171,6 +3717,7 @@ spec 运行时快照内容寻址（2026-09-30 todo/0130,承接 hopissues/0115—
       - engine.test.ts "复用模式 body 白名单并集（卡上《已批准命令》）"（advanceToCaller 驱动 engine 消化路径注入点——review 面三变异 f 全量 3596 绿实抓零保护,2 例） — @v: anc-exec-command-primitive
     - engine.ts requires_commands 预检闸 available 改并集（review 面二探针 Q 两闸不齐） — @a: anc-exec-requires-commands-gate, anc-exec-command-primitive
       - engine.test.ts "requires_commands 预检闸吃《已批准命令》并集"（宿主空+卡批 echo+声明 echo 起跑;声明 ls 拒且报文两修法并列,2 例） — @v: anc-exec-requires-commands-gate, anc-exec-command-primitive
+      - mcp-run-approved-command.test.ts 2026-10-11 hopissues/0128：timeout 用例改钉上限 1500 并加不等式断言 `RUN_COMMAND_TIMEOUT_MAX_SEC < 1800`（Claude Code 对 MCP 工具的静默上限）与"传 3600 截断照跑不拒收"——决策分支变异证明:常量改回 3600 该用例红,恢复后 23 例绿 — @v: anc-mcp-run-command
   - driver/hop-skill.md + codex/opencode 副本 §2「已批准命令走 mcp__hopjit__run_approved_command」段（与 0071 禁 start_run 并列） — 协议面
 
 **2026-10-01 工程链 review（run_approved_command批工程链review）追注**：四面并行 + 主对话裁定 28 修 10 不修。修：^anc-obs-command-block 真身悬空（列表项散文锚定不合法,机检 orphans 实证）→ 独立契约节;engine 复用模式注入点与 requires_commands 预检闸零保护/两闸不齐 → 并集三消费口齐+测试;joinArgvPrefix 往返有损（`#TODO` 裸写回读成注释,授权变宽）→ 包回规则+两种引号都含抛错;内联标签形经 lang 转换清单蒸发 → 只认 ## 段头形;未闭合引号静默 → parse error;timeout 三钳/stderr 截断/argv 空/账写失败 account_error 补测试;STATE_READ_FAILED 查实死码删;mcp-server 表行归位、错误码清单补登、分级表两行、五工具残留六处;设计"放 Steps 后 parser 不认"失实断言改正;本卡拆三张（两子锚原嵌套无独立 ### 卡,机检 c2tr/d2tr missing 三条）。不修（裁定入任务卡处置记录）：多空格段头单向/hopjit.exe 平台盲区/活跃 run 双写 resumed_at 中段（设计已注已知形态）/ws 缺席 process.cwd() 直读/CommandRecord 不入出口表/概念设计锚异名/低位边角正例/守卫盲区（check-anchor-baseline 只比 11 数,orphans 明细增量不入——立卡）。11 处变异重放全红。
@@ -3194,6 +3741,16 @@ hopjit-mcp run_approved_command 每次执行在该 run 的 main.yaml 追加文�
     - hoplog.ts `CommandRecord` + `HopLog.recordCommand` — @a: anc-obs-command-block
       - hoplog.test.ts "recordCommand 顶层 command: 块"（level=warn 恒写字段齐 js-yaml 可 load/resume 后 resumed_at 先于 command 且步骤键仍在） — @v: anc-obs-command-block
       - mcp-run-approved-command.test.ts "run_approved_command 按任务卡授权" 正例与截断两例断言 main.yaml 顶层 command: 块字段（跨进程落账半边） — @v: anc-obs-command-block
+
+### anc-exec-resume-rejected-event ✅（2026-10-08 hopissues/0122——对终态失败实例的重复推进留痕）
+
+`hopjit resume` 撞终态失败实例时引擎毫秒级拒绝,响应有 failed_step_id / failure_reason,但 hoplog 只追 resumed_at / status / ended_at 三行、exec_events 零新增——排障者看日志不知道这次为什么没动。修：nextStepRaw 两个 failed 终态出口在"进入时 terminalState 已是 failed"（本次是重复推进不是首次到达）时记 `{event: 'resume_rejected', step_id: <失败步>, detail: <失败原因>}` 并 persist;首次到达终态不记（step_failed 已在）。取事件不改 close 块：事件流记动作,close 块是终态快照,塞原因与 step 块重复。
+
+- [[exec-engine#^anc-exec-resume-rejected-event]] ← 权威源（state.json exec_events 字段说明下）;[[exec-engine#^anc-exec-crash-recovery]] recover HopSop 步 3 随注
+  - engine.ts recordResumeRejected（terminalState 判 + recordEvent + persist）;nextStepRaw terminalFailure 短路与 allTerminal&&hasFailed 两出口各调一次 — @a: anc-exec-resume-rejected-event
+    - engine.test.ts "正例：终态失败的实例 recover 后再推进 → exec_events 增一条 resume_rejected 带失败步与原因,且落盘" / "反例：首次到达终态不记 resume_rejected" / "正例（review 面三 G5,mut-18）：不经 terminalFailure 短路、走 allTerminal 扫描出口的重复推进同样记"（旧快照无 terminal_failure 字段形态;2026-10-08 发版前八项修复批工程链 review 修复 补第二出口钉） — @v: anc-exec-resume-rejected-event
+  - [[exec-engine#^anc-exec-resume-rejected-event]] 两出口 HopSop（2026-10-08 发版前八项修复批工程链 review 修复 补——此前只有散文）
+  - probe：hopissues/hoplogic3/0122 卡 probe.sh（run 失败 → resume → 比 state.json exec_events 增量）修后 `resume_rejected/TOOL_EXEC_ERROR: …` PASS;变异 m3（不记）m4（首次也记）两例红
 
 ### anc-exec-state-persistence ✅（2026-08-26 终态落盘扩——0043"暂停有卡,终局有据"终局半边）
 
@@ -3302,6 +3859,7 @@ this.runDir = join(options.logDir, `${options.specId}-${runId}`);
   - [[spec-observability#^anc-obs-file-layout]]
     - hoplog.ts `this.runDir = join(options.logDir, `${options.spec` — @a: anc-obs-file-layout
       - hoplog.test.ts — @v: anc-obs-file-layout
+  - 2026-10-07 追注：头块字段加 `workspace_dir`（紧随 started_at,hoplog v0.8.0）,代码与测试挂 anc-cli-workspace-arg 卡
 
 ---
 
@@ -3312,7 +3870,7 @@ response 记应答原文（2026-08-25 hopissues/0031 连带：单值仅原始类
 export interface HitlRecord {
 
   - [[spec-observability#^anc-obs-hitl-record]]
-    - hoplog.ts `export interface HitlRecord {` — @a: anc-obs-hitl-record
+    - hoplog.ts `export interface HitlRecord {`（responder 类型 2026-10-11 语义审计 0156 C8 随设计收窄为恒 'caller'——应答一律经调用方通道进引擎,human 值不可达） — @a: anc-obs-hitl-record
       - hoplog.test.ts — @v: anc-obs-hitl-record
 
 ---
@@ -3347,6 +3905,8 @@ flush(): void {（2026-08-25 #41 追注：条款 2"任何时刻合法 YAML"补�
     - engine.ts `// Rebuild HopLog if persisted` — @a: anc-obs-hoplog-resume
     - hoplog.ts `static resume(runDir: string, level?: LogLevel): H` — @a: anc-obs-hoplog-resume
       - hoplog.test.ts — @v: anc-obs-hoplog-resume
+    - hoplog.ts resume 目录不在分支之后的 mkdirSync 改条件（未降级且目录仍不在才建——2026-10-08 todo/0136 ③ 补测试时实抓无条件 mkdir 把 EACCES 原样抛出,catch 的"warn + 降级,run 继续"承诺落空） — @a: anc-obs-hoplog-resume
+      - hoplog.test.ts "③ 反例：resume 到父目录只读下不存在的 runDir → 重建失败不抛、appendDead 生效、warn 含重建失败（resume 侧）" / "③ 正例：父目录可写 → 重建成功、最小 header 带断档标记、后续 record 正常写" — @v: anc-obs-hoplog-resume
 
 ---
 
@@ -3420,6 +3980,7 @@ export class FilePersistence implements PersistenceProvider {
     - dispatcher.ts `DirSpecProvider`（同目录寻址 + 路径穿越拒绝）— @a: anc-provider-spec-default
       - dispatcher.test.ts "DirSpecProvider（缺省同目录寻址）" 正反例 — @v: anc-provider-spec-default
     - mcp-server.ts startRun `hostConfig.spec_provider ??= new DirSpecProvider(...)` — @a: anc-provider-spec-default
+      - mcp-server.test.ts "HopjitMcpCore 缺省 SpecProvider 两级寻址" 组（缺省 provider 经 antRoots(homedir(), hostConfig.workspace_dir) 找到项目级 HopAnt——2026-10-10 0154+0155 工程链 review 改装项目级,变异 M21-mcp 红） — @v: anc-provider-spec-default
     - dispatcher.ts `handleCallStep`（resolve 消费点,null → UNKNOWN_SPEC fail）— @a: anc-exec-call-recursion
       - dispatcher.test.ts "反例：无 SpecProvider / 解析不到 → UNKNOWN_SPEC" — @v: anc-exec-call-recursion
 
@@ -3500,9 +4061,12 @@ B2 三分支：内置函数白名单查 arity/内置文件编辑工具名单认�
       - act-body-validator.test.ts B2 五钉（内置函数通过/arity 不符 error/非内置 warn+0077 批新增:write read 零 B2 正例/拼错 wrote 照 warn 反例） — @v: anc-rule-b2
       - tools.test.ts 三名单同源对账组（B2 全量 17 员/B9 写侧七件/B10 读侧四件对 DefaultToolProvider 注册面逐员——2026-09-06 review 立,变异重放三拍各红） — @v: anc-rule-b2
 
-  - 2026-09-14 0089 修复批:commit 步未知函数升 error（hopkb 三批连撞——body 写不存在的 run_shell,warn 放行后运行期走 tool_request 外包,driver 回执 {ok:true} 未真执行,引擎 completed 谎报:盘面零提交+产出变量装回执值;probe 全链复现后写时拦——commit 且 Tools 段未声明 → error 报文指路 subprocess.run/Tools 声明,act 步与声明过的保持 warn 开放性;declaredTools 经 walkVariableScope 走链穿透）— @a: anc-rule-b2;act-body-validator.test.ts 三钉（commit 未声明 error/act 同款 warn/声明过 warn）— @v: anc-rule-b2;重放:分档改回统一 warn→反例红复原绿
-  - 2026-09-15 R10 review 修复批：三档枚举改 act/check（reason 步 AST 无 body 空指——面一/面二双抓）+checkActExpr 四处递归补透传 declaredTools（binary/dict/comprehension/default——A⑥ 漏传致 commit 嵌套表达式位已声明工具误 error）+fragment 模式 commit 档降 warn（片段无 header 声明面,error 误杀合法 replan——isFragment 布尔随链穿透六层）+通知件名单纠源（notify 真身=tools-composite specs 表映射）与对账钉扩员 — @a: anc-rule-b2;act-body-validator.test.ts 四新钉+两既有钉补强（嵌套 subtask commit 声明过零 error〔M3 重放〕/dict 值位零 error/check 步 warn/fragment warn 带整文验为准报文/:394 补 Tools 段指路词/:406 补 warn 在场对称断言）+tools.test.ts 对账组第四行 — @v: anc-rule-b2;重放三拍:容器递归删透传→嵌套钉红/dict 递归删透传→dict 钉红/名单删员→对账钉红,复原全绿
-  - 2026-09-16 内置工具参数名核对升档批（作者拍,决策页 todo/decision/20260916-内置工具参数名写时校验.md——hopbuild2 交付步 move 参数名臆造成 src/dst〔注册面真名 from/to〕,原"参数错留运行期报"实况运行期同样零校验,undefined 穿透 Node fs 报误导错,毒行躲条件分支后 selftest 零通电真机烧一轮才爆）：文件件"认得不报（arity 不查）"废止,改**签名表三判**——B2_BUILTIN_TOOL_SIGS（17 员,每件合法参数名集+必填集,与注册面 input_schema 同源）,未知参数名/缺必填/位置参数各 error 报文带合法参数名集指路 — @a: anc-rule-b2;act-body-validator.test.ts 参数名核对组七钉（move src/dst 实撞重放红/from-to 绿/write 缺 content 红/位置参数红/read 可选参带与不带双绿/read filename 红/签名表外调用照 warn 不误伤）— @v: anc-rule-b2;tools.test.ts 对账钉扩参数名级（签名表对注册面 input_schema 逐键核 props/required 双向,幽灵成员反向核）— @v: anc-rule-b2;重放三拍:三判禁用→4 钉红/签名表 move 改回 src-dst→对账钉红点名不同源,复原全绿。运行期兜底半边=execute 实参名进闸（独立卡 anc-exec-tool-arg-gate）,两层防线不互替
+  - 2026-09-14 0089 修复批:commit 步未知函数升 error（hopkb 三批连撞——body 写不存在的 run_shell,warn 放行后运行期走 tool_request 外包,driver 回执 {ok:true} 未真执行,引擎 completed 谎报:盘面零提交+产出变量装回执值;probe 全链复现后写时拦——commit 且 Tools 段未声明 → error 报文指路 subprocess.run/Tools 声明,act 步与声明过的保持 warn 开放性;declaredTools 经 walkVariableScope 走链穿透）— @a: anc-rule-b2, act-body-validator.test.ts 三钉（commit 未声明 error/act 同款 warn/声明过 warn）— @v: anc-rule-b2, 重放:分档改回统一 warn→反例红复原绿
+  - 2026-09-15 R10 review 修复批：三档枚举改 act/check（reason 步 AST 无 body 空指——面一/面二双抓）+checkActExpr 四处递归补透传 declaredTools（binary/dict/comprehension/default——A⑥ 漏传致 commit 嵌套表达式位已声明工具误 error）+fragment 模式 commit 档降 warn（片段无 header 声明面,error 误杀合法 replan——isFragment 布尔随链穿透六层）+通知件名单纠源（notify 真身=tools-composite specs 表映射）与对账钉扩员 — @a: anc-rule-b2, act-body-validator.test.ts 四新钉+两既有钉补强（嵌套 subtask commit 声明过零 error〔M3 重放〕/dict 值位零 error/check 步 warn/fragment warn 带整文验为准报文/:394 补 Tools 段指路词/:406 补 warn 在场对称断言）+tools.test.ts 对账组第四行 — @v: anc-rule-b2, 重放三拍:容器递归删透传→嵌套钉红/dict 递归删透传→dict 钉红/名单删员→对账钉红,复原全绿
+  - 2026-09-16 内置工具参数名核对升档批（作者拍,决策页 todo/decision/20260916-内置工具参数名写时校验.md——hopbuild2 交付步 move 参数名臆造成 src/dst〔注册面真名 from/to〕,原"参数错留运行期报"实况运行期同样零校验,undefined 穿透 Node fs 报误导错,毒行躲条件分支后 selftest 零通电真机烧一轮才爆）：文件件"认得不报（arity 不查）"废止,改**签名表三判**——B2_BUILTIN_TOOL_SIGS（17 员,每件合法参数名集+必填集,与注册面 input_schema 同源）,未知参数名/缺必填/位置参数各 error 报文带合法参数名集指路 — @a: anc-rule-b2, act-body-validator.test.ts 参数名核对组七钉（move src/dst 实撞重放红/from-to 绿/write 缺 content 红/位置参数红/read 可选参带与不带双绿/read filename 红/签名表外调用照 warn 不误伤）— @v: anc-rule-b2, tools.test.ts 对账钉扩参数名级（签名表对注册面 input_schema 逐键核 props/required 双向,幽灵成员反向核）— @v: anc-rule-b2, 重放三拍:三判禁用→4 钉红/签名表 move 改回 src-dst→对账钉红点名不同源,复原全绿。运行期兜底半边=execute 实参名进闸（独立卡 anc-exec-tool-arg-gate）,两层防线不互替
+  - 2026-10-09 安全分析批次 review 修复批次 D7：签名表第④判——内置写类工具（write / edit_file / move / remove）的 keep 实参是字面量且不是非负整数（-1 / 1.5 / "3" / True）时报 B2 error,报文写明"0 表示不留旧版本,缺省留 DEFAULT_KEEP 份"并回显收到的值;此前这类字面量过静态校验,commit 安全分析转人工时理由写"运行前无法确定",人批准后运行期才报错。变量形态的 keep 照旧留给运行期校验（keepLiteralInvalid 只判字面量与负号字面量）— @a: anc-rule-b2, act-body-validator.test.ts 两钉（正:keep 0 / 3 / 输入变量与 remove keep:0 零 error;反:-1 / 1.5 / "3" / True / move keep -2 / edit_file keep 2.5 各恰一条 error 且回显值）— @v: anc-rule-b2, 重放:第④判禁用→反例钉红,复原全绿
+      - act-body-validator.test.ts 2026-10-10 逐分支补 1 例"反例：签名里没有 keep 的工具（append / create）写了 keep → 只报"没有参数 keep",不再报"keep 须是非负整数""（review 第三次 6.2 阅卷打回后,run17 存活的变异 V-sigcond 补测后 run18 红） — @v: anc-rule-b2
+    - act-body-validator.test.ts 2026-10-10 "keep 第④判逐条件" 1 例（review 第五次 6.2 阅卷打回后:not 一元与取负的变量不核;取负的字符串字面量报 -"3";False 报 False;None 报 null;0 与 7 放行——Z-val1651-and / Z-val1654-ifT / Z-val1657-ternF 红） — @v: anc-rule-b2
 
 ---
 
@@ -3617,8 +4181,8 @@ B2 三分支：内置函数白名单查 arity/内置文件编辑工具名单认�
     - validator.ts `// P10: declared output should have a producer (st` — @a: anc-rule-p10
       - validator.test.ts — @v: anc-rule-p10
 
-    - 2026-09-10 0084 批（hopissues/0084 条件产出）：第三档 warn——collectAlwaysProduced 变体（顺序并集/branch 全臂交集且须有 else 臂/loop 保守不计零迭代可达;parser 把 case(else) 归一 condition='default' 的判据实撞当场修）— @a: anc-rule-p10;validator.test.ts P10 第三档 4 钉（一臂产出 warn/全臂零 warn/无 else 臂 warn/loop 保守+顺序对照）— @v: anc-rule-p10;变异:交集改回并集→正例红复原绿
-    - 2026-09-11 工程链review修复批（四面并行+变异 7 处 3 存活）：第四规则——容器自声明不计必然（0084 原型包一层自声明 subtask 即穿闸的探针实锤;空容器落叶子路径保 free 豁免,CG7 首跑红抓出 hasChildren 空数组缺口当场补）+on_fail 兜底块跳过+exit_outputs 死分支两处删 — @a: anc-rule-p10;六钉 CG6-CG11（容器包裹/空 free 豁免/on_fail/loop collect/零产出点不叠 warn/exit 正门） — @v: anc-rule-p10;重放两拍:通配原病→CG6+CG8 红,删 allProduced.has→CG10 红,复原绿。不修:hasElse/isDefault 不同构（parser 归一 default 后不可达,动 engine 回归风险大于防御收益,记录在案）
+    - 2026-09-10 0084 批（hopissues/0084 条件产出）：第三档 warn——collectAlwaysProduced 变体（顺序并集/branch 全臂交集且须有 else 臂/loop 保守不计零迭代可达;parser 把 case(else) 归一 condition='default' 的判据实撞当场修）— @a: anc-rule-p10, validator.test.ts P10 第三档 4 钉（一臂产出 warn/全臂零 warn/无 else 臂 warn/loop 保守+顺序对照）— @v: anc-rule-p10, 变异:交集改回并集→正例红复原绿
+    - 2026-09-11 工程链review修复批（四面并行+变异 7 处 3 存活）：第四规则——容器自声明不计必然（0084 原型包一层自声明 subtask 即穿闸的探针实锤;空容器落叶子路径保 free 豁免,CG7 首跑红抓出 hasChildren 空数组缺口当场补）+on_fail 兜底块跳过+exit_outputs 死分支两处删 — @a: anc-rule-p10, 六钉 CG6-CG11（容器包裹/空 free 豁免/on_fail/loop collect/零产出点不叠 warn/exit 正门） — @v: anc-rule-p10, 重放两拍:通配原病→CG6+CG8 红,删 allProduced.has→CG10 红,复原绿。不修:hasElse/isDefault 不同构（parser 归一 default 后不可达,动 engine 回归风险大于防御收益,记录在案）
 ---
 
 ### anc-rule-p11 ✅
@@ -3875,6 +4439,7 @@ S12 异步派发依赖边界：① call parallel 必须 loop 体内（收齐点=
     - validator.ts `// V2: no duplicate output names in same scope` — @a: anc-rule-v2
       - validator.test.ts — @v: anc-rule-v2
 
+    - validator.test.ts "反例（语义审计 #23）：产出类型 enum(a, else) 与中文 enum(甲, 其他) 各报 V2 \"enum 成员含保留字 else\"——成员位独立判,不经变量名闸" + "正例（语义审计 #23）：enum 成员不含 else/其他（含形近的 elsewhere / 其他人）→ 不报该条 V2"（变异：some → every 反例红） — @v: anc-rule-v2
 ---
 
 ### anc-rule-v3 ✅
@@ -4019,6 +4584,7 @@ V10：collect 子句两端静态校验——① unitVar 须有产出方（loop �
     - cli.ts `run --parallel-child` — @a: anc-exec-parallel-subinstance
     - runtime-types.ts `can_fanout` — @a: anc-exec-parallel-subinstance
       - engine.test.ts — @v: anc-exec-parallel-subinstance
+      - dispatcher.test.ts "call parallel 六条传递线（launchParallelCallChild,todo/0165）" 正例⑥（call parallel 子实例目录 calls/<call 步骤号>.<轮次>/ 与卫星日志位置——子实例目录布局的 call 形态半边,2026-10-11 todo/0165;正文在 anc-exec-call-child-persist 卡同行） — @v: anc-exec-parallel-subinstance, anc-exec-call-child-persist
 
 ---
 
@@ -4060,11 +4626,20 @@ V10：collect 子句两端静态校验——① unitVar 须有产出方（loop �
     - prompt.ts `buildTaskContext 子任务目标段` — @a: anc-exec-parallel-worker-prompt
       - engine.test.ts — @v: anc-exec-parallel-worker-prompt
 
+    - prompt.test.ts "worker 子实例的 L1 骨架与身份标注（语义审计 #9 #10 #11）" 3 例（正:task_context 含 [你的子任务] 与 交付输出: 行;正:骨架带"← 你负责 1.1 分支"身份头且裁到子树、顶层兄弟不在场;反:非 worker 同叶子无身份行且全视图;变异：buildSubtreeSkeleton 返回空串 / 去身份两行 各红） — @v: anc-exec-parallel-worker-prompt, anc-exec-l1-skeleton
 ---
 
 ### anc-exec-parallel-foreach ❌（2026-08-11 P0.5 退役）
 
 旧通道（静态 fan-out→批量窗口→单点 join）随统一模型 P0.5 退役（2026-08-11）：代码/测试已删，设计 §1-§10 归档存史。统一通道链见 anc-exec-gather 卡。
+
+### anc-exec-parallel-foreach-barrier ✅（条款字面废止,屏障语义由 §U7 统一派发门承担——2026-10-11 语义审计 0156 A1 立卡）
+
+旧条款"fan-out 探测先于 nextStep 树遍历"随 P0.5 退役;守的目标——parallel 未 reap 齐前不得推进其下游 sibling——现由统一派发门承担：pending 的 parallel 标注步产 dispatch_ready 入 inflight 账,主线 nextStep 返回 drain_wait,下游 sibling 在收割齐之前不作下一可执行步。
+
+- [[parallel-execution#^anc-exec-parallel-foreach-barrier]] ← 承接注记（§9b' 字面废止 + §U7 现行落点）
+  - engine.ts advanceToCaller 注释落点（史料,不再先探批） — @a: anc-exec-parallel-foreach-barrier
+    - engine.test.ts "parallel 续链收割" 组 "正例（D1 晚收割——阅卷实抓恒丢末元素后修）：主线先走完全部派发再收割 → 收集清单仍两元素齐"——断言派发后 nextStep 恒 drain_wait、reap 齐后才 completed（2026-10-11 自 CLI 测试文件里一段说明注释迁来;原挂点无测试体,语义审计 ❌） — @v: anc-exec-parallel-foreach-barrier
 
 ### anc-exec-parallel-foreach-worker ❌（2026-08-11 P0.5 退役）
 
@@ -4093,6 +4668,8 @@ run 隔离不变量（跨切面强制,string-escape 同款架构级契约）：�
       - tests/guard-scripts.test.ts 守卫判据回归（正2反2:干净内核/组合根读放行;三型违规/组合根写也拒） — @v: anc-run-isolation
       - scripts/multi-run-smoke.mjs 真机冒烟（真 stdio server+真 LLM 并发两 run:双 completed/盘面隔离/stderr 零漏网标记——实撞形态直接对应物;G14 台账已登） — @v: anc-run-isolation
       - tests/dispatcher.test.ts dispatcher 侧承诺钉 3（池尾 catch 直接测:收割自身炸→零 unhandledRejection+文档级 warn 落盘〔测试顺手抓出步骤级 warn 被孤儿门拦,改文档级〕;envOf 快照冻结:构造后改 process.env 不可见+快照封闭集不回退;envOf 回退支路:快照缺席直读〔嵌入场景存量兼容〕） — @v: anc-run-isolation
+    - scripts/check-process-state.mjs RE_PROC 扩面（2026-10-10 0154+0155 review D12：机器身份级读取 homedir()/hostname()/userInfo()/process.execPath 并入禁区,EXEMPT 登记引擎 Config.dirs 的 `~` 家目录展开与 hop-admin 握手子脚本模板两条;负向验证：在 hop-admin 内核文件里加一处 homedir() 调用,守卫 exit 1 点名行号——设计承诺四项不读而守卫只拦三项,变异 M19a 实锤） — @a: anc-run-isolation
+      - tests/guard-scripts.test.ts check-process-state 组新例 "反/正：内核文件调 homedir() → exit 1 且报文含文件名与 homedir;同文件换成纯常量 → exit 0"（另断组合根文件调 homedir 照旧放行——守卫准入第三步负向验证的回归形态;重放变异 M19a-guard：RE_PROC 改回旧三项→本例红,恢复绿） — @v: anc-run-isolation
 
 ---
 
@@ -4123,7 +4700,7 @@ run 隔离不变量（跨切面强制,string-escape 同款架构级契约）：�
 
   - [[concept-anchor-rules#^anc-meta-card-ref-owner]] ← 权威源（引用行归属契约 + 校验语义 + 不写行号）
     - scripts/audit/scan.py scan_traceability：按行解析 declared/owner，check_ref 校验 owner 而非 card_id — @a: anc-meta-card-ref-owner
-      - anchor-scan.test.ts "引用行归属该行声明的锚点"（嵌套锚点不假报）/ "真缺锚点仍被抓出" / "死引用被抓出" / "不比对行号" — @v: anc-meta-card-ref-owner
+      - anchor-scan.test.ts "引用行归属该行声明的锚点"（嵌套锚点不假报）/ "真缺锚点仍被抓出" / "死引用被抓出" / "不比对行号" / "反例（todo/0133 挂账③,review mut-13 补常驻钉）：卡片行归属声明尾粘全角括号 → invalid_refs 一条点名归属声明解析失败"（2026-10-08 发版前八项修复批工程链 review 修复） — @v: anc-meta-card-ref-owner
       - anchor-scan.test.ts "测试前提：能找到装了 pyyaml 的 python" — 防依赖缺失时静默跳过冒充通过（早期版本每例 0ms 假绿）
 
 ### anc-exec-parallel-launch-path ❌（2026-08-11 P0.5 退役）
@@ -4170,6 +4747,8 @@ run 隔离不变量（跨切面强制,string-escape 同款架构级契约）：�
     - cli.ts --tool-result 路由 + 组合根工厂注册（2026-09-05 直执批——engine 不越层 import,经静态工厂注入 CompositeToolProvider） — @a: anc-exec-tool-request
     - mcp-server.ts 组合根工厂注册（同上,standalone 侧） — @a: anc-exec-tool-request
     - runtime-types.ts toolJournal 类型注记 — @a: anc-exec-tool-request
+    - act-body-parser.ts `bodyHasToolCall`（引擎 advance 分流判据:含工具 body 走 tool_request——2026-10-12 语义审计 #1 从已废止的 anc-cli-next-drives-body 改挂到此） — @a: anc-exec-tool-request
+      - act-body-parser.test.ts "bodyHasToolCall：body 里有没有要交 caller 的工具调用" 2 例（正:非白名单 callee 在赋值/if 条件/列表元素位均 true;反:只有内置函数与算术 → false;变异:恒 false → 正例红） — @v: anc-exec-tool-request
       - cli.test.ts "tool_request"×4（单工具往返/双工具跨进程 seq 递增/参数代入/INVALID_STATE）— @v: anc-exec-tool-request
 - 消费面：driver/references/step-execution-rules.md + driver/codex/references/execution-rules.md（caller 纪律🔴条——载荷从原响应捕获，禁中途 resume 重取）
 - 2026-08-30 追注：契约追加"载荷一次性——禁用 resume 重取"caller 纪律条款（examples/mutation-verify 真机实撞 st2 轮病根归档，abcc2ad）；同日工程链 review 抓初版条款机理描述错误（写成"清本步 tool_journal 从头重跑"，实际 recover 不清 journal——已入账结果重放代入，未入账调用对当前文件系统重执行）并勘误，两载体同步（exec-engine v0.25.4）
@@ -4192,10 +4771,20 @@ run 隔离不变量（跨切面强制,string-escape 同款架构级契约）：�
 
 - [[ci-pipeline#^anc-meta-ci-baseline]] ← 权威源（2026-08-03 决策 3 拍板"基线锁定"）
   - audits/baselines/anchor-baseline.json — 基线数据（锚定 _baseline_commit）
-  - scripts/check-anchor-baseline.mjs — @a: anc-meta-ci-baseline（比对逻辑；缺产物/字段脱节 exit 2 显式失败）
+  - scripts/check-anchor-baseline.mjs — @a: anc-meta-ci-baseline （比对逻辑；缺产物/字段脱节 exit 2 显式失败）
     - 负向验证 2026-08-03：伪造更严基线→exit 1 ✅；删扫描产物→exit 2 ✅；恢复→exit 0 ✅
-  - audits/baselines/coverage-baseline.json + check-coverage-baseline.mjs — @a: anc-meta-ci-baseline（同契约第二实例：测试覆盖率基线，原 G7 空白 2026-08-03 补守卫销账；只算 src/ 汇总防 scripts 0% 失真）
+  - audits/baselines/coverage-baseline.json + check-coverage-baseline.mjs — @a: anc-meta-ci-baseline （同契约第二实例：测试覆盖率基线，原 G7 空白 2026-08-03 补守卫销账；只算 src/ 汇总防 scripts 0% 失真）
     - 负向验证 2026-08-03：伪造 99% 基线→exit 1 ✅；删 coverage-summary→exit 2 ✅；恢复→exit 0 ✅
+
+### anc-meta-ci-detail-baseline ✅（2026-10-08 todo/0133 作者拍 b 形态——明细基线另建文件;落点=scripts 的 @a:,验证=准入负向验证实录,无独立 *.test.ts——同 anc-meta-ci-baseline 先例）
+
+数字基线只比 11 个计数,三张明细表（code_to_design.orphans / code_to_traceability.missing / design_to_traceability.missing）的增量不在比对面——d147fbed 散文行锚让 orphans 多一条而 11 个数一个没变差,check:audit 报绿,独立阅卷与基线上调两道都以绿为凭过了。修：`audits/baselines/anchor-detail-baseline.json` 存三张表的 id+file 对集合（file 去行号）;check-anchor-baseline.mjs 对每张表算"当前有基线没有"的差集,非空 exit 1 逐条点名;列表变短走收紧提示（agent 自己收,与数字基线同口径）;缺文件 exit 2。
+
+- [[ci-pipeline#^anc-meta-ci-detail-baseline]] ← 权威源（§4 基线锁定策略下"明细基线"段：三张表 / 形态 b 另建文件的理由 / 收紧与放松方向 / 负向验证）;[[chain-enforcement#^anc-meta-chain-guards]] 1b 全链行补登
+  - audits/baselines/anchor-detail-baseline.json — 明细基线数据（首版 2026-10-08 主区 e1c2e203 实测 6 / 101 / 202 条,锚定 _baseline_commit）
+  - scripts/check-anchor-baseline.mjs 明细增量比对段（DETAIL_KEYS / pairKey 去行号 / detailWorse 并入红、detailBetter 并入收紧提示 / 缺文件 exit 2;2026-10-08 发版前八项修复批工程链 review 修复 接 HOPJIT_CHECK_ROOT 替身仓库根供判据回归） — @a: anc-meta-ci-detail-baseline
+    - guard-scripts.test.ts "check-anchor-baseline 明细基线判据回归"（正:孤儿与基线相同含行号变化 exit 0 / 反:多一条基线没有的孤儿 exit 1 点名锚与文件 / 反:明细基线文件缺席 exit 2 显式失败）——2026-10-08 发版前八项修复批工程链 review 修复 补常驻用例,面三 mut-14 实证一次性负向实录拦不住局部放宽 — @v: anc-meta-ci-detail-baseline
+    - 负向验证 2026-10-08（准入③）：docs/design/sandbox.md 加散文行锚 `- 某条说明（探针） ^anc-exec-probe-orphan：` + src/errors.ts 末尾加一行对 anc-exec-probe-orphan 的代码标注 → check:audit exit 1 点名 `code_to_design_orphans: 新增 1 条…anc-exec-probe-orphan（src/errors.ts）` ✅（修前同形态绿——卡 probe 1）;撤掉后绿 ✅（probe 2）
 
 ### anc-meta-module-layering ✅（守卫落点=scripts/，同 meta 守卫惯例）
 
@@ -4203,8 +4792,8 @@ run 隔离不变量（跨切面强制,string-escape 同款架构级契约）：�
 
 - [[module-principles#^anc-meta-module-layering]] ← 权威源（判据表）
   - [[../ARCHITECTURE#分层桥接点]] — 豁免名单权威（脚本 APPROVED_BRIDGES 与之一一对应）
-  - scripts/check-layer-imports.mjs — @a: anc-meta-module-layering（含 import type；LAYER 表外新文件显式红）
-    - guard-scripts.test.ts "check-layer-imports 判据回归" ×3（合规绿/越层红/表外红）— @v: anc-meta-module-layering（2026-08-07 补常驻保护）
+  - scripts/check-layer-imports.mjs — @a: anc-meta-module-layering （含 import type；LAYER 表外新文件显式红）
+    - guard-scripts.test.ts "check-layer-imports 判据回归" ×3（合规绿/越层红/表外红）— @v: anc-meta-module-layering （2026-08-07 补常驻保护）
     - 负向验证 2026-08-04：hoplog 越层引 cli→exit 1 精确报；同行合法共享层 import 不误报；恢复→exit 0 ✅
 
 ### anc-meta-module-versioning ✅（守卫落点=scripts/，同 meta 守卫惯例）
@@ -4212,8 +4801,8 @@ run 隔离不变量（跨切面强制,string-escape 同款架构级契约）：�
 模块版本-接口互锁——接口区（出口表/命令表/响应类型）有 diff 而"模块版本"行无 diff 即红；语义分级（MINOR/PATCH）归人
 
 - [[module-principles#^anc-meta-module-versioning]] ← 权威源（§4 操作化五条）
-  - scripts/check-version-lock.mjs — @a: anc-meta-module-versioning（commit-range 判据；G9 守卫 2026-08-04 准入）
-    - guard-scripts.test.ts "check-version-lock 判据回归" ×3（接口动版本不动红/同动绿/正文改动不误报）— @v: anc-meta-module-versioning（2026-08-07 补常驻保护）
+  - scripts/check-version-lock.mjs — @a: anc-meta-module-versioning （commit-range 判据；G9 守卫 2026-08-04 准入）
+    - guard-scripts.test.ts "check-version-lock 判据回归" ×3（接口动版本不动红/同动绿/正文改动不误报）— @v: anc-meta-module-versioning （2026-08-07 补常驻保护）
     - 负向验证 2026-08-04：用真实违规历史 HEAD~3..HEAD（pack+install-skill 两次接口变化未动版本）→ exit 1 精确报 hop-cli.md ✅；含版本行修改的 range → exit 0 ✅
 
 ### anc-meta-module-arch-audit ✅（守卫落点=scripts/，同 meta 守卫惯例；概念上游=必备件④）
@@ -4222,8 +4811,8 @@ run 隔离不变量（跨切面强制,string-escape 同款架构级契约）：�
 
 - [[../docs/concepts/工程实现链规范#^anc-meta-module-design-artifacts]] ← 概念上游（四必备件之④；①③由 G9/边界清单/D2C 覆盖，②由边界清单+出口注释覆盖）
   - [[module-principles#^anc-meta-module-arch-audit]] ← 设计权威（本库三落点与判据）
-    - scripts/check-module-arch-audit.mjs — @a: anc-meta-module-arch-audit（check:fast 内，原 G10 2026-08-06 当日销账）
-      - guard-scripts.test.ts "check-module-arch-audit 判据回归" ×3（全登记绿/缺名精确红/判据源空 exit 2）— @v: anc-meta-module-arch-audit（§5 硬要求 2，2026-08-07 补常驻保护）
+    - scripts/check-module-arch-audit.mjs — @a: anc-meta-module-arch-audit （check:fast 内，原 G10 2026-08-06 当日销账）
+      - guard-scripts.test.ts "check-module-arch-audit 判据回归" ×3（全登记绿/缺名精确红/判据源空 exit 2）— @v: anc-meta-module-arch-audit （§5 硬要求 2，2026-08-07 补常驻保护）
       - 负向验证 2026-08-06：临时抹掉 Doctree 的 mcp-server → exit 1 精确报 ✅；恢复 → 存量违规 act-body/shared-errors（ARCHITECTURE 缺登）被抓 → 补登后 exit 0 ✅（守卫首跑即抓真账，非摆设）
 
 ### anc-type-tool-spec / anc-config-tool-registry / anc-exec-tool-shape-check / anc-type-tool-binding / anc-exec-tool-composite ✅（工具接口标准批次一，2026-08-12 作者定开工；三决策：requires_commit 原样/shape 偏差入 adaptive 阶梯/绑定两档 exec 挂起）
@@ -4241,6 +4830,7 @@ typed request-response 第一层（ToolSpec 七字段含 tool_id/unwrap 实测�
     - tools-registry.ts（ToolServerEntry.per_parallel_child + parseToolServers 校验）— @a: anc-config-tool-registry
     - tools-composite.ts（forkForParallelChild/closeOwned/顶层 close 兜底）+ dispatcher.ts（childToolView/releaseChildToolView 与三个并行注入点、四类收场点）— @a: anc-exec-tool-composite
       - tests/dispatcher.test.ts「并行子任务独占工具进程（per_parallel_child,0112）」6 例（真 stdio 夹具返回自身进程号：开关开三子任务三进程且收场即退/开关关三次同一进程且归顶层/串行 call 与顶层同进程/并行子任务内嵌套串行 call 继承子任务进程/暂停期间进程保留回答后退出/中止级联关暂停中子任务进程）+ tests/tools-interface.test.ts「per_parallel_child 注册文法」4 例（非布尔拒/in-process 拒/true 解析/缺省与 false 缺席）；修前基线 eb9b27bb 上 10 红 2 绿（绿的两条是预期绿的反例）,变异两处（派生改回共享父视图/删收场关闭）均使正例①转红 — @v: anc-exec-tool-composite, anc-exec-standalone-parallel, anc-config-tool-registry
+      - tests/dispatcher.test.ts "call parallel 六条传递线（launchParallelCallChild,todo/0165）" 正例⑤（父工具面带 forkForParallelChild → call parallel 子工具调用回派生视图标识、子完成即 closeOwned;父工具面不能派生 → 子用父同一对象、零收场调用;变异:注入点改传 this.toolProvider 此钉红） — @v: anc-exec-tool-composite
 
 - 2026-09-30 todo/0122 批次补账（工程链 review 补,原批次 b708bb91 未进卡）：**anc-exec-tool-composite** 的 list() 投影面扩为用注册面声明补全——notes 并进描述、description 缺席退回成员自报、output_schema 渲染成 returns（设计 [[tool-interface#^anc-exec-tool-composite]] list() 段渲染表;模型可见面归 anc-tool-params-notes 与 anc-exec-tool-manifest-supply 两卡）
     - tools-composite.ts list()（代码标记挂 anc-tool-params-notes, anc-exec-tool-manifest-supply——投影规则属注册面语义与清单供给,本卡只记装配器承载位置）
@@ -4252,7 +4842,7 @@ typed request-response 第一层（ToolSpec 七字段含 tool_id/unwrap 实测�
 mcp 绑定成员：MCP client 最小子集（connect=initialize+会话流 SDK 自动/tools/call）、惰性连接、**连接失败即收尸**（38轮review/hopdoc e2e 实撞 2026-08-26——stdio connect 已 spawn 子进程,initialize 超时抛错不 close 即僵尸持锁,一次失败滚成永久失败;connect 抛错路径 close client 尽力而为）、发现比对与 input_schema 补全、发端校验兑现（required+type 浅检不发即拒）、错误原始信息截断进 FailRecord 供 replan 消费（作者定严格解析）、百炼"未开通"识别指路、run 终态三段收（Composite.close 传导+mcp-server applyResult 钩子）。
 
 - [[tool-interface#^anc-exec-mcp-binding]] — 设计权威（McpBindingMember HopType+连接/调用/收割 HopSop+发端校验语义）+ [[tool-interface#^anc-exec-tool-server-lifecycle]] 生命周期总图（五阶段,stdio/http 同骨架——作者定 2026-08-12）
-  - tools-mcp-binding.ts（McpBindingMember/checkArgsShallow/connectFailure）+ tools-composite.ts registry 缺省 McpBinding+close 传导 + mcp-server.ts tools_file 加载与 applyResult 终态收 — @a: anc-exec-mcp-binding（HostConfig.tool_registry 字段归 anc-config-tool-registry 卡）
+  - tools-mcp-binding.ts（McpBindingMember/checkArgsShallow/connectFailure）+ tools-composite.ts registry 缺省 McpBinding+close 传导 + mcp-server.ts tools_file 加载与 applyResult 终态收 — @a: anc-exec-mcp-binding （HostConfig.tool_registry 字段归 anc-config-tool-registry 卡）
     - tests/tools-mcp-binding.test.ts 26 例（+**list() 兜底三例**〔零参声明工具未连接时兜底=最小合法对象 schema 非裸 {}/声明 input_schema 不被兜底覆盖/in-process 同款——2026-08-28 schema 兜底实撞回补:发现惰性而 list() 先于首次 connect 被 LLM 通道消费,裸 {} 经 OpenAI 门面端点 400,注册面 genSchema 同批放宽为无 input_schema 即生成〕）原 23 例（+**僵尸收尸反例**〔server 起来 initialize 不应答→连接失败且 pid 实测已死——38轮〕）原 22 例（+kind:in-process 经 startRun 全链结构化 error 指路反例——未实装档的用户配置面拒绝形态,验证债随实装到期非豁免〔作者纠正 2026-08-12:没有 module 不是不测试的理由——拒绝面现在就可测〕）原 21 例（+单调用超时硬闸反例〔挂死 server 300ms 放弃报 MCP_CALL_TIMEOUT〕/业务错误含 timeout 字样不误归反例〔判定按 McpError.code,review 抓文本匹配误伤〕/Composite 结果带 audit 元信息正例/shape 偏差失败保留 audit 正例〔review 抓偏差路径丢归属〕/内置不带 audit 正例——五点需求⑤收尾+review 修 2026-08-12）原 16 例（真 server 经 SDK InMemory 传输——协议全链真跑：调用全链/发现漂移 warn/发端 required+type 两反例/isError 原始报文截断/白名单外拒/list=声明面/close 幂等/auth_env 缺失报名不报值/未开通指路/Composite 全链 unwrap+shape+裁剪/close 传导/stdio spawn 失败反例+env_passthrough 白名单不漏正例〔review 探针补——真 spawn 单行 server 验证〕/tools_file 经 HopjitMcpCore 全链正例〔config→startRun→装配→body 经 tool_id→completed,接缝此前零覆盖〕/tools_file 损坏结构化 error 反例）— @v: anc-exec-mcp-binding
     - scripts/tools-smoke.mjs（三通道统一冒烟:内置组正反/in-process 真隔离模块装载+发端校验/mcp 真百炼——缺凭证跳过明说;npm run test:smoke:tools）+ scripts/mcp-binding-smoke.mjs（真机判据:绑定层零 LLM,hoptools.yaml→真调百炼两服务→unwrap+shape 断言）+ scripts/standalone-tools-live-e2e.mjs（真机判据:LLM×外部工具同 run 协同,1 次 LLM 交互=5c 例行档;npm run test:e2e:mcp-binding / test:e2e:standalone-tools）— @v: anc-exec-mcp-binding, anc-exec-tool-composite
 - 2026-09-25 todo/0112 批次追注（旧缺陷修复——写 0112 并行测试时撞出）：McpBindingMember 惰性连接原本没有"连接进行中"状态,共享成员被几个并行子任务同时第一次调用时各起一个进程,后连好的覆盖前面的 client,被覆盖的进程无人关闭即泄漏（违反设计"后续调用复用连接",属代码没照设计做）。修：`connecting` 等待句柄让并发首调共用同一次连接;连接完成时若终态闸已落下（连接期间被 close）当场关掉刚连好的进程并让该次调用失败。设计 [[tool-interface#^anc-exec-mcp-binding]] HopSop 连接第 5、6 步 + 类型约定 connecting 字段 + 生命周期图②一行。
@@ -4285,7 +4875,8 @@ mcp 绑定成员：MCP client 最小子集（connect=initialize+会话流 SDK �
 - [[../docs/concepts/HopSpec V3扩展-有序思考与渐进固化]] 探索验证闭环 ← 概念上游
   - [[step-dispatcher#^anc-exec-adaptive-pipeline]] — 设计权威（Trait 四约束+三段 HopSop+与验证侧分工）
     - dispatcher.ts handleAdaptive 三段化 + pipelineCall（段产物空响亮抛）+ hoplog.ts StepMeta.replan_pipeline 与 submit_rejected（后者 2026-08-26 拆独立审计字段,P2-1 归类裁定）;assembleReplanEdits 2026-08-30 随树编辑函数化统一——D44 三原子翻译成 spec-tree-edit 核心函数调用序（delete=deleteNodeAt/replace=replaceNodeAt/insert.before 与 END=insertNodeAt,tagTemp 临时唯一号防片段相对号撞原步 id）,parseReplanEdits 协议校验零变（代码落点与 [[#anc-exec-builtin-edit-tree-tool]] 卡交叉挂账） — @a: anc-exec-adaptive-pipeline
-      - dispatcher.test.ts handleAdaptive 组（三段各一发+后段吃前段产物断言/段空产物首段即停计入预算反例/熔断与计数器既有例沿用）— @v: anc-exec-adaptive-pipeline
+      - dispatcher.test.ts handleAdaptive 组（三段各一发+后段吃前段产物断言/段空产物首段即停计入预算反例/熔断与计数器既有例沿用 / "观测（todo/0151）：三段流水线每段在容器步骤下各记一个 llm 块,带 pipeline_stage 与 stop_reason"〔变异:记录块删 → 红〕）— @v: anc-exec-adaptive-pipeline
+    - dispatcher.ts pipelineCall 第四参 obs → recordStepMeta llm 块（pipeline_stage 四值;六个调用点各传段名;2026-10-08 todo/0151 作者定修——此前三个 LLM 调用点里唯一不记的）;hoplog.ts StepMeta.llm 加 pipeline_stage — @a: anc-exec-adaptive-pipeline
       - dispatcher.test.ts replan 定向编辑组（正5:三原子同场未提及保留/多 insert 同锚+与 delete 交错次序钉/嵌套片段 tagTemp 防撞钉〔2026-08-30 review D4 固化探针——tagTemp 失效时 delete 按 id 误杀片段子步〕/END 追加/编号归一;反3:悬空重复 null/全删光散文 null/缺 EDIT 片段 null——2026-08-30 review 面四抓测试组无卡入账,补记）— @v: anc-exec-adaptive-pipeline
 
 ### anc-exec-inprocess-binding ✅（in-process 扩展模块装载，2026-08-12 作者令"做个例子出来实测"当日实装）
@@ -4320,7 +4911,8 @@ now()/today() 进 hop_python（work_zone_path 同档）——journal 记值保�
 
 - [[step-dispatcher#^anc-exec-protocol-adapter]] — 设计权威（ProtocolClient HopTrait 含 supportsToolLoop/chat 与 responses 双转换规则/工具循环协议边界）
   - protocol-openai.ts（wrapAnthropicClient/makeOpenAiClient/makeOpenAiResponsesClient/classifyOpenAiError/LlmErrorKind；显式传 key 切断 openai SDK 隐读 OPENAI_API_KEY——standalone 不变量 2）+ dispatcher.ts 构造分派三道/getClientForService env 通道三道/executeActWithTools 谓词闸/executeReason 谓词降级 + provider-types.ts HostConfig.protocol + mcp-server.ts 三枚举校验/providerToHostConfig 贯穿/{SERVICE_ID}_PROTOCOL env — @a: anc-exec-protocol-adapter
-    - tests/protocol-openai.test.ts（chat+anthropic 包装 15 例既有 + responses 新例:请求映射 system→instructions/max_output_tokens/store:false、工具形顶层平铺、工具往返 typed items、响应 message→text/function_call→tool_use、usage 同名直取+cached_tokens、坏 JSON 响亮拒、incomplete→max_tokens、reasoning 不进 IR、错误分类共用判据、thinking→reasoning.effort 两点映射、reasoning 被拒剥除重试、reasoning item 工具轮回显）+ dispatcher.test.ts openai 集成 7 例（chat 5 例既有 + responses 工具循环全链两轮/{SERVICE_ID}_PROTOCOL=openai-responses 通道）+ mcp-server.test.ts config 校验（chat 与 responses 放行正例/枚举外乱值拒绝反例）— @v: anc-exec-protocol-adapter（Codex/opencode 自举协议照抄例归属 anc-cli-install-skill 卡,见彼处 @v 清单）
+  - config-load.ts providers[].protocol 三枚举文法核（2026-10-08 todo/0131 自 mcp-server 搬入） — @a: anc-exec-protocol-adapter
+    - tests/protocol-openai.test.ts（chat+anthropic 包装 15 例既有 + responses 新例:请求映射 system→instructions/max_output_tokens/store:false、工具形顶层平铺、工具往返 typed items、响应 message→text/function_call→tool_use、usage 同名直取+cached_tokens、坏 JSON 响亮拒、incomplete→max_tokens、reasoning 不进 IR、错误分类共用判据、thinking→reasoning.effort 两点映射、reasoning 被拒剥除重试、reasoning item 工具轮回显）+ dispatcher.test.ts openai 集成 7 例（chat 5 例既有 + responses 工具循环全链两轮/{SERVICE_ID}_PROTOCOL=openai-responses 通道）+ mcp-server.test.ts config 校验（chat 与 responses 放行正例/枚举外乱值拒绝反例）— @v: anc-exec-protocol-adapter （Codex/opencode 自举协议照抄例归属 anc-cli-install-skill 卡,见彼处 @v 清单）
 
 ### anc-struct-standalone-endpoint / anc-struct-standalone-facets / anc-exec-standalone-invariants / anc-meta-standalone-review ✅（standalone 统一设计，2026-08-11 作者定"本质上是一个统一接口端，需要统一的设计和审查"）
 
@@ -4390,6 +4982,7 @@ standalone 的各部分条款分在四份文档（配置 schema/凭证解析/模
     - engine.ts writePausedCard/removePausedCard + nextStep confirm/ask 分支落卡 + completeStep 消化删卡（reject 同删）— @a: anc-exec-pause-persist
       - engine.test.ts 问题卡生命周期三例（ask 落卡→拒收保留→消化删/confirm reject 删+纯内存零卡零炸/**recover 重置清旧卡再暂停重落新卡**〔32轮:陈卡源头治理〕）— @v: anc-exec-pause-persist
       - mcp-server.test.ts "run 恢复"正例（load 后直接 completeStep 消化答案）— @v: anc-exec-pause-persist
+      - engine.test.ts "正例（0162）：on_fail_active 写盘后新引擎 load 回填——load 出的引擎继续推进时兜底子树仍按激活态执行（dfs 不把 1.2 整树改标 skipped）,兜底值成为容器输出" / "正例（0162）：on_fail_consumed 写盘后新引擎 load 回填——兜底走完后再 load,消耗集含 1.2,findNearestSubtaskAncestor 不再把已用过兜底的容器当可入选边界" / "正例（0162）：subtree_root 写盘后新引擎 load 回填——worker 子实例 load 后 getSubtreeRoot 仍是 1.1,且顶层 Outputs 未赋值的完备性豁免仍生效（子树跑完判 completed 而不是 never assigned 的 failed）" / "反例（0162）：手工删掉盘上 state.json 的 on_fail_active 键再 load——新引擎按\"键缺席=空集\"走：兜底步拿不到失败上下文,兜底走完也不登记消耗集,宿主容器按\"失败未被消化\"收 failed（证明 load 读的是盘上这个键,不是内存残留）"（todo/0162 跨进程往返：写盘 → 同目录新建引擎 load → 字段值与行为都与写盘前一致;变异核证：注释掉 buildStateFile 里该字段的写出行、或 load 里该字段的回填行,对应正例各红——三字段六次）— @v: anc-exec-pause-persist
     - mcp-server.ts runStatus 快照兜底（stateDir 第二参+工具 schema state_dir）— @a: anc-mcp-run-restore
     - mcp-server.ts stopRun 墓碑同拍删卡（34轮:中止关闭等人窗口,残卡误导文件级消费方）— @a: anc-mcp-stop-run
     - ~~dispatcher.ts PARALLEL_HITL_TODO 清死卡~~（35轮临时路径,0013 兑现已撤 2026-08-25——子实例 paused 保卡入队,removePausedCard 保持 public 供杀活连坐清卡,见 anc-exec-parallel-hitl-queue 卡）
@@ -4415,6 +5008,8 @@ server 重启后 paused run 从快照恢复：load 引擎 + 宿主重注入 Host
   - engine.ts `setHostConfig`/`getSpecPath` — @a: anc-mcp-run-restore
   - dispatcher.ts `getEngine` + 构造回填 cumulativeTokens — @a: anc-exec-cost-guardrails
 
+    - mcp-server.test.ts "mcp 组合根装配线删一行必红（todo/0164）" 重启版 2 例（2026-10-11：项目级 routing_rules 的 thinking: disabled 在新 core 恢复续跑后第一次模型请求的 thinking.type 仍是 disabled / 显式 workspace_dir 的 run 恢复续跑后 body read 按原作业根解析读到标记文件、快照 host_context.workspace_dir 不漂回 server cwd;删 restoreRun 的 model_engine 装配行与 getRestoredWorkspaceDir 取值各红一次） — @v: anc-mcp-run-restore
+  - 2026-10-07 追注（dirs 批 review D3）：restoreRun 在 setHostConfig 后从 engine.getDeclaredDirs() 重建 read/write 两白名单（新构造沙箱没有 write_access——不重建则恢复后 commit 写 readwrite 被拒）;runStatus 快照兜底对 dirs 卡与引擎源⑥同判;代码与测试挂 anc-exec-dirs-grant 卡
 ### 跨进程持久化字段（2026-08-10 v2-1 阶段3，DEBT-03/07）
 
 - [[exec-engine]] last_replan_children 字段 / [[step-dispatcher#^anc-exec-cost-guardrails]] cumulative_tokens
@@ -4427,11 +5022,14 @@ server 重启后 paused run 从快照恢复：load 引擎 + 宿主重注入 Host
 
 第五工具 stop_run 主动中止 run（此前失控 run 只能杀 server 重启会话止损，两次实撞）。五条实施契约：级联中止（requestAbortCascade 递归**三张表**——inflightDispatchers/callFrames/activeCallChildren，第三表系 review 实抓：执行中的串行 call 子层两表都不在，级联够不着则子树烧到自然终态）/ aborted 钉住（受理即置终态，**三个回写口**——applyResult+startRun catch+resumeRun catch——迟到结果一律不得改写，后两口首版漏堵 review 实抓）/ 终态幂等（destructiveHint: true + idempotentHint: true）/ aborted 落盘（实例目录墓碑 aborted.json，restore 撞墓碑 RUN_ABORTED 拒复活——不落盘则"终局"只在内存成立，重启后可被 resume 复活含 commit，review 实抓）/ 工具通道收口分道（paused 当场收，running 归钉住回调——首版对 running 也当场收会打断"在飞那步跑完"承诺，review 实抓）。aborted 是终态不是暂停：同进程注册表拒 + 跨重启墓碑拒双防线。
 
-- [[mcp-server#^anc-mcp-tools]] 五工具表 stop_run 行 + [[mcp-server#^anc-mcp-stop-run]] 中止细则五条 ← 设计权威
+- [[mcp-server#^anc-mcp-tools]] 五工具表 stop_run 行 + [[mcp-server#^anc-mcp-stop-run]] 中止细则六条（第 6 条快照兜底=hopissues/0117,2026-10-04 补） ← 设计权威
   - dispatcher.ts `requestAbortCascade`（三表级联，出口表调度组）+ `activeCallChildren` 第三表（handleCallStep 进 await 前登记/结算 finally 注销/登记后立查父位补漏扫窗口）— @a: anc-mcp-stop-run
-  - mcp-server.ts `stopRun`（墓碑落盘+收口分道）+ applyResult/startRun catch/resumeRun catch 三口钉住 + restoreRun 墓碑门 + buildServer stop_run 注册 — @a: anc-mcp-stop-run
+  - mcp-server.ts `stopRun`（墓碑落盘+收口分道）+ applyResult/startRun catch/resumeRun catch/resumeRun `.then` rejected 回调四口钉住（第四口 2026-10-11 语义审计 0156 B5 登记：迟到的拒收见 aborted 只 close tool provider 不改写终态）+ restoreRun 墓碑门 + buildServer stop_run 注册 — @a: anc-mcp-stop-run
+    - mcp-server.test.ts "正/反（竞态防线·第四口）：resume 被拒收迟到时 run 已 aborted → 不改写终态且 tool provider 被 close;未 aborted 则回 paused+failure 且不 close"（0156 B5;变异:分支改回裸 return→红 expected +0 to be 1） — @v: anc-mcp-stop-run
     - mcp-server.test.ts stop_run 8 例（正:running→aborted 且 list_runs 可见+终态幂等/paused 停当场收工具通道;反:未知 run RUN_NOT_FOUND/running 停不当场收〔收口归钉住回调〕/aborted 同进程 resume 拒 INVALID_STATE/跨重启墓碑门 RUN_ABORTED 拒复活;竞态:applyResult 迟到结果不改写+resume 异常迟到不改写〔catch 旁路〕）+ 五工具注册面契约（stop_run 注解逐项 destructiveHint/idempotentHint）— @v: anc-mcp-stop-run
     - dispatcher.test.ts 级联正反例（正:cascade 打在 call 子层执行中→子步间中止后续步骤不执行〔activeCallChildren 生效〕;反:单点 requestAbort 只停父层子层跑完全部步骤〔cascade 与单点语义分界，parallel 杀活语义如旧〕）— @v: anc-mcp-stop-run
+  - mcp-server.ts `stopFromSnapshot`（第 6 条快照兜底,hopissues/0117,2026-10-04：注册表未命中按 state_dir/run_id 快照走九步——无快照 RUN_NOT_FOUND/已有墓碑幂等/终态幂等不写墓碑/别的存活进程持有 RUN_OWNED_ELSEWHERE/非 mcp 通道 DRIVER_CHANNEL_MISMATCH/写墓碑失败 STOP_WRITE_FAILED/删问题卡/回 restored_from_snapshot）+ `pidAlive` + stop_run 注册加可选 state_dir — @a: anc-mcp-stop-run
+    - mcp-server.test.ts "stop_run 快照兜底"8 例（正:paused 快照新 core 停→墓碑落卡删、run_status 报 aborted、resume_run 拒 RUN_ABORTED、再停幂等/最后写入者已退出照常中止;反:无快照 RUN_NOT_FOUND 含 state_dir 提示/终态幂等不写墓碑/别的存活进程 RUN_OWNED_ELSEWHERE/cli 通道 DRIVER_CHANNEL_MISMATCH/只读目录 STOP_WRITE_FAILED;工具面 state_dir 可选且透传）;变异一拍（活进程判定砍除 1 红） — @v: anc-mcp-stop-run
 
 ### anc-config-hop-env ✅（2026-08-14，spec 环境参数命名空间全链）
 
@@ -4440,6 +5038,7 @@ spec 消费的非密环境参数统一 `hop_env_*` 命名空间，与系统 env 
 - [[docs/concepts/HopSpec V3核心规范#^anc-config-hop-env]] ← 概念权威
 - [[docs/design/shared-providers#^anc-config-standalone-schema]] env 字段 + HostConfig.hop_env 字段
   - mcp-server.ts StandaloneConfig.env + parseConfigFile env 文法闸（前缀必须/凭证形态拒/值须字符串）+ mergeConfigs env 逐键 + startRun/restoreRun 覆盖链合成（restore 以快照恢复表覆盖配置）— @a: anc-config-hop-env
+  - config-load.ts HopConfig.env + parseConfigFile env 文法闸 + mergeConfigs env 逐键（2026-10-08 todo/0131 自 mcp-server 搬入;~ 归一按传入 homeDir） — @a: anc-config-hop-env
   - runtime-types.ts StateFile.host_context.hop_env — 随 state 持久化（复用模式 next/done 独立进程,doc-ref 展开/L2e/ask 回填须同表;该落点的 @a: 原尾粘分号对审计隐形,2026-09-07 两批 review 修尾粘后现形补卡） — @a: anc-config-hop-env
     - mcp-server.test.ts "hop_env 配置" 正反例（合法加载/缺前缀拒/凭证形态拒×4/非字符串拒/两级合并逐键）+ "startRun 覆盖链"（params 摘出）— @v: anc-config-hop-env
   - provider-types.ts HostConfig.hop_env — @a: anc-config-hop-env
@@ -4486,6 +5085,8 @@ dr13 实撞：子 run 大 fragment 输出经 deflateValues 成 {$file} 指针，
 - [[docs/design/shared-types#^anc-exec-deflate]] 进程内 call 边界条款（deflate 面向 agent 受众;进程内确定性消费方恒真值,双层修复） + [[docs/design/act-body]] deref 递归下钻条款
   - dispatcher.ts inflateFilePointers（settleCallOutcome 消费前递归解引用,同步读本地盘） — @a: anc-exec-deflate
     - dispatcher.test.ts 子实例大输出（>4096 deflate 指针）跨 call 边界回填父空间为真值 — @v: anc-exec-deflate
+  - prompt.ts formatHumanContext 人通道（HUMAN_PREVIEW_THRESHOLD 5000,{$file, preview} 复合,workZone 空串跳过） — @a: anc-exec-deflate
+    - prompt.test.ts "formatHumanContext 人通道 deflate" 4 例（正:超阈落盘+preview 形态+其他键原样 / 正:结构值按 JSON 长度判 / 反:恰等阈不落盘恰超一字落盘 / 反:workZone 空串原样返回——2026-10-08 todo/0129 B9,此前五个测试文件零命中） — @v: anc-exec-deflate
   - act-body-interpreter.ts derefFilePointer 递归下钻（数组元素/对象字段位;形状契约不变,{$file,preview} 双键豁免） — @a: anc-exec-inputs-deflate
     - act-body-interpreter.test.ts 数组元素位/字段位指针解出真值正例 + 既有形状契约/缺盘反例组 — @v: anc-exec-inputs-deflate
 
@@ -4660,6 +5261,9 @@ language 特性实现总锚（序列化按配置出目标语言/读回/生成面
   - 2026-09-11 0086 续账①修:i18n.md:60 language-config 锚原写"】^anc-…"形态（锚前无空格且非扫描器认的三形态之一）,扫描漏收设计环断——重排为粗体闭合形"** ^anc-…："（scan.py 实跑验证收录）
   - parser.ts 反向映射程序化反转（invertAliases 单一事实源零手抄）+ serializeSpec/serializeFragment/serializeSteps lang 参数（zh 出中文关键词,容器递归透传——漏传子层恒英文,测试实抓修）+ convertSpecKeywords 行级手术（围栏跳过/括号组表达式不动唯 else 整组/词元级） — @a: anc-i18n-serialize-lang, anc-i18n-language-config
   - cli.ts readProjectLanguage + HostConfig.language + hop_env_language 打底注入（复用模式组合根）+ lang 子命令(首名 i18n-convert 作者抓太复杂改短)（备份加序号/validate 前后对照不引病拒写回）;mcp-server.ts StandaloneConfig.language + startRun 同注入（standalone 组合根） — @a: anc-i18n-serialize-lang, anc-i18n-language-config
+  - config-load.ts HopConfig.language + 文法核 + mergeConfigs 项目级赢（2026-10-08 todo/0131 自 mcp-server 搬入;cli buildHostConfig 改经 applyReuseConfig 装 language 与 hop_env_language,readProjectLanguage 退役） — @a: anc-i18n-serialize-lang
+  - config-load.ts `detectSystemLanguage(env)` + `effectiveLanguage(configured)`（2026-10-11 todo/0160 作者定"缺省跟随系统语言,中文就 zh 否则 en"：LC_ALL → LC_MESSAGES → LANG 取首个非空,三空用 Intl resolvedOptions().locale 兜底,zh 前缀不分大小写判中文;键是合法值用键值否则探测——五个落点 applyReuseConfig〔cli 与 reuse-driver 两组合根经它〕/ mcp-server startRun / mcp-server restoreRun 全调它,此前各自写死 `=== 'zh' ? 'zh' : 'en'`;复用模式坏值随之按缺席处理,原"读坏回 en"撤） — @a: anc-i18n-language-config
+    - config-load.test.ts "language 缺省跟随系统语言（detectSystemLanguage / effectiveLanguage）" 组五条（正:LANG=zh_CN 缺键→zh、LANG=en_US→en / 优先序 LC_ALL 压 LANG、LC_MESSAGES 压 LANG、zh-Hans·ZH_cn·C·POSIX·ja_JP 判法 / 三空 Intl 兜底 zh-CN→zh、en-US→en;反:显式 en 加 LANG=zh_CN 仍 en、显式 zh 加 LANG=en_US 仍 zh / 坏值 fr 加 LANG=zh_CN→zh 且 effectiveLanguage(undefined|42)→zh;变异:探测函数恒返 en→四例红 `expected 'en' to be 'zh'`）+ 既有空配置反例把环境钉成英文 — @v: anc-i18n-language-config
   - tools.ts DefaultToolProvider 持 language,read_spec_tree node/skeleton 档按项目语言出词（树编辑工具走行级手术片段原样进出,不吃语言——吃语言的是读回面） — @a: anc-i18n-serialize-lang
   - hopbuild2 两处：spec.md 拼头 body zh 分支（中文段头）+ split-structure 骨架成文'关键词语言'教学段 + split-patterns 语法速查中文对照
     - parser.test.ts lang 组 6 钉（zh 序列化全形态+parse 回英文 AST/en 缺省逐字节零变化/convert 双向可逆/变量名·散文·body 不腐蚀/裸围栏内不转换〔首钉写引用形围栏不走跳过逻辑,变异全绿实锤钉错保护面改钉重放红〕/case 表达式组不动） — @v: anc-i18n-serialize-lang, anc-i18n-language-config
@@ -4730,8 +5334,8 @@ v1 多文件契约在 hopbuild2 引擎强制链上的执行面：D83 多文件�
 渐进展开工装（D91）——mixed 产物二轮进构建器：主 spec 一判一分支分流（作者拍"hopspec 层做分支不留散文层"）+独立 expand spec 承载二轮实体+B0 首轮降档留范围标记。骨架保真不变量=差异行必须全落被展开原子替换范围。probe 挂起随浅拆批（作者拍排程 A,决策页 20260915-hopbuild2有界浅拆重定形.md——a40963cd 旧逻辑产物不对题,等新逻辑首轮产物）。
 
 - [[hopbuild2#^anc-build-expand]] ← 设计权威（语义三条款/分流条款/B0 契约/expand 六步 HopSop/三风险,v0.14.0）
-  - skills/hopbuild2/hopbuild2-expand.md 九步（1.1/1.2 成套核/5.1.1 切片备料/5.1.3 组装/6.2 骨架保真核/6.4 转账/7 升档账/8.1 终审备料/8.3 意见闸/8.4 交付 commit 各 body 内 # @a: anc-build-expand） — @a: anc-build-expand（spec 载体,0067 试点形态）
-  - skills/hopbuild2/spec.md 1.4 输入分型+1.5.2.1 首轮放行（body 内标注两处；D103 起步号由 1.3/1.4.2.1 顺延）+ split-node.md 步骤 10 台账行号段（body 内标注一处） — @a: anc-build-expand（同上）
+  - skills/hopbuild2/hopbuild2-expand.md 九步（1.1/1.2 成套核/5.1.1 切片备料/5.1.3 组装/6.2 骨架保真核/6.4 转账/7 升档账/8.1 终审备料/8.3 意见闸/8.4 交付 commit 各 body 内 # @a: anc-build-expand ） — @a: anc-build-expand （spec 载体,0067 试点形态）
+  - skills/hopbuild2/spec.md 1.4 输入分型+1.5.2.1 首轮放行（body 内标注两处；D103 起步号由 1.3/1.4.2.1 顺延）+ split-node.md 步骤 10 台账行号段（body 内标注一处） — @a: anc-build-expand （同上）
   - 测试面：spec 载体的行为测试归真机档（test:live 族）——C→T 环对 spec 载体的定义是 0067 机制设计面三问之一,本卡如实记空,不虚列 @v
   - 2026-09-16 D93 修复批追注（probe 七八跑实撞+review 面一面二合卷,^anc-build-shallow-fix 卡详账）：档位判行级化（"档位: mixed" in head 两处——子串判把 hop 档误进二轮）/tier 计未入选原子（部分展开谎报 hop）/replaced.md 底册双类行口径归一+骨架核补新增行反向差集（去数字归一判重刷形态）/6.3 质检拆备料步（判官判料经←喂值——第七跑三轮烧尽实撞）/5.1.1 切片逐行加行号前缀+L? 兜底段响亮拒（第八跑 5.1.4 lack_of_info 实撞）/8.2 意见回路自述如实化（subtask 8 retry 到不了步骤 6,意见指路 hopfix/重起）
 
@@ -4740,8 +5344,8 @@ v1 多文件契约在 hopbuild2 引擎强制链上的执行面：D83 多文件�
 有界浅拆定形（D92 五点:迭代≤2/停拆判据升格/叶子恒三件套/commit 必带 body 探索首轮不带/定向下钻扩任意步）+D93 实装勘误（迭代闸回写通道——原三处 check body 死写零生效,review 面一实锤后闸真身迁 case 条件位,通电实证三态:iteration=2 放行/=3 压落叶/hit=false 照旧）。
 
 - [[hopbuild2#^anc-build-shallow-split]] ← 设计权威（决策记述+五条契约+mixed 改述+落点清单,v0.15.0;D93 勘误 ^anc-build-shallow-fix v0.16.0）
-  - skills/hopbuild2/split-node.md 三处结构判 case 条件位迭代闸（2.1/4.1/6.1 `case(X_hit and iteration <= 2)`）+三处 check body gated 豁免判+步骤 7 叶子分型+步骤 8 三档三件套模板+步骤 9 台账行（body 内 # @a: anc-build-shallow-split） — @a: anc-build-shallow-split（spec 载体,0067 试点形态）
-  - skills/hopbuild2/split-structure.md 3.2 sub_iteration 递增+3.3.1 递归透传+3.3.2.1.1 档③三件套+3.3.2.2 兜底台账行号段（body 内标注） — @a: anc-build-shallow-split（同上）
+  - skills/hopbuild2/split-node.md 三处结构判 case 条件位迭代闸（2.1/4.1/6.1 `case(X_hit and iteration <= 2)`）+三处 check body gated 豁免判+步骤 7 叶子分型+步骤 8 三档三件套模板+步骤 9 台账行（body 内 # @a: anc-build-shallow-split ） — @a: anc-build-shallow-split （spec 载体,0067 试点形态）
+  - skills/hopbuild2/split-structure.md 3.2 sub_iteration 递增+3.3.1 递归透传+3.3.2.1.1 档③三件套+3.3.2.2 兜底台账行号段（body 内标注） — @a: anc-build-shallow-split （同上）
   - 测试面：同 anc-build-expand 卡口径——spec 载体行为测试归真机档,probe 第八跑全链通(交付三件核+6.4 一次过)为现行为证,不虚列 @v;迭代闸通电实证(evalExprSync 三态)记 D93 批 commit
 
 ### anc-build-teaching-sync ✅（落点=scripts 守卫脚本——.mjs 不入 code_ref 采集面,散文形态同 anc-guard-hb2-carrier 先例;验证=准入负向验证实录（见卡内）;2026-09-16 D93 防线一立——作者抓"知识供给缺口一直在打地鼠,完全没有吸取教训"+点名"重要的知识,示例也非常重要"）
@@ -4815,7 +5419,7 @@ skill repo 全量 12 件滚动验证收官后，把攒下的五条构建器缺�
 修法：
 
 - 设计 D76③ 改写为点名两个使用点的约束（split-structure 步 1.3 语法关与步 3.2 切片,同一套分段规则）,hopbuild2 升 v0.22.8。
-- 测试块改挂 @v: anc-build-main-flow（D76 条目在 ^anc-build-main-flow 节下）,抽公共函数按小节标题取盘上 1.3、3.2 的 body 经解释器执行,不在测试里另抄 body;补 1.3 半边正反例一对。
+- 测试块改挂 @v: anc-build-main-flow （D76 条目在 ^anc-build-main-flow 节下）,抽公共函数按小节标题取盘上 1.3、3.2 的 body 经解释器执行,不在测试里另抄 body;补 1.3 半边正反例一对。
 
 - [[docs/design/hopbuild2#^anc-build-main-flow]] ← D76③ 条目（范围标记分段口径——两个使用点,一套规则）
   - skills/hopbuild2/split-structure.md 步 1.3 语法关与步 3.2 切片 body — 引擎强制链载体（本批次未改 spec,只补设计与测试）
@@ -4837,6 +5441,7 @@ hopbuild2 翻译拆步时,原文"条件 A 取 X、否则用 Y"的兜底落值只
   - prompt.ts assembleContext revision_short 置位（short 档×reason 打回轮;constraints 单独抽出）+ renderRevisionShortParts 短卷渲染（全入易变面零稳定段） — @a: anc-exec-revision-short-weak
   - engine.ts revisionPromptMode 字段+set/get 访问器（会话级不入 StateFile——档案消费链落地前的轻量开关位） — @a: anc-exec-revision-short-weak
   - mcp-server.ts StandaloneConfig.revision_prompt 字段+mergeConfigs 项目级赢+文法核 fail-fast+startRun 装配（env > 配置 > 缺省）+restoreRun 同装（2026-09-18 review 抓漏装补——恢复档位跟随盘上配置现值） — @a: anc-exec-revision-short-weak
+  - config-load.ts HopConfig.revision_prompt 字段 + mergeConfigs 项目级赢 + 文法核（2026-10-08 todo/0131 自 mcp-server 搬入;装配仍在 mcp-server） — @a: anc-exec-revision-short-weak
   - runtime-types.ts AssembledContext.revision_short/constraints_text 两字段（2026-09-18 review 抓卡漏列落点补） — @a: anc-exec-revision-short-weak
     - prompt.test.ts revision_short 四钉（短卷六件在场教学框架全撤/schema 行内反馈保真/工具清单保真+不置位标准卷零变化/stableSections 空契约） — @v: anc-exec-revision-short-weak
     - mcp-server.test.ts revision_prompt 文法核正反例（short 合法/坏值响亮拒） — @v: anc-exec-revision-short-weak
@@ -4866,6 +5471,15 @@ act/reason 工具循环共用的形态闸：连续 3 次同名同参（参数 JS
 
 ### anc-build-pass-model 追注（D94 档位语义勘误,2026-09-16——本锚原无独立卡,追注行置于 anc-build-teaching-sync 与 anc-build-multifile-fidelity 两卡之间;此行为账面指路）：终态两档"standalone 严格面料不齐失败"过时口径勘误——与概念层 free 档（核心规范:116 独立模式由引擎带工具面的 LLM 循环执行）、step-dispatcher ^anc-exec-act-free-role 实装矛盾,经产物头括注模板复制成最大声错误教学源（作者三问实锤）。改写=按工具面依赖说话;产物头模板/SKILL/split-node/split-structure/examples 全链同步;存量 12 份产物头 hopfix 定向修。设计权威=hopbuild2.md 终态两档 D94 勘误版（v0.17.0）
 
+### anc-build-fidelity-dynamic ✅（2026-10-07 hopissues 0123/0124/0125——翻译保真三条,落点=知识文档条款,无引擎强制面）
+
+翻译在三种隐蔽降级上无条款约束、复阅只核"步骤有没有译出来"：①运行时问询/延伸规则的触发前提被收紧（"下一个"绑到翻译自造的执行清单、默认值条款升格为通用豁免——壳宣称续接、条款锁死,用户只能引擎外手术）;②原文隐含"保留已有内容"的写入被译成整文件 write（宿主 Edit 天然承担的约束底座换引擎后无人接管,timer frontmatter 被抹）;③把阶段内嵌的事后操作拆成顶层步骤却不接"本轮执行范围"信号（stage=all 时各步靠执行 LLM 猜）。三条陈述体规则各带原因与正反例;与 D99 同一上位原则"设计意图不许静默降级"。产物侧归报告方自修,本方 fixed=准则落地。
+
+- [[hopbuild2#^anc-build-fidelity-dynamic]] ← 契约权威（D105 三条 + 与 D99 / ^anc-build-multifile-fidelity 分工 + 落点清单）
+  - [[hopbuild#^anc-build-multifile-fidelity]] 开头一句指回本条（v1 与 v2 同受约束）
+  - skills/hopbuild2/split-patterns.md 「交互闸门与其它定型细则」末两条（条①触发前提 / 条③范围信号）+「body 里调工具」"共享索引禁裸 write"段之后（条②保留已有内容,同一规则两个现场并排） — 知识文档条款载体,验证=真机翻译实测（与 D104 同款挂账:hopbuild-selftest 候选 fixture 待 live:deep 批）
+  - 不加 validate 规则（三条都要对着原文核,validate 没有原文）;deep-validate 教材本批不动
+
 ### anc-build-multifile-fidelity ✅（落点=NL skill 散文纪律载体〔hopbuild SKILL.md,v1 无引擎强制面〕+cli 资产面代码锚挂 anc-cli-pack 既有卡名下;2026-09-04 作者定"先完善/hopbuild"——hopissues/0069 首发语料 sandbox-platform-deploy-630 双形态产物互补失真实锤后立;大原则=渐进完善三条:不一次拆太细/忠于原有技能不简化不失真/探索-核验-提交坚守）
 
 多文件 skill（轮毂+辐条形态:本体只做路由,细节住 references/scripts）的翻译与交付自包含契约：翻译面=引用文件二分（流程性——门禁句/闸门句必须读进来翻成显式 check/confirm,细节仍留文件按需读;参考性——不翻,登记路径）;交付面=产物零悬空指针（步骤正文引用的包内路径交付目录里必须真有,合理关增设指针闭合核）。实锤双病:v1 产物 14 处"读 references/x"全悬空（依赖没随交付）,v2 产物 P-0~P-4 五阶段收成一条 act free 逐阶段门禁蒸发（构建只读 skill_path 一个文件,workflows.md 门禁原话从未进视野）。
@@ -4892,14 +5506,16 @@ standalone reason 步工具面——与无 body act 能力对等：executeReason
 
 - [[docs/concepts/HopSpec V3核心规范#^anc-step-tool-grant]] ← 概念权威（尾句改定:reason 入消费面/check 维持——待回同步 vault,2d296f5e 批注明）
 - [[docs/design/step-dispatcher#^anc-exec-reason-tools]] ← 设计权威（契约节:能力契约+HopSop+正反例;prompt-assembler L0 恒定化条款同批——L0 去类型裁剪归 anc-exec-l0-worldview-impl 既有卡语境）
-  - ast-types.ts ReasonStep 收 tool_grants — @a: anc-exec-reason-tools
-  - parser.ts checkAttrGate 放开 reason+授权行收编（check 带授权行照拒） — @a: anc-exec-reason-tools
-  - dispatcher.ts executeReason 复用工具循环体（协议分道/requires_commit list 期过滤/探测位不变,六处标注） — @a: anc-exec-reason-tools
+  - ast-types.ts ReasonStep 收 tool_grants;CheckStep 同收 tool_grants / tool_denies（2026-10-11 todo/0161,作者定"check 工具可能要读文件,这个应该留个口子"——无 body 的 check 与 reason 同一套声明制） — @a: anc-exec-reason-tools
+  - parser.ts checkAttrGate 宿主集合 act / reason / check（0054 act → 2026-09-01 reason → 2026-10-11 check,todo/0161;confirm / ask / commit / 容器步照拒）+ check 分支材料化 tool_grants / tool_denies — @a: anc-exec-reason-tools
+  - dispatcher.ts executeReason 复用工具循环体（协议分道/requires_commit list 期过滤/探测位不变,六处标注）;2026-10-11 todo/0161：无 body 的 check 分派进 executeReason（有声明走工具循环,零声明单发纯判定——既有行为不变）,模型类别按步骤类型解析 check 档不借 reason 档,角色档 check 走判官档,下发面过滤谓词 isDeclaredOnlyStep = reason ∨ check — @a: anc-exec-reason-tools
   - prompt.ts buildToolManifest 真身档第三 filter（requires_commit 恒不列——6cb7c7b8 批修:复用模式 L4 清单与下发面同源承诺的清单侧兑现,2026-09-06 review 抓卡行未回填致 check:audit 反向核红后补） — @a: anc-exec-reason-tools
     - prompt.test.ts manifest 过滤反例钉（授权 requires_commit 件也不列真身档+不误伤其余件——6cb7c7b8 批补,同上回填） — @v: anc-exec-reason-tools
-    - dispatcher.test.ts reason 工具面组四钉（special 声明下发/未声明仅 basic/requires_commit 恒缺席/check 零 tools;变异:撤过滤红） — @v: anc-exec-reason-tools
+  - prompt.ts buildToolManifest reason 步 basic 不恒列（2026-09-18 修订下发面改了清单漏改,reason 声明子集仍列全部 basic——2026-10-08 todo/0129 B8 补,清单与下发面同源）;2026-10-11 todo/0161 过滤谓词与 L4 清单组装条件同扩 check（无 body 的 check 声明了工具才组清单,basic 按声明列） — @a: anc-exec-reason-tools
+    - prompt.test.ts "反例（reason）：reason 步只声明 special 子集 → 清单只列声明件,basic 的 read 不出现;act 步同声明 basic 仍恒列（对照）" — @v: anc-exec-reason-tools
+    - dispatcher.test.ts reason 工具面组六钉（special 声明下发/零声明单发/requires_commit 恒缺席/**钉④正例（0161）：check 声明 read → 走工具循环,请求 tools 只含 read,模型调 read 读到 work_zone 文件后给出判定**/**钉⑤反例（0161）：check 零声明 → 单发零工具（请求无 tools 字段,既有行为不变——零声明的判官物理无可着魔按钮）**/**钉⑥反例（0161）：check 声明 requires_commit=true 的工具（danger_send,即使 * 全量授权）→ 下发面里没有它——check 只读不写**;变异:check 分派改回恒单发→钉④⑥红,撤 list 期 requires_commit 过滤→钉③⑥红 `to not include 'danger_send'`;原钉④"check 零 tools 扩员不及 check"随修订撤） — @v: anc-exec-reason-tools
     - probe-reason-tools.test.ts 端到端连通钉（mock 两轮 tool_use→text,循环走通+work_zone 写域+按声明键解出——4.1 探针转正） — @v: anc-exec-reason-tools
-    - parser.test.ts reason 授权行收编正例（旧反例"reason 无工具面"随概念层改定翻正） — @v: anc-exec-reason-tools
+    - parser.test.ts reason 授权行收编正例（旧反例"reason 无工具面"随概念层改定翻正）;"正/反（0161）：check 步带授权行 → 收进 CheckStep.tool_grants 零 error;confirm 步带授权行 → parse error 指路仅 act/reason/check" 与禁用行同款一条（原"check 带授权行 → 拒"两反例随修订翻正,拒收面挪 confirm;变异:宿主集合去 check→红） — @v: anc-exec-reason-tools
   - prompt.ts L4 清单组装条件扩 reason（供给面补账,2026-09-01 作者抓"教学缺口就该补——留着过年?"——原批只接下发面没接供给面:standalone reason 有工具可用却零清单零 tool_failure 教条,"清单与下发面同源"对 reason 落空;仅 standalone〔getToolDefs 有注册面才组〕,复用模式 reason 不渲染指引档;渲染内容与无 body act 全同构。prompt-assembler v0.18.0 供给面第 5 面） — @a: anc-exec-tool-manifest-supply
     - prompt.test.ts reason 同供 2 钉（standalone 含清单+tool_failure 教条+自救半句/复用模式不渲染;变异:组装条件撤 reason 半边红） — @v: anc-exec-tool-manifest-supply
 
@@ -4973,7 +5589,7 @@ Tools 段声明-授权行消费对账,warn（D94 批 2026-09-16,作者拍"valida
 
 - [[spec-parser#^anc-rule-v14]] ← 设计权威（v0.38.0）
   - validator.ts toolDeclConsumptionV14（validateSpec 主体挂点,片段跳过） — @a: anc-rule-v14
-    - validator.test.ts V14 五钉（声明零消费 warn 点名带指路/声明+授权零 warn/声明+body 直调零 warn/通配全消费/无 Tools 段静默） — @v: anc-rule-v14;重放:挂点禁用→反例钉红复原绿
+    - validator.test.ts V14 五钉（声明零消费 warn 点名带指路/声明+授权零 warn/声明+body 直调零 warn/通配全消费/无 Tools 段静默） — @v: anc-rule-v14, 重放:挂点禁用→反例钉红复原绿
 
 ---
 
@@ -5063,4 +5679,257 @@ check-spec-syntax.mjs 的 hopbuild2 专项断言段——守卫对象是 skills/
 - [[docs/design/concept-anchor-rules#^anc-meta-anchor-head]] ← 契约权威（判据+两类隐形形态+块注释禁令）
 - [[docs/design/chain-enforcement]] §1 登记行（代码/测试层,check-anchor-format 第三职责）
   - scripts/check-anchor-format.mjs 第三职责（ts 扫描,HEAD_OK_RE 行注释判+BLOCK_FORM_RE 块注释判+SKIP_DIRS 含 .claude〔并行会话 worktree 非审计对象〕） — @a: anc-meta-anchor-head
+  - scripts/check-anchor-format.mjs 尾粘检扩 TRACEABILITY.md 卡片行末的归属声明段（2026-10-08 todo/0133 挂账③——卡片行尾粘让 scan 归属静默回退为卡 id,审计照绿;首跑真咬存量 62 行〔三类形态：锚后紧跟全角括号 / 两锚间用 `;` `/` 当分隔 / 句号紧贴〕,本批全部修正;2026-10-08 发版前八项修复批工程链 review 修复：多锚声明逐个检——此前正则只看 @a: 后第一个锚,`anc-x, anc-y（注）` 第二个尾粘漏网〔面二 G13〕,.ts 注释段与 TRACEABILITY 段两处同改） — @a: anc-meta-anchor-head
+  - scripts/audit/scan.py parse_anchor_ids 加 bad 回传参 + 卡片解析把解析失败的归属段记 bad_owner_decls → invalid_refs 一条点名,不再回退为卡 id — @a: anc-meta-card-ref-owner
+    - guard-scripts.test.ts "check-anchor-format TRACEABILITY 归属声明尾粘判据回归"（正:行尾/半角逗号 exit 0 / 反:尾粘全角括号 exit 1 点名 / 反 G13:多锚第二个尾粘同抓,.ts 多锚同款）——2026-10-08 发版前八项修复批工程链 review 修复 补常驻用例 — @v: anc-meta-anchor-head
+    - 负向验证 2026-10-08（准入③）：把 anc-meta-ci-baseline 卡的 check-anchor-baseline 行的归属声明改成锚名紧贴全角括号（去掉锚后的空格）→ check-anchor-format exit 1 点名 `卡片行归属声明锚 anc-meta-ci-baseline 尾粘字符 '（'` ✅;同时 run-audit 的 invalid_refs 出现 `归属声明解析失败：'anc-meta-ci-baseline（比对逻辑…' 不是合法锚 id` ✅（修前两处都静默）;复原后两者绿 ✅
     - 负向验证=变异（第三职责撤→粘连样本放行,恢复真拦）+亲植探针（阅卷人 src/_p.ts 粘连形态红并点名;面三 .claude/probe.ts 探针验 SKIP_DIRS 边界）——守卫无 vitest 惯例（与前两职责同待遇）,凭证在 0501ecec 与本批 commit message
+
+### anc-mcp-reuse-driver-tools ✅（2026-10-07 todo/0146——/hop 与 /hopspec 复用模式驱动改走 hopjit MCP 工具:原每推进一步敲一条 `hopjit` Bash 命令,参数每次不同,载体几乎每条弹窗）
+
+复用模式驱动工具七件：`run` / `submit_and_fetch_next` / `reap_and_fetch_next` / `status` / `resume` / `abort` / `validate`。与 CLI 同名子命令走同一引擎调用序、返回同一份响应；参数是结构化字段，没有 shell、管道与引号转义；工具本身不调 LLM、不读独立模式配置，配置缺失时照常可用。通道认领与 CLI 相同（`cli` 通道），同一个 run 可在工具与命令行之间切换。环境变量值由组合根读一次经 ReuseDriverContext 传入 reuse-driver（进程状态守卫只许三个入口读 process.env）。本版 MCP 驱动只记通知渠道不发送（v1 边界）。
+
+- [[docs/design/mcp-server#^anc-mcp-reuse-driver-tools]] ← 设计权威（七件参数表、提交形态互斥、工作区解析、与 start_run 的分工）
+  - mcp-server.ts 七件工具注册与 handler 上下文构造（workspace_dir 校验、env 值组合根读取） — @a: anc-mcp-reuse-driver-tools
+  - reuse-driver.ts 七件的引擎调用序（driverRun/Submit/Reap/Status/Resume/Abort/Validate,与 CLI 同名子命令逐行同序;工作区取参数、出错抛 Error、结果返回不写 stdout） — @a: anc-mcp-reuse-driver-tools
+  - reuse-driver.ts 逐函数锚点:七个 driver* 函数、resolveInstance、driverErrorOf 各带一处;mcp-server.ts driverCall 同锚（todo/0146 review D45,锚点粒度到函数） — @a: anc-mcp-reuse-driver-tools
+    - mcp-server.test.ts 复用驱动工具组（正:config 缺失时 run→submit→status 全程可用、validate 只读且不建状态目录、status 报 execution_status 与 instance_id、abort 后 status 为 aborted;反:互斥提交形态/work_zone 外 @路径/非法 status/不存在的工作区返回结构化错误且 isError、abort 不存在的实例 INSTANCE_NOT_FOUND） — @v: anc-mcp-reuse-driver-tools
+    - mcp-server.test.ts "反例：run 工具 spec 不存在 / log_level 非法 / max_runs 非正整数 / notify 渠道不支持 → 结构化错误,不建状态目录"（todo/0146 review G3N-4） — @v: anc-mcp-reuse-driver-tools
+    - mcp-server.test.ts "复用驱动七种提交形态经 MCP 工具面（todo/0163;todo/0168 撤 branch 后七种）" 组（原十一条,todo/0168 把 branch 预选正例改为反例并加两条——child_instance / failure_child / failure / replan / tool_result 各一条正例,branch 一条反例 INVALID_ARG 拒收,经工具 handler 走到引擎并断言状态推进;两形态同给 → INVALID_STATE 且引擎状态不动;reap_and_fetch_next 真收割 worker 子实例的值;run 两反例 INIT_FAILED 与 HOP_ENV_CREDENTIAL_REJECTED;resume 用新 core 复位悬空 running 步。变异:driverSubmit 六个形态分支逐个改 throw 对应正例各红） — @v: anc-mcp-reuse-driver-tools
+    - mcp-server.test.ts "驱动工具起跑的 run 认领 cli 通道:state.json 记 driver_channel=cli,同一实例可改用 hopjit 命令行推进"（todo/0146 review D38,变异 M9 变红） — @v: anc-exec-driver-channel
+
+### anc-mcp-commit-approve ✅（2026-10-07 todo/0146——驱动工具全放行后不可逆动作需要一道人看得见的闸,放在每句 commit 第一次执行前）
+
+`approve_commit(instance_id, step_id, fingerprint, scope, state_dir?, workspace_dir?, child_instance?)`：按人的选择记批准——scope=once 记本次运行里这一步的当前 body（for-each 后续轮、续跑不再停,下一次运行重新问）,scope=task 记这一步的当前 body 以后都通过（跨运行有效,body 一改就重新分析）。指纹只覆盖 body,输入值与引用文件不进指纹。停点只在安全分析发现需要人确认的动作时出现（2026-10-08 起）：driver 先用大白话把分析结论（每个动作的后果、建议）讲给用户,代码在用户要求时才贴,用三个选项问用户（只批准这一次 / 这一步以后都通过 / 不批准），用户选前两项才调本工具；独立模式 parallel 子实例的 commit 卡带 child_instance，在子实例引擎上批（批准账按子实例的 spec 路径与步骤号记）；本工具和其他 hopjit 工具一样由 setup 放行，载体弹窗不承担批准职责。独立模式下 instance_id 即 run_id，批准后经 `resume_run(run_id, step_id, answer={})` 续跑；`resume_run` 遇未批准的 commit 停点同步拒（COMMIT_NOT_APPROVED），run 保持 paused。
+
+- [[docs/design/mcp-server#^anc-mcp-commit-approve]] ← 设计权威
+  - mcp-server.ts approveCommit 方法（注册表内独立模式 run 用内存引擎,否则从快照 load,不认领通道）与工具注册 — @a: anc-mcp-commit-approve
+  - provider-types.ts APPROVE_COMMIT_TOOL 常量（在放行清单里） — @a: anc-mcp-commit-approve
+  - engine.ts commitNotApprovedMessage（COMMIT_NOT_APPROVED 报文函数,dispatcher.resume 与 resume_run 预检两个产生点共用;todo/0146 review D12） — @a: anc-mcp-commit-approve
+    - mcp-server.test.ts commit 组（停在批准点→递交产出被拒→错哈希被拒→approve_commit→resume 执行、同 spec 再跑不停;resume_run 遇未批准停点 COMMIT_NOT_APPROVED;放行清单与全部注册工具相等） — @v: anc-mcp-commit-approve
+    - mcp-server.test.ts tools/list 组（经内存 transport 拉 tools/list,全部工具含 approve_commit 都不带 `_meta["anthropic/requiresUserInteraction"]`——人批准不靠载体强制弹窗） — @v: anc-mcp-commit-approve
+    - mcp-server.test.ts "独立模式 commit 批准（真 dispatcher）"（todo/0146 review D7/D12:停在批准点 → 未批准 resume_run 与 dispatcher.resume 两个产生点都拒且报文带 instance_id 与"在对话里问" → approve_commit 走注册表内存引擎 → resume_run 执行 body → 同 spec 再跑不停;变异 M12、M13 变红） — @v: anc-mcp-commit-approve, anc-exec-commit-approval
+    - mcp-server.test.ts "反例：approve_commit / approve_dirs 显式传了不存在的工作区 → WORKSPACE_NOT_FOUND"（todo/0146 review D29） — @v: anc-mcp-commit-approve, anc-mcp-dirs-approve
+    - mcp-server.test.ts "反例：approve_commit 的 scope 不是 once/task → INVALID_ARG,不记账,run 仍停在批准点"（2026-10-08 安全分析批次） — @v: anc-mcp-commit-approve
+    - mcp-server.test.ts tools/list 组追加断言（2026-10-09 安全分析批次 review D8:approve_commit 的 fingerprint 参数说明含"body 的指纹",不提输入值与引用文件） — @v: anc-mcp-commit-approve
+    - mcp-server.test.ts 0126 子实例 commit 卡用例（2026-10-08:不带 child_instance 批到父实例 → COMMIT_NOT_APPROVED;带 paused_queue 那张卡的 child_instance → ok;不存在的 child_instance → INSTANCE_NOT_FOUND） — @v: anc-mcp-commit-approve
+    - engine.test.ts 2026-10-10 "COMMIT_NOT_APPROVED 报文:带 child_instance 时参数多一项且续跑提示带同一个 child_instance;不带时两段都没有" 1 例（review 第五次 6.2 阅卷打回后:Z-eng134-ternT / ternF、Z-eng135-ternT / ternF 四条文案三元变异红） — @v: anc-mcp-commit-approve
+
+（已撤回,见下段）2026-10-07 补：approve_commit 在 tools/list 带 `_meta["anthropic/requiresUserInteraction"] = true`。真机探针里用户在它的弹窗上点了"以后不再询问",Claude Code 把它写进项目放行清单,commit 批准闸被一次点击撤掉;带此标记后 Claude Code 每次都弹窗、不给永久放行选项、放行规则跳不过（v2.1.214 起;Codex/opencode 不认此键）。
+
+2026-10-07 撤回上条：作者纠正"需要审批的时候在对话里问"——Claude Code 弹窗频繁,用户习惯性点过或点永久放行,弹窗不是可靠的闸,也看不到 body 原文。改为 driver 贴 body 后用载体提问工具问用户,同意后才调 approve_commit;approve_commit 并入放行清单,强制确认标记撤掉。
+
+### anc-mcp-server-status ✅（2026-10-07 todo/0146 MCP 健康"乙"案——原配置问题 fail-fast 阻止启动,复用驱动工具跟着不可用）
+
+配置问题不阻止 server 启动，记为能力状态：config 为 null 表示独立模式不可用，configError 记原因与修法（配置文件缺失/providers 为空/文法非法/凭证环境变量未设四类）。`start_run` 与独立模式 `resume_run` 返回 STANDALONE_UNAVAILABLE 并带 reason/fix；复用驱动工具不受影响。`server_status` 只读工具报版本、独立模式能力状态与注册工具清单，/hop 分派节用它判 server 是否起来。
+
+- [[docs/design/mcp-server#^anc-mcp-server-status]] ← 设计权威
+  - mcp-server.ts 能力状态字段、standaloneUnavailable 闸、serverStatus、startRun/resumeRun 两处闸点、classifyConfigError 纯函数、server_status 工具注册 — @a: anc-mcp-server-status
+    - mcp-server.test.ts 能力状态组（classifyConfigError 四类各给修法;config 为 null 时 server_status 如实报不可用、start_run 与独立模式 resume_run 返回 STANDALONE_UNAVAILABLE;config 合法报可用无 reason） — @v: anc-mcp-server-status
+    - mcp-server.test.ts "serve 启动——配置问题不阻止启动（子进程）" 组（配置缺失/key 环境变量未设/明文 key 三种都照常启动,横幅说明独立模式不可用并带报文与修法、不回显明文 key;配置合法报可用;stdin 关闭 exit 0。todo/0146 review D46 补登,G3-8 删 serve catch 变异下变红） — @v: anc-mcp-server-status
+    - mcp-server.test.ts "server 重启后的 commit 停点快照"（todo/0146 review D37:config 缺失的 core 得 STANDALONE_UNAVAILABLE 且快照不动;变异 M6c、M17 变红） — @v: anc-mcp-run-restore, anc-exec-commit-approval
+    - mcp-server.test.ts 2026-10-10 "buildServer 的版本号:server 自报 version 取 package.json 的版本号" 1 例（review 第五次 6.2 阅卷打回后:Z-mcp1303-ncL 红） — @v: anc-mcp-server-status
+
+### anc-mcp-admin-tools ✅（2026-10-10 todo/0154——hop 自己的管理命令没有 MCP 工具面,`/hop 封成 HopAnt` / `/hop 体检` 落到载体 Bash 弹窗与文件沙盒;作者抓"hopjit 都不应该拿出来讨论",拍 a 案补工具不加 Bash 放行）
+
+README 第四例"查天气 → 提纯 → 封成 HopAnt"三句话里,前两句全程 hopjit MCP 工具零弹窗,第三句落到 `hopjit --json ant pack` 走载体 Bash,接着 `ant install` 写 `~/.hopjit/ants/` 撞 Claude Code 文件沙盒,agent 只能关沙盒重跑。三层原因：run_approved_command 对 hopjit 恒拒（对驱动命令是对的,顺带挡了管理命令）、管理命令没有自己的 MCP 工具、hop-skill §0"不为此添加 Bash 放行规则"一刀切。修法：mcp-server 新增管理八件 `doctor` / `ant_list` / `ant_install` / `ant_adapt` / `ant_remove` / `ant_bootstrap` / `ant_pack` / `ant_share`,与 CLI 同名参数、同一份响应;业务体从 cli.ts 搬进 hop-cli 模块的出口文件 `hop-admin.ts`（随搬载体探测与归属标识助手）,机器侧事实经 `AdminContext` 由两个组合根各读一次传入,hop-admin 不读进程状态;`ant_install` / `ant_share` 写 `~/.hopjit/` 由 server 进程做,不受载体 Bash 文件沙盒约束。八件进 HOPJIT_ALLOWED_TOOLS;`setup` 不进（它改的是载体配置与放行,server 本身就是它装出来的）;OPENCODE_DISABLED_TOOLS 不动（管理面两模式共用）。
+
+- [[docs/design/mcp-server#^anc-mcp-admin-tools]] ← 设计权威（八件与 CLI 对应表、setup 不进的理由、为什么是 MCP 工具不是 Bash 放行、HopType HopAdmin 八成员、HopSchema AdminContext 六字段、adminContext / adminCall 两 HopSop、放行与 opencode 门、driver 接线、测试面）
+  - [[docs/design/hop-cli#^anc-cli-doctor]] / [[docs/design/hop-cli#^anc-cli-ant]] 各补「实现落点」段（业务体住 hop-admin.ts,HopSop 里的进程读改读 ctx）;[[docs/design/hop-cli#^anc-struct-hop-cli-exports]] 出口文件加 hop-admin.ts 与四行符号;[[docs/design/hop-cli#^anc-cli-install-skill-permission]] 放行清单含管理八件;[[docs/design/hop-cli#^anc-cli-opencode-tools-gate]] 求差口径补管理八件;[[docs/design/shared-providers]] 出口表 HOPJIT_ALLOWED_TOOLS 行同步
+  - hop-admin.ts 文件头 + `AdminContext` + `antList` / `antInstall` / `antAdapt` / `antRemove` / `antBootstrap` / `antPack` / `antShare` 七函数（runDoctor 与载体探测助手沿用原 ^anc-cli-doctor / ^anc-cli-carrier-home-resolution 等锚,随搬不改锚） — @a: anc-mcp-admin-tools
+  - mcp-server.ts `adminContext` / `adminCall` 两助手 + 八个 registerTool（注解：doctor / ant_list readOnly;ant_remove destructive;ant_bootstrap openWorld） — @a: anc-mcp-admin-tools
+  - 2026-10-10 todo/0155 两级根：`ant_install` 加 `scope`（user | project）、`ant_remove` 加可选 `scope`、`ant_list` 加 `workspace_dir`（项目级根按它找）;adminContext 装 roots: antRoots(homedir(), cwd) — @a: anc-mcp-admin-tools
+  - cli.ts import / re-export 段（tests 既有导入面经 `export { … } from './hop-admin.js'` 转发）+ `adminContext()` 组合根工厂;doctor / ant 子命令改薄壳 `antShell`（成功 output、业务 Error 走 errorExit、adapt 缺口与 bootstrap 非零置退出码 1） — @a: anc-mcp-admin-tools, anc-cli-doctor, anc-cli-ant
+  - provider-types.ts HOPJIT_ALLOWED_TOOLS 加八件 — @a: anc-mcp-admin-tools, anc-cli-install-skill-permission
+  - scripts/check-layer-imports.mjs LAYER 表登记 hop-admin（层 2）;scripts/check-driver-carriers.mjs 三载体 parity token 加 ant_pack / ant_share / ant_list / ant_adapt / ant_install — 守卫面
+    - mcp-server.test.ts "buildServer 工具面" 注册名单扩八件;"放行清单 = 注册的全部工具" 两集合瓜分断言 reuseNeeded 并入管理八件;server_status 例补 doctor / ant_list readOnly、ant_remove destructive、ant_bootstrap openWorld 注解 — @v: anc-mcp-admin-tools
+    - mcp-server.test.ts "管理工具面（doctor / ant_*）" 组 4 例（假 HOME：ant_pack → ant_install（dry_run 不写 / 相对路径按 workspace_dir）→ ant_adapt 写戳 → ant_list adapted → ant_bootstrap 无脚本 → ant_remove 一条链;ant_share 首机 owner_prompt_required 不写包 → 带 owner 写包并回写 config.yaml owner_id;反例撞 id HOPANT_ID_CONFLICT / 不存在 id HOPANT_NOT_FOUND / spec 不存在 PACK_ERROR / 不存在工作区 WORKSPACE_NOT_FOUND / 目标已存在 HOPANT_TARGET_EXISTS 皆 isError 且码取报文前缀;doctor 返回 DoctorReport 八问 id 齐、零载体前六问 fail carrier none、exit_code 1） — @v: anc-mcp-admin-tools
+    - cli.test.ts EXPECTED_ALLOW 写死名单扩八件（常量漏项照红）;既有 doctor / setup / 载体探测用例改经 `adminCtx()` 组上下文后直调,断言不改——证明搬家后行为同 — @v: anc-mcp-admin-tools, anc-cli-install-skill-permission
+    - 2026-10-10 0154+0155 工程链 review 修复批补测试：mcp-server.test.ts 管理工具面组新例 "正例：scope:project 全链——同 id 用户级与项目级并存不冲突;ant_list 两条 project 在前;ant_adapt 命中 project;ant_remove 指定 scope:user 删用户级留项目级,不传 scope 删项目级"（缺口 G2 mcp 半边 / G5 / G6 / G10——此前 scope 参数经 mcp-server→hop-admin→hopant 的整条透传链零测试;重放变异 M9a〔ant_install 的 scope 固定 'user'〕/ M9b〔ant_remove 丢 scope〕/ M17〔antAdapt 只查用户级〕/ M2〔planInstall 跨级撞 id 也拒〕四处各使本例红,恢复绿）;hopant.test.ts 两级根组新例 "正：hop-admin.antInstall 不传 scope → 缺省装进 roots.user,项目级不长出目录,响应 scope 为 user"（缺口 G1 缺省值;重放变异 M7 缺省改 'project'→红,恢复绿）;cli.test.ts adminCtx 助手补 roots（缺陷 D11）;管理工具面链例 ant_list 显式传 workspace_dir（缺陷 D13——此前靠 server cwd 碰巧等于测试工作区） — @v: anc-mcp-admin-tools
+  - driver 三载体 hop-skill §0 "不为此添加 Bash/命令 放行规则" 句扩写管理动作走 MCP 工具;HopAnt 段 `ant list` / `ant adapt` 改调 `ant_list` / `ant_adapt`;§6 封装 / 分享段改调 `ant_pack` / `ant_install` / `ant_adapt` / `ant_share`（命令行等价留括号里作回退;排障分支仍先跑命令行 doctor——那一支正是工具不可达的情形）;USAGE 对应表体检行与 HopAnt 行"对应 MCP 工具"列由"无"改为工具名 — 协议面
+
+### anc-cli-install-skill-handshake ✅（2026-10-07 todo/0146 MCP 健康"乙"案——注册写进配置不等于载体拉得起 server:command 不在 PATH、包内 server 文件缺失都会让工具静默不可见）
+
+setup 注册（或已有注册）之后拉起一次 hopjit-mcp，走 initialize → tools/list → server_status，结果以 `mcp_handshake = {ok, tools?, standalone_available?, reason?, fix?}` 随输出返回。只报告不修改注册（载体配置归用户），失败不阻断 setup；postinstall 跳过握手。
+
+- [[docs/design/hop-cli#^anc-cli-install-skill-handshake]] ← 设计权威（setup 第 4 项）
+  - cli.ts mcpHandshake 函数与 setup 调用点、输出字段 — @a: anc-cli-install-skill-handshake
+  - hop-admin.ts `McpHandshake` / `HANDSHAKE_SCRIPT` / `mcpHandshake(execPath, serverJs, command, pathEnv)`（2026-10-10 todo/0154 从 cli.ts 搬出,node 路径改参数传入;cli.ts setup 调用点传 process.execPath） — @a: anc-cli-install-skill-handshake
+    - cli.test.ts mcpHandshake 组（正:server 起得来且 command 在 PATH 上→ok 带工具清单与独立模式状态;反:command 不在 PATH→ok=false 修法给绝对路径注册形态;包内 server 文件缺失→ok=false 报路径）与项目级注册后带 mcp_handshake 的断言 — @v: anc-cli-install-skill-handshake
+
+### anc-cli-approve-commit ✅（2026-10-07 todo/0146——CI、脚本与 MCP 不可用时的命令行回退需要批准入口,否则 commit 停点卡死）
+
+`hopjit approve_commit <step-id> --fingerprint <fp> --scope once|task [--instance id]`（2026-10-08 起两个选项都必填）：加载走 load 不认领通道，两种通道的 run 都可批；只记账不推进，批准后 resume 续跑。
+
+- [[docs/design/hop-cli#^anc-cli-approve-commit]] ← 设计权威
+  - cli.ts approve_commit 子命令 — @a: anc-cli-approve-commit
+    - cli.test.ts approve_commit 子命令组（正:run→check final→commit 停点→approve_commit→resume 执行;反:错指纹与非 commit 步骤被拒,缺 --scope 是参数错误、退出码非 0、不记账） — @v: anc-cli-approve-commit
+  - 2026-10-09 追注（commit 安全分析批次 review D35）:①命令行 hopjit 不注册安全分析函数,需要模型判的动作（不留旧版本的覆盖与删除）按模板后果转人工;②scope=once 只管本次运行,下一次 run 同一步再停;③cli.test.ts 六个用例的 commit body 改成 keep:0 写入——缺省 keep 的写入被引擎判安全直接执行,不再停,测批准流程必须用需要人确认的动作
+
+### anc-cli-commit-approve-response ✅（2026-10-07 todo/0146 review 修复批次——approve_commit 返回值此前只有代码里的 TS 类型,设计层补 HopSchema 时立锚）
+
+approve_commit 的返回分 ok 与 error 两支:ok 带 step_id、fingerprint、scope,重复批准带 already_approved,账启用时带 store_path;error 带 code（COMMIT_NOT_APPROVED / INVALID_STATE,MCP 入口另有 INVALID_ARG）与 message。CLI 子命令与 MCP 工具同一形态。
+
+2026-10-09 追注（commit 安全分析批次 review D35）:already_approved 的含义随批准账改变——账里已有同 spec、同步骤、同指纹的 task 记录,或 scope=once 时已有本次运行的 once 记录,才返回 already_approved:true;once 记录只算本次运行,上一次运行的 once 不算已批准。
+
+- [[docs/design/hop-cli#^anc-cli-commit-approve-response]] ← 设计权威
+  - engine.ts CommitApproveResponse 类型 — @a: anc-cli-commit-approve-response
+    - cli.test.ts approve_commit 子命令组（ok 支 status=ok;error 支错哈希得 COMMIT_NOT_APPROVED、非 commit 步骤得 INVALID_STATE,两支都是退出码 0 的 JSON） — @v: anc-cli-commit-approve-response
+
+### anc-exec-commit-approval ✅（2026-10-07 todo/0146 作者定"spec 里的每一句 commit,只需要确认一次,不用反复确认"）
+
+2026-10-08 改为安全分析（作者定"这里应该主要出自于安全性判断，而不是正确性判断";"可逆或低危工作打上安全标记直接放行,以后也不用问;无垃圾箱的删除、直接覆盖、外部不明副作用的调用报出来让人审批,不用上来就贴代码"）：执行带 body 的 commit 前经 commitGate 查账。引擎先用 extractCommitActions 把 body 里每个有副作用的调用列成动作清单并按分类表定风险（safe / review / human）;全部 safe 直接执行,不调模型（engine_safe）。task 记录与 model_safe 记录按 spec 路径 + 指纹匹配,once 记录还要同 step_id、同 run_id（只管本次运行）;都没有且这句 body 没分析过才调组合根注册的分析函数一次——模型判全部安全记 model_safe（scope task,以后不再问）,其余（含无模型、分析出错、模型判 human）记 referred 并落 paused 卡,referred 之后同指纹不再分析。指纹只覆盖 body 原文的 sha256（输入值与引用文件不进指纹,for-each 各轮与子实例共用一次批准）。停点卡 context 带 step_id / fingerprint / analysis / body,instruction 要求先用大白话讲 analysis、不先贴代码,三选项 once（只批准这一次）/ task（这一步以后都通过）/ deny。模型不能把引擎判的 human 降下来（mergeAnalysis）。commit_audit 的 authorized_by 记 engine_safe / model_safe / human / task_always / policy。v0.54 的自动研判记录与 body_hash 旧记录不再匹配。账文件缺席或损坏按空表处理（宁可多问一次，不能静默放行）。driver 用 submit 递交带 body 的 commit 产出被拒（COMMIT_BODY_ENGINE_ONLY）。账位置由组合根注册解析函数（未注册=闸关闭，commit 照旧直接执行）。2026-10-09 commit 安全分析 review 缺陷 D41（作者定"body应该是被整体审批""这个任务之前批过放行的话，连前面的引擎扫描都不应该执行""引擎扫描过没危险的，也应该以后放行"）：批准的单位是整个 commit 步骤;checkCommitApproval 改为先查账后扫描——账上有这一步当前指纹的 task_always / model_safe / engine_safe 记录或本次运行的 once 记录就直接放行（from_ledger=true,actions 为空,不调 extractCommitActions）;账上没有才扫描;引擎判全部 safe 时 commitGate 记一条 engine_safe 记录（scope task,run_id 与 analysis 为 null）,以后同一步查账放行。checkCommitApproval 只读,记账只在 commitGate;这条记录由 appendCommitRecord 原子写盘,实例状态没有变化,不另调 persist（run18 变异 D41-engsafe-persist 去掉 persist 后测试全绿,核实后删除）。confirm/ask 与 P8 前置不变。
+
+- [[docs/design/exec-engine#^anc-exec-commit-approval]] ← 设计权威（同批 step-dispatcher executeCommit 闸点、shared-errors 两错误码）
+  - engine.ts commitApprovalStoreResolver 函数类型第三参 workspace_dir（2026-10-10 todo/0155 两级根——两处调用传 hostConfig.workspace_dir,组合根闭包据此算项目级 HopAnt 根,spec 在项目级 HopAnt 下账落它的 inner_store/;review G13 追注搬回自卡） — @a: anc-exec-commit-approval
+  - engine.ts 批准账读写、checkCommitApproval/approveCommit、暂停载荷与卡、独立模式回置、submit 拒收、复用模式闸点 — @a: anc-exec-commit-approval
+  - 2026-10-07 追注：Config.dirs 清单批准（anc-exec-dirs-grant）复用本节的注册位、读写规则与停点形态,账分文件 dirs_approvals.json
+  - 2026-10-09 追注（commit 安全分析批次 review D1a/D2）:①所有批准记录（task / model_safe / once）都按 spec 路径 + 步骤号 + 指纹匹配——上文"task 与 model_safe 按 spec 路径 + 指纹匹配"少了步骤号,与概念层记账键不一致,已改;②作者 2026-10-09 定"核心是研判的时候，应该判断这个过程，不应该是实例化的参数"——安全分析材料只含 body 的写法与参数来源,不含本步输入的实际值,所以指纹只覆盖 body 成立:换一个输入值复用旧分析不会绕过判断
+    - engine.test.ts "commit 批准：安全分析与人的批准"组 2026-10-09 补例:两次运行换输入值（target 从 old.bak 换成 important.txt）第二次照样复用、分析材料与停点里都没有输入值;步骤 2 选 task 后 body 相同的步骤 3 仍停 — @v: anc-exec-commit-approval
+  - dispatcher.ts executeCommit 批准闸与 resume 的 commit 分支 — @a: anc-exec-commit-approval
+  - errors.ts COMMIT_NOT_APPROVED / COMMIT_BODY_ENGINE_ONLY — @a: anc-exec-commit-approval
+  - mcp-server.ts 账位置解析注册、resume_run 恢复分支与同步核对 — @a: anc-exec-commit-approval
+  - cli.ts 账位置解析注册（cli 组合根,与 mcp-server 同调 commitApprovalStorePath;todo/0146 review D44 补锚） — @a: anc-exec-commit-approval
+    - engine.test.ts commit 批准组（正:首次停→批准→续跑执行、重跑与续跑不再停;for-each 第 2 轮不再停;反:body 改了要重新批准;边界:未注册账位置时闸关闭） — @v: anc-exec-commit-approval
+    - engine.test.ts todo/0146 review 补的六条:"停点响应带 workspace_dir"（D8）/"账键取解析软链后的路径"（D26）/"两份 spec 共用一个账文件……批了 A 不放行 B"（D35,变异 M14 变红）/"同 spec 两句 body 相同的 commit,批第一句后第二句仍停"（G3N-1）/"账损坏按空表"（D36,变异 M2 变红）/"停点写 paused.json,批准续跑后删除"（D43/G3-2/G3-1,变异 M-G3-2' 变红） — @v: anc-exec-commit-approval
+    - mcp-server.test.ts "独立模式 commit 批准（真 dispatcher）"与"server 重启后的 commit 停点快照"（todo/0146 review D7、D37——独立模式下批准闸经真 dispatcher 停、拒、批、放行,重启后未批准停点不当崩溃悬空步重跑） — @v: anc-exec-commit-approval
+    - engine.test.ts "commit 批准：安全分析与人的批准"组（2026-10-08 重写:正:首次停带模板分析与三选项记 referred、once 只管本次运行、下次再停不重新分析、task 之后放行;反:body 改了指纹变要重新批准、旧指纹批新 body 被拒;for-each 指纹不含输入值一次 once 放行全部轮次;只做计算或只追加的 body 引擎判安全直接执行并记 engine_safe（review 缺陷 D41,checkCommitApproval 只读不写账）;先查账后扫描（review 缺陷 D41 正:引擎判过安全的步骤再跑不扫描不重复记账、人选 task 的步骤再跑不扫描;反:body 改了查账不命中重新扫描并停、once 换一次运行不命中照常扫描）;once 升级 task 追加记录;账损坏按空表含 v0.54 研判记录、缺 run_id 的 once 记录、body_hash 旧记录;templateAnalysis / mergeAnalysis human 不降;commit_audit engine_safe / human / task_always / policy） — @v: anc-exec-commit-approval
+    - dispatcher.test.ts "commit_audit authorized_by 取批准来源"（无副作用 → engine_safe;keep:0 写入经模型判安全 → model_safe;外部命令人批 once → human,下次运行再停;人批 task 后再跑 → task_always） — @v: anc-exec-commit-approval
+    - dispatcher.test.ts "子实例 commit 拒收报文改写"（未批准带 child_instance resume → 报文含父实例 id、child_instance 与指纹,卡仍在队列;照报文批后放行。去掉父层改写的变异下变红）与 0126 正例（for-each × parallel 三子实例各停 commit 卡,批准后三项全部续跑;指纹只覆盖 body,三个子实例共用一次批准） — @v: anc-exec-commit-approval
+    - engine.test.ts "账损坏按空表"用例 2026-10-09 review 收尾扩写:账里留两条不合法的 once 记录（一条缺 run_id、一条 step_id 不是字符串）时 approveCommit 重写的账只剩停点前记的 referred 与这次的批准——变异"读账不再过滤不合法的 once 记录"红 — @v: anc-exec-commit-approval
+    - engine.test.ts "buildCommitAnalysisRequest 分析材料:把关事实只列本步之前已完成的 check final 与 confirm（非 final 的 check、未完成的步骤不列,一个都没有时写明没有）;body 逐行带行号,if / else 两个分支按层缩进、else 单列一行"（2026-10-09 review 6.2 阅卷打回后补:把关事实四个分支与 body_lines 的 else 行、缩进、行号——变异"不跳过未完成的步骤""confirm 不计入""非 final 的 check 也计入""不在本步处截止""兜底文案改写""不出 else 行""else 行号取首条语句""缩进改两格""then 分支不加层"各红） — @v: anc-exec-commit-approval
+    - engine.test.ts 2026-10-10 逐分支补 3 例（review 第三次 6.2 阅卷打回后:"读账时丢弃取值不合法的记录:outcome / decided_by / scope / spec_path / fingerprint 各有一处不合法的记录,在下一次写账时都被丢掉";"mergeAnalysis 逐分支:返回值没有动作列表时全部补 human;同一行同名的两个动作各自对上一条模型结论;safe / human 以外的结论按 human;summary / recommendation / model 是字符串才采信,否则取空";"commitGate 逐分支:模型只把部分动作判 safe 时转人并记 referred;模型判全部安全后立即把分析事件写进实例快照"——run17 存活或作废的 R-* / MA-* / G-every / G-persist / G-catch 补测后 run18 全红;R-noexist / R-notarray / R-notobj / G-source-sub 四条等价变异登记在 todo/0152 五-1 至五-3、五-7） — @v: anc-exec-commit-approval
+    - engine.test.ts 2026-10-10 补 1 例（review 第四次 6.2 阅卷打回后:"关卡关闭与非 commit 步骤:账位置解析函数返回 null 时关卡关闭（gate_closed,不扫描、不写账）;commitGate 对非 commit 步骤返回 null 不经关卡"——run19b 存活的变异 CA-nostore（:1147 提前返回改恒假）与 G-nostate（commitGate !state 提前返回改恒假）补测后 run19c 红;同批 CA-null / CA-noresolver / G-approved-ret / G-analysis-ret / P-scope / P-notcommit / P-fpmismatch 七条由既有用例杀死） — @v: anc-exec-commit-approval
+    - engine.test.ts 2026-10-10 逐分支侧补 5 例（review 第五次 6.2 阅卷打回后机器枚举分支侧,run20 存活项补测:"账里夹着 null 元素:合法记录照样命中;outcome 不是 approved 的记录不放行;once 记录三条件缺一不可;多条 referred 取最后一条 analysis"（Z-eng155-or / Z-eng1152-and / Z-eng1153-and / Z-eng1159-ncR 红）、"commitGate 的分析事件:分析函数抛非 Error 值时建议写 String(值);model 缺席事件写 -;task 批过的步骤再跑不记 engine_safe 账"（Z-eng1187-ternF / Z-eng1191-ncL / ncR 红）、"approveCommit 的返回与账:带 store_path;幂等返回只对已批准且非 once→task 成立"（Z-eng1265-ternT / Z-eng1266 系列红）、"buildCommitAnalysisRequest 的 header 回落:背景章节原样带上、缺席为空数组"（Z-eng1237-ncL / ncR 红）;首次停点用例加断言 output_schema 取自本步 + → 声明（Z-eng1347-ncL 红）） — @v: anc-exec-commit-approval
+    - engine.test.ts 2026-10-10 第六次 6.2 阅卷后补 1 例「commitAuthorizedBy 逐取值:engine_safe / model_safe / human / task_always 原样记;gate_closed、analysis、undefined 都记 policy」（Z-eng141-or-modelsafe 只删 model_safe 项,run22 存活→run22b 红） — @v: anc-exec-commit-approval, anc-obs-audit
+
+### anc-exec-commit-analyzer ✅（2026-10-08 作者定"第一次执行一个spec，应该分析commit的安全性，并给出建议，然后让人来确认";"需要模型的，否则光一个轮转模式，都无法靠规则来识别"——取代同日早些时候的 anc-exec-commit-reviewer 正确性研判函数）
+
+commit 安全分析函数：组合根（mcp-server serve）在独立模式配置可用时按 resolveCommitAnalyzerProvider 取模型（routing_rules 里 step_type=commit 那条,没有就用 default_model,再没有取第一个 provider 的缺省模型）,makeCommitAnalyzer 构造协议客户端,经 ExecutionEngine.setCommitAnalyzer 注册;命令行 hopjit 不注册,需要模型判的动作按模板转人工。analyzeCommitWith 单次调用:prompt 含任务目标与背景章节、待提交步骤、本步之前通过的把关（一行事实）、带 spec 行号的 body、引擎动作清单,不给输入值全文与文件内容;输出只认 YAML（summary / actions 逐条 line·category·verdict·consequence / recommendation）,先经 repairYamlScalars 修冒号裸标量,解析不了抛"安全分析输出无法解析",verdict 非 safe 的一律按 human;调用抛错由 commitGate 接住改用模板分析转人工,不重试。
+
+- [[docs/design/step-dispatcher#^anc-exec-commit-analyzer]] ← 设计权威（同批 exec-engine ^anc-exec-commit-approval 分析方条款、mcp-server serve 第 3a 步与 resolveCommitAnalyzerProvider）
+  - dispatcher.ts CommitAnalyzerProvider / COMMIT_ANALYSIS_SYSTEM / makeCommitAnalyzer / analyzeCommitWith / renderCommitAnalysisPrompt — @a: anc-exec-commit-analyzer
+  - mcp-server.ts resolveCommitAnalyzerProvider 与 serve 注册点 — @a: anc-exec-commit-analyzer
+  - engine.ts CommitAnalyzer 类型与 setCommitAnalyzer 注册位 — @a: anc-exec-commit-analyzer
+    - dispatcher.test.ts "analyzeCommitWith（commit 安全分析函数）"组（正:裸 YAML 与围栏 YAML 都解析;后果说明含冒号经 repairYamlScalars 修复;非 safe 取值按 human;反:不可解析输出抛"安全分析输出无法解析";prompt 含目标、把关事实、带行号 body 与动作清单） — @v: anc-exec-commit-analyzer
+    - mcp-server.test.ts resolveCommitAnalyzerProvider 组（正:commit 路由优先、其次 default_model、再次第一个 provider 缺省模型;反:路由引用未知 service → STANDALONE_CONFIG_INVALID） — @v: anc-exec-commit-analyzer
+    - dispatcher.test.ts 同组 2026-10-10 逐分支补 3 例（review 第三次 6.2 阅卷打回后:"反例：输出是 YAML 的 null（解析成空值）→ 抛"安全分析输出无法解析",不是读空值字段的类型错误";"字段转换与缺省:actions 里的 null 与标量丢弃;行号与引用行的字符串转数字;callee / category / consequence / summary / recommendation 缺失记空串,cited_lines 缺失记空列表";"prompt 里非字符串的参数值按 JSON 渲染:列表与数字"——run17 存活的 D-* 变异补测后 run18 全红） — @v: anc-exec-commit-analyzer
+    - dispatcher.test.ts / mcp-server.test.ts 2026-10-10 逐分支侧补 4 例（review 第五次 6.2 阅卷打回后机器枚举分支侧,run20 存活项补测:"prompt 的回落文字:goal 空 / narratives 空 / irreversible_action 空各写回落句,有值原样"（Z-disp328-orR / Z-disp329-ternF / Z-disp330-orL / orR 红）、"响应里非 text 块不参与解析"（Z-disp292-predP 红）、"makeCommitAnalyzer 按协议构造客户端:openai-chat / openai-responses / anthropic × base_url 有无 × bearer 与 api-key 鉴权"（Z-disp268-ifT / ifE、Z-disp270-ifT / ifE、Z-disp269-ternT、Z-disp271-ternT、Z-disp274-ternT / ternF、Z-disp277-ternT、Z-disp266-ncL 红）、"resolveCommitAnalyzerProvider 字段回落:裸模型名取第一个 provider、按名找大小写不敏感、base_url 缺席 null、key 未设空串、auth bearer 原样"（Z-mcp64-ternT / ncL、Z-mcp70-ncR、Z-mcp71-ncR、Z-mcp72-ternT 红）） — @v: anc-exec-commit-analyzer
+
+### anc-exec-commit-action-facts ✅（2026-10-08 作者定"append、新建文件、移动文件、文件轮转等可逆或低危工作打上安全标记直接放行;无垃圾箱的删除、文件的直接覆盖、外部不明副作用的 api 调用报出来让人审批";"同意不猜测"）
+
+commit 动作清单提取：extractCommitActions 遍历 body（if 两个分支都列）,把每个有副作用的调用列成 CommitAction（line / callee / category / risk / args / keep）。分类表:safe = create_file / append / make_dir / overwrite_keep / move_keep / remove_keep / work_zone_write;review（交模型判）= overwrite_no_keep / move_no_keep / remove_permanent;human = run_command（subprocess.run）/ run_script / notify / external_tool。keep 缺省 3,字面量非负整数照取,其他写法按 null（不安全档）。参数值只取字面量、本步输入实际值与 work_zone_path / spec_dir 的拼接,其余记"运行前无法确定";内容类参数只报字数。只算返回值不写盘的纯函数件不进清单。templateAnalysis 按 risk 套模板后果;mergeAnalysis 以引擎清单为准对齐模型输出,模型漏掉的补 human,不许把 human 降下来。
+
+2026-10-09 修订（commit 安全分析批次 review D1a/D3/D5/D6/D9/D24）:参数不再取本步输入的实际值,改为按来源渲染——字面量给值,输入给名字形态"target(本步输入,运行时取值)",由输入算出的给"由本步输入 X 算出(运行时取值)",work_zone_path / spec_dir 套字面量渲染成"任务临时工作区里的 x"/"spec 所在目录下的 x"（rel 含 .. 记运行前无法确定）;if 两个分支赋值不同的变量在 if 之后记运行前无法确定。work_zone 按写法判:work_zone_path(...) 开头才算,move 要两端都在;目标在 work_zone 内不论 keep 都判 work_zone_write。keep 缺省取常量 DEFAULT_KEEP（ast-types.ts）。mergeAnalysis 只在引擎 risk=review、模型判 safe 且类别属于 rotation / data_op 时采信模型类别,类别不在其内按 human。
+
+- [[docs/design/exec-engine#^anc-exec-commit-action-facts]] ← 设计权威（分类表、参数取值规则;消费侧 tools/file-tools ^anc-exec-file-keep-recycle 的 keep 语义）
+  - engine.ts CommitAction 类型 / ArgForm / COMMIT_ARG_UNKNOWN / 纯函数件表 / classifyCommitCall / COMMIT_MODEL_CATEGORIES / 模板后果 / extractCommitActions — @a: anc-exec-commit-action-facts
+  - ast-types.ts DEFAULT_KEEP 常量（动作清单 keep 缺省值与工具实际行为同源,2026-10-09 review D5）— @a: anc-exec-commit-action-facts
+    - engine.test.ts "extractCommitActions:分类表逐类、参数摘要、不进清单的调用、if 两个分支都列、运行前定不了的值不猜"与"templateAnalysis / mergeAnalysis"两例（前一例 2026-10-09 第二次 6.2 阅卷打回后补一行 validate_spec 调用,守"纯工具不进清单"——变异"纯工具进清单"红） — @v: anc-exec-commit-action-facts
+    - engine.test.ts 2026-10-09 补例:"mergeAnalysis 的分类"（rotation / data_op 采信,其他类别判 safe 改 human,line 与 cited_lines 非数字的处置）、"按写法判 work_zone"（12 个动作:输入、拼接、move 两端、spec_dir、if 合并、f-string、三元式;断言分析材料里没有任何输入值）、B9_WRITE_TOOLS 对账（每个写类工具都进分类表,不落到 external_tool）;T23 补 else 分支、now() 参数、keep:1、run_script 与外部工具;review 收尾补"参数渲染的其余形态"（列表逐项渲染、超长字面量截断、列表推导迭代变量、if 两分支同值、字面量求值出错;工具结果出现在拼接、列表、其他表达式、work_zone_path 参数里都记运行前无法确定,工具结果覆盖同名输入后不回落到输入形态——为十处变异存活而补,补后重放全红）;"按写法判 work_zone"补无参 work_zone_path() 一例;6.2 阅卷打回后再补 spec_dir(target) 一例（spec 所在目录拼本步输入 → overwrite_no_keep / review,不算 work_zone——变异"用到输入就算 work_zone 内"原先存活,补后重放红） — @v: anc-exec-commit-action-facts
+    - engine.test.ts 2026-10-10 逐分支补 3 例（review 第三次 6.2 阅卷打回后:"extractCommitActions 逐分支:纯函数件不进清单;new_text 按内容摘要;推导的来源与过滤条件里的输入都算引用;只含字面量但求值为空记定不了;未赋值的变量记定不了;字面量拼接与字面量列表按值摘要;嵌套在其他调用里与写在 if 条件里的调用都列出";"extractCommitActions:body 里引用的变量既不是局部变量也不是本步输入时记运行前无法确定";"templateAnalysis 逐分支:缺参数写运行前无法确定;非字符串参数按 JSON 写;引用行取动作行号"——run17 存活或作废的 X-* / K-* / T-undef / T-json / TA-cited 补测后 run18 全红;X-specdir-rt / X-literal / X-thencopy 三条等价变异登记在 todo/0152 五-4 至五-6） — @v: anc-exec-commit-action-facts
+    - engine.test.ts 2026-10-10 逐分支侧补 4 例（review 第五次 6.2 阅卷打回后机器枚举分支侧,run20 存活项补测:"commitActionTemplate 逐类模板文字"（make_dir / overwrite_keep 带份数 / move_keep / remove_keep / work_zone_write 的 move 取 to / move_no_keep / run_script / notify / 清单外分类走外部工具模板——Z-eng208 至 Z-eng219 十一条 case/default/三元变异红）、"mergeAnalysis 逐守卫"（null 跳过、同行不同 callee 不对上、consequence 非字符串或空白用模板、cited_lines 空数组或字符串退回动作行号——Z-eng246 / 250 / 257 七条红）、"extractCommitActions 逐守卫"（keep=0 的 reason、now() 与 subprocess.run() 包在纯函数里记定不了、content 列表按 JSON 长度、超长截断、位置参数 argv / arg0、move 一端不在 work_zone、if 前后赋不同值定不了——Z-eng191 / 1005 / 1103 / 1107 / 1125 系列红）、"keep 字面量守卫:非数字字面量、非整数、负数、变量都记 null 归 no_keep（直接构造步骤节点）"（Z-eng1097-and / and2 红）） — @v: anc-exec-commit-action-facts
+    - engine.test.ts 2026-10-10 第六次 6.2 阅卷后补 1 例「extractCommitActions 位置参数不按 content 类摘要」（守 summarize 对位置参数走非 content 路径;对应侧 Z-eng1076-and-name 为等价变异,登记 todo/0152 五-16） — @v: anc-exec-commit-action-facts
+
+### anc-exec-file-keep-recycle ✅（2026-10-08 作者定"加一个原语，让这些写入或移动操作最容易的变成安全操作";"缺省keep=3";"目录名字不应该叫backup";"一个文件在一次hopspec任务执行中只轮换一次"）
+
+write / edit_file / move / remove 四件带可选参数 keep（缺省 DEFAULT_KEEP=3,住 ast-types.ts,引擎与工具两侧同源;0 = 不留存,非负整数以外拒"keep 须是非负整数"）。覆盖、替换移动目标或删除 work_zone 外的已有文件之前,先把旧版本复制进 `<状态目录>/recycle/<相对工作区的路径>.<YYYYMMDD-HHMMSS>[-n]`,同一秒重名时序号取现有最大值加 1;每个文件按（时间戳,序号数值）排序只保留最近 keep 份,刚复制的那份不删。同一文件在一次运行里只留存一次:顶层实例目录下的 recycle_ledger.json 记账（子实例共享,resume 与崩溃恢复后仍在）,本 run 新建的文件或已用 keep=0 改过的文件之后再改也不留存。work_zone 内的写入不留存。回执注明旧版本位置;复制失败则不覆盖、不删除。
+
+- [[docs/design/tools/file-tools#^anc-exec-file-keep-recycle]] ← 设计权威（tools v0.27.0;HopSop 留存步骤;2026-10-08 同日修订序号取最大值加 1 与数值排序）
+  - tools.ts RECYCLE_DIR_NAME / RECYCLE_LEDGER_FILE / KEEP_PARAM / keep 实参校验 / 四件工具的留存调用 / 接管账读写 / retainBeforeChange / setWorkZoneScope 回收站锚点 — @a: anc-exec-file-keep-recycle
+    - tools.test.ts "keep 参数与回收站" 7 例（正:覆盖留存一次接管账一条;keep=0 与之后的缺省 keep 都不留存;新建文件不留存;remove 缺省进回收站、keep=0 永久删、move 留存被替换目标;跨 run 五次覆盖 keep=3 只剩 v2/v3/v4;反:work_zone 内不留存;keep 非法拒且原文件不动） — @v: anc-exec-file-keep-recycle
+  - 2026-10-09 安全分析批次 review 修复批次（工程链 review D5/D10/D11/D17/D21/D29/D33 与缺口 G4/G7–G10/G12）：DEFAULT_KEEP 从 tools.ts 迁到 ast-types.ts（engine 停点模板"最多保留 N 份"与工具实际行为同源）;RECYCLE_DIR_NAME / RECYCLE_LEDGER_FILE / RecycleLedgerEntry 去掉 export（只在 tools.ts 用）;tools.ts:811 keep 实参校验补机器锚;设计侧契约改写成 HopType: DefaultToolProvider（留存部分）+ HopSchema: RecycleLedgerEntry,noteLedger 补 work_zone 跳过分支、读账补解析失败按空表、move 接线补"源文件存在"条件、execute 主流程补 keep 校验步骤;静态半边 keep 字面量非负整数校验进 validator B2 签名表（见卡 anc-rule-b2 同日追注）
+    - ast-types.ts DEFAULT_KEEP 常量;tools.ts execute 的 keep 实参校验 — @a: anc-exec-file-keep-recycle
+    - tools.test.ts "create 与 append 的接管账:create 新建记 created;append 让原本不存在的文件出现记 created;append 到已有文件不记——之后覆盖照常留存 run 前的内容"（2026-10-09 review 6.2 阅卷打回后补;变异"create 不入账""append 一律入账""append 从不入账"各红） — @v: anc-exec-file-keep-recycle
+    - tools.test.ts "目标是目录（不是普通文件）→ 不留存、回收站不建件;write 与 remove 按原语自身的报错失败,报文不是"旧版本留存失败""与"remove 带 keep=0 永久删除后,同一 run 里该路径被工具之外的手段重新建出（如外部命令）,再用缺省 keep 覆盖也不留存（run 前的内容已被本 run 删掉,接管账记 created）"（2026-10-09 review 第二次 6.2 阅卷打回后补:retainBeforeChange 的"不是普通文件返回空"与"keep=0 记 created"两行——变异"目录也留存""keep=0 不入账"各红） — @v: anc-exec-file-keep-recycle
+    - tools.test.ts 同组新增 9 例（已留存过的文件再用 keep=0 覆盖或 edit_file 后接管账改记 created——review 收尾补,变异 write 入账条件只留"!existed"、edit_file 入账条件改成永不成立各红;move 的源文件不存在时报 ENOENT、已有目标不动不留存不入账——review 收尾补,变异"不核源文件就留存目标"红;接管账文件损坏〔不是 JSON 或是数组〕按空账处理、覆盖照常留存并把账重写成合法对象——review 收尾补,变异 catch 改重抛 / 去掉数组判断各红;work_zone 内新建与 keep=0 写入不入账〔G7,M17 重放红〕/edit_file 改已有文件留存并入账〔G4,M13 重放红〕/父子两个提供者共用 tree 同一文件只留存一次〔G8〕/回收站位置被普通文件占住时写入与删除都不执行〔G9〕/没有实例目录时内存账同一文件只留存一次〔G10〕/move 把源文件接管账条目移交给目标〔G12〕;后四例变异重放各红,复原全绿）— @v: anc-exec-file-keep-recycle
+    - tools.test.ts "keep 参数与回收站"组 2026-10-10 逐分支补 4 例（review 第三次 6.2 阅卷打回后:"工具定义:write / edit_file / move / remove 的 keep 参数类型是 integer、下限 0";"回执:move 替换已有目标、remove 删除已有文件,回执都写明旧版本存到了哪里;move 带 keep=0 替换目标不留存";"轮转只删本文件的留存件:文件名里的点按字面匹配,名字只是以本文件名结尾的别的文件不受影响;刚留存的这份即使排序靠前也不删";"内存接管账:move 之后源路径的条目删除——源路径被重新建出后再覆盖,按 run 前已有的文件留存"——run17 存活的变异 W-keepparam / W-pass-move / W-note-move / W-note-delete / W-memdelete / W-root-tmp / W-escape / W-anchor / W-self 补测后 run18 全红;keep 缺省值、typeof 判断、读账与写账的四类等价变异登记在 todo/0152 第五节五-8 至五-15） — @v: anc-exec-file-keep-recycle
+    - tools.test.ts 2026-10-10 逐分支侧补 6 例（review 第五次 6.2 阅卷打回后机器枚举分支侧,run20 存活项补测:"同一秒内多份留存件:序号接着现有最大值加 1;后缀非数字不算"（Z-tool1103-and / and2 / Z-tool1106-ternT 红）、"轮转排序按（时间戳,序号数值）:-2 与 -10 按数值排;无序号当 1"（Z-tool1122-ternT 红）、"留存后清理旧件失败 → 写入照常完成,回执带清理失败"（Z-tool1126-catchC 红）、"接管账内容是 null 或数字按空账;move 源无条目目标不继承"（Z-tool1062-and2 / and3 红）、"setWorkZoneScope:own 空串写根为空;tree 缺席回收站锚回退"（Z-tool1204-ternF / Z-tool1206-orR 红）、"keep 缺省值是 3:不传 keep 连续五次 run 只留三份"（W-defkeep 红）;另 execute() 树工具派发 1 例见 anc-exec-builtin-edit-tree-tool） — @v: anc-exec-file-keep-recycle
+
+### anc-exec-dirs-grant ✅（2026-10-07 todo/0148 作者定"具体任务可以指定添加读写的目录,在 spec 配置上指定";写法逐条对齐——`## Config` 下 `dirs` 键、read / readwrite 两档（作者定"完整语义是 read / read-write"）、相对路径不支持、`~` 只表当前用户家目录、变量值须绝对路径、授权账落设计三处）
+
+spec 在 `Config.dirs` 声明任务级目录：`read` 只读、`readwrite` 读写（蕴含读,写只对 commit 开）;值为 `/` 开头绝对路径、`~` / `~/…` 家目录、`{Inputs 变量}` / `{hop_env_*}`（替换后须 `/` 开头;名字字符集与 parser 同源含中文,DIRS_VAR_REF_RE 住 ast-types）。**展开与授权只在顶层 run 做一次**（2026-10-07 工程链 review 补——首版子实例与恢复零字,代码按既有机制滚出三条【高】：worker 重展开 {var} 缺值 INIT_FAILED / 独立模式 callee 共享父 hostConfig 把目录推进父白名单且不经关卡 / server 重启恢复 setHostConfig 盖掉 write_access）：子实例经 EngineOptions.inheritedDirs 继承（复用模式经参数文件保留键 DECLARED_DIRS_PARAM 透传,独立模式 dispatcher 直传且 sandbox 深拷贝）,独立模式 callee 自带 dirs 忽略并 warn,恢复时从 declared_dirs 重建两白名单。独立模式授权面 start_run.dirs 作为 EngineOptions.dirsGrant 在 initExecution 内对账（realpath 两边,缺即 INIT_FAILED 不建实例,多即 warn 回显原路径）。status 对 dirs 停点按源⑥报 paused/dirs（卡 step_id 恒空串,无 paused_step_id）。起跑 resolveDeclaredDirs：展开 → `..` 判（在 normalize 之前——首测实抓之后判等于没判）→ statSync 非目录 INIT_FAILED → read∪readwrite 入 read_access.allowed、readwrite 入新字段 write_access.allowed → 同目录两档 readwrite 赢 warn → outside（workspace 外条目）与 dirs_hash（"<mode>:<path>" 排序 sha256,mode 变即哈希变）;declared_dirs 持久化进 state.json。授权闸在 advanceToCaller 首个步骤之前（read 授权 act 步就要用,比 commit 闸早）：有 outside 且未批 → paused / pause_reason dirs（context.dirs 只列 outside + dirs_hash）;approveDirs 按 spec 路径 + dirs_hash 记账 `dirs_approvals.json`（与 commit 账同 resolver 同目录分文件——粒度不同）;闸关条件同 commit 批准。独立模式无停点,start_run `dirs` 参数是唯一授权面（缺 INIT_FAILED 列缺的 / 多不授 / 对上记账）。四档边界表在 sandbox;hop_env "写配置即授权读"保留,只在读白名单合流。
+
+- [[../concepts/HopSpec V3语法参考]] §1 骨架与键表 `dirs` 句 / [[../concepts/HopSpec V3核心规范#^anc-config-hop-env]] 分工条 / [[../concepts/HopSpec V3核心规范#^anc-step-act-body-lang]] 工具组条款半句 ← 概念权威（作者 2.1 确认稿,已回同步 vault）
+  - [[exec-engine#^anc-exec-dirs-grant]] ← 设计权威（v0.53.0-draft：HopType 三成员 + HopSop 七步 + 闸点 / 独立模式对账 / 授权账 / 闸关 / 与 hop_env 与 spec 目录关系 + 三 HopSchema）;[[sandbox#^anc-config-sandbox-filesystem]] write_access 字段 + 四档边界表 + 写操作规则（v0.3.0）;[[tools/file-tools#^anc-exec-builtin-file-tools]] commit 写域 workspace ∪ write_access + resolvePath 第⑤形态（tools v0.25.0）;[[hopant#^anc-hopant-commit-store]] dirsApprovalStorePath（v0.3.3）;[[doc-ref#^anc-exec-doc-ref-hop-env]] 分工追注
+    - engine.ts resolveDeclaredDirs（出口函数）+ readDirsApprovals / dirsStoreFromCommitStore + DECLARED_DIRS_PARAM + initExecution（inheritedDirs 短路 / 独立模式 callee 忽略 warn / dirsGrant 对账 / 并入两白名单 / pendingDirsGrantApproval 记账）+ declaredDirs 字段与持久化 + checkDirsApproval / approveDirs（persist）/ buildDirsApprovalPause + advanceToCaller 首步前批准关卡 + detectPausedState 源⑥ + launch_command / init_command 保留键透传 + worker 回填剔除保留键 — @a: anc-exec-dirs-grant
+    - ast-types.ts DIRS_VAR_REF_RE / dispatcher.ts childHostConfig 深拷贝 + 三处子引擎 init 传 inheritedDirs / mcp-server.ts restoreRun 重建两白名单 + runStatus 兜底 dirs 卡同判 + startRun dirsGrant 恒传 / cli.ts extractInheritedDirs — @a: anc-exec-dirs-grant
+    - provider-types.ts FilesystemSandbox.write_access? / runtime-types.ts declared_dirs / errors.ts DIRS_NOT_APPROVED / cli-types.ts pause_reason 'dirs' — @a: anc-exec-dirs-grant
+    - tools.ts resolvePath strict 档第⑤形态 + validateFileAccess commit 写域 workspace ∪ write_access.allowed（报文列写域） — @a: anc-exec-dirs-grant
+    - hopant.ts dirsApprovalStorePath — @a: anc-exec-dirs-grant, anc-hopant-commit-store
+      - hopant.test.ts "dirsApprovalStorePath" 1 例（HopAnt 内 → inner_store / 项目 → state_dir;恒等于 dirname(commit 账)+dirs_approvals.json） — @v: anc-exec-dirs-grant, anc-hopant-commit-store
+      - engine.test.ts "Config.dirs 任务级目录声明与授权" 18 例（首批 8：正:三形态展开+两白名单+outside+hash / workspace 内不停 / 同目录 readwrite 赢 warn / 停点→哈希不符拒→批→已批→续跑且账文件 / 二次 run 不停·换目录再停·read↔readwrite 哈希变再停 / load 回填 / 内存态关卡关;反:六种 INIT_FAILED——缺值·相对值·不存在·相对字面·~user·含 ..;review 修复批 +10：worker 继承不重展开且保留键透传 / status 源⑥ / approveDirs persist 删卡 / 兄弟目录进 outside / 同清单不同 spec 不互认 / 引擎兜底形态拒四种 / context.dirs 只列 outside / resume 不重算 / {中文变量} / 独立模式 dirsGrant 缺拒·软链别名 realpath 对上·多传 warn 原路径） — @v: anc-exec-dirs-grant
+      - dispatcher.test.ts "独立模式子实例的 Config.dirs" 2 例（反:callee 自带 dirs 忽略并 warn 且父沙箱零污染;正:父 declared_dirs 经 inheritedDirs 传 callee 且 sandbox 深拷贝） — @v: anc-exec-dirs-grant
+      - dispatcher.test.ts "call parallel 六条传递线（launchParallelCallChild,todo/0165）" 正例③+反例③（正:父 readwrite 经 dirsGrant 批过 → 子 state.json declared_dirs 与父同份同 dirs_hash、子 commit 真写进该目录、全程无 dirs 停点;反:父无 dirs → 子无 declared_dirs、子写 workspace 外被沙箱拒、父按派发全灭 PARALLEL_ALL_FAILED、子事件流无 dirs_approval_pause——独立模式 dispatcher 走 nextStep 不经 advanceToCaller 的 dirs 闸,如实按此断;变异:不传 inheritedDirs 正例红） — @v: anc-exec-dirs-grant
+      - mcp-server.test.ts "Config.dirs 的 MCP 面" +2（server 重启恢复后 commit 真写 readwrite / run_status 兜底 dirs 卡未批 paused·已批陈卡） — @v: anc-exec-dirs-grant
+      - cli.test.ts "Config.dirs 批准停点的 CLI 入口" +2（status paused/dirs 无 paused_step_id / worker 经 launch_command 起跑直达且继承写白名单、保留键不泄成 Inputs） — @v: anc-exec-dirs-grant
+      - tools.test.ts "write_access.allowed 写域" 8 例（正:commit 写四件放行且读放行 / commit 语境 edit_file·move·remove 放行且 move 跨域〔readwrite↔read 目录,字面与经软链两形态〕源目标都过写侧校验拒〔review 修复批补,面二缺口13〕;反:act 写拒 WORK_ZONE_ONLY / read 目录 commit 写拒 / denied 仍拦 / 未声明照拒 / 兄弟前缀不算 / 经软链指向 read 目录拒） — @v: anc-exec-dirs-grant
+  - 变异重放（先 WIP commit 再重放,单文件 checkout 复原）25 处全红,逐测试覆盖账（阅卷一判要求"每条新测试有重放红记录",首稿只给总数）：
+    - engine 8 例：三形态展开 ← {var} 不展开（红×8）;workspace 内不停 ← workspace 内也算 outside;六种 INIT_FAILED ← 不核存在 / 相对路径静默补 / / ~user 不拒 / .. 判回 normalize 后;同目录 readwrite 赢 ← 同目录两档不处理;停点→批→续跑 ← 闸不停（红×2）/ readwrite 不入写白名单;二次 run 不停·换目录再停·read↔readwrite 再停 ← hash 不含 mode;load 回填 ← load 不回填;内存态闸关 ← 内存态闸不关
+    - tools 7 例：commit 写放行 ← resolvePath 第⑤形态删（红×2）/ commit 写域不认 write_access;act 写拒 ← （行为不变守卫,同 resolvePath 第⑤形态删联动）;read 目录 commit 写拒 ← commit 写域误用读白名单（经软链指向 read 目录的形态）;denied 仍拦 ← denied 不优先;未声明照拒 ← resolvePath 第⑤形态删;兄弟前缀不算 ← 写域兄弟前缀放过（经软链形态）
+    - validator 6 例：{var} 未声明 error ← V16 {var} 不查;相对三形态 error ← V16 相对不 error;.. error ← V16 .. 不 error;四种坏形态 warn ← V16 形态坏不 warn;四合法零警告 / 无 dirs 零 ← （阴性守卫,上述四变异均不使其红——它们钉的是"合法不误报",由 error 变异的反向保证）
+    - cli 5 例：run→paused→approve_dirs→resume ← 闸不停 / --approve-dirs 空转（红×2）;run --approve-dirs ← --approve-dirs 空转;init --approve-dirs ← 同;目录不存在 INIT_FAILED ← 不核存在;无 dirs 行为不变 ← 无 flag 也批
+    - mcp 3 例：run→paused→approve_dirs→resume ← 闸不停;run approve_dirs=true ← --approve-dirs 空转（reuse-driver 同 helper 语义）;start_run 缺拒·对上记账·多传 warn ← start_run 缺 dirs 不拒 / 多传不 warn
+    - hopant 1 例：dirsApprovalStorePath 与引擎换名恒等 ← （结构守卫,引擎 dirsStoreFromCommitStore 改名即红）
+  - 变异重放（review 修复批,17 处全红）：inheritedDirs 不短路 / launch_command 不透传 / status 源⑥删 / approveDirs 不 persist / inWs 去分隔符边界 / 账比对去 spec_path / 对账键不 realpath（首轮绿——tmpdir 本是 /tmp 形态别名等于原路径,改软链别名后红）/ dirsGrant 缺不拒 / 子实例 sandbox 不深拷贝（红×2）/ 独立模式 callee dirs 不忽略（首轮绿——原断言只看结果,改截获 callee init 断 warn 与 declaredDirs null 后红）/ restore 不重建白名单 / run_status 兜底不核账 / V16 ~user 无专报文 / 正则不认中文 / cli 不摘 inheritedDirs / move 去目标写侧校验 / move 去源写侧校验（阅卷二判补的 edit_file·move·remove 例,两处各红——字面跨域在解析层就拒,经 readwrite 内软链的形态才落到校验层,与上一批两例同理）
+
+### anc-cli-approve-dirs ✅（2026-10-07 todo/0148——与 approve_commit 同模型的第二个批准入口：人同意由 driver 在对话里问,工具/命令只记账）
+
+`hopjit approve_dirs <dirs-hash> [--instance]`（load → approveDirs,不认领通道、只记账不推进）;`run` / `init` 加 `--approve-dirs`（起跑即记账跳停点——写参数的人就是批准的人,脚本/CI 场景）;pause_reason 枚举加 dirs。与 commit 闸正交：dirs 闸在首步前,commit 闸在每个 commit 前;账分两个文件,resolver 共用一个注册位。
+
+- [[hop-cli#^anc-cli-approve-dirs]] ← 设计权威（v0.44.0,命令表三行）
+  - cli.ts approve_dirs 命令 + approveDirsIfFlagged + run/init `--approve-dirs` option（子实例入口不收——子实例经 inheritedDirs 继承,不重核） — @a: anc-cli-approve-dirs
+    - cli.test.ts "Config.dirs 批准停点的 CLI 入口" 5 例（正:run→paused/dirs→approve_dirs→resume 且账 .hopstate/dirs_approvals.json 与 commit 账分文件 / run --approve-dirs 直达且账在 / init --approve-dirs / 无 dirs 的 spec 行为不变;反:哈希不符 DIRS_NOT_APPROVED / 目录不存在 INIT_FAILED 不建实例） — @v: anc-cli-approve-dirs
+
+### anc-mcp-dirs-approve ✅（2026-10-07 todo/0148——独立模式没有人可问,start_run 的 dirs 参数是唯一授权面）
+
+MCP 工具 `approve_dirs(instance_id, dirs_hash, state_dir?, workspace_dir?)`（与 approve_commit 同模型：进放行清单,人同意由 driver 在对话里问）;`start_run` 加 `dirs: {read?, readwrite?}`——与 spec 声明展开后的 outside 对账：缺 → INIT_FAILED 列缺的、多 → warn 不授、对上 → 记账;复用驱动 `run` 加 `approve_dirs` bool。
+
+- [[mcp-server#^anc-mcp-dirs-approve]] ← 设计权威（v0.23.1,工具表 start_run / run 两行）
+  - mcp-server.ts core.approveDirs + approve_dirs 注册 + startRun 把 dirsArg 作 dirsGrant 传引擎（对账在引擎 init 内,warnings 从 init 取随返回）+ start_run / run schema — @a: anc-mcp-dirs-approve
+  - reuse-driver.ts DriverRunArgs.approve_dirs + driverRun 起跑记账 — @a: anc-mcp-dirs-approve
+  - provider-types.ts APPROVE_DIRS_TOOL（入放行清单） — @a: anc-mcp-dirs-approve
+  - mcp-server.ts `DIRS_WARNING_RULES` + startRun 多传不授 warnings 按 warning 的 rule 字段（引擎 Config.dirs 对账 warning 恒 rule=CONFIG）筛选,不按报文文字正则（2026-10-11 语义审计 0156 C12） — @a: anc-mcp-dirs-approve
+    - mcp-server.test.ts "正/反（dirs 授权 warnings 按 rule 筛）：rule 为 dirs 类的透传;rule 非 dirs 类的不透传（即使报文文字含'目录'字样）"（反例构造 Inputs 段孤儿行让 validator 出 rule=W1 且报文含 Config.dirs 字样;变异:改回正则→红 expected true to be false） — @v: anc-mcp-dirs-approve
+    - mcp-server.test.ts "Config.dirs 的 MCP 面" 3 例（正:run→paused→approve_dirs→resume / run approve_dirs=true 直达;独立模式:缺拒·对上直通记账·多传不授）+ 三条工具集契约测试按 0148 更新（工具集 +approve_dirs / 放行清单含它 / tools/list 不带 _meta） — @v: anc-mcp-dirs-approve
+
+### anc-rule-v16 ✅（2026-10-07 todo/0148——Config.dirs 形态与引用 validate 期就报,不等起跑 INIT_FAILED;首稿误用已占用的 V14 号,anchor-format 守卫抓出改 V16）
+
+形态非 `{read?: [str], readwrite?: [str]}` → warn（与 requires_commands 坏形态同一处理,起跑再拒一次）;`{名字}` 不在 Inputs 且不以 hop_env_ 开头 → error（名字字符集与 parser 同源含中文,DIRS_VAR_REF_RE）;`~user` 形态 → error 专报文;相对路径（不以 / ~ { 开头）或含 .. 段 → error。展开、存在性、授权归引擎起跑。
+
+- [[spec-parser#^anc-rule-v16]] ← 设计权威（v0.45.0）
+  - validator.ts configDirsV16（validateSpec 主体挂点,片段跳过） — @a: anc-rule-v16
+    - validator.test.ts "V16 Config.dirs 形态与变量引用" 7 例（正:四种合法写法零警告 / 无 dirs 零 / {中文变量} 引用中文 Inputs 零警告;反:{var} 未声明 error / 相对三形态 error / .. error / 四种坏形态各 warn / ~user 专报文） — @v: anc-rule-v16, 重放:{var} 查禁用→反例红 / ~user 分支删→红 / 正则不认中文→红
+
+### anc-rule-v17 ✅（2026-10-08 作者定"yaml/列表型的输入究竟应该怎么交互,至少要给一个建议输入让人来改"——结构化 ask 要有建议值来源,写 spec 时就提醒）
+
+ask 声明结构化输出（yaml / 列表 `[T]` / 类型面具名类型）而文档序前面没有任何步 `+ →` 同名、本步也没有 present_inputs → warn 指路"前置一个步骤把建议值备好,或用 present_inputs 指一个样板";标量类型不核。只 warn 不 error：可用性缺口不是语义错误,运行期 driver 对无建议值的结构化 ask 如实告诉人要给完整结构。来源规则（a 案：教学规定必须有来源,引擎不按类型造骨架）与 driver 义务归 anc-exec-hitl-presentation 卡建议值供给行。
+
+- [[spec-parser#^anc-rule-v17]] ← 设计权威（v0.46.0）
+  - validator.ts askStructuredDefaultV17（validateSpec 主体挂点,片段跳过;flattenSteps 文档序累计 produced 集） — @a: anc-rule-v17
+    - validator.test.ts "V17 结构化 ask 的建议值来源" 4 例（反:yaml 声明无前序无 present_inputs → warn 点名声明与类型并指路〔变异:删挂点红〕;正:前序同名 +→ 零警告 / present_inputs 零警告 / 标量 line·int·enum 不核;列表 [line] 与类型面 Rec 按结构化核） — @v: anc-rule-v17
+
+### anc-rule-act-body-line ✅（2026-10-09 commit 安全分析批次工程链 review 发现:安全分析材料与停点给人看的"第 N 行"对不上 spec 原文——行号逻辑早于该批次,本批次当场修）
+
+act body 每条语句的 line 是 spec 文件真实行号。parser 的扁平步骤结构 FlatStep 新增 instruction_lines（与 instruction 等长,逐项记每个指令行的 1 起算行号,五个 push 点同步记）;parseActBody 加可选第四参数 line_numbers,给了就按它取语句行号与 body 的 source_location（首行到末行加 1）,不给照旧 base_line + 行下标;IfStmt 新增 else_line（else 行,elif 展开时为 elif 行）,commit 安全分析材料 body_lines 的 else 行号取它。旧算法"步骤行号 + instruction 下标"漏数 ← / → / 空行,每多一行少算一行。
+
+- [[spec-parser#^anc-rule-act-body-line]] ← 设计权威（spec-parser v0.46.3;同批 act-body v0.27.4 parseActBody 签名、spec-ast v0.10.6 IfStmt.else_line、exec-engine buildCommitAnalysisRequest body_lines 子步）
+  - parser.ts FlatStep.instruction_lines 字段与五个 push 点、围栏未闭合报错行、body 逐行行号切片传给 parseActBody — @a: anc-rule-act-body-line
+  - act-body-parser.ts tokenize 逐行真实行号、parseIf 记 else_line — @a: anc-rule-act-body-line
+  - ast-types.ts IfStmt.else_line — @a: anc-rule-act-body-line
+    - parser.test.ts "act body 语句行号等于 spec 文件真实行号" 6 例（正:步骤行与 body 之间夹 ← / → 行、body 中间夹空行、if / else 嵌套;elif 展开后外层 else_line 是 elif 行、内层是 else 行,没有 else 的 if 不带 else_line;标题风段落 + ← / → + 缩进裸围栏;标题风 body 前先有示例围栏;直接调 parseActBody 给 line_numbers;反:body 内解析错误与围栏未闭合的报错行号都是原文真实行） — @v: anc-rule-act-body-line
+    - engine.test.ts "buildCommitAnalysisRequest 分析材料:…"的 body_lines 行号与 else 行断言（行号经 lineOf 从 spec 原文取,不手算） — @v: anc-rule-act-body-line
+    - act-body-parser.test.ts 2026-10-10 "act body 行号回落（lineNumbers 缺席 / 空 / 在场）" 3 例（review 第五次 6.2 阅卷打回后:不传时按 baseLine 顺延;空数组同不传;在场时逐行取真实行号、line_end 取末行 +1、解析错误行号也取真实行号——Z-abp207-and / Z-abp696-ncR / Z-abp697-and2 红） — @v: anc-rule-act-body-line
+  - 变异核证（四步法:变异→构建→红→恢复→构建→同组测试绿）共 13 处,每处恢复后同组测试绿:else_line 加 1 / elif 不记 else_line / tokenize 不用逐行行号 / 末行加 7 / source_location 起行不用逐行行号 / lineEnd 不用逐行行号 / parser 改回旧算法 / 围栏未闭合报错行改回步骤行 / 五个 push 点逐个删或改成 i。首轮 10 处红、3 处存活（末行加 7、起行、标题风闭栏 push）,补两例（示例围栏、直接调 parseActBody）后这 3 处重放红
+
+### anc-hopant-commit-store ✅（2026-10-07 todo/0146——HopAnt 的批准随 HopAnt 走,任务卡的批准随项目 .hopstate 走）
+
+`commitApprovalStorePath(antsRootDir, specPath, runRootParent)`：spec 在某个 HopAnt 目录下（含嵌套子目录）→ `<antDir>/inner_store/commit_approvals.json`；其余 → `<run 根上一级>/commit_approvals.json`（即 `.hopstate/commit_approvals.json`）。规则只此一份实现，cli 与 mcp-server 两个组合根注册给引擎的闭包都调它。
+
+- [[docs/design/hopant#^anc-hopant-commit-store]] ← 设计权威
+  - hopant.ts commitApprovalStorePath — @a: anc-hopant-commit-store
+  - 2026-10-10 todo/0155 两级根：第一参由单根改为 AntRoots,两级依次试（项目级先）,spec 在项目级 HopAnt 下账也落它的 inner_store/;dirsApprovalStorePath 同改 — @a: anc-hopant-commit-store
+  - hopant.ts dirsApprovalStorePath（同规则换文件名 dirs_approvals.json,2026-10-07 todo/0148） — @a: anc-hopant-commit-store
+    - hopant.test.ts commitApprovalStorePath 组（正:HopAnt 内 spec 含嵌套→inner_store;项目内 spec→run 根旁;反:ants 根下直接放的文件不算 HopAnt、同名前缀目录不算 ants 根内） — @v: anc-hopant-commit-store
+    - hopant.test.ts "正例：ants 根经软链（HOME 是软链）、specPath 是解析过软链的真实路径 → 仍落 inner_store"（todo/0146 review 修复中发现:引擎改按 canonicalSpecPath 传真实路径后,ants 根也须按同一口径解析,否则 HOME 经软链时账错落 run 根上一级） — @v: anc-hopant-commit-store
+    - mcp-server.test.ts "HopAnt 目录下的 spec:批准账落 <HopAnt 目录>/inner_store/commit_approvals.json,不落工作区 .hopstate"（todo/0146 review D41,HOME 指向临时目录的端到端用例;变异 M7 变红） — @v: anc-hopant-commit-store

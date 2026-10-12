@@ -3,20 +3,27 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 // @module: mcp-server ^anc-struct-mcp-server
-// standalone 执行的 MCP server 协议壳：六工具（start_run/run_status/resume_run/list_runs/stop_run/run_approved_command）
-// 薄壳包 StepDispatcher 进程内 API。常驻进程——run 状态活在注册表内存，HITL resume 同进程注入。
+// hopjit MCP server 协议壳：独立模式六工具（start_run/run_status/resume_run/list_runs/stop_run/run_approved_command）
+// 薄壳包 StepDispatcher 进程内 API;另有复用模式驱动七件（实现在 reuse-driver.ts）、approve_commit、server_status（todo/0146）。常驻进程——run 状态活在注册表内存，HITL resume 同进程注入。
 // 见 design/mcp-server.md ^anc-struct-mcp-server。
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { load as yamlLoad } from 'js-yaml';
-import { parseToolServers, enrichParamsComments, loadProjectToolRegistry } from './tools-registry.js';
+import { parseToolServers } from './tools-registry.js';
+// 两级配置读取/合并/引用核归 config-load 模块（todo/0131,[[config-load]]）;StandaloneConfig 为 HopConfig 别名再导出一版供既有测试 import // @a: anc-struct-config-load
+import { parseConfigFile, mergeConfigs, validateMergedRefs, loadHopConfig, configPaths, loadToolRegistry, effectiveLanguage, type HopConfig, type ProviderEntry } from './config-load.js';
+export { mergeConfigs, type ProviderEntry };
+/** StandaloneConfig：HopConfig 的别名（两种模式共用后改名,本别名再导出一版供既有测试 import——[[config-load#^anc-struct-config-load]]）。 */
+export type StandaloneConfig = HopConfig;
 import { readFileSync, writeFileSync, existsSync, realpathSync, readdirSync, unlinkSync } from 'node:fs';
 import { resolve, isAbsolute, join, dirname } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, hostname, userInfo } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { ExecutionEngine } from './engine.js';
-import { StepDispatcher, DirSpecProvider, parseModelRef, childNotInQueueMessage, type RunResult } from './dispatcher.js';
+import { ExecutionEngine, getEngineVersion, commitNotApprovedMessage } from './engine.js';
+import { StepDispatcher, DirSpecProvider, parseModelRef, childNotInQueueMessage, makeCommitAnalyzer, type RunResult, type CommitAnalyzerProvider } from './dispatcher.js';
+import { antRoots, resolveCalleeSpecPath, commitApprovalStorePath } from './hopant.js';
+import { resolveInstance, driverRun, driverSubmit, driverReap, driverStatus, driverResume, driverAbort, driverValidate, driverErrorOf, type ReuseDriverContext } from './reuse-driver.js';
+import { runDoctor, antList, antInstall, antAdapt, antRemove, antBootstrap, antPack, antShare, type AdminContext } from './hop-admin.js';   // 管理工具面八件的业务体（hop-cli 模块出口文件,^anc-mcp-admin-tools） // @a: anc-mcp-admin-tools
 import { parseSpec } from './parser.js';
 import { validateSpec } from './validator.js';
 import { CompositeToolProvider, makeEngineToolProviderFactory } from './tools-composite.js';
@@ -26,85 +33,45 @@ import { CompositeToolProvider, makeEngineToolProviderFactory } from './tools-co
 // 两组合根一致,将来 mcp 引入消化路径不埋雷。^anc-exec-tool-request）
 // @a: anc-exec-tool-request
 ExecutionEngine.setEngineToolProviderFactory(
-  makeEngineToolProviderFactory(() => loadProjectToolRegistry(process.cwd())),   // cwd 读在组合根（run 隔离不变量）
+  makeEngineToolProviderFactory(hc => loadToolRegistry(configPaths(homedir(), hc.workspace_dir, process.env['HOPJIT_CONFIG'] || undefined), hc.workspace_dir)),   // 项目根=本 run 的 workspace_dir（复用模式 run 可显式传,与 server cwd 不同）;home/HOPJIT_CONFIG 读在组合根;两级（todo/0131） // @a: anc-config-reuse-consume
 );
+// 复用驱动工具建的 run 同样烘焙 callee 路径进 call_protocol——与 cli 组合根同一注册（两级寻址,家目录读在组合根）。
+// ^anc-exec-callee-resolver // @a: anc-exec-callee-resolver
+ExecutionEngine.setCalleeSpecResolver((callerSpecPath, calleeId, workspaceDir) => resolveCalleeSpecPath(dirname(callerSpecPath), antRoots(homedir(), workspaceDir), calleeId));   // 两级 HopAnt 根：项目级取本 run 工作区;不做 process.cwd 兜底（exec-engine ^anc-exec-callee-resolver）
+// commit 批准账位置（^anc-exec-commit-approval）：spec 在 HopAnt 目录下记 <HopAnt>/inner_store/,其余记 run 根上一级
+//（即 .hopstate/commit_approvals.json）。规则实现在 hopant.commitApprovalStorePath,与 cli 组合根同调。// @a: anc-exec-commit-approval
+ExecutionEngine.setCommitApprovalStoreResolver((specPath, instanceDir, workspaceDir) => commitApprovalStorePath(antRoots(homedir(), workspaceDir), specPath, dirname(findRunRoot(instanceDir))));
 import { ACT_BUILTIN_NAMES } from './act-builtins.js';
 import { hasChildren, getChildren } from './ast-helpers.js';
 import type { StepNode, ActBody, ActExpr, ActStatement } from './ast-types.js';
 import type { HostConfig, RoutingCategory } from './provider-types.js';
-import { credentialLikeHopEnvKey, hopEnvCredentialError, ROUTING_CATEGORIES, RUN_APPROVED_COMMAND_TOOL } from './provider-types.js';
+import { credentialLikeHopEnvKey, hopEnvCredentialError, RUN_APPROVED_COMMAND_TOOL, APPROVE_COMMIT_TOOL, APPROVE_DIRS_TOOL } from './provider-types.js';
 import { sendDingtalk, composeRunCard } from './tools-notify.js';
-import { readSpec, readState, stateExists } from './persistence.js';   // 0093 快照兜底读 spec——唯一合法读口（内容寻址引用形态,^anc-provider-spec-content-addressed）;run_approved_command 纯读盘取清单（^anc-mcp-run-command）
+import { readSpec, readState, stateExists, readStateSeq, findRunRoot } from './persistence.js';   // 0093 快照兜底读 spec——唯一合法读口（内容寻址引用形态,^anc-provider-spec-content-addressed）;run_approved_command 纯读盘取清单（^anc-mcp-run-command）
 import { runWhitelistedCommand } from './command-exec.js';
 import { HopLog } from './hoplog.js';
-import { resolveRealDeep, isWithinDir } from './tools.js';
 import { appendFileSync } from 'node:fs';
 import type { ExecutionPaused } from './cli-types.js';
 
-// ── StandaloneConfig 加载（schema 权威：shared-providers ^anc-config-standalone-schema）──
 
-/** ProviderEntry：standalone 单 provider 条目。配置只保存 api_key_env 名称，不允许明文 key。 */
-export interface ProviderEntry {
-  service_id: string;
-  protocol: 'anthropic' | 'openai-chat' | 'openai-responses';
-  base_url: string;
-  model: string;
-  api_key_env: string;
-  auth?: 'api-key' | 'bearer';   // 鉴权头档,缺省 api-key（x-api-key 头）;bearer=Authorization: Bearer（只认此形态的网关——实测百炼 claude-code-proxy 对 x-api-key 报 InvalidApiKey） // @a: anc-config-standalone-schema
-  // 可选。该 provider 模型的输出上限（作者定"按 LLM 的上限去设置"——缺省按模型能力发满,
-  // 产出约束归 spec 输出声明;经 {SID}_MAX_OUTPUT_TOKENS 快照键透传 dispatcher 解析链第3级）。
-  // @a: anc-exec-output-budget
-  max_output_tokens?: number;
-  // provider 级思考缺省（五级链第 4 级——逐模型矫正档:antchat 类"端点缺省关"的服务配 disabled
-  // 压回第 5 级步骤类型缺省的 reason 恒开;设计 [[shared-providers#^anc-config-standalone-schema]]
-  // thinking 行）。env 键 {SERVICE_ID}_THINKING 与 _AUTH 同披。// @a: anc-exec-thinking-provider-default
-  thinking?: 'enabled' | 'disabled';
-  // 声明"这个端点的思考关不掉"（todo/0118——glm-5.3-flash 收到 thinking disabled 报 400）。
-  // true 时五级链算出"关"的请求改发 output_config {effort: low}、不带 thinking 键;只认布尔,
-  // 只对 anthropic 协议有意义。env 键 {SERVICE_ID}_THINKING_DISABLE_UNSUPPORTED=true 只在 true 时披。
-  // 设计 [[shared-providers#^anc-config-standalone-schema]] 同名行。// @a: anc-exec-thinking-disable-unsupported
-  thinking_disable_unsupported?: boolean;
-}
 
-/** StandaloneConfig：standalone 执行的完整配置。见 [[shared-providers#^anc-config-standalone-schema]] */
-export interface StandaloneConfig {
-  providers: ProviderEntry[];
-  default_model?: string;
-  // 系统层按类别路由（两层配置的系统半边——spec 层 Config.models 逐类别继承本层）。
-  // 见 shared-providers ^anc-config-standalone-schema / step-dispatcher ^anc-exec-model-resolve。
-  // @a: anc-exec-model-routing
-  routing_rules?: Array<{ step_type: string; model: string; thinking?: 'enabled' | 'disabled' }>;
-  // spec 环境参数（hop_env_* 命名空间,概念 ^anc-config-hop-env——非密可落盘,凭证禁入）// @a: anc-config-hop-env
-  env?: Record<string, string>;
-  // 生成物语言（项目级 hopjit.yaml language: zh|en 缺省 en,^anc-i18n-language-config——
-  // 序列化/read_spec_tree 读回/hopbuild2 生成面消费;注入 hop_env_language）// @a: anc-i18n-serialize-lang
-  language?: 'en' | 'zh';
-  // 修订供给档（^anc-exec-revision-short-weak——short=弱模型档打回重试轮换短 prompt;缺省
-  // standard 全模型零变化。最终户口=model-gearbox 档案 adapt.revision_prompt,档案消费链落地
-  // 前本键即人工开关位;env HOPJIT_REVISION_PROMPT 每 run 可覆盖）// @a: anc-exec-revision-short-weak
-  revision_prompt?: 'standard' | 'short';
-  // 外部工具注册节（原独立 hoptools.yaml 收编,tools_file 指针退役——统一配置 2026-08-13 作者定;
-  // 文法权威 tool-interface ^anc-config-tool-registry 不变）。加载器给每项打 _base_dir（声明所在
-  // 配置文件目录——in-process module 相对路径解析基准,项目级声明相对项目根）。
-  tool_servers?: unknown[];
-  // 单步资源上限（四十四审补节——重档步 OUTPUT_TRUNCATED 于 16384 缺省而 MCP 主模式无配置通道;
-  // 逐键可选,合并项目级赢,装配进 hostConfig.resource_limits;env HOPJIT_MAX_OUTPUT_TOKENS 仍最高优先）。
-  // @a: anc-config-standalone-schema
-  resource_limits?: Partial<import('./provider-types.js').ResourceLimits>;
-  // subprocess.run 命令白名单（人话名——操作者视角"允许哪些命令";装入 sandbox.runtime.available,
-  // 两级合并=并集与 tool_servers 同律。^anc-exec-subprocess-run 配置通路条款）// @a: anc-exec-subprocess-run
-  commands?: string[];
-  // 通知挂点通道声明（^anc-mcp-notify-hook,todo/0052——config 只声明"用哪个通道",凭证归通道
-  // 约定环境变量不进配置;发不发以 per-run 参数 hop_notify 为主,三与门见 applyResult 挂点）
-  // @a: anc-mcp-notify-hook
-  notify?: { channel: 'dingtalk' };
-  // HopLog 记录级别（缺省 info——2026-09-30 todo/0127 作者定,对外分发防塞爆硬盘;2026-08-22 曾定 debug。
-  // 排障经此口升 debug）。合并项目级赢;非法值加载期拒。见 design mcp-server HopLog 恒开条。
-  // @a: anc-config-standalone-schema
-  log_level?: 'debug' | 'info' | 'warn';
-  // 日志保留上限（todo/0127 作者定——对外分发防塞爆硬盘,只此一个旋钮,缺省 max_runs=3）。合并项目级赢;非正整数加载期拒。
-  // 见 [[spec-observability#^anc-obs-log-retention]] // @a: anc-obs-log-retention
-  log_retention?: { max_runs: number };
+/** commit 安全分析用哪个模型:跟着 commit 的路由走（routing_rules 里 step_type=commit 那条）,没配就用默认模型。
+ * 凭证缺失到不了这里——serve 第 2.2 步 preflightProviderKeys 已判成 configError。见 [[mcp-server]] resolveCommitAnalyzerProvider HopSop。
+ * // @a: anc-exec-commit-analyzer */
+export function resolveCommitAnalyzerProvider(config: StandaloneConfig): CommitAnalyzerProvider {
+  const rule = (config.routing_rules ?? []).find(r => r.step_type === 'commit');
+  const ref = rule ? parseModelRef(rule.model) : resolveStandaloneDefaultModel(config);
+  const p = (ref.service_id === 'default' ? config.providers[0] : undefined)
+    ?? config.providers.find(x => x.service_id.toUpperCase() === ref.service_id.toUpperCase());
+  if (!p) throw new Error(`STANDALONE_CONFIG_INVALID: commit 安全分析模型引用的 service '${ref.service_id}' 不在 providers 内`);
+  return {
+    service_id: p.service_id,
+    protocol: p.protocol,
+    base_url: p.base_url ?? null,
+    api_key: process.env[p.api_key_env] ?? '',
+    auth: p.auth === 'bearer' ? 'bearer' : null,
+    model: ref.model,
+  };
 }
 
 function resolveStandaloneDefaultModel(config: StandaloneConfig): { service_id: string; model: string } { // @a: anc-mcp-config
@@ -132,7 +99,7 @@ function snapshotProviderKeys(config: StandaloneConfig): Map<ProviderEntry, stri
   for (const p of config.providers) {
     const value = process.env[p.api_key_env];
     if (!value || !value.trim()) {
-      throw new Error(`STANDALONE_KEY_MISSING: 环境变量 ${p.api_key_env} 未设置（provider '${p.service_id}'）——server 拒绝启动`);
+      throw new Error(`STANDALONE_KEY_MISSING: 环境变量 ${p.api_key_env} 未设置（provider '${p.service_id}'）——独立模式不可用`);
     }
     values.set(p, value);
   }
@@ -160,7 +127,7 @@ export function buildEnvSnapshot(config: StandaloneConfig, providerKeys: Map<Pro
     snap[`${p.service_id.toUpperCase()}_BASE_URL`] = p.base_url;
     snap[`${p.service_id.toUpperCase()}_PROTOCOL`] = p.protocol;   // getClientForService 按此选适配器
     if (p.auth === 'bearer') snap[`${p.service_id.toUpperCase()}_AUTH`] = 'bearer';   // 鉴权头档（^anc-config-standalone-schema auth 字段——只认 Bearer 的网关实测百炼 claude-code-proxy）
-    if (p.thinking !== undefined) snap[`${p.service_id.toUpperCase()}_THINKING`] = p.thinking;   // provider 级思考缺省（五级链第 4 级,^anc-exec-thinking-provider-default——dispatcher envOf 消费）
+    if (p.thinking !== undefined) snap[`${p.service_id.toUpperCase()}_THINKING`] = p.thinking;   // provider 级思考缺省（五级链第 4 级,^anc-exec-thinking-provider-default——dispatcher envOf 消费） // @a: anc-exec-thinking-provider-default
     if (p.thinking_disable_unsupported === true) snap[`${p.service_id.toUpperCase()}_THINKING_DISABLE_UNSUPPORTED`] = 'true';   // 端点思考关不掉的声明（只在 true 时披——dispatcher 五级链结果为关时改发 effort low）// @a: anc-exec-thinking-disable-unsupported
     if (p.max_output_tokens !== undefined) snap[`${p.service_id.toUpperCase()}_MAX_OUTPUT_TOKENS`] = String(p.max_output_tokens);   // 输出预算解析链第3级 // @a: anc-exec-output-budget
   }
@@ -178,70 +145,13 @@ export function buildEnvSnapshot(config: StandaloneConfig, providerKeys: Map<Pro
 // 同一 schema 逐节合并项目级赢（providers 按 service_id/routing_rules 按 step_type/tool_servers 并集
 // 判重在装配层/default_model 项目级在场即赢）。configPath 显式指定（HOPJIT_CONFIG）=只用它不合并（e2e 语义不变）。
 export function loadStandaloneConfig(configPath?: string, projectDir?: string): StandaloneConfig {
-  if (configPath) {
-    const c = parseConfigFile(configPath, /*required*/ true);
-    if (!c.providers?.length) throw new Error(`STANDALONE_CONFIG_INVALID: ${configPath} 缺 providers[]（至少 1 条）`);
-    validateMergedRefs(c);   // 单文件=合并结果本身,过同一核
-    return c;
-  }
-  const sysPath = join(homedir(), '.hopjit', 'config.yaml');
-  const projPath = join(projectDir ?? process.cwd(), 'hopjit.yaml');
-  const sys = existsSync(sysPath) ? parseConfigFile(sysPath, true) : null;
-  const proj = existsSync(projPath) ? parseConfigFile(projPath, false) : null;
-  if (!sys && !proj) {
-    throw new Error(`STANDALONE_CONFIG_MISSING: 配置文件不存在（${sysPath} 与 ${projPath} 均缺席）。standalone 需要 providers 配置（YAML），`
-      + `格式见 docs/design/shared-providers.md ^anc-config-standalone-schema`);
-  }
-  const merged = !proj ? sys! : (!sys ? proj : mergeConfigs(sys, proj));
-  if (!merged.providers?.length) {
-    throw new Error(`STANDALONE_CONFIG_MISSING_PROVIDERS: 两级配置合并后 providers 为空（至少 1 条——通常在系统级 ${sysPath}）`);
-  }
-  validateMergedRefs(merged);
-  return merged;
+  // 薄包装（todo/0131）：算路径 → config-load 两级加载,独立模式 requireProviders 且 default_model 引用核经回调注入 // @a: anc-struct-config-load
+  return loadHopConfig(configPaths(homedir(), projectDir ?? process.cwd(), configPath), { requireProviders: true, resolveDefault: resolveStandaloneDefaultModel });
 }
 
-// 跨节引用校验（合并后统一做——^anc-config-standalone-schema 校验时点条款,2026-08-13 BUG-E 实撞：
-// 项目级文件合法形态=只有 routing_rules+tool_servers,providers 归系统级;逐文件核引用必把合法形态
-// 误拒〔实撞 providers undefined 崩 server 启动〕。文法核〔step_type 枚举/形状/明文 key〕仍逐文件）。
-// @a: anc-mcp-config, anc-config-standalone-schema
-function validateMergedRefs(config: StandaloneConfig): void {
-  const providers = config.providers ?? [];
-  for (const [i, r] of (config.routing_rules ?? []).entries()) {
-    const ref = parseModelRef(r.model);
-    if (ref.service_id !== 'default' && !providers.some(p => p.service_id.toUpperCase() === ref.service_id.toUpperCase())) {
-      throw new Error(`STANDALONE_CONFIG_INVALID: routing_rules[${i}].model 引用的 service '${ref.service_id}' 不在合并后 providers 内`);
-    }
-  }
-  resolveStandaloneDefaultModel(config);   // default_model 引用核（原逐文件时点同病同迁）
-}
 
-// 逐节合并（项目级赢）：providers 按 service_id、routing_rules 按 step_type 覆盖同键,其余项目级在场即赢。
-// tool_servers 取并集（同 server 名项目级赢;工具名跨级判重归装配层既有 fail-fast）。// @a: anc-config-standalone-schema
-export function mergeConfigs(sys: StandaloneConfig, proj: StandaloneConfig): StandaloneConfig {   // 导出供测试直测合并语义（0005——server 同名替换语义著文配套钉测）
-  const byKey = <T>(base: T[] | undefined, over: T[] | undefined, key: (t: T) => string): T[] | undefined => {
-    if (!base?.length) return over;
-    if (!over?.length) return base;
-    const m = new Map(base.map(t => [key(t), t]));
-    for (const t of over) m.set(key(t), t);
-    return [...m.values()];
-  };
-  return {
-    providers: byKey(sys.providers, proj.providers, p => p.service_id.toUpperCase()) ?? [],
-    ...(proj.default_model ?? sys.default_model ? { default_model: proj.default_model ?? sys.default_model } : {}),
-    ...((sys.env || proj.env) ? { env: { ...(sys.env ?? {}), ...(proj.env ?? {}) } } : {}),   // env 逐键合并项目级赢 // @a: anc-config-hop-env
-    // commands 并集去重（review F1 三面独立实锤:原返回体无此键,双文件部署 commands 整键蒸发
-    // 恒关死——'两级合并=并集与 tool_servers 同律'设计条款首次兑现）// @a: anc-exec-subprocess-run
-    ...((sys.commands?.length || proj.commands?.length) ? { commands: [...new Set([...(sys.commands ?? []), ...(proj.commands ?? [])])] } : {}),
-    ...((proj.notify ?? sys.notify) ? { notify: proj.notify ?? sys.notify } : {}),   // 项目级赢（^anc-mcp-notify-hook——新顶层键必须同步本函数,commands 漏写合并整键蒸发的前车） // @a: anc-mcp-notify-hook
-    ...(byKey(sys.routing_rules, proj.routing_rules, r => r.step_type)?.length ? { routing_rules: byKey(sys.routing_rules, proj.routing_rules, r => r.step_type) } : {}),
-    ...(byKey(sys.tool_servers, proj.tool_servers, t => (t as { name: string }).name)?.length ? { tool_servers: byKey(sys.tool_servers, proj.tool_servers, t => (t as { name: string }).name) } : {}),
-    ...((sys.resource_limits || proj.resource_limits) ? { resource_limits: { ...(sys.resource_limits ?? {}), ...(proj.resource_limits ?? {}) } } : {}),   // 逐键合并项目级赢（env 节同法）
-    ...((proj.log_level ?? sys.log_level) ? { log_level: proj.log_level ?? sys.log_level } : {}),   // 项目级赢 // @a: anc-config-standalone-schema
-    ...((proj.log_retention ?? sys.log_retention) ? { log_retention: proj.log_retention ?? sys.log_retention } : {}),   // 项目级赢 // @a: anc-obs-log-retention
-    ...((proj.language ?? sys.language) ? { language: proj.language ?? sys.language } : {}),   // 项目级赢（todo/0084 M2——本键曾漏合并:项目级 zh 在 MCP 侧静默蒸发落 en 与 CLI 劈叉,恰是上一行 commands 前车注警告的同型复发;新顶层键必须同步本函数+补合并测试钉） // @a: anc-i18n-serialize-lang
-    ...((proj.revision_prompt ?? sys.revision_prompt) ? { revision_prompt: proj.revision_prompt ?? sys.revision_prompt } : {}),   // 项目级赢（^anc-exec-revision-short-weak;新顶层键必须同步本函数——0084 M2 前车） // @a: anc-exec-revision-short-weak
-  };
-}
+
+
 
 // 项目级配置每 run 重读（0007②+0012;十四审收敛为单一函数——startRun/restore 原各手写一份,
 // 三审四审接连在'另一份'上撞同型缺陷〔catch 吞闸/providers 未剥〕,同一语义多路径实现是缺陷温床）。
@@ -258,223 +168,17 @@ function reloadProjectConfig(startupConfig: StandaloneConfig, projectDir: string
   const projPath = join(projectDir, 'hopjit.yaml');
   if (!existsSync(projPath)) return { config: startupConfig };
   try {
-    const projCfg = parseConfigFile(projPath, false);
+    const projCfg = parseConfigFile(projPath, false, homedir());
     const merged = mergeConfigs(startupConfig, { ...projCfg, providers: [] } as StandaloneConfig);
     const config = { ...merged, providers: startupConfig.providers };   // providers 恒启动期快照
-    validateMergedRefs(config);
+    validateMergedRefs(config, resolveStandaloneDefaultModel);
     return { config };
   } catch (err: unknown) {
     return { error: { code: 'CONFIG_INVALID', message: `项目级配置 ${projPath} 非法——${err instanceof Error ? err.message : String(err)}` } };
   }
 }
 
-function parseConfigFile(path: string, required: boolean): StandaloneConfig {
-  if (!existsSync(path)) {
-    if (required) {
-      throw new Error(`STANDALONE_CONFIG_MISSING: 配置文件不存在（${path}）。standalone 需要 providers 配置（YAML），`
-        + `格式见 docs/design/shared-providers.md ^anc-config-standalone-schema`);
-    }
-    return { providers: [] };
-  }
-  const content = readFileSync(path, 'utf-8');
-  const parsed = yamlLoad(content);
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`STANDALONE_CONFIG_INVALID: ${path} 不是 YAML 映射（顶层须是 key: value 结构）`);
-  }
-  const raw = parsed as Record<string, unknown>;
-  // params 短形态行尾 # 说明回填（唯一有原始文本的时点——yamlLoad 丢裸注释）// @a: anc-tool-params-notes
-  if (Array.isArray(raw['tool_servers'])) enrichParamsComments(content, raw['tool_servers'] as unknown[]);
 
-  if ('api_key' in raw) {
-    throw new Error('STANDALONE_CONFIG_PLAINTEXT_KEY: 顶层 api_key 禁止写入配置文件，请改用 providers[].api_key_env');
-  }
-
-  const providers = raw['providers'];
-  if (providers !== undefined && !Array.isArray(providers)) {
-    throw new Error(`STANDALONE_CONFIG_INVALID: ${path} providers 须为列表`);
-  }
-  // resource_limits 文法核（四十五审——原零核:'not-a-map'/数字串静默漂到装配,max_tokens NaN 发 API 400
-  // 离病灶两层;逐键数字核,未知键拒——键集即契约,拼错静默失效正是 0008③ 要治的病）。
-  // @a: anc-config-standalone-schema
-  const rl = raw['resource_limits'];
-  if (rl !== undefined) {
-    if (rl === null || typeof rl !== 'object' || Array.isArray(rl)) {
-      throw new Error(`STANDALONE_CONFIG_INVALID: ${path} resource_limits 须为映射（max_output_tokens: 65536 形）`);
-    }
-    const RL_KEYS = new Set(['max_tool_iterations', 'max_context_tokens', 'max_output_tokens', 'max_replan_attempts', 'max_concurrent_workers', 'max_call_depth', 'timeout_seconds', 'parallel_child_timeout_seconds', 'max_concurrent_runs']);
-    for (const [k, v] of Object.entries(rl as Record<string, unknown>)) {
-      if (!RL_KEYS.has(k)) {
-        throw new Error(`STANDALONE_CONFIG_INVALID: resource_limits.${k} 不是合法键（合法: ${[...RL_KEYS].join(', ')}）`);
-      }
-      if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) {
-        throw new Error(`STANDALONE_CONFIG_INVALID: resource_limits.${k} 须为正数（实际: ${JSON.stringify(v)}）`);
-      }
-    }
-  }
-  // commands 文法核（review F4——零核时标量串一路灌到 commandWhitelist,includes 对字符串退化
-  // 子串匹配:whitelist='github-echo-tools' 时 echo 放行,白名单形同虚设;与 CLI 侧
-  // readProjectCommands 形状核对齐,mcp 侧按 fail-fast 惯例拒不静默）。// @a: anc-exec-subprocess-run
-  const cmds = raw['commands'];
-  if (cmds !== undefined) {
-    if (!Array.isArray(cmds) || !cmds.every(c => typeof c === 'string' && c.trim())) {
-      throw new Error(`STANDALONE_CONFIG_INVALID: ${path} commands 须为非空字符串列表（commands:\n  - git 形）——标量/混型会使白名单判定失真`);
-    }
-    // hopjit 恒拒名单配置面（^anc-exec-subprocess-deny-hopjit——白名单管"哪些外部命令可用",
-    // hopjit 不是外部命令是执行语境本身;写进来即配置错,加载即拒早于运行期）
-    // @a: anc-exec-subprocess-deny-hopjit
-    if (cmds.some(c => c === 'hopjit' || c.split('/').pop() === 'hopjit')) {
-      throw new Error(`STANDALONE_CONFIG_INVALID: ${path} commands 白名单不得含 hopjit——act/commit 步骤不驱动引擎（跑别的 spec 用 [call],不可逆动作走注册工具）`);
-    }
-  }
-  // notify 节文法闸（^anc-mcp-notify-hook——channel 枚举现只 dingtalk;非法值加载即拒不静默漂过）
-  // @a: anc-mcp-notify-hook
-  const ntf = raw['notify'];
-  if (ntf !== undefined) {
-    const ch = (ntf as Record<string, unknown> | null)?.['channel'];
-    if (typeof ntf !== 'object' || ntf === null || ch !== 'dingtalk') {
-      throw new Error(`STANDALONE_CONFIG_INVALID: ${path} notify 节须为 {channel: dingtalk} 形（channel 枚举现只 dingtalk）——凭证不进配置,通道读约定环境变量 DINGTALK_WEBHOOK/DINGTALK_SECRET`);
-    }
-  }
-  // log_level 文法核（同 resource_limits 姿势——非法值静默漂过=级别悄悄错档,核验通道无声变窄）。
-  // @a: anc-config-standalone-schema
-  const ll = raw['log_level'];
-  if (ll !== undefined && ll !== 'debug' && ll !== 'info' && ll !== 'warn') {
-    throw new Error(`STANDALONE_CONFIG_INVALID: log_level 须为 debug|info|warn（实际: ${JSON.stringify(ll)}）`);
-  }
-  // log_retention 文法核（同姿势——max_runs 非正整数静默当缺省=用户以为限了实际没限）。// @a: anc-obs-log-retention
-  const lr = raw['log_retention'];
-  if (lr !== undefined) {
-    const mr = (lr as { max_runs?: unknown } | null)?.max_runs;
-    if (typeof lr !== 'object' || lr === null || !Number.isInteger(mr) || (mr as number) < 1) {
-      throw new Error(`STANDALONE_CONFIG_INVALID: log_retention.max_runs 须为正整数（实际: ${JSON.stringify(lr)}）`);
-    }
-  }
-  // 至少 1 条的校验在两级合并后统一做（项目级文件可只有 tool_servers 节）——见 loadStandaloneConfig 尾部
-  for (const [i, p] of ((providers ?? []) as Record<string, unknown>[]).entries()) {
-    if (p === null || typeof p !== 'object' || Array.isArray(p)) {
-      throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}] 须为映射`);
-    }
-    if ('api_key' in p) {
-      throw new Error(`STANDALONE_CONFIG_PLAINTEXT_KEY: providers[${i}].api_key 禁止写入配置文件，请改用 api_key_env`);
-    }
-    for (const field of ['service_id', 'protocol', 'base_url', 'model'] as const) {
-      if (typeof p[field] !== 'string' || !(p[field] as string).trim()) {
-        throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}].${field} 缺失或为空`);
-      }
-    }
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(p['service_id'] as string)) {
-      throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}].service_id '${String(p['service_id'])}' 非法——须匹配 [A-Za-z_][A-Za-z0-9_]*`);
-    }
-    // protocol 三枚举校验（^anc-exec-protocol-adapter 配置准入面）// @a: anc-exec-protocol-adapter
-    if (p['protocol'] !== 'anthropic' && p['protocol'] !== 'openai-chat' && p['protocol'] !== 'openai-responses') {
-      throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}].protocol '${String(p['protocol'])}' 不支持（anthropic | openai-chat | openai-responses）`);
-    }
-    if (typeof p['api_key_env'] !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(p['api_key_env'])) {
-      throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}].api_key_env '${String(p['api_key_env'] ?? '')}' 非法——须匹配 [A-Za-z_][A-Za-z0-9_]*`);
-    }
-    // auth 鉴权头档文法核（可选枚举——拼错静默漂过=运行期 InvalidApiKey 才暴露,病灶离症状两步）// @a: anc-config-standalone-schema
-    // provider 级 thinking 文法核（0100 批,^anc-exec-thinking-provider-default——枚举外值加载期
-    // 响亮拒,静默失效是 0008③ 同病）// @a: anc-exec-thinking-provider-default
-    if (p['thinking'] !== undefined && p['thinking'] !== 'enabled' && p['thinking'] !== 'disabled') {
-      throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}].thinking '${String(p['thinking'])}' 非法（enabled | disabled;缺省落引擎内建步骤类型缺省——五级链第 5 级）`);
-    }
-    // thinking_disable_unsupported 文法核（todo/0118）:只认 YAML 布尔——字符串 "true"/数字 1 静默当真或当假
-    // 都是配置悄悄错档;非 anthropic 协议写 true 拒——openai-responses 适配器本就把 disabled 映成
-    // reasoning.effort low,openai-chat 不透传思考参数,写了等于静默失效。// @a: anc-exec-thinking-disable-unsupported
-    const tdu = p['thinking_disable_unsupported'];
-    if (tdu !== undefined && typeof tdu !== 'boolean') {
-      throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}].thinking_disable_unsupported 须为布尔 true 或 false（实际: ${JSON.stringify(tdu)}）——声明该端点思考关不掉,写 true 后引擎要关思考时改发 output_config effort low`);
-    }
-    if (tdu === true && p['protocol'] !== 'anthropic') {
-      throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}].thinking_disable_unsupported 只对 protocol: anthropic 有效（实际 protocol: ${String(p['protocol'])}）——openai-responses 已把关思考映成 reasoning.effort low,openai-chat 不发思考参数,写了不会产生任何效果`);
-    }
-    if (p['auth'] !== undefined && p['auth'] !== 'api-key' && p['auth'] !== 'bearer') {
-      throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}].auth '${String(p['auth'])}' 不支持（api-key | bearer;缺省 api-key 发 x-api-key 头）`);
-    }
-    // max_output_tokens 文法核（可选正整数——静默漂过=预算悄悄错档,同 resource_limits 姿势）// @a: anc-exec-output-budget
-    const mot = p['max_output_tokens'];
-    if (mot !== undefined && (typeof mot !== 'number' || !Number.isInteger(mot) || mot <= 0)) {
-      throw new Error(`STANDALONE_CONFIG_INVALID: providers[${i}].max_output_tokens 须为正整数（实际: ${JSON.stringify(mot)}）`);
-    }
-  }
-  // service_id 归一校验（design v0.3.2）：路由 env 键取大写，大小写歧义会覆盖同一变量；
-  // 'default' 是 dispatcher 客户端池保留键，禁用作 service_id
-  const seen = new Map<string, string>();
-  for (const p of (providers ?? []) as { service_id: string }[]) {
-    const upper = p.service_id.toUpperCase();
-    if (upper === 'DEFAULT') {
-      throw new Error(`STANDALONE_CONFIG_INVALID: service_id '${p.service_id}' 是保留名（dispatcher 缺省客户端键），换一个`);
-    }
-    const prev = seen.get(upper);
-    if (prev !== undefined) {
-      throw new Error(`STANDALONE_CONFIG_INVALID: service_id '${prev}' 与 '${p.service_id}' 大小写归一后冲突（路由 env 键 ${upper}_API_KEY 会互相覆盖）`);
-    }
-    seen.set(upper, p.service_id);
-  }
-  if (raw['default_model'] !== undefined && typeof raw['default_model'] !== 'string') {
-    throw new Error(`STANDALONE_CONFIG_INVALID: default_model 须为字符串（'service/model' 引用或裸模型名）`);
-  }
-  // 系统层路由规则文法（^anc-exec-model-routing）：step_type 枚举封闭+model 引用可解析,
-  // 引用的 service 必须在 providers 内（拼错=请求错后端,default_model 同纪律）
-  if (raw['routing_rules'] !== undefined) {
-    if (!Array.isArray(raw['routing_rules'])) throw new Error(`STANDALONE_CONFIG_INVALID: routing_rules 须为列表`);
-    const CATEGORIES = new Set<string>(ROUTING_CATEGORIES);   // 类型与闸同源单点（0008①——原字面量复写,与 ModelRoute 类型两处漂移）
-    for (const [i, r] of (raw['routing_rules'] as Record<string, unknown>[]).entries()) {
-      if (r === null || typeof r !== 'object' || typeof r['step_type'] !== 'string' || typeof r['model'] !== 'string') {
-        throw new Error(`STANDALONE_CONFIG_INVALID: routing_rules[${i}] 须为 {step_type, model}`);
-      }
-      if (!CATEGORIES.has(r['step_type'])) {
-        throw new Error(`STANDALONE_CONFIG_INVALID: routing_rules[${i}].step_type '${r['step_type']}' 不在类别表（act/commit/reason/check/replan——confirm/ask 是介入点无 LLM 不路由）`);
-      }
-      // thinking 枚举核（形态 B 2026-08-20——非法值静默失效是 0008③ 同病）// @a: anc-exec-thinking-routing
-      if (r['thinking'] !== undefined && r['thinking'] !== 'enabled' && r['thinking'] !== 'disabled') {
-        throw new Error(`STANDALONE_CONFIG_INVALID: routing_rules[${i}].thinking '${String(r['thinking'])}' 非法（enabled | disabled;缺省落 provider 级 thinking 或引擎内建步骤类型缺省——五级链见设计 ^anc-exec-thinking-routing）`);
-      }
-      parseModelRef(r['model'] as string);   // 文法核（两段式合法性）——引用在场核延后到合并后（BUG-E:项目级合法形态就是无 providers,逐文件核引用必误拒）
-    }
-  }
-  // env 节文法闸（hop_env_* 命名空间,^anc-config-hop-env）：键必须 hop_env_ 前缀（防业务配置混入）;
-  // 键名含凭证形态即拒（hop_env_* 可落盘入日志——凭证只许 api_key_env 名引用纪律）。// @a: anc-config-hop-env
-  if (raw['env'] !== undefined) {
-    if (raw['env'] === null || typeof raw['env'] !== 'object' || Array.isArray(raw['env'])) {
-      throw new Error(`STANDALONE_CONFIG_INVALID: env 须为键值映射`);
-    }
-    for (const [k, v] of Object.entries(raw['env'] as Record<string, unknown>)) {
-      if (!k.startsWith('hop_env_')) {
-        throw new Error(`STANDALONE_CONFIG_INVALID: env 节键 '${k}' 缺 hop_env_ 前缀——spec 环境参数统一命名空间（业务配置勿入此节）`);
-      }
-      if (credentialLikeHopEnvKey(k)) {   // 三级共用闸（0004,^anc-config-hop-env）
-        throw new Error(`STANDALONE_CONFIG_INVALID: env 节键 '${k}' 形似凭证——hop_env_* 会落盘入日志,凭证只许走 providers[].api_key_env（环境变量名引用）`);
-      }
-      if (typeof v !== 'string') {
-        throw new Error(`STANDALONE_CONFIG_INVALID: env 节 '${k}' 值须为字符串`);
-      }
-      // ~ 前缀归一为 home 绝对路径（YAML 不经 shell,~ 不会被展开——按 workspace 相对解析必错;
-      // 配置参考样例即 ~ 写法）。// @a: anc-config-hop-env
-      if (v.startsWith('~/')) (raw['env'] as Record<string, unknown>)[k] = join(homedir(), v.slice(2));
-    }
-  }
-  // default_model/routing_rules 的"引用 service 在 providers 内"核 → loadStandaloneConfig 合并后统一做
-  // （^anc-config-standalone-schema 校验时点条款,2026-08-13 BUG-E）。此处不再调 resolveStandaloneDefaultModel。
-  // tool_servers 各项打 _base_dir（声明所在文件目录——module 相对路径按声明处解析）
-  if (Array.isArray(raw['tool_servers'])) {
-    const base = dirname(resolve(path));
-    for (const sv of raw['tool_servers'] as Record<string, unknown>[]) {
-      if (sv && typeof sv === 'object' && !('_base_dir' in sv)) sv['_base_dir'] = base;
-    }
-  }
-  // language 文法核（todo/0084 M2 随合并补齐——原零核,坏值静默当 en:与 log_level 同姿势响亮拒）。
-  const lg = raw['language'];
-  if (lg !== undefined && lg !== 'en' && lg !== 'zh') {
-    throw new Error(`STANDALONE_CONFIG_INVALID: language 须为 en|zh（实际: ${JSON.stringify(lg)}）`);
-  }
-  // revision_prompt 文法核（^anc-exec-revision-short-weak——坏值静默当 standard=开关悄悄失效,响亮拒）。// @a: anc-exec-revision-short-weak
-  const rp = raw['revision_prompt'];
-  if (rp !== undefined && rp !== 'standard' && rp !== 'short') {
-    throw new Error(`STANDALONE_CONFIG_INVALID: revision_prompt 须为 standard|short（实际: ${JSON.stringify(rp)}）`);
-  }
-  return raw as unknown as StandaloneConfig;
-}
 
 /** provider → HostConfig：api_key_env 解引用（env 缺失即报变量名不报值——key 安全纪律）。
  * // @a: anc-mcp-key-isolation */
@@ -570,17 +274,52 @@ interface RunEntry {
 
 const DEFAULT_MAX_CONCURRENT_RUNS = 4;   // 并发 run 上限缺省——防失控烧费的保守默认;resource_limits.max_concurrent_runs 可调（todo/0084 M1 配置化:原裸常量任何途径改不了,批量验证第 5 run 被拒实撞;server 级判定读启动期合并后配置,与 providers 快照同理由不入每 run 重读面） // @a: anc-mcp-config
 
+/** start_run 响应里随返回的 dirs 对账提示——按 init warnings 的 rule 字段挑（引擎 Config.dirs 对账的 warning 恒 rule=CONFIG,^anc-exec-dirs-grant）,不按报文文字。// @a: anc-mcp-dirs-approve */
+export const DIRS_WARNING_RULES: ReadonlySet<string> = new Set(['CONFIG']);
+
 /** run_approved_command 超时缺省秒数（^anc-mcp-run-command 步 6;inputSchema describe 与设计同源——review 抓五处字面量）。 */
 export const RUN_COMMAND_TIMEOUT_DEFAULT_SEC = 300;
-/** run_approved_command 超时上限秒数——spawnSync 阻塞 server 事件循环,上限失守=一条命令锁死 server（^anc-mcp-run-command）。 */
-export const RUN_COMMAND_TIMEOUT_MAX_SEC = 3600;
+/** run_approved_command 超时上限秒数——spawnSync 阻塞 server 事件循环,上限失守=一条命令锁死 server;且须恒小于 Claude Code 对一次 MCP 工具调用的
+ * 1800 秒静默上限（期间无响应无 progress 即被载体单方面中止,本工具执行期间发不了 progress）,留 300 秒给 4MB 截断、序列化与传输——超限传入按此截断照跑,
+ * 更长的等待由调用方分段（^anc-mcp-run-command;hopissues/0128 cloudflash 3500 秒等待实撞）。 */
+export const RUN_COMMAND_TIMEOUT_MAX_SEC = 1500;
+
+/** 进程存活判定（stop_run 快照兜底的"另一个活进程持有"判据,^anc-mcp-stop-run 第 6 条 HopType）——
+ * process.kill(pid, 0) 不抛=活;抛 EPERM=活（进程在,只是无权发信号）;抛 ESRCH 或其他=已死。// @a: anc-mcp-stop-run */
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (err: unknown) { return (err as { code?: unknown })?.code === 'EPERM'; }
+}
 
 /** run 注册表 + 工具 handler 核心。与 transport 分离（HTTP 演进出口留在 serve() 层）。
  * // @a: anc-struct-mcp-server */
 export class HopjitMcpCore {
   private runs = new Map<string, RunEntry>();
 
-  constructor(private config: StandaloneConfig) {}
+  // config=null 表示独立模式不可用（配置缺失/非法/凭证缺失）,configError 记原因与修法;复用驱动工具不依赖它。
+  // 见 [[mcp-server#^anc-mcp-server-status]]。// @a: anc-mcp-server-status
+  constructor(private config: StandaloneConfig | null, private configError: { reason: string; fix: string } | null = null, private configPath = '') {}
+
+  /** 独立模式入口的能力闸：config 为 null 时返回 STANDALONE_UNAVAILABLE 错误体,否则 null。// @a: anc-mcp-server-status */
+  private standaloneUnavailable(): Record<string, unknown> | null {
+    if (this.config) return null;
+    const ce = this.configError ?? { reason: '独立模式配置未加载', fix: '创建 ~/.hopjit/config.yaml（只写 api_key_env 名,不写 key）,或设 HOPJIT_CONFIG 指向配置文件' };
+    return { error: { code: 'STANDALONE_UNAVAILABLE', message: `独立模式不可用:${ce.reason}——复用模式驱动工具不受影响`, reason: ce.reason, fix: ce.fix } };
+  }
+
+  /** server_status 工具:版本、独立模式能力状态、注册工具清单（只读）。// @a: anc-mcp-server-status */
+  serverStatus(tools: string[]): Record<string, unknown> {
+    return {
+      version: getEngineVersion() ?? 'unknown',
+      standalone: {
+        available: this.config !== null,
+        ...(this.config ? {} : { reason: this.configError?.reason ?? '独立模式配置未加载', fix: this.configError?.fix ?? '' }),
+        config_path: this.configPath,
+      },
+      reuse_tools_available: true,
+      tools,
+    };
+  }
 
   // run 生命周期状态机：running → (completed|failed|paused)，paused → resume → running（可多次）。
   // paused 非终态；终态 run 保留在注册表至 server 退出。见 [[mcp-server#^anc-mcp-run-lifecycle]]。
@@ -617,7 +356,7 @@ export class HopjitMcpCore {
    * requires_commit 的 commit 语境约束不适用。 // @a: anc-mcp-notify-hook */
   private maybeNotify(entry: RunEntry): void {
     if (!entry.notifyRequested) return;                       // 门① 用户要了才发
-    if (this.config.notify?.channel !== 'dingtalk') return;   // 门② 配置声明了通道
+    if (this.config?.notify?.channel !== 'dingtalk') return;   // 门② 配置声明了通道（config 为 null=独立模式不可用,无通道）
     const specTitle = entry.dispatcher.getEngine().getSpec()?.header.title
       ?? entry.specPath.split('/').pop()?.replace(/\.md$/, '') ?? entry.runId;
     let completed = 0, total = 0, currentStep: string | undefined;
@@ -660,10 +399,13 @@ export class HopjitMcpCore {
     };
   }
 
-  async startRun(specPathArg: string, params?: Record<string, unknown>, stateDir?: string, workspaceDirArg?: string): Promise<Record<string, unknown>> { // @a: anc-mcp-config
-    const providerKeys = snapshotProviderKeys(this.config);
+  async startRun(specPathArg: string, params?: Record<string, unknown>, stateDir?: string, workspaceDirArg?: string, dirsArg?: { read?: string[]; readwrite?: string[] }): Promise<Record<string, unknown>> { // @a: anc-mcp-config
+    const unavailable = this.standaloneUnavailable();   // 独立模式能力闸 // @a: anc-mcp-server-status
+    if (unavailable) return unavailable;
+    const config = this.config!;
+    const providerKeys = snapshotProviderKeys(config);
     const active = [...this.runs.values()].filter(e => e.state === 'running' || e.state === 'paused').length;
-    const maxRuns = this.config.resource_limits?.max_concurrent_runs ?? DEFAULT_MAX_CONCURRENT_RUNS;
+    const maxRuns = config.resource_limits?.max_concurrent_runs ?? DEFAULT_MAX_CONCURRENT_RUNS;
     if (active >= maxRuns) {
       return { error: { code: 'RUN_LIMIT', message: `并发 run 已达上限 ${maxRuns}——等现有 run 终态或另起 server（上限可调:配置 resource_limits.max_concurrent_runs,server 启动期生效）` } };
     }
@@ -681,7 +423,7 @@ export class HopjitMcpCore {
     }
     // 项目级配置每 run 装配期重读（0007②+0012——项目根=本 run 组合根 cwd,与 restore 钉根
     // 重读对称同一函数;语义四条见 reloadProjectConfig 注）// @a: anc-mcp-config
-    const reloaded = reloadProjectConfig(this.config, runCwd);
+    const reloaded = reloadProjectConfig(config, runCwd);
     if ('error' in reloaded) return { error: reloaded.error };
     const effectiveConfig = reloaded.config;
     const specPath = isAbsolute(specPathArg) ? specPathArg : resolve(runCwd, specPathArg);
@@ -702,7 +444,7 @@ export class HopjitMcpCore {
     // 全部条目注入本进程路由 env（{SERVICE_ID}_API_KEY/_BASE_URL，即 dispatcher
     // getClientForService 的既有多服务约定）+ ModelEngine——service/model 引用按
     // service_id 命中对应后端，不静默回退默认 client（错后端=烧错钱）。
-    const provider = this.config.providers[0];
+    const provider = config.providers[0];
     const hostConfig = providerToHostConfig(provider, runCwd, effectiveConfig.commands);   // effectiveConfig 每 run 重读——项目级 commands 生效(review F2:原读启动期快照,项目级无通路) // @a: anc-exec-subprocess-run
     hostConfig.config_project_dir = runCwd;   // 配置读取根随快照钉住（BUG-I——重启恢复据此重读项目级配置）// @a: anc-mcp-run-restore
     // resource_limits 节装配（每 run 重读数据面——effectiveConfig 已两级合并;env 优先序归 dispatcher 解析链）// @a: anc-config-standalone-schema
@@ -721,21 +463,21 @@ export class HopjitMcpCore {
     }
     // 缺省 SpecProvider：宿主未注入时按 spec 文件所在目录构造 DirSpecProvider（[call callee] 同目录
     // 寻址，design ^anc-provider-spec-default）——独立模式 call 递归的解析源。// @a: anc-provider-spec-default
-    hostConfig.spec_provider ??= new DirSpecProvider(dirname(specPath));
+    hostConfig.spec_provider ??= new DirSpecProvider(dirname(specPath), antRoots(homedir(), hostConfig.workspace_dir));
     // 凭证/端点/协议改走 run 级 env 快照（run 隔离不变量,ARCHITECTURE ^anc-run-isolation——
     // 原实现写 process.env 把进程环境当全局注册表:多 run 共享可变槽的反模式实例,且外部
     // 观察者〔子进程/诊断〕会看到凭证泄进进程环境）。dispatcher envOf 只查快照。
     // 键集与构造单点 buildEnvSnapshot（0008③——原手写只冻 providers 三键,固定透传键漏冻,
     // 封闭集下 HOPJIT_MAX_OUTPUT_TOKENS 等用户环境变量静默失效）。
     // @a: anc-run-isolation, anc-exec-protocol-adapter
-    hostConfig.env_snapshot = buildEnvSnapshot(this.config, providerKeys);
-    hostConfig.language = effectiveConfig.language === 'zh' ? 'zh' : 'en';   // 生成物语言（^anc-i18n-language-config） // @a: anc-i18n-serialize-lang
+    hostConfig.env_snapshot = buildEnvSnapshot(config, providerKeys);
+    hostConfig.language = effectiveLanguage(effectiveConfig.language);   // 生成物语言：键缺席跟随系统语言,与复用模式同一判定（todo/0160;^anc-i18n-language-config） // @a: anc-i18n-serialize-lang
     // hop_env 覆盖链合成（组合根,^anc-config-hop-env）：配置 env 节（已两级合并）→ params 里
     // hop_env_* 键覆盖（覆盖项从业务 params 中摘出——它是环境参数不是 spec 输入）。
     // @a: anc-config-hop-env
     // hop_env_language 打底注入（^anc-i18n-language-config——language 是项目属性恒在表,
     // hopbuild2 拼头 body 直接引用零判存;env 节/params 显式写 hop_env_language 者按覆盖链后到覆盖）。// @a: anc-i18n-serialize-lang
-    const hopEnv: Record<string, string> = { hop_env_language: effectiveConfig.language === 'zh' ? 'zh' : 'en', ...(effectiveConfig.env ?? {}) };   // env 数据面同重读（0012）
+    const hopEnv: Record<string, string> = { hop_env_language: hostConfig.language, ...(effectiveConfig.env ?? {}) };   // env 数据面同重读（0012）
     let notifyRequested = false;   // per-run 通知开关（^anc-mcp-notify-hook） // @a: anc-mcp-notify-hook
     if (params) {
       for (const k of Object.keys(params)) {
@@ -807,11 +549,15 @@ export class HopjitMcpCore {
       ...(effectiveConfig.log_retention ? { maxRuns: effectiveConfig.log_retention.max_runs } : {}),   // @a: anc-obs-log-retention
       ...(params ? { params } : {}),
       specPath,
+      dirsGrant: dirsArg ?? {},   // 独立模式 Config.dirs 唯一授权面——没传也要对账（spec 有 workspace 外声明即缺）,引擎 init 内判,缺即不建实例 // @a: anc-mcp-dirs-approve
       driverChannel: 'mcp',   // 双执行硬闸落账 // @a: anc-exec-driver-channel
     });
     if (init.status !== 'ok') {
       return { error: { code: 'INIT_FAILED', message: ('errors' in init ? init.errors : []).map(e => e.message).join('; ') || 'init 失败' } };
     }
+    // Config.dirs 对账已在 engine.initExecution 内完成（dirsGrant,^anc-exec-dirs-grant）——多传不授的提示在 init.warnings 里,
+    // 按 warning 的 rule 字段挑出（引擎 dirs 对账产生的 warning 恒 rule=CONFIG）随本返回的 warnings 送出,不按报文文字筛。// @a: anc-mcp-dirs-approve
+    const dirsWarn = ('warnings' in init ? (init.warnings ?? []) : []).filter(w => w.kind === 'validate' && DIRS_WARNING_RULES.has(w.rule)).map(w => w.message);
     // 修订供给档装配（^anc-exec-revision-short-weak）:精度 env > 项目配置 > 缺省 standard。
     // env 读进程环境属组合根一次读取（与 HOPJIT_CONTEXT_MODE 同款豁免——低危调档开关,
     // 不碰凭证/解析根）。// @a: anc-exec-revision-short-weak
@@ -847,8 +593,8 @@ export class HopjitMcpCore {
         this.maybeNotify(entry);   // 异常失败路径同挂（阅卷缺口 B——"failed 恒发"不豁免 throw 终态） // @a: anc-mcp-notify-hook
       });
 
-    // state_dir 解析后绝对路径随返回——server 重启后 run_status/resume_run 快照兜底据此传参
-    return { run_id: entry.runId, status: 'running', state_dir: resolvedStateDir };
+    // state_dir 解析后绝对路径随返回——server 重启后 run_status/resume_run 快照兜底据此传参;dirs 多传不授的提示随 warnings 送出（^anc-mcp-dirs-approve）
+    return { run_id: entry.runId, status: 'running', state_dir: resolvedStateDir, ...(dirsWarn.length ? { warnings: dirsWarn } : {}) };
   }
 
   runStatus(runId?: string, stateDir?: string): Record<string, unknown> {
@@ -917,6 +663,14 @@ export class HopjitMcpCore {
             if (existsSync(statePath)) {
               const st = JSON.parse(readFileSync(statePath, 'utf-8')) as { step_states?: Record<string, string> };
               const cardStep = String(card['step_id'] ?? '');
+              // dirs 卡（step_id 空）与引擎 getStatus 源⑥同判：账已批即陈卡（approveDirs 会删卡,此支只在删卡与进程退出之间崩溃时命中）// @a: anc-exec-dirs-grant
+              if (card['pause_reason'] === 'dirs') {
+                try {
+                  const eng = ExecutionEngine.load(instDir);
+                  const g = eng.checkDirsApproval();
+                  if (!g || g.approved) return { error: { code: 'RUN_NOT_FOUND', message: `run '${runId}' 不在注册表;快照有 dirs 问题卡但清单已批准（陈卡,批准账为准）——用 resume_run 续跑` } };
+                } catch { /* 载不起引擎就按卡报 */ }
+              }
               if (cardStep && st.step_states?.[cardStep] !== 'running') {
                 return { error: { code: 'RUN_NOT_FOUND', message: `run '${runId}' 不在注册表;快照有问题卡但其步骤 '${cardStep}' 已非等待态（陈卡,状态源 state.json 为准）——完整恢复用 resume_run` } };
               }
@@ -1012,6 +766,10 @@ export class HopjitMcpCore {
     if (existsSync(join(instanceDir, 'aborted.json'))) {
       return { error: { code: 'RUN_ABORTED', message: `run '${runId}' 已被 stop_run 主动中止（终局,不可恢复）——快照在 ${instanceDir} 仅供人工检视` } };
     }
+    // 恢复要用 provider 构造 Dispatcher——独立模式不可用时拒,快照不动（^anc-mcp-server-status）// @a: anc-mcp-server-status
+    const unavailable = this.standaloneUnavailable();
+    if (unavailable) return unavailable as { error: Record<string, unknown> };
+    const config = this.config!;
     let engine: ExecutionEngine;
     try {
       engine = ExecutionEngine.load(instanceDir);   // load 保留 running（paused 的 confirm/ask 即 running 态）
@@ -1030,9 +788,9 @@ export class HopjitMcpCore {
       const pinnedDir = engine.getRestoredConfigProjectDir();
       // 重读面=项目级 hopjit.yaml（按钉住根,与 startRun 对称同一函数——语义四条见
       // reloadProjectConfig 注）。pinnedDir 缺席（旧快照）回退 server 当前配置。
-      let restoreConfig = this.config;
+      let restoreConfig = config;
       if (pinnedDir) {
-        const reloaded = reloadProjectConfig(this.config, pinnedDir);
+        const reloaded = reloadProjectConfig(config, pinnedDir);
         if ('error' in reloaded) return { error: reloaded.error };
         restoreConfig = reloaded.config;
       }
@@ -1077,7 +835,7 @@ export class HopjitMcpCore {
     }
       specPath = engine.getSpecPath();
       if (specPath) {
-        hostConfig.spec_provider ??= new DirSpecProvider(dirname(specPath));
+        hostConfig.spec_provider ??= new DirSpecProvider(dirname(specPath), antRoots(homedir(), hostConfig.workspace_dir));
         // spec 目录读授权恢复（init 组合点同款——setHostConfig 用新构造沙箱盖掉快照恢复的,
         // 不重加则恢复后 doc-ref 第一级候选拒读）。// @a: anc-exec-doc-ref-resolve
         const specDir = dirname(resolve(specPath));
@@ -1088,7 +846,7 @@ export class HopjitMcpCore {
       // restore 同构造 env 快照（run 隔离——顺带修隐性依赖 bug:旧实现 restore 不写 env,
       // 非默认 service 凭证依赖"此前某 startRun 写过进程 env"的残留,server 重启直 restore 即缺）。
       // 构造同 startRun 单点 buildEnvSnapshot（0008③键集单一语义）。// @a: anc-run-isolation
-      hostConfig.env_snapshot = buildEnvSnapshot(this.config, snapshotProviderKeys(this.config));
+      hostConfig.env_snapshot = buildEnvSnapshot(config, snapshotProviderKeys(config));
       // 模型路由随恢复同装（todo/0084 M3——原 restore 漏装 model_engine,恢复的 run 路由静默
       // 回落 providers[0];构造单点 buildModelEngine 与 startRun 同调,用重读合并后配置）。
       // @a: anc-exec-model-routing
@@ -1100,13 +858,13 @@ export class HopjitMcpCore {
         const envRp = process.env['HOPJIT_REVISION_PROMPT']?.toLowerCase();
         engine.setRevisionPromptMode((envRp === 'short' || envRp === 'standard') ? envRp : (restoreConfig.revision_prompt ?? 'standard'));
       }
-      hostConfig.language = restoreConfig.language === 'zh' ? 'zh' : 'en';   // 与 startRun 对齐（M4 随批） // @a: anc-i18n-serialize-lang
+      hostConfig.language = effectiveLanguage(restoreConfig.language);   // 与 startRun 对齐（M4 随批;键缺席跟随系统语言 todo/0160） // @a: anc-i18n-serialize-lang
       // hop_env restore 合成：配置 env 节打底,快照恢复表覆盖（host_context 持久化了原 run 的
       // params 覆盖与 ask 回填——它是覆盖链更下游产物,配置重合成会丢）。声明根同扩读白名单。
-      // env 打底换重读面（todo/0084 M4——原用启动期 this.config.env,同函数内 tool_servers/
+      // env 打底换重读面（todo/0084 M4——原用启动期 config.env,同函数内 tool_servers/
       // commands/resource_limits 皆重读面唯 env 启动快照,三节两种口径;并补 hop_env_language
       // 打底与 startRun 对齐）。// @a: anc-config-hop-env, anc-exec-doc-ref-hop-env
-      const restoredHopEnv = { hop_env_language: restoreConfig.language === 'zh' ? 'zh' : 'en', ...(restoreConfig.env ?? {}), ...(engine.getRestoredHopEnv() ?? {}) };
+      const restoredHopEnv = { hop_env_language: hostConfig.language, ...(restoreConfig.env ?? {}), ...(engine.getRestoredHopEnv() ?? {}) };
       if (Object.keys(restoredHopEnv).length) {
         hostConfig.hop_env = restoredHopEnv;
         for (const v of Object.values(restoredHopEnv)) {
@@ -1117,6 +875,12 @@ export class HopjitMcpCore {
       }
       // 引擎重建后需重接 hostConfig（load 只恢复 host_context 子集）
       engine.setHostConfig(hostConfig);
+      // Config.dirs 两白名单随恢复重建（新构造沙箱没有 write_access,read_access 也缺并入的目录——不重建则恢复后 commit 写 readwrite 被拒）。// @a: anc-exec-dirs-grant
+      const dd = engine.getDeclaredDirs();
+      if (dd) {
+        for (const d of [...dd.read, ...dd.readwrite]) if (!hostConfig.sandbox.filesystem.read_access.allowed.includes(d)) hostConfig.sandbox.filesystem.read_access.allowed.push(d);
+        if (dd.readwrite.length) hostConfig.sandbox.filesystem.write_access = { allowed: [...new Set([...(hostConfig.sandbox.filesystem.write_access?.allowed ?? []), ...dd.readwrite])] };
+      }
       dispatcher = new StepDispatcher(engine, hostConfig);   // 构造时回填 cumulative_tokens（预算延续）
     } catch (err: unknown) {
       // 凭证缺失/Dispatcher 构造失败——结构化返回,不炸 server（快照未动,配好凭证可重试）
@@ -1153,6 +917,9 @@ export class HopjitMcpCore {
       if ('error' in restored) return restored as Record<string, unknown>;
       entry = restored as RunEntry;
     }
+    // 独立模式 run 的续跑要用 provider——config 为 null 时拒（^anc-mcp-server-status）。// @a: anc-mcp-server-status
+    const unavailableOnResume = this.standaloneUnavailable();
+    if (unavailableOnResume) return unavailableOnResume;
     // 同通道两进程的过时账预检（todo/0114）:在通道核对（会认领）与一切状态翻转之前。// @a: anc-exec-state-seq-guard
     const staleOnResume = this.rejectIfStale(runId, entry);
     if (staleOnResume) return staleOnResume;
@@ -1211,8 +978,11 @@ export class HopjitMcpCore {
       //（崩溃恢复无问题在答）。design ^anc-mcp-run-restore 运行中崩溃恢复条款。
       // @a: anc-mcp-run-restore, anc-exec-crash-recovery
       const isEscalatePaused = node && eng.getEscalatePending?.() === stepId;   // 升层待答跨进程放行 // @a: anc-exec-check-escalate
+      // commit 批准停点先于崩溃悬空判:running 的 commit 步骤放行给下方批准核对与 dispatcher.resume 的 commit 分支,
+      // 不当悬空步重置（^anc-mcp-run-restore 恢复分支,todo/0146）。// @a: anc-exec-commit-approval
+      const isCommitPause = node && node.step_type === 'commit' && eng.getStepStates().get(stepId) === 'running';
       const isCrashDangling = node && eng.getStepStates().get(stepId) === 'running'
-        && node.step_type !== 'confirm' && node.step_type !== 'ask' && !isEscalatePaused;
+        && node.step_type !== 'confirm' && node.step_type !== 'ask' && !isEscalatePaused && !isCommitPause;
       if (isCrashDangling) {
         eng.recoverDanglingRunning();
         entry.state = 'running';
@@ -1227,8 +997,17 @@ export class HopjitMcpCore {
           });
         return { run_id: runId, status: 'running', recovered_from_crash: true };
       }
-      if (!node || (node.step_type !== 'confirm' && node.step_type !== 'ask' && !isNetworkPaused && !isEscalatePaused)) {
+      if (!node || (node.step_type !== 'confirm' && node.step_type !== 'ask' && !isNetworkPaused && !isEscalatePaused && !isCommitPause)) {
         return { error: { code: 'INVALID_STATE', message: `step_id '${stepId}' 不是本 spec 的 confirm/ask 步骤,也非网络暂停步,也非悬空崩溃步——恢复的 run 只支持顶层暂停点注入或崩溃步重跑（嵌套 call 的暂停随恢复重跑整个 call）` } };
+      }
+    }
+    // commit 批准停点的同步核对:未批准即当场拒,run 保持 paused（不翻 running 再异步回滚——调用方要看到明确错误）。
+    // ^anc-mcp-commit-approve / ^anc-exec-commit-approval。// @a: anc-exec-commit-approval
+    if (!childInstance) {
+      const eng = entry.dispatcher?.getEngine?.();
+      const approval = eng?.getStepStates?.().get(stepId) === 'running' ? eng.checkCommitApproval?.(stepId) : null;
+      if (approval && !approval.approved) {
+        return { error: { code: 'COMMIT_NOT_APPROVED', message: commitNotApprovedMessage(stepId, approval.fingerprint, runId), step_id: stepId, fingerprint: approval.fingerprint } };
       }
     }
     // 嵌套 call 的暂停帧：call_path 由 server 从暂停载荷原样回传（caller 无需感知调用链），
@@ -1245,9 +1024,14 @@ export class HopjitMcpCore {
         // 指路——run_status 呈现 paused+failure 组合='答案被拒,原因在此,可修正重试'
         //（修前:结构化错误被吞,run 被錘 failed 终态且 reason 恒'No executable step found'）。
         if (r.rejected) {
-          // aborted 钉住（^anc-mcp-stop-run 第2条）：rejected 回调虽为微任务级（与下一条
-          // stdio 消息的 stop_run 理论无交叠）,同 applyResult 姿态守一道不依赖时序论证。
-          if (entry.state === 'aborted') return;   // @a: anc-mcp-stop-run
+          // aborted 钉住（^anc-mcp-stop-run 第2条第四口）：rejected 回调虽为微任务级（与下一条
+          // stdio 消息的 stop_run 理论无交叠）,同 applyResult 姿态守一道不依赖时序论证;
+          // 与另三口同律只做资源收尾——收 tool provider（0156 B5 补,此前此口漏 close）。
+          if (entry.state === 'aborted') {   // @a: anc-mcp-stop-run
+            const tpR = entry.dispatcher?.getToolProvider?.() as { close?: () => Promise<void> } | undefined;
+            if (typeof tpR?.close === 'function') void tpR.close();
+            return;
+          }
           entry.state = 'paused';
           entry.paused = prevPaused;
           entry.failure = { step_id: stepId, reason: `${r.rejected.code}: ${r.rejected.message}` };
@@ -1303,12 +1087,8 @@ export class HopjitMcpCore {
       return { error: { code: 'APPROVAL_REQUIRED', message: `命令 "${shown}" 不在本任务卡《已批准命令》里。卡上现有前缀:\n${listed}\n这是任务授权范围要不要扩的问题,请停下问用户：批则在任务卡的 \`## 已批准命令\` 节加一行 \`- ${argv.slice(0, Math.min(argv.length, 2)).join(' ')}\`（一行一个 argv 前缀,逐项相等地以它开头的命令放行）后重起 run;不批则这一条走载体自己的审批。不要自己把命令加进卡,不要换通道绕过` } };   // 报文与 description、/hop skill 同口径（review 面二抓首版并列'改走 Bash'无'归人决定'）
     }
     const ws = (state as { host_context?: { workspace_dir?: string } }).host_context?.workspace_dir;
+    // cwd 只做绝对化不判越界——授权本体是上面的 argv 前缀匹配,worktree / 临时区都是正当工作面（2026-10-09 todo/0152 撤越界闸,理由见设计 ^anc-mcp-run-command「撤闸记录」）
     const cwdEff = args.cwd ? (isAbsolute(args.cwd) ? args.cwd : resolve(ws ?? process.cwd(), args.cwd)) : (ws ?? process.cwd());
-    if (ws) {
-      let real: string;
-      try { real = resolveRealDeep(cwdEff); } catch (e) { return { error: { code: 'CWD_OUTSIDE_WORKSPACE', message: `cwd 解析失败: ${e instanceof Error ? e.message : String(e)}` } }; }
-      if (!isWithinDir(real, resolveRealDeep(ws))) return { error: { code: 'CWD_OUTSIDE_WORKSPACE', message: `cwd '${args.cwd}' 落在本 run 的 workspace（${ws}）之外——run_approved_command 只在该 run 的作业根内执行` } };
-    }
     const timeoutSec = Math.min(Math.max(1, Math.floor(args.timeout_sec ?? RUN_COMMAND_TIMEOUT_DEFAULT_SEC)), RUN_COMMAND_TIMEOUT_MAX_SEC);
     const t0 = Date.now();
     let r: { stdout: string; stderr: string; returncode: number };
@@ -1338,6 +1118,54 @@ export class HopjitMcpCore {
     return { returncode: r.returncode, stdout: cut(r.stdout, stdoutBytes), stderr: cut(r.stderr, stderrBytes), duration_ms, truncated, ...(account_error ? { account_error } : {}) };
   }
 
+  /** approve_commit:安全分析转人工后,把人的选择（once 只批准这一次 / task 这一步以后都通过）记入批准账,不推进 run。
+   * 本进程注册表里的独立模式 run 用其内存引擎,否则从快照 load（不认领通道）。见 [[mcp-server#^anc-mcp-commit-approve]]。
+   * // @a: anc-mcp-commit-approve */
+  approveCommit(args: { instance_id: string; step_id: string; fingerprint: string; scope: string; state_dir?: string; workspace_dir?: string; child_instance?: string }): Record<string, unknown> {
+    if (args.scope !== 'once' && args.scope !== 'task') return { error: { code: 'INVALID_ARG', message: 'scope 只能是 once 或 task' } };
+    try {
+      const ws = driverContext(args.workspace_dir).workspace_dir;   // 与驱动工具同一规则:显式传了但不存在 → WORKSPACE_NOT_FOUND
+      const instanceDir = resolveInstance(resolve(ws, args.state_dir ?? '.hopstate'), args.instance_id);
+      const entry = this.runs.get(args.instance_id);
+      let engine: ExecutionEngine;
+      if (args.child_instance) {
+        // 子实例的指纹按子实例作用域里的输入算,只能在子实例引擎上批;队列里的内存引擎优先——
+        // 另 load 一份来批会推进盘上写入序号,内存那份续跑落盘撞 STATE_STALE // @a: anc-mcp-commit-approve
+        const cid = args.child_instance;
+        const queued = entry?.dispatcher?.getPausedChildren?.()?.get(cid)?.engine;
+        if (queued) engine = queued;
+        else {
+          const childDir = ['parallel', 'calls'].map(d => join(instanceDir, d, cid)).find(p => existsSync(join(p, 'state.json')));
+          if (!childDir) throw new Error(`INSTANCE_NOT_FOUND: 实例 ${args.instance_id} 下没有子实例 ${cid}（查过 parallel/ 与 calls/）——child_instance 取 run_status 的 paused_queue 里那张卡的值`);
+          engine = ExecutionEngine.load(childDir);
+        }
+      } else {
+        engine = entry?.dispatcher?.getEngine?.() ?? ExecutionEngine.load(instanceDir);
+      }
+      const r = engine.approveCommit(args.step_id, args.fingerprint, args.scope);
+      if (r.status === 'error') return { error: { code: r.code, message: r.message } };
+      return r as unknown as Record<string, unknown>;
+    } catch (err) {
+      return driverErrorOf(err);
+    }
+  }
+
+  /** approve_dirs:把某 run 的 Config.dirs 清单记入批准账,不推进 run。与 approveCommit 同形。见 [[mcp-server#^anc-mcp-dirs-approve]]。
+   * // @a: anc-mcp-dirs-approve */
+  approveDirs(args: { instance_id: string; dirs_hash: string; state_dir?: string; workspace_dir?: string }): Record<string, unknown> {
+    try {
+      const ws = driverContext(args.workspace_dir).workspace_dir;   // 与驱动工具同一规则:显式传了但不存在 → WORKSPACE_NOT_FOUND
+      const instanceDir = resolveInstance(resolve(ws, args.state_dir ?? '.hopstate'), args.instance_id);
+      const live = this.runs.get(args.instance_id)?.dispatcher?.getEngine?.();
+      const engine = live ?? ExecutionEngine.load(instanceDir);
+      const r = engine.approveDirs(args.dirs_hash);
+      if (r.status === 'error') return { error: { code: r.code, message: r.message } };
+      return r as unknown as Record<string, unknown>;
+    } catch (err) {
+      return driverErrorOf(err);
+    }
+  }
+
   listRuns(): Record<string, unknown> {
     return {
       runs: [...this.runs.values()].map(e => ({
@@ -1349,10 +1177,11 @@ export class HopjitMcpCore {
   // 主动中止 run（2026-08-22 作者定"hopjit 应该能自己杀自己的子任务"——此前失控 run 只能
   // 杀 server 重启会话止损）。running → 级联协作 abort（步间生效,不打断执行中单步）;
   // paused → 直接终局（无在飞活动）;终态 → 幂等返回现状。中止是终局不是暂停——不支持 resume,
-  // 快照保留可人工检视。五条实施契约见 [[mcp-server#^anc-mcp-stop-run]]。// @a: anc-mcp-stop-run
-  stopRun(runId: string): Record<string, unknown> {
+  // 快照保留可人工检视。六条实施契约见 [[mcp-server#^anc-mcp-stop-run]]——注册表查不到时按
+  // state_dir 快照兜底（第 6 条,hopissues/0117）。// @a: anc-mcp-stop-run
+  stopRun(runId: string, stateDir?: string): Record<string, unknown> {
     const entry = this.runs.get(runId);
-    if (!entry) return { error: { code: 'RUN_NOT_FOUND', message: `run '${runId}' 不在注册表` } };
+    if (!entry) return this.stopFromSnapshot(runId, stateDir);
     if (entry.state === 'completed' || entry.state === 'failed' || entry.state === 'aborted') {
       return { run_id: entry.runId, status: entry.state };   // 终态幂等
     }
@@ -1393,6 +1222,46 @@ export class HopjitMcpCore {
     return { run_id: entry.runId, status: 'aborted' };
   }
 
+  // stop_run 快照兜底（^anc-mcp-stop-run 第 6 条,hopissues/0117）：MCP server 重启后注册表清空,
+  // 重启前停在 paused 的 run 只剩盘上快照。纯盘操作——不建注册项、不加载引擎、不读凭证;不做
+  // STATE_STALE 预检（没有内存账可比）。别的活进程持有时拒,否则本进程写的墓碑停不了那边的执行。
+  // 墓碑写失败如实报 STOP_WRITE_FAILED（快照路径墓碑就是中止的全部效果）。// @a: anc-mcp-stop-run
+  private stopFromSnapshot(runId: string, stateDir?: string): Record<string, unknown> {
+    const dir = resolve(stateDir ?? '.hopstate', runId);
+    if (!existsSync(join(dir, 'state.json'))) {
+      return { error: { code: 'RUN_NOT_FOUND', message: `run '${runId}' 不在注册表,快照目录 ${dir} 下也没有 state.json——run 以 workspace_dir 启动时须传 start_run 返回的 state_dir 绝对路径` } };
+    }
+    if (existsSync(join(dir, 'aborted.json'))) {
+      return { run_id: runId, status: 'aborted', restored_from_snapshot: true };
+    }
+    let st: { terminal_state?: string; driver_channel?: string };
+    try {
+      st = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf-8')) as typeof st;
+    } catch (err: unknown) {
+      return { error: { code: 'RUN_NOT_FOUND', message: `run '${runId}' 的快照 ${join(dir, 'state.json')} 解析失败: ${err instanceof Error ? err.message : String(err)}` } };
+    }
+    if (st.terminal_state === 'completed' || st.terminal_state === 'failed' || st.terminal_state === 'aborted') {
+      return { run_id: runId, status: st.terminal_state, restored_from_snapshot: true };   // 终态幂等,不写墓碑
+    }
+    const lw = readStateSeq(dir).last_writer;
+    if (lw && lw.pid !== process.pid && pidAlive(lw.pid)) {
+      return { error: { code: 'RUN_OWNED_ELSEWHERE', message: `run '${runId}' 的快照最后由进程 ${lw.pid} 写入（${lw.at}）,该进程仍存活——run 可能正在那个 hopjit 进程的注册表里执行,本进程写墓碑停不了那边的执行循环。请到那个进程所在的会话里调 stop_run;若确认 pid ${lw.pid} 已不是 hopjit 进程（pid 被系统复用）,结束该进程或等它退出后重试` } };
+    }
+    if (st.driver_channel != null && st.driver_channel !== 'mcp') {
+      return { error: { code: 'DRIVER_CHANNEL_MISMATCH', message: `DRIVER_CHANNEL_MISMATCH: run 属 '${st.driver_channel}' 通道,本入口是 'mcp'——双执行防线拒绝跨通道推进。该 run 由 hopjit CLI 建立/驱动——用 hopjit abort 中止,不要经 MCP server` } };
+    }
+    try {
+      writeFileSync(join(dir, 'aborted.json'), JSON.stringify({ aborted_at: new Date().toISOString(), reason: 'caller 经 stop_run 主动中止（注册表外,按快照兜底）' }, null, 2));
+    } catch (err: unknown) {
+      return { error: { code: 'STOP_WRITE_FAILED', message: `run '${runId}' 墓碑 ${join(dir, 'aborted.json')} 写入失败,中止没有生效: ${err instanceof Error ? err.message : String(err)}` } };
+    }
+    // 问题卡随墓碑清除;删不掉不算失败——墓碑优先,残卡不会被当成等人
+    const cardPath = join(dir, 'paused.json');
+    try { if (existsSync(cardPath)) unlinkSync(cardPath); }
+    catch (err: unknown) { console.error(`[hopjit-mcp] 问题卡删除失败（${cardPath}）: ${err instanceof Error ? err.message : String(err)}——墓碑已落,不影响中止`); }
+    return { run_id: runId, status: 'aborted', restored_from_snapshot: true };
+  }
+
   private resolveRun(runId?: string): RunEntry | undefined {
     if (runId) return this.runs.get(runId);
     // 简写按活跃（running/paused）run 计数（design v0.3.1 review P2）：终态永久保留在
@@ -1408,12 +1277,58 @@ function jsonContent(data: Record<string, unknown>): { content: { type: 'text'; 
   return { content: [{ type: 'text', text: JSON.stringify(data) }], ...(data['error'] ? { isError: true } : {}) };
 }
 
-/** server 装配：六工具注册。core 与 transport 分离（决策注记：HTTP transport 演进出口）。
+/** 复用驱动工具 handler 的工作区根与上下文:workspace_dir 参数在场须是已存在目录,缺席取 server cwd;
+ * 环境变量值在此（组合根）读一次传入。见 [[mcp-server#^anc-mcp-reuse-driver-tools]]。// @a: anc-mcp-reuse-driver-tools */
+function driverContext(workspaceDir?: string): ReuseDriverContext {
+  const ws = workspaceDir ? resolve(process.cwd(), workspaceDir) : process.cwd();
+  if (workspaceDir && !existsSync(ws)) throw new Error(`WORKSPACE_NOT_FOUND: workspace_dir 不存在: ${ws}`);
+  return {
+    workspace_dir: ws,
+    cli_abs_path: join(dirname(fileURLToPath(import.meta.url)), 'cli.js'),
+    home: homedir(),
+    api_key: process.env['HOPJIT_ANTHROPIC_API_KEY'] ?? '',
+    hopjit_config: process.env['HOPJIT_CONFIG'] ?? '',
+    context_mode_env: process.env['HOPJIT_CONTEXT_MODE'] ?? '',
+  };
+}
+
+/** 复用驱动工具 handler 的统一外壳:组上下文 → 调驱动函数 → 结果或抛错都转成 JSON 文本内容（错误经 driverErrorOf 结构化,不炸 server）。
+ * // @a: anc-mcp-reuse-driver-tools */
+async function driverCall(workspaceDir: string | undefined, fn: (ctx: ReuseDriverContext) => unknown): Promise<ReturnType<typeof jsonContent>> {
+  try {
+    return jsonContent(await fn(driverContext(workspaceDir)) as Record<string, unknown>);
+  } catch (err) {
+    return jsonContent(driverErrorOf(err));
+  }
+}
+
+/** 管理工具 handler 的机器侧事实（设计 HopSchema AdminContext,^anc-mcp-admin-tools）：workspace_dir 在场须是已存在目录,缺席取 server cwd;
+ * home / env / exec_path / login / hostname 在此（组合根）读一次传入。// @a: anc-mcp-admin-tools */
+function adminContext(workspaceDir?: string): AdminContext {
+  const cwd = workspaceDir ? resolve(process.cwd(), workspaceDir) : process.cwd();
+  if (workspaceDir && !existsSync(cwd)) throw new Error(`WORKSPACE_NOT_FOUND: workspace_dir 不存在: ${cwd}`);
+  let login = '';
+  try { login = userInfo().username; } catch { /* 容器里可能取不到 */ }
+  const home = homedir();
+  return { home, cwd, env: process.env, exec_path: process.execPath, login, hostname: hostname(), roots: antRoots(home, cwd) };
+}
+
+/** 管理工具 handler 的统一外壳：组上下文 → 调 hop-admin 函数 → 结果或抛错都转成 JSON 文本内容（错误经 driverErrorOf 结构化：HOPANT_* / PACK_ERROR / WORKSPACE_NOT_FOUND）。
+ * // @a: anc-mcp-admin-tools */
+function adminCall(workspaceDir: string | undefined, fn: (ctx: AdminContext) => unknown): ReturnType<typeof jsonContent> {
+  try {
+    return jsonContent(fn(adminContext(workspaceDir)) as Record<string, unknown>);
+  } catch (err) {
+    return jsonContent(driverErrorOf(err));
+  }
+}
+
+/** server 装配：独立模式六工具 + 复用驱动七件 + approve_commit + approve_dirs + 管理八件 + server_status。core 与 transport 分离（决策注记：HTTP transport 演进出口）。
  * // @a: anc-mcp-tools */
 // standalone 的全部对外形态在此装配（design/standalone-mode.md ^anc-struct-standalone-endpoint）：
-// 一份 config + 一次注册 + 六个 MCP 工具。// @a: anc-struct-standalone-endpoint
+// 一份 config + 一次注册 + 独立模式六个 MCP 工具。// @a: anc-struct-standalone-endpoint
 export function buildServer(core: HopjitMcpCore): McpServer {
-  const server = new McpServer({ name: 'hopjit', version: '0.1.0' });
+  const server = new McpServer({ name: 'hopjit', version: getEngineVersion() ?? '0.0.0' });
 
   server.registerTool('start_run', {
     description: '启动一个 HopSpec 规约的 standalone 执行（HopJIT 引擎直调 LLM API）。异步返回 run_id，用 run_status 查询进度。',
@@ -1425,8 +1340,9 @@ export function buildServer(core: HopjitMcpCore): McpServer {
       params: z.record(z.string(), z.unknown()).optional().describe('spec Inputs 实参'),
       state_dir: z.string().optional().describe('状态目录（默认 .hopstate;相对路径锚 workspace_dir——快照/hoplog/work_zone 三产物单一基准,返回值携带解析后绝对路径）'),
       workspace_dir: z.string().optional().describe('作业对象根（业务材料读+产出写+沙箱锚,默认 server cwd）——server cwd 非作业目录时显式传;显式路径不存在即拒'),
+      dirs: z.object({ read: z.array(z.string()).optional(), readwrite: z.array(z.string()).optional() }).optional().describe('独立模式 Config.dirs 的唯一授权面：spec 声明的 workspace 之外目录,调用方显式传同一组绝对路径才算批准（缺即 INIT_FAILED 列缺的;多传的不授权）——^anc-mcp-dirs-approve'),
     },
-  }, async ({ spec_path, params, state_dir, workspace_dir }) => jsonContent(await core.startRun(spec_path, params, state_dir, workspace_dir)));
+  }, async ({ spec_path, params, state_dir, workspace_dir, dirs }) => jsonContent(await core.startRun(spec_path, params, state_dir, workspace_dir, dirs)));
 
   server.registerTool('run_status', {
     description: '查询 run 状态。paused 时携带完整介入载荷（问题/schema/默认值）；completed 携带全部 outputs；running 且有并行在飞时携带 current_step 与 inflight 子实例视图。run 不在注册表（server 重启/跨进程）时按 state_dir 快照兜底：paused run 返回盘上问题卡全文（纯读零凭证）。',
@@ -1456,27 +1372,230 @@ export function buildServer(core: HopjitMcpCore): McpServer {
   }, async () => jsonContent(core.listRuns()));
 
   server.registerTool('stop_run', {
-    description: '主动中止一个 run（协作式:步间生效,不打断执行中的单步;级联中止全部在飞子实例）。中止是终局不是暂停——不支持 resume;快照保留可检视。已终态的 run 幂等返回现状。',
+    description: '主动中止一个 run（协作式:步间生效,不打断执行中的单步;级联中止全部在飞子实例）。中止是终局不是暂停——不支持 resume;快照保留可检视。已终态的 run 幂等返回现状。run 不在注册表（server 重启后）时按 state_dir 快照兜底:非终态的写墓碑中止,快照正被另一个活着的进程持有时拒 RUN_OWNED_ELSEWHERE。',
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
-    inputSchema: { run_id: z.string().describe('要中止的 run') },
-  }, async ({ run_id }) => jsonContent(core.stopRun(run_id)));
+    inputSchema: {
+      run_id: z.string().describe('要中止的 run'),
+      state_dir: z.string().optional().describe('快照目录（缺省 .hopstate;相对路径按 server cwd 解析——run 以 workspace_dir 启动时传 start_run 返回的绝对路径）——仅 server 重启后中止旧 run 时用到'),
+    },
+  }, async ({ run_id, state_dir }) => jsonContent(core.stopRun(run_id, state_dir)));
 
   // 已批准命令在 run 上下文里执行（^anc-mcp-run-command,todo/0132）——授权来源是任务卡《已批准命令》节,
   // 不是 hopjit.yaml;openWorldHint 如实为 true（命令可联网,server 进程不在载体 Bash 沙箱里）。// @a: anc-mcp-run-command
   server.registerTool(RUN_APPROVED_COMMAND_TOOL, {
-    description: '在某个 run 的上下文里执行一条任务卡已批准的命令。授权三要素：①什么任务——授权绑定 run,从 instance_id 的快照里读该任务卡《已批准命令》节,别的活拿不到;②什么核验——命令级:argv 逐项相等地以卡上某行前缀开头才放行,hopjit 恒拒,cwd 必须在该 run 的工作区内,不经 shell;任务级:同一条命令在 act 步骤里是探索（可重跑）,在 commit 步骤里由引擎按 body 执行且前面已过 check final 或 confirm——两态由步骤类型定,不由本工具定;③才可以执行——两层都过才跑,每次执行的 argv/cwd/returncode/耗时进该 run 的 hoplog command: 块,事后可查。不认 hopjit.yaml commands:（那是项目级白名单,本工具的授权单位是任务）。被拒时怎么办：APPROVAL_REQUIRED 表示命令不在卡上——这是任务授权范围要不要扩的问题,归人决定;调用方停下来问用户（说清命令干什么、可逆否、为什么需要）,批则在卡上加一行后重起 run,不批则这一条走载体自己的审批;调用方不得自己把命令加进卡、不得改走别的通道绕过。COMMAND_FAILED 按报文修命令或超时再调,不换通道;CWD_OUTSIDE_WORKSPACE 改 cwd。人工闸（confirm/ask/commit 前置检查）不受本工具影响。',
+    description: '在某个 run 的上下文里执行一条任务卡已批准的命令。授权三要素：①什么任务——授权绑定 run,从 instance_id 的快照里读该任务卡《已批准命令》节,别的活拿不到;②什么核验——命令级:argv 逐项相等地以卡上某行前缀开头才放行,hopjit 恒拒,不经 shell（cwd 任意目录,缺省该 run 的工作区——授权看的是 argv 不是在哪跑）;任务级:同一条命令在 act 步骤里是探索（可重跑）,在 commit 步骤里由引擎按 body 执行且前面已过 check final 或 confirm——两态由步骤类型定,不由本工具定;③才可以执行——两层都过才跑,每次执行的 argv/cwd/returncode/耗时进该 run 的 hoplog command: 块,事后可查。不认 hopjit.yaml commands:（那是项目级白名单,本工具的授权单位是任务）。被拒时怎么办：APPROVAL_REQUIRED 表示命令不在卡上——这是任务授权范围要不要扩的问题,归人决定;调用方停下来问用户（说清命令干什么、可逆否、为什么需要）,批则在卡上加一行后重起 run,不批则这一条走载体自己的审批;调用方不得自己把命令加进卡、不得改走别的通道绕过。COMMAND_FAILED 按报文修命令或超时再调,不换通道。人工闸（confirm/ask/commit 前置检查）不受本工具影响。',
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: false },
     inputSchema: {
       state_dir: z.string().optional().describe('该 run 的快照目录（缺省 .hopstate;相对路径按 server cwd 解析——start_run 返回值里的绝对路径最稳）'),
       instance_id: z.string().describe('run 的实例 id（快照目录名）——清单从它的 spec 快照里读'),
       argv: z.array(z.string()).min(1).describe('命令的 argv 列表,首项是命令名;不拼 shell 字符串、不支持管道与重定向'),
-      cwd: z.string().optional().describe('工作目录,缺省该 run 的 workspace_dir;相对路径按 workspace_dir 解析;必须落在 workspace_dir 内'),
+      cwd: z.string().optional().describe('工作目录,缺省该 run 的 workspace_dir;相对路径按 workspace_dir 解析;任意目录都行（worktree / 临时区）——授权看的是 argv'),
       timeout_sec: z.number().optional().describe(`超时秒数,缺省 ${RUN_COMMAND_TIMEOUT_DEFAULT_SEC},上限 ${RUN_COMMAND_TIMEOUT_MAX_SEC},下限 1`),
       caller_step: z.string().optional().describe('调用方自报的所属步骤号,只写进账供人对账'),
     },
   }, async (args) => jsonContent(core.runCommand(args)));
 
+  // ── 复用模式驱动工具七件（^anc-mcp-reuse-driver-tools,todo/0146）——与 CLI 同名子命令同一引擎调用序、同一响应,
+  // 没有 shell。工具本身不调 LLM、不依赖独立模式配置。// @a: anc-mcp-reuse-driver-tools
+  const wsArg = z.string().optional().describe('工作区根（缺省 server cwd,即载体拉起 server 的项目根）;state_dir/spec_path/@路径的相对路径都按它解析');
+  const stateDirArg = z.string().optional().describe('状态目录,缺省 .hopstate（相对工作区根）');
+  const instanceArg = z.string().optional().describe('实例 id;省略取 state_dir 下最新的实例');
+  const outputArg = z.union([z.record(z.string(), z.unknown()), z.string()]);
+
+  server.registerTool('run', {
+    description: '复用模式起跑一份 spec:初始化实例并推进到第一个需要调用方处理的点（与 `hopjit run` 同）。工具不调 LLM——返回的步骤由调用方自己干完再用 submit_and_fetch_next 提交。',
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
+    inputSchema: {
+      spec_path: z.string().describe('spec 文件路径（相对工作区根或绝对）'),
+      params: z.record(z.string(), z.unknown()).optional().describe('spec Inputs 实参（结构化对象）'),
+      state_dir: stateDirArg,
+      workspace_dir: wsArg,
+      log_dir: z.string().optional().describe('hoplog 目录,缺省 state_dir 同级 .hoplog'),
+      log_level: z.string().optional().describe('debug | info | warn'),
+      max_runs: z.number().optional().describe('日志目录下最多保留几个 run 的 hoplog 目录（正整数,缺省 3）——起跑前删掉最旧的,与 CLI --max-runs 同义'),
+      context_mode: z.string().optional().describe('full | minimal;环境变量 HOPJIT_CONTEXT_MODE 在场时以它为准'),
+      notify: z.string().optional().describe('只认 dingtalk——渠道记进实例账;MCP 推进不发通知,改走 CLI 推进时照发'),
+      approve_dirs: z.boolean().optional().describe('起跑即批准 Config.dirs 清单、跳过 dirs 停点（与 CLI --approve-dirs 同义,写参数的人就是批准的人）'),
+    },
+  }, async (args) => driverCall(args.workspace_dir, ctx => driverRun(ctx, args)));
+
+  server.registerTool('submit_and_fetch_next', {
+    description: '提交当前步骤的结果并推进到下一个需要调用方处理的点（与 `hopjit submit_and_fetch_next` 同）。七种提交形态恰好给一个:output/answer/child_instance/failure_child/failure/replan/tool_result。output 传与输出槽同名的对象,大产出写进 work_zone 后传 "@<路径>"。带 body 的 commit 步骤由引擎执行,不能用本工具提交输出（COMMIT_BODY_ENGINE_ONLY）。',
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
+    inputSchema: {
+      step_id: z.string().describe('当前步骤号'),
+      instance_id: instanceArg,
+      state_dir: stateDirArg,
+      workspace_dir: wsArg,
+      output: outputArg.optional().describe('输出对象（键=输出槽名）,或 "@<work_zone 内路径>" 指向 JSON 文件'),
+      answer: outputArg.optional().describe('confirm/ask 的人类回答,形态同 output'),
+      child_instance: z.string().optional().describe('call 子实例完成回填:子实例 id'),
+      failure_child: z.string().optional().describe('call 子实例失败回填:子实例 id'),
+      failure: z.string().optional().describe('本步失败说明文本,或 "@路径"'),
+      replan: z.string().optional().describe('新计划 markdown,或 "@路径"'),
+      proactive: z.boolean().optional().describe('replan 为主动改计划'),
+      extend_expansion: z.boolean().optional().describe('replan 申请追加展开次数（须人已批）'),
+      tool_result: outputArg.optional().describe('tool-call 的工具结果,形态同 output'),
+    },
+  }, async (args) => driverCall(args.workspace_dir, ctx => driverSubmit(ctx, args)));
+
+  server.registerTool('reap_and_fetch_next', {
+    description: '收割一个 parallel 子实例的结果并推进（与 `hopjit reap_and_fetch_next` 同）。',
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
+    inputSchema: {
+      child_instance: z.string().describe('子实例 id'),
+      status: z.string().describe('completed | failed'),
+      instance_id: instanceArg,
+      state_dir: stateDirArg,
+      workspace_dir: wsArg,
+    },
+  }, async (args) => driverCall(args.workspace_dir, ctx => driverReap(ctx, args)));
+
+  server.registerTool('status', {
+    description: '查询复用模式实例的进度（与 `hopjit status` 同,只读）。',
+    annotations: { readOnlyHint: true },
+    inputSchema: { instance_id: instanceArg, state_dir: stateDirArg, workspace_dir: wsArg },
+  }, async (args) => driverCall(args.workspace_dir, ctx => driverStatus(ctx, args)));
+
+  server.registerTool('resume', {
+    description: '续跑复用模式实例:重置崩溃留下的悬空步骤并推进到下一个需要调用方处理的点（与 `hopjit resume` 同）。commit 步骤批准后也用它续跑。',
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
+    inputSchema: { instance_id: instanceArg, state_dir: stateDirArg, workspace_dir: wsArg },
+  }, async (args) => driverCall(args.workspace_dir, ctx => driverResume(ctx, args)));
+
+  server.registerTool('abort', {
+    description: '主动中止复用模式实例（与 `hopjit abort` 同）。中止不可撤销,快照与 hoplog 保留。',
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: {
+      instance_id: instanceArg,
+      reason: z.string().optional().describe('中止原因,记进实例账'),
+      state_dir: stateDirArg,
+      workspace_dir: wsArg,
+    },
+  }, async (args) => driverCall(args.workspace_dir, ctx => driverAbort(ctx, args)));
+
+  server.registerTool('validate', {
+    description: '校验 spec 合法性（与 `hopjit validate` 同,只读）:返回 errors 与 warnings 两组。',
+    annotations: { readOnlyHint: true },
+    inputSchema: {
+      spec_path: z.string().describe('spec 文件路径'),
+      fragment: z.boolean().optional().describe('按片段校验（replan 片段）'),
+      known_vars: z.array(z.string()).optional().describe('片段校验时视为已存在的变量名'),
+      workspace_dir: wsArg,
+    },
+  }, async (args) => driverCall(args.workspace_dir, ctx => driverValidate(ctx, args)));
+
+  // commit 转人工后的记账入口（^anc-mcp-commit-approve）——人的选择由 driver 在对话里问,用户选了 once/task 才调本工具;
+  // 和其他 hopjit 工具一样由 setup 放行,载体弹窗不当批准闸（用户习惯性点过弹窗,弹窗也看不到 body 原文）。
+  // @a: anc-mcp-commit-approve
+  server.registerTool(APPROVE_COMMIT_TOOL, {
+    description: '记录用户对一个 [commit] 步骤的批准。commit 步骤第一次执行前引擎先做安全分析:可逆或低危的动作（新建、追加、移动、写入前已留存旧版本的覆盖与删除）直接执行,不停;有动作销毁内容且找不回、运行命令、发通知或调外部工具时停下转人工（pause_reason=commit,载荷 context 带 step_id、fingerprint、analysis、body）。引擎判过安全、模型判过安全或人批准过的步骤记进批准账,以后同一步（body 没改）先查账、账上有就直接执行,不再扫描与分析。先用不懂代码的人也读得懂的话把 context.analysis 讲给用户:summary、每个需要确认的动作的 consequence、recommendation;代码不先贴,用户要看再给 context.body。然后在对话里给三个选项:只批准这一次（scope=once,本次运行内有效）、这一步以后都通过（scope=task）、不批准。用户选了前两个之一才调本工具,选不批准则不调,不得替用户回答。fingerprint 只覆盖 body,body 改了要重新分析与批准。本工具只记批准,不推进:复用模式接着调 resume,独立模式接着调 resume_run。',
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+    inputSchema: {
+      instance_id: z.string().describe('run 的实例 id'),
+      step_id: z.string().describe('停下来的 commit 步骤号'),
+      fingerprint: z.string().describe('停点载荷 context.fingerprint——body 的指纹,证明批准的是此刻这份 body,body 改了就对不上'),
+      scope: z.string().describe('once（只批准这一次,本次运行内有效）或 task（这一步以后都通过）——取自用户在三个选项里的选择'),
+      state_dir: stateDirArg,
+      workspace_dir: wsArg,
+      child_instance: z.string().optional().describe('独立模式 parallel 子实例的 commit 卡:run_status 的 paused_queue 里那张卡的 child_instance;缺省=批顶层实例的 commit'),
+    },
+  }, async (args) => jsonContent(core.approveCommit(args)));
+
+  server.registerTool(APPROVE_DIRS_TOOL, {
+    description: '批准某个 run 的 Config.dirs 目录清单（spec 声明的 workspace 之外的目录）。run 起跑后第一个响应停在 pause_reason=dirs（载荷 context 带 dirs 清单与 dirs_hash）,先把清单（路径 + 只读/读写）给用户看、在对话里问用户同不同意,用户明确同意后才调本工具,不同意则不调;之后同一份清单在重跑、续跑都不再停,声明或 Inputs 变了要重新批准。本工具只记批准,不推进:接着调 resume。',
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+    inputSchema: {
+      instance_id: z.string().describe('run 的实例 id'),
+      dirs_hash: z.string().describe('停点载荷里的 dirs_hash——证明批准的是此刻这份清单'),
+      state_dir: stateDirArg,
+      workspace_dir: wsArg,
+    },
+  }, async (args) => jsonContent(core.approveDirs(args)));
+
+  // ── 管理工具面八件（^anc-mcp-admin-tools,todo/0154）——hop 自己的体检与 HopAnt 生命周期动作,与 CLI `doctor` / `ant *` 同名参数、同一份响应。
+  // 由 server 进程写 ~/.hopjit/,不受载体 Bash 文件沙盒约束;setup 不进（它改的是载体配置与放行,server 本身就是它装出来的）。// @a: anc-mcp-admin-tools, anc-cli-doctor, anc-cli-ant
+  server.registerTool('doctor', {
+    description: '体检：装完 hop 之后一次答"能不能用"的八问（skill 在场 / 版本 / 菜单可见 / MCP 注册 / 握手 / 放行 / MCP server 模型配置 / 独立模式凭证）,每项 ok | warn | fail | n/a 一行加补法;只报不改（修归终端 `hopjit setup`）。与 `hopjit doctor` 同一份报告。读 items 里 status 为 fail 的项：detail 是事实,hint 是补法。',
+    annotations: { readOnlyHint: true },
+    inputSchema: { workspace_dir: wsArg },
+  }, async (args) => adminCall(args.workspace_dir, ctx => runDoctor(ctx)));
+
+  server.registerTool('ant_list', {
+    description: '列已装 HopAnt 与各自的适配状态——两级合并：项目级（<workspace_dir>/hop_tasks/ants/,这个项目总结出的）在前、用户级（~/.hopjit/ants/,装进来的）在后,每项带 scope,同 id 两条都在（按 id 找时项目级遮住用户级）。adapt_state：adapted 直接跑 / never 装上后没适配过 / stale 适配后 spec 头变了或目录从别的机器拷来——后两种先 ant_adapt。与 `hopjit ant list` 同。',
+    annotations: { readOnlyHint: true },
+    inputSchema: { workspace_dir: wsArg },
+  }, async (args) => adminCall(args.workspace_dir, ctx => antList(ctx)));
+
+  server.registerTool('ant_install', {
+    description: '装一个 HopAnt 目录或 HopAnt 包根（含 ants/<id>/）进 HopAnt 根（与 `hopjit ant install` 同）。scope 缺省 user（~/.hopjit/ants/,装别人的 HopAnt 是给自己用）;用户说"只在这个项目里用"传 project（<workspace_dir>/hop_tasks/ants/）。撞 id 只在目标级内判,整单拒 HOPANT_ID_CONFLICT,不覆盖;不自动跑任何脚本——响应 result.bootstrap_pending 列出带安装脚本的 HopAnt,先 ant_bootstrap dry_run 看计划再决定跑不跑。',
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
+    inputSchema: {
+      dir: z.string().describe('单 HopAnt 目录或 HopAnt 包根;相对路径按 workspace_dir 解析'),
+      scope: z.enum(['user', 'project']).optional().describe('装到哪一级：user=~/.hopjit/ants/（缺省,所有项目可用）;project=<workspace_dir>/hop_tasks/ants/（只给这个项目）'),
+      dry_run: z.boolean().optional().describe('只返回安装计划（撞 id / 哪些带 bootstrap.js）,不写盘'),
+      workspace_dir: wsArg,
+    },
+  }, async (args) => adminCall(args.workspace_dir, ctx => antInstall(ctx, args.dir, args.dry_run === true, args.scope ?? 'user')));
+
+  server.registerTool('ant_adapt', {
+    description: '核本机对某个已装 HopAnt 的依赖齐不齐（id 两级查找：先 <workspace_dir>/hop_tasks/ants/ 再 ~/.hopjit/ants/）——入口 spec 头声明的工具是否在两级 tool_servers 注册、凭证环境变量是否有值、已批准命令是否在 PATH、引擎版本是否够;全绿写适配戳并返回 report.ok true;有缺口 report.ok false 且 hints 逐条写补法（把 hints 原样告诉用户,补齐之前不跑）。与 `hopjit ant adapt` 同。',
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true },
+    inputSchema: { id: z.string().describe('HopAnt id（~/.hopjit/ants/<id>/）'), workspace_dir: wsArg },
+  }, async (args) => adminCall(args.workspace_dir, ctx => antAdapt(ctx, args.id)));
+
+  server.registerTool('ant_remove', {
+    description: '卸载一个已装 HopAnt（与 `hopjit ant remove` 同）。不传 scope 删两级查找命中的那一个（项目级在就删项目级）,传了删指定级。keep_store 为 true 时先把它的 inner_store/（跨 run 累积的本机数据）挪到 ~/.hopjit/ants-store-backup/<id>/ 再删;不传则连数据一起删。',
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: { id: z.string().describe('HopAnt id'), scope: z.enum(['user', 'project']).optional().describe('删哪一级;缺省=两级查找命中的那一级'), keep_store: z.boolean().optional().describe('保留 inner_store/ 到备份位'), workspace_dir: wsArg },
+  }, async (args) => adminCall(args.workspace_dir, ctx => antRemove(ctx, args.id, args.keep_store === true, args.scope)));
+
+  server.registerTool('ant_bootstrap', {
+    description: '跑某个 HopAnt 自带的 bootstrap.js（id 两级查找,项目级先;装它自己的运行时依赖,可联网可装系统包——是 HopAnt 作者写的脚本,跑前先 dry_run 看它打算做什么并告诉用户）。没有 bootstrap.js 返回 has_bootstrap false 不报错;脚本退出码进 returncode。与 `hopjit ant bootstrap` 同。',
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: false },
+    inputSchema: { id: z.string().describe('HopAnt id'), dry_run: z.boolean().optional().describe('给脚本传 --dry-run,只打印计划'), workspace_dir: wsArg },
+  }, async (args) => adminCall(args.workspace_dir, ctx => antBootstrap(ctx, args.id, args.dry_run === true)));
+
+  server.registerTool('ant_pack', {
+    description: '把一份 spec 封成可装的 HopAnt 目录 <out>/<id>/（与 `hopjit ant pack` 同）。/hop 总结干完的活时 out 传 <workspace_dir>/hop_tasks/ants——产物就地是活的项目级 HopAnt,不再经 ant_install。它会对账入口 spec 头的 ## Tools 与 ## 已批准命令（从 body 扫出实际使用面,少的补、多的删,增删进 pack.reconciled——读给用户看;tools_added 里的非标准工具是占位签名,装机前要按真实参数改）;spec 同目录被 doc-ref 引用的知识文件随包拷入,另要带的文件走 assets。不覆盖已有目标 HOPANT_TARGET_EXISTS;doc-ref 文件缺 / 越出 spec 目录 / assets 不存在 → HOPANT_DOC_MISSING 不写。产物接着 ant_install。',
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
+    inputSchema: {
+      spec_path: z.string().describe('spec 文件路径（相对 workspace_dir 或绝对）'),
+      out: z.string().optional().describe('输出根目录,缺省 <workspace_dir>/ants'),
+      id: z.string().optional().describe('HopAnt id,缺省取 spec 的 Id 行'),
+      assets: z.array(z.string()).optional().describe('额外拷进 HopAnt 根的文件（相对 spec 目录或绝对）'),
+      workspace_dir: wsArg,
+    },
+  }, async (args) => adminCall(args.workspace_dir, ctx => antPack(ctx, args.spec_path, { out: args.out, id: args.id, assets: args.assets })));
+
+  server.registerTool('ant_share', {
+    description: '把若干已装 HopAnt 的可分发面装进一个 HopAnt 包目录 <out>/<name>/（package.json + ants/<id>/…,与 `hopjit ant share` 同）。四核任一不过即拒不写（入口头与目录一致 / 无凭证字面值 / 本机面不进包 / 谱系）。归属标识：owner 参数 > ~/.hopjit/config.yaml 已有 owner_id（在场即用不问）> yes 时现算 > 都没有 → 不写包,返回 owner_prompt_required true 与 owner_default,在对话里问用户用缺省还是改一个后带 owner 重跑（用户确认缺省也带）。写了包时 credential_scan.warnings 逐条念给用户,disclaimer 原样说一次。',
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
+    inputSchema: {
+      ids: z.array(z.string()).min(1).describe('要装进包的 HopAnt id 列表（每个两级查找,项目级先——本项目总结的 HopAnt 不须先装用户级）'),
+      out: z.string().optional().describe('输出根目录,缺省 workspace_dir'),
+      name: z.string().optional().describe('包名,单个 id 时缺省取该 id;多个时必填'),
+      pkg_version: z.string().optional().describe('包版本（运输标签）,缺省 0.1.0'),
+      owner: z.string().optional().describe('归属标识;成功后写回 ~/.hopjit/config.yaml 的 owner_id'),
+      yes: z.boolean().optional().describe('首机没有 owner_id 时直接用现算的缺省归属标识,不问'),
+      workspace_dir: wsArg,
+    },
+  }, async (args) => adminCall(args.workspace_dir, ctx => antShare(ctx, args.ids, { out: args.out, name: args.name, pkg_version: args.pkg_version, owner: args.owner, yes: args.yes })));
+
+  // 配置能力状态（^anc-mcp-server-status）——只读,不依赖配置。// @a: anc-mcp-server-status
+  server.registerTool('server_status', {
+    description: '报告 hopjit-mcp 的版本、独立模式是否可用（不可用时给原因与修法）、注册的工具清单。复用模式驱动工具不依赖独立模式配置,恒可用。',
+    annotations: { readOnlyHint: true },
+    inputSchema: {},
+  }, async () => jsonContent(core.serverStatus(registeredToolNames(server))));
+
   return server;
+}
+
+/** 本 server 注册的全部工具名（server_status 用）。 */
+function registeredToolNames(server: McpServer): string[] {
+  const reg = (server as unknown as { _registeredTools?: Record<string, unknown> })._registeredTools;
+  return reg ? Object.keys(reg) : [];
 }
 
 /** fail-fast 启动预检（design v0.3.1 review P2）：逐 provider 解引用 api_key_env——
@@ -1485,6 +1604,22 @@ export function buildServer(core: HopjitMcpCore): McpServer {
  * // @a: anc-mcp-config */
 export function preflightProviderKeys(config: StandaloneConfig): void {
   snapshotProviderKeys(config);
+}
+
+/** 配置加载/预检的报文 → 能力状态的原因与修法（四类,design ^anc-mcp-server-status）。可测纯函数。
+ * // @a: anc-mcp-server-status */
+export function classifyConfigError(message: string): { reason: string; fix: string } {
+  if (message.startsWith('STANDALONE_CONFIG_MISSING_PROVIDERS') || /缺 providers\[\]/.test(message)) {
+    return { reason: message, fix: '在 providers 下至少配一个 provider' };
+  }
+  if (message.startsWith('STANDALONE_CONFIG_MISSING')) {
+    return { reason: message, fix: '创建 ~/.hopjit/config.yaml（只写 api_key_env 名,不写 key）,或设 HOPJIT_CONFIG 指向配置文件' };
+  }
+  if (message.startsWith('STANDALONE_KEY_MISSING')) {
+    const v = /环境变量 (\S+) 未设置/.exec(message)?.[1] ?? '对应的环境变量';
+    return { reason: message, fix: `在启动 server 的环境里导出 ${v},然后重开会话` };
+  }
+  return { reason: message, fix: '按报文改 config.yaml;明文 key 改用 api_key_env' };
 }
 
 // 配置消费入口：加载 StandaloneConfig → 预检 → 构建 core → 装配 transport。schema 权威在
@@ -1504,10 +1639,21 @@ async function serve(): Promise<void> {
     escapedErrors++;
     process.stderr.write(`hopjit-mcp: [run-isolation] 漏网 uncaughtException #${escapedErrors}（同上）: ${err.stack ?? err.message}\n`);
   });
-  // fail-fast：配置缺失/非法即启动失败并说明修法（design 核心要求 3）
-  const config = loadStandaloneConfig(process.env['HOPJIT_CONFIG'] || undefined);
-  preflightProviderKeys(config);
-  const core = new HopjitMcpCore(config);
+  // 配置问题不阻止启动,记为能力状态（design 核心要求 3,2026-10-07 todo/0146 改定;^anc-mcp-server-status）
+  const configPath = process.env['HOPJIT_CONFIG'] || join(homedir(), '.hopjit', 'config.yaml');
+  let config: StandaloneConfig | null = null;
+  let configError: { reason: string; fix: string } | null = null;
+  try {
+    config = loadStandaloneConfig(process.env['HOPJIT_CONFIG'] || undefined);
+    preflightProviderKeys(config);
+  } catch (err) {
+    config = null;
+    configError = classifyConfigError(err instanceof Error ? err.message : String(err));
+  }
+  // commit 安全分析函数注册（design serve 配置加载第 3a 步）:配置可用才注册,否则需要模型判的动作按模板转人工。
+  // @a: anc-exec-commit-analyzer
+  if (config) ExecutionEngine.setCommitAnalyzer(makeCommitAnalyzer(resolveCommitAnalyzerProvider(config)));
+  const core = new HopjitMcpCore(config, configError, configPath);
   const server = buildServer(core);
   const transport = new StdioServerTransport();
   // 宿主断开即退出（^anc-mcp-shutdown-on-disconnect,四十七审——孤儿 server 实撞:两个历史会话的
@@ -1523,7 +1669,9 @@ async function serve(): Promise<void> {
   process.stdin.on('end', () => exitOnDisconnect('stdin 关闭'));
   process.stdin.on('close', () => exitOnDisconnect('stdin 关闭'));
   await server.connect(transport);
-  process.stderr.write(`hopjit-mcp: standalone server 就绪（provider: ${config.providers[0].service_id}）\n`);
+  process.stderr.write(config
+    ? `hopjit-mcp: server 就绪（独立模式可用,provider: ${config.providers[0].service_id}）\n`
+    : `hopjit-mcp: server 就绪（复用驱动工具可用;独立模式不可用:${configError?.reason}）\n`);
 }
 
 function resolveRealPath(p: string): string {

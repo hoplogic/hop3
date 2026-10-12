@@ -1,10 +1,10 @@
 %% @trace
 	id: hopjit-tutorial-first-run
-	source: [[../../USAGE]]
-	source_id: hopjit-usage
+	source: [[../../README]]
+	source_id: hopjit-readme
 	type: extend
-	last_sync: 2026-10-01T15:53+0800
-	note: 新手教程 1——从安装到在 CC 里跑通第一个 example spec 的完整实操（USAGE 是速查，本文是带预期输出的手把手版）
+	last_sync: 2026-10-10T00:25+0800
+	note: 新手教程 1——从安装到在 CC 里跑通第一个 example spec 的完整实操（README 安装与 /hop 节是速览,本文是带预期输出的手把手版;2026-10-10 源由 USAGE 改 README——USAGE 已定位为命令行手册）
 %%
 
 # 教程 1（Claude Code 版）· 第一次运行
@@ -26,25 +26,25 @@ hopjit --version
 ## 第 2 步：装 skill
 
 ```bash
-hopjit install-skill --demo
+hopjit setup
 ```
 
-输出 `status: ok`（YAML 格式——CLI 缺省输出给人看的 YAML；机器/脚本用 `--json`）。这一步同时把 hopjit 的 MCP server 注册进当前项目、自举了独立模式的配置、并放行了 run_approved_command 工具（任务卡里批准的命令不再逐条弹窗）——都不需要你再配。**重启 Claude Code**（或新开会话），输入 `/` 应能看到 `/hop` 和 `--demo` 装的三个演示 skill：
+输出 `status: ok`（YAML 格式——CLI 缺省输出给人看的 YAML；机器/脚本用 `--json`）。这一步同时把 hopjit 的 MCP server 注册进当前项目、自举了独立模式的配置、并放行了 run_approved_command 工具（任务卡里批准的命令不再逐条弹窗）——都不需要你再配。**重启 Claude Code**（或新开会话），输入 `/` 应能看到 `/hop`：
 
 - `/hop` —— HopSpec 的唯一入口：日常活、跑现成 spec、翻译/修订 spec 都从这里进（本篇后半主角）。跑 spec、翻译 skill 这些能力仍装在盘上，由 /hop 按你说的话分派，不占你的 skill 菜单
-- `/demo-coffee-week` `/demo-fact-check` `/demo-rename` —— `--demo` 附装的演示 skill（下一步用第一个；不想装 demo 就去掉 `--demo`。demo 件统一 `demo-` 前缀，好认也好整批删）
+- 三个演示 HopAnt —— `demo-coffee-week`（咖啡店周报）、`demo-fact-check`（事实核查简化版）、`demo-rename`（批量改名，带确认与提交）。HopAnt 是装在 hop 自己目录 `~/.hopjit/ants/` 下的成品工具，一个目录里放着入口 spec 和它要用的数据；setup 缺省就装，不进 `/` 菜单，由 /hop 调用。输出里的 `demo_ants` 字段列出本次装上的几件，已装过的不覆盖
 
 > 进阶：`--plus` 会另装两个真正干活的研究件 `/hop-fact-check`（事实核查）与 `/hop-deep-research`（深度研究），并自动把它们要用的检索/浏览器工具配置并入 `~/.hopjit/config.yaml`——装完只差一个 `export DASHSCOPE_API_KEY=<百炼key>`。首跑先不用管它，跑通 demo 后想上真活再回来加。
 
-## 第 3 步：最短首跑——对话里说 `/demo-coffee-week`
+## 第 3 步：最短首跑——让 /hop 跑演示件 `demo-coffee-week`
 
-什么都不用准备（演示数据已打包在 skill 里），直接输入：
+什么都不用准备（演示数据 `coffee-sales.json` 与入口 spec 在同一个目录），直接输入：
 
 ```
-/demo-coffee-week
+/hop 跑 ~/.hopjit/ants/demo-coffee-week/demo-coffee-week.md
 ```
 
-它会向你确认两个参数（演示数据与周目标都有现成默认，一路确认即可），然后交给引擎执行，最后给你一份咖啡店周报。**这就是 hopskill 的产品形态**：用户拿到的是一个具名能力，spec、引擎、驱动协议全是实现细节——你刚才没看到它们，这是有意的。
+它会向你确认两个参数（演示数据与周目标都有现成默认，一路确认即可），然后交给引擎执行，最后给你一份咖啡店周报。**这就是 HopAnt 的产品形态**：用户拿到的是一个装好的成品工具，引擎和驱动协议是实现细节。
 
 下面转入技术视角：这个能力是怎么由一份 spec 定义、怎么被引擎驱动的。
 
@@ -77,7 +77,7 @@ hopjit validate examples/coffee-week.md
 
 ## 第 5 步：用 /hop 跑一份现成的 spec
 
-第 3 步的 `/demo-coffee-week` 内部委托的就是这条通用驱动——任何 spec 都能这样跑，不用先 pack 成具名 skill。在仓库目录里打开 Claude Code，输入：
+第 3 步跑演示件走的就是这条通用驱动——任何 spec 都能这样跑，不用先 pack 成具名 skill。在仓库目录里打开 Claude Code，输入：
 
 ```
 /hop 跑 examples/coffee-week.md
@@ -112,7 +112,7 @@ coffee-week 是全自动的。换一个**会停下来问你**的：
 
 | 症状 | 处置 |
 |---|---|
-| `/hop` 不在列表 | 确认 install-skill 输出 ok；**重启 Claude Code** |
+| `/hop` 不在列表 | 确认 setup 输出 ok；**重启 Claude Code** |
 | skill 说找不到引擎 | `npm i -g @hoplogic/hopjit` 装好重试（skill 用 `command -v hopjit` 一条命令定位，找不到即报错，不做多级探测） |
 | validate 报 errors | 按提示修 spec——errors 挡执行，warnings 不挡 |
 | 想干净重跑 | 不要 `rm -rf .hopstate`——每次 run 自建独立实例目录，旧实例不干扰；实在想隔离就换 `--state-dir` |
@@ -121,5 +121,5 @@ coffee-week 是全自动的。换一个**会停下来问你**的：
 
 主线顺序读：[[02-读懂一份spec]]（地基：五分钟建立全景）→ [[03-探索与提交]] → [[D10-hop_python计算体]] → [[05-并行与遍历]] → [[06-实战-事实核查器]] → [[07-升级你的自然语言skill]]。
 
-- 任务变长变频后想省对话额度、换轻量模型：独立模式（standalone）——对 /hop 说"走 MCP 跑 xxx"（/hop 会按独立模式分派），配置步骤见 `USAGE.md` §6、取舍详见 [[D8-模型与工具配置]] 开头；
+- 任务变长变频后想省对话额度、换轻量模型：独立模式（standalone）——对 /hop 说"走 MCP 跑 xxx"（/hop 会按独立模式分派），配置步骤见 `USAGE.md` §4、取舍详见 [[D8-模型与工具配置]] 开头；
 - 语法完整参考：`docs/concepts/HopSpec V3语法参考.md`；引擎内幕：`ARCHITECTURE.md`。

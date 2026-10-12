@@ -1,15 +1,15 @@
 // @module: tools ^anc-struct-tools
 // @v: anc-provider-tool
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NotifyToolProvider, composeRunCard } from '../src/tools-notify.js';
 import { DefaultToolProvider , executeValidateSpec, executeReadSpecTree, executeInsertNode, executeReplaceNode, executeReplaceChildren, executeRenumberSteps } from '../src/tools.js';
 import { deleteNodeAt, replaceNodeAt as coreReplaceNodeAt, renumberSteps as coreRenumberSteps } from '../src/spec-tree-edit.js';
-import type { StepNode } from '../src/ast-types.js';
+import { DEFAULT_KEEP, type StepNode } from '../src/ast-types.js';
 import { parseFragment as parseFragForCore } from '../src/parser.js';
 import type { HostConfig } from '../src/provider-types.js';
 import { B2_BUILTIN_FILE_TOOLS, B2_BUILTIN_NOTIFY_TOOLS, B2_BUILTIN_TOOL_SIGS, B9_WRITE_TOOLS, B10_READ_TOOLS } from '../src/validator.js';
 import { fileURLToPath } from 'node:url';
-import { readFileSync, mkdtempSync, writeFileSync, mkdirSync, symlinkSync, existsSync } from 'node:fs';
+import { readFileSync, mkdtempSync, writeFileSync, mkdirSync, symlinkSync, existsSync, realpathSync, readdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';   // run_script 组:解释器真身探测（不静默假绿）
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -475,6 +475,59 @@ describe('DefaultToolProvider', () => {
       expect(readResult.result).toBe('data');
     });
 
+    // 父目录缺失报文（hopissues/0120——裸 ENOENT 分不清路径写错还是目录没建;报文指路 makedirs,不代建）
+    // @v: anc-exec-write-parent-missing
+    it('反例：write 目标的父目录不存在 → 报文点名父目录并指路 makedirs,文件不落、目录不代建', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'hoptools-'));
+      const provider = makeProvider(dir);
+      const r = await provider.execute('write', { path: 'newdir_a/newdir_b/probe.txt', content: 'x' }, 'workspace');
+      expect(r.success).toBe(false);
+      expect(String(r.result)).toContain(`父目录 ${join(realpathSync(dir), 'newdir_a/newdir_b')} 不存在`);   // 工具层路径已 realpath（macOS /tmp → /private/tmp）
+      expect(String(r.result)).toContain('makedirs');
+      expect(String(r.result)).toContain('ENOENT');   // 原始错误保留在括号里
+      expect(existsSync(join(dir, 'newdir_a'))).toBe(false);   // 不自动建目录
+    });
+    it('反例：create / append 目标的父目录不存在 → 同一指路报文（三件同链）', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'hoptools-'));
+      const provider = makeProvider(dir);
+      for (const tool of ['create', 'append']) {
+        const r = await provider.execute(tool, { path: 'nodir/f.txt', content: 'x' }, 'workspace');
+        expect(r.success).toBe(false);
+        expect(String(r.result)).toMatch(/^父目录 .*nodir 不存在,请先 makedirs/);
+      }
+    });
+    it('正例：父目录在场的写入照常;父目录在场的 ENOENT（目标是坏软链）原文照回不改写', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'hoptools-'));
+      const provider = makeProvider(dir);
+      mkdirSync(join(dir, 'sub'));
+      const ok = await provider.execute('write', { path: 'sub/f.txt', content: 'x' }, 'workspace');
+      expect(ok.success).toBe(true);
+      // 先 makedirs 再 write 是设计指的正路
+      await provider.execute('makedirs', { path: 'deep/er' }, 'workspace');
+      const ok2 = await provider.execute('write', { path: 'deep/er/f.txt', content: 'y' }, 'workspace');
+      expect(ok2.success).toBe(true);
+      // 真造坏软链（review 面三 mut-12 抓本例标题承诺没兑现）：sub/ 在场,sub/dangling → sub/nope/x（workspace 内、目标目录不存在）,
+      // open 抛 ENOENT 而 dirname(resolved)=sub 存在 → 不改写,原文照回
+      symlinkSync(join(dir, 'sub', 'nope', 'x'), join(dir, 'sub', 'dangling'));
+      const r = await provider.execute('write', { path: 'sub/dangling', content: 'z' }, 'workspace');
+      expect(r.success).toBe(false);
+      expect(String(r.result)).toMatch(/ENOENT/);
+      expect(String(r.result)).not.toMatch(/^父目录 /);   // 变异：withParentDirHint 删 !existsSync(parent) 半边 → 这里被改写成指路报文,红
+    });
+    it('反例（review 面二 G11）：move 的目标父目录不存在 → 同一指路报文点名目标父目录;源不存在的 ENOENT 原文照回（那是源的问题）', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'hoptools-'));
+      const provider = makeProvider(dir);
+      writeFileSync(join(dir, 'a.txt'), 'A');
+      const r = await provider.execute('move', { from: 'a.txt', to: 'nodir/b.txt' }, 'workspace');
+      expect(r.success).toBe(false);
+      expect(String(r.result)).toContain(`父目录 ${join(realpathSync(dir), 'nodir')} 不存在,请先 makedirs`);
+      expect(existsSync(join(dir, 'a.txt'))).toBe(true);   // 源未动
+      const r2 = await provider.execute('move', { from: 'ghost.txt', to: 'nodir/b.txt' }, 'workspace');
+      expect(r2.success).toBe(false);
+      expect(String(r2.result)).not.toMatch(/父目录 /);
+      expect(String(r2.result)).toMatch(/ENOENT/);
+    });
+
     // yaml 型变量直传写侧（^anc-type-yaml-structured 落盘条款——原 as string 裸断言,
     // 结构进来 writeFileSync 抛 TypeError 炸穿,三十六审探针实抓）
     // @v: anc-type-yaml-structured
@@ -692,6 +745,25 @@ describe('内置文件/目录工具组', () => {
     it('反例：目录不存在显式失败', async () => {
       const r = await makeProvider().execute('listdir', { path: 'nope' });
       expect(r.success).toBe(false);
+    });
+    // 2026-10-12 语义审计 #25 #26（作者拍甲案）：空目录 result 恒为纯 []（content_type json 必须真能 parse）,
+    // 给弱模型看的明示语走 hint 旁路——修前注记拼进 result,parse_json / call 位 JSON.parse 都炸
+    it('正例（语义审计 #25）：空目录 result === "[]" 且 JSON.parse 得空数组;明示语在 hint 字段（含"目录存在但为空"）,不在 result 里', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'hoptools-empty-'));
+      const r = await makeProvider(dir).execute('listdir', { path: '.' });
+      expect(r.success).toBe(true);
+      expect(r.content_type).toBe('json');
+      expect(r.result).toBe('[]');
+      expect(JSON.parse(String(r.result))).toEqual([]);
+      expect(r.hint).toContain('目录存在但为空');
+      expect(String(r.result)).not.toContain('目录存在但为空');
+    });
+    it('反例（语义审计 #26）：非空目录 hint 缺席——明示语只给空目录', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'hoptools-nonempty-'));
+      writeFileSync(join(dir, 'a.txt'), 'x');
+      const r = await makeProvider(dir).execute('listdir', { path: '.' });
+      expect(r.success).toBe(true);
+      expect(r.hint).toBeUndefined();
     });
   });
 
@@ -1183,6 +1255,93 @@ describe('路径解析：workspace 内绝对路径与目录边界', () => {
     const r = await p.execute('read', { path: 'lkb2/f.md' });
     expect(r.success).toBe(false);
     expect(String(r.result)).toContain('Read outside allowed paths');
+  });
+});
+
+// read_access.allowed 内绝对路径——读类第④合法形态（design tools/file-tools ^anc-exec-tool-path-resolve,2026-10-07）：
+// 起跑把 spec 所在目录加进 allowed,spec_dir() 产物由此能读;写类与 run_script 不认（strict 档）。
+// 作者定"不让读的话 knowledge、data 和未来的 inner_store 都要再分开授权"。 // @v: anc-exec-tool-path-resolve
+describe('read_access.allowed 内绝对路径（spec 目录只读）', () => {
+  function makeProviderAllowing(wsDir: string, extraAllowed: string[]): DefaultToolProvider {
+    const config: HostConfig = {
+      workspace_dir: wsDir,
+      sandbox: {
+        filesystem: { workspace_dir: wsDir, read_access: { allowed: [wsDir, ...extraAllowed], denied: [], confirm_required: [] } },
+        network: { trusted_hosts: [] },
+        runtime: { available: ['python3'] },
+      },
+      api_key: 'test',
+    };
+    return new DefaultToolProvider(config);
+  }
+  function setup() {
+    const ws = mkdtempSync(join(tmpdir(), 'hoptools-ws-'));
+    const ant = mkdtempSync(join(tmpdir(), 'hoptools-ant-'));   // workspace 外的"spec 目录"
+    mkdirSync(join(ant, 'data'), { recursive: true });
+    writeFileSync(join(ant, 'data', 'a.csv'), 'k,v\n1,2\n', 'utf-8');
+    return { ws, ant, p: makeProviderAllowing(ws, [ant]) };
+  }
+
+  it('正例：read / exists / listdir / search_file 对 allowed 内绝对路径放行（workspace 外）', async () => {
+    const { ant, p } = setup();
+    const r = await p.execute('read', { path: join(ant, 'data', 'a.csv') });
+    expect(r.success, String(r.result)).toBe(true);
+    expect(String(r.result)).toContain('k,v');
+    const e = await p.execute('exists', { path: join(ant, 'data', 'a.csv') });
+    expect(e.success).toBe(true);
+    expect(JSON.parse(String(e.result)).exists).toBe(true);
+    const l = await p.execute('listdir', { path: join(ant, 'data') });
+    expect(l.success, String(l.result)).toBe(true);
+    const sf = await p.execute('search_file', { path: join(ant, 'data', 'a.csv'), pattern: '1,2' });
+    expect(sf.success, String(sf.result)).toBe(true);
+  });
+
+  it('反例：不在 allowed 内的 workspace 外绝对路径,读仍拒（变异：删 read 档分支本例不变,删 allowed 判本例红）', async () => {
+    const { p } = setup();
+    const other = mkdtempSync(join(tmpdir(), 'hoptools-other-'));
+    writeFileSync(join(other, 'x.txt'), 'x', 'utf-8');
+    const r = await p.execute('read', { path: join(other, 'x.txt') });
+    expect(r.success).toBe(false);
+    expect(String(r.result)).toContain('Absolute path outside workspace');
+  });
+
+  it('反例：写类不认 allowed——commit 语境 write / append / create / makedirs / remove 到 allowed 内绝对路径全拒,文件不落', async () => {
+    const { ant, p } = setup();
+    for (const [tool, args] of [
+      ['write', { path: join(ant, 'data', 'new.txt'), content: 'v' }],
+      ['append', { path: join(ant, 'data', 'a.csv'), content: 'x' }],
+      ['create', { path: join(ant, 'data', 'c.txt'), content: 'v' }],
+      ['makedirs', { path: join(ant, 'data', 'sub') }],
+      ['remove', { path: join(ant, 'data', 'a.csv') }],
+    ] as const) {
+      const r = await p.execute(tool, args as Record<string, unknown>, 'workspace');
+      expect(r.success, `${tool} 应拒`).toBe(false);
+      expect(String(r.result)).toMatch(/Absolute path outside workspace|outside workspace/);
+    }
+    expect(existsSync(join(ant, 'data', 'new.txt'))).toBe(false);
+    expect(readFileSync(join(ant, 'data', 'a.csv'), 'utf-8')).toBe('k,v\n1,2\n');
+  });
+
+  it('反例：run_script 走 strict 档——allowed 内的 .py 不被当作可执行脚本（寻址面不扩到 spec 目录,作者定）', async () => {
+    const { ant, p } = setup();
+    writeFileSync(join(ant, 'data', 'x.py'), 'print(1)\n', 'utf-8');
+    const r = await p.execute('run_script', { path: join(ant, 'data', 'x.py') });
+    expect(r.success).toBe(false);
+    expect(String(r.result)).toContain('Absolute path outside workspace');
+  });
+
+  it('反例：allowed 内绝对路径带 .. 仍拒;denied 模式命中仍拒（read 档不绕过后续校验链）', async () => {
+    const { ws, ant } = setup();
+    const p = new DefaultToolProvider({
+      workspace_dir: ws,
+      sandbox: { filesystem: { workspace_dir: ws, read_access: { allowed: [ws, ant], denied: ['a.csv'], confirm_required: [] } }, network: { trusted_hosts: [] }, runtime: { available: [] } },
+      api_key: 'test',
+    });
+    const r1 = await p.execute('read', { path: join(ant, 'data', '..', 'data', 'a.csv') });
+    expect(r1.success).toBe(false);
+    const r2 = await p.execute('read', { path: join(ant, 'data', 'a.csv') });
+    expect(r2.success).toBe(false);
+    expect(String(r2.result)).toContain('Read denied');
   });
 });
 
@@ -2183,6 +2342,41 @@ Id: fence
 // 钉钉通知工具模块（^anc-tool-dingtalk-notify——todo/0052 正式形态;真发送归真机 probe 不进 vitest,
 // 可测面=报文拼装与失败值,fetch 打桩零网络）
 // @v: anc-tool-dingtalk-notify, anc-tool-dingtalk-sop
+// execute() 的 switch 把四个树工具名派给对应函数——按 case 逐个经 execute 调一次（commit 安全分析批次 review 变异 run20 存活项:case 标签换掉后原测试只直调函数,不经 switch）
+// @v: anc-exec-builtin-edit-tree-tool
+describe('execute() 对树工具名的派发', () => {
+  const DRAFT = `# T
+Id: t
+
+## Goal
+g
+
+## Steps
+1. [loop max=3] 遍历
+  1.1. [reason] 待展开——判断
+    + → flag: line  # f
+2. [subtask] 汇总
+  2.1. [act] 写清单
+    + → out: text  # o
+`;
+  const FRAG = '1. [reason] 判断紧急\n  - ← item\n  + → flag: line  # f\n';
+  it('insert_node / replace_node / replace_children / read_spec_tree 四个名字各派到自己的实现（结果带各自的标志字段）', async () => {
+    const p = makeProvider();
+    const ins = JSON.parse((await p.execute('insert_node', { spec_text: DRAFT, node_path: '2', fragment: FRAG }, 'workspace')).result as string);
+    expect(ins.status).toBe('ok');
+    expect(ins.renumber_map['2']).toBe('3');
+    const rep = JSON.parse((await p.execute('replace_node', { spec_text: DRAFT, node_path: '1.1', fragment: FRAG }, 'workspace')).result as string);
+    expect(rep.status).toBe('ok');
+    expect(rep.spec_text).toContain('1.1. [reason] 判断紧急');
+    const ch = JSON.parse((await p.execute('replace_children', { spec_text: DRAFT, node_path: '1', fragment: FRAG }, 'workspace')).result as string);
+    expect(ch.status).toBe('ok');
+    expect(ch.spec_text).not.toContain('待展开');
+    const rd = JSON.parse((await p.execute('read_spec_tree', { spec_text: DRAFT, mode: 'skeleton' }, 'workspace')).result as string);
+    expect(rd.status).toBe('ok');
+    expect(rd.text).toContain('2.1. [act] 写清单');
+  });
+});
+
 describe('NotifyToolProvider 钉钉通知', () => {
   const FAKE_HOOK = 'https://oapi.dingtalk.com/robot/send?access_token=deadbeef01';
   let fetchCalls: Array<{ url: string; body: Record<string, unknown> }>;
@@ -2303,5 +2497,540 @@ describe('复用模式指引档两族名单与 DefaultToolProvider 注册面同�
     const { ENGINE_BUILTIN_SPECIAL_TOOL_NAMES, NATIVE_FIRST_BUILTIN_SPECIAL_TOOL_NAMES } = await import('../src/provider-types.js');
     const overlap = [...NATIVE_FIRST_BUILTIN_SPECIAL_TOOL_NAMES].filter(n => ENGINE_BUILTIN_SPECIAL_TOOL_NAMES.has(n));
     expect(overlap).toEqual([]);
+  });
+});
+
+// @v: anc-exec-dirs-grant —— write_access.allowed（Config.dirs.readwrite 经授权）：commit 可写、act/check 仍拒、read 目录 commit 写仍拒、denied 仍拦、未声明照拒
+describe('write_access.allowed 写域（Config.dirs.readwrite,todo/0148）', () => {
+  function mk(ws: string, readOnly: string[], readWrite: string[]): DefaultToolProvider {
+    const config: HostConfig = {
+      workspace_dir: ws,
+      sandbox: {
+        filesystem: {
+          workspace_dir: ws,
+          read_access: { allowed: [ws, ...readOnly, ...readWrite], denied: ['*.key'], confirm_required: [] },
+          write_access: { allowed: readWrite },
+        },
+        network: { trusted_hosts: [] }, runtime: { available: [] },
+      },
+      api_key: 'test',
+    };
+    return new DefaultToolProvider(config);
+  }
+  function setup() {
+    const ws = mkdtempSync(join(tmpdir(), 'hopdirs-ws-'));
+    const ro = mkdtempSync(join(tmpdir(), 'hopdirs-ro-'));
+    const rw = mkdtempSync(join(tmpdir(), 'hopdirs-rw-'));
+    const other = mkdtempSync(join(tmpdir(), 'hopdirs-other-'));
+    writeFileSync(join(ro, 'a.txt'), 'ro', 'utf-8'); writeFileSync(join(rw, 'b.txt'), 'rw', 'utf-8'); writeFileSync(join(rw, 'secret.key'), 'k', 'utf-8');
+    return { ws, ro, rw, other, p: mk(ws, [ro], [rw]) };
+  }
+
+  it('正例：commit 语境 write / append / create / makedirs 到 readwrite 目录放行,文件真落;读也放行', async () => {
+    const { rw, p } = setup();
+    expect((await p.execute('write', { path: join(rw, 'out.md'), content: 'x' }, 'workspace')).success).toBe(true);
+    expect(readFileSync(join(rw, 'out.md'), 'utf-8')).toBe('x');
+    expect((await p.execute('append', { path: join(rw, 'b.txt'), content: '+' }, 'workspace')).success).toBe(true);
+    expect((await p.execute('makedirs', { path: join(rw, 'sub') }, 'workspace')).success).toBe(true);
+    expect((await p.execute('create', { path: join(rw, 'c.txt'), content: 'c' }, 'workspace')).success).toBe(true);
+    expect(readFileSync(join(rw, 'c.txt'), 'utf-8')).toBe('c');
+    expect((await p.execute('read', { path: join(rw, 'b.txt') })).success).toBe(true);
+  });
+  it('正例：commit 语境 edit_file / move / remove 到 readwrite 目录放行;反例：move 跨域（源在 readwrite、目标在只读 read 目录,或反向）两端都过写侧校验 → 拒且源目标都不动——字面路径在解析层拒,经 readwrite 内软链指向 read 目录的路径解析层放行、校验层拒（变异：move 去掉目标或源的写侧校验本例红）', async () => {
+    const { ro, rw, p } = setup();
+    expect((await p.execute('edit_file', { path: join(rw, 'b.txt'), old_text: 'rw', new_text: 'RW' }, 'workspace')).success).toBe(true);
+    expect(readFileSync(join(rw, 'b.txt'), 'utf-8')).toBe('RW');
+    expect((await p.execute('move', { from: join(rw, 'b.txt'), to: join(rw, 'moved.txt') }, 'workspace')).success).toBe(true);
+    expect(existsSync(join(rw, 'b.txt'))).toBe(false); expect(readFileSync(join(rw, 'moved.txt'), 'utf-8')).toBe('RW');
+    expect((await p.execute('remove', { path: join(rw, 'moved.txt') }, 'workspace')).success).toBe(true);
+    expect(existsSync(join(rw, 'moved.txt'))).toBe(false);
+    writeFileSync(join(rw, 'src.txt'), 's', 'utf-8');
+    const out = await p.execute('move', { from: join(rw, 'src.txt'), to: join(ro, 'dst.txt') }, 'workspace');
+    expect(out.success).toBe(false);
+    expect(existsSync(join(rw, 'src.txt'))).toBe(true); expect(existsSync(join(ro, 'dst.txt'))).toBe(false);
+    const back = await p.execute('move', { from: join(ro, 'a.txt'), to: join(rw, 'a.txt') }, 'workspace');
+    expect(back.success).toBe(false);
+    expect(existsSync(join(ro, 'a.txt'))).toBe(true); expect(existsSync(join(rw, 'a.txt'))).toBe(false);
+    symlinkSync(ro, join(rw, 'link-ro'));
+    const viaLinkOut = await p.execute('move', { from: join(rw, 'src.txt'), to: join(rw, 'link-ro', 'dst.txt') }, 'workspace');
+    expect(viaLinkOut.success).toBe(false);
+    expect(existsSync(join(rw, 'src.txt'))).toBe(true); expect(existsSync(join(ro, 'dst.txt'))).toBe(false);
+    const viaLinkIn = await p.execute('move', { from: join(rw, 'link-ro', 'a.txt'), to: join(rw, 'a2.txt') }, 'workspace');
+    expect(viaLinkIn.success).toBe(false);
+    expect(existsSync(join(ro, 'a.txt'))).toBe(true); expect(existsSync(join(rw, 'a2.txt'))).toBe(false);
+  });
+  it('反例：act/check 语境（缺省 work_zone 写域）写 readwrite 目录仍拒 WORK_ZONE_ONLY——readwrite 不放大探索步权限', async () => {
+    const { rw, p } = setup();
+    const r = await p.execute('write', { path: join(rw, 'act.md'), content: 'x' });
+    expect(r.success).toBe(false); expect(String(r.result)).toContain('WORK_ZONE_ONLY');
+    expect(existsSync(join(rw, 'act.md'))).toBe(false);
+  });
+  it('反例：read（只读档）目录 commit 写仍拒;读放行', async () => {
+    const { ro, p } = setup();
+    const r = await p.execute('write', { path: join(ro, 'x.md'), content: 'x' }, 'workspace');
+    expect(r.success).toBe(false); expect(String(r.result)).toMatch(/outside workspace/);
+    expect((await p.execute('read', { path: join(ro, 'a.txt') })).success).toBe(true);
+  });
+  it('反例：denied 基线对 readwrite 目录仍优先拦读', async () => {
+    const { rw, p } = setup();
+    const r = await p.execute('read', { path: join(rw, 'secret.key') });
+    expect(r.success).toBe(false); expect(String(r.result)).toContain('denied');
+  });
+  it('反例：未声明的 workspace 外目录读写照拒（变异：删 write_access 判本例不变——边界变异由下方软链兄弟前缀例钉）', async () => {
+    const { other, p } = setup();
+    expect((await p.execute('read', { path: join(other, 'z') })).success).toBe(false);
+    expect((await p.execute('write', { path: join(other, 'z.md'), content: 'x' }, 'workspace')).success).toBe(false);
+  });
+  it('反例：兄弟前缀目录不算在 readwrite 内（/x/rw2 不算 /x/rw）——字面路径在解析层拒;经 readwrite 内软链指向兄弟目录的路径解析层放行、校验层按真实路径带分隔符边界拒（变异：写域退回裸 startsWith 本例红）', async () => {
+    const { rw, p } = setup();
+    const sib = rw + '2'; mkdirSync(sib, { recursive: true });
+    expect((await p.execute('write', { path: join(sib, 'x.md'), content: 'x' }, 'workspace')).success).toBe(false);
+    symlinkSync(sib, join(rw, 'to-sib'));
+    const viaLink = await p.execute('write', { path: join(rw, 'to-sib', 'y.md'), content: 'x' }, 'workspace');
+    expect(viaLink.success).toBe(false);
+    expect(existsSync(join(sib, 'y.md'))).toBe(false);
+  });
+  it('反例：经 readwrite 内软链指向 read（只读）目录——解析层放行、校验层按真实路径查写白名单拒（变异：写域误用读白名单本例红）', async () => {
+    const { ro, rw, p } = setup();
+    symlinkSync(ro, join(rw, 'to-ro'));
+    const r = await p.execute('write', { path: join(rw, 'to-ro', 'z.md'), content: 'x' }, 'workspace');
+    expect(r.success).toBe(false);
+    expect(existsSync(join(ro, 'z.md'))).toBe(false);
+  });
+});
+
+// 文件写类四件的 keep 参数:覆盖、移动替换、删除前把旧版本留存进 <状态目录>/recycle/,同一文件每次 run 只留存一次,
+// 轮转保留最近 keep 份;keep=0 不留存;work_zone 豁免;keep 不是非负整数即拒。
+// @v: anc-exec-file-keep-recycle
+describe('keep 参数与回收站', () => {
+  const setup = (run = 'run1') => {
+    const ws = mkdtempSync(join(tmpdir(), 'keep-ws-'));
+    const p = makeProvider(ws);
+    const tree = join(ws, '.hopstate', run);
+    ownWz(p, join(tree, 'work_zone'), tree);
+    mkdirSync(join(tree, 'work_zone'), { recursive: true });
+    return { ws, p, tree, recycle: join(ws, '.hopstate', 'recycle') };
+  };
+  const copiesOf = (dir: string, name: string): string[] =>
+    existsSync(dir) ? readdirSync(dir).filter(f => f.startsWith(`${name}.`)).sort() : [];
+
+  it('正例：覆盖已有文件 → 旧内容留存进回收站,回执注明位置;同一 run 再次覆盖不再留存,回执指向本次运行开始前的版本;接管账记一条', async () => {
+    const { ws, p, tree, recycle } = setup();
+    writeFileSync(join(ws, 'a.txt'), 'v0');
+    const r1 = await p.execute('write', { path: 'a.txt', content: 'v1' }, 'workspace');
+    expect(r1.success).toBe(true);
+    expect(String(r1.result)).toContain('旧版本已存到');
+    const copies = copiesOf(recycle, 'a.txt');
+    expect(copies.length).toBe(1);
+    expect(readFileSync(join(recycle, copies[0]!), 'utf-8')).toBe('v0');
+    const r2 = await p.execute('write', { path: 'a.txt', content: 'v2' }, 'workspace');
+    expect(String(r2.result)).toContain('本次运行开始前的版本已存于');
+    expect(copiesOf(recycle, 'a.txt').length).toBe(1);   // 一次 run 只轮换一次
+    expect(readFileSync(join(ws, 'a.txt'), 'utf-8')).toBe('v2');
+    const ledger = JSON.parse(readFileSync(join(tree, 'recycle_ledger.json'), 'utf-8'));
+    expect(Object.keys(ledger).length).toBe(1);
+  });
+
+  it('正例：keep=0 不留存;同一 run 先 keep=0 覆盖后,再用缺省 keep 覆盖也不留存（本次运行开始前的内容已经没了,留下的只是本 run 自己写的）', async () => {
+    const { ws, p, recycle } = setup();
+    writeFileSync(join(ws, 'b.txt'), 'v0');
+    expect((await p.execute('write', { path: 'b.txt', content: 'v1', keep: 0 }, 'workspace')).success).toBe(true);
+    expect(copiesOf(recycle, 'b.txt')).toEqual([]);
+    await p.execute('write', { path: 'b.txt', content: 'v2' }, 'workspace');
+    expect(copiesOf(recycle, 'b.txt')).toEqual([]);
+  });
+
+  it('正例：新建文件不留存,同一 run 之后再覆盖它也不留存（本 run 自己建的）', async () => {
+    const { p, recycle } = setup();
+    await p.execute('write', { path: 'n.txt', content: 'v1' }, 'workspace');
+    await p.execute('write', { path: 'n.txt', content: 'v2' }, 'workspace');
+    expect(copiesOf(recycle, 'n.txt')).toEqual([]);
+  });
+
+  it('正例：remove 缺省进回收站,keep=0 永久删除;move 替换已有目标时留存目标的旧版本', async () => {
+    const { ws, p, recycle } = setup();
+    writeFileSync(join(ws, 'd.txt'), 'D');
+    const rd = await p.execute('remove', { path: 'd.txt' }, 'workspace');
+    expect(rd.success).toBe(true);
+    expect(existsSync(join(ws, 'd.txt'))).toBe(false);
+    expect(readFileSync(join(recycle, copiesOf(recycle, 'd.txt')[0]!), 'utf-8')).toBe('D');
+    writeFileSync(join(ws, 'e.txt'), 'E');
+    expect((await p.execute('remove', { path: 'e.txt', keep: 0 }, 'workspace')).success).toBe(true);
+    expect(copiesOf(recycle, 'e.txt')).toEqual([]);
+    writeFileSync(join(ws, 'src.txt'), 'NEW');
+    writeFileSync(join(ws, 'dst.txt'), 'OLD');
+    expect((await p.execute('move', { from: 'src.txt', to: 'dst.txt' }, 'workspace')).success).toBe(true);
+    expect(readFileSync(join(ws, 'dst.txt'), 'utf-8')).toBe('NEW');
+    expect(readFileSync(join(recycle, copiesOf(recycle, 'dst.txt')[0]!), 'utf-8')).toBe('OLD');
+    expect(copiesOf(recycle, 'src.txt')).toEqual([]);   // 源内容原样到了目标,不留存
+  });
+
+  it('正例：跨 run 轮转——五次 run 各覆盖一次、keep=3 → 回收站只剩最近三份旧版本（v2/v3/v4）', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'keep-rot-'));
+    writeFileSync(join(ws, 'r.txt'), 'v0');
+    for (let k = 1; k <= 5; k++) {
+      const p = makeProvider(ws);
+      const tree = join(ws, '.hopstate', `run${k}`);
+      ownWz(p, join(tree, 'work_zone'), tree);
+      expect((await p.execute('write', { path: 'r.txt', content: `v${k}`, keep: 3 }, 'workspace')).success).toBe(true);
+    }
+    const recycle = join(ws, '.hopstate', 'recycle');
+    const kept = copiesOf(recycle, 'r.txt').map(f => readFileSync(join(recycle, f), 'utf-8')).sort();
+    expect(kept).toEqual(['v2', 'v3', 'v4']);
+  });
+
+  it('反例：work_zone 内的覆盖与删除不留存、不入接管账', async () => {
+    const { p, tree, recycle } = setup();
+    const f = join(tree, 'work_zone', 'scratch.txt');
+    writeFileSync(f, 'S');
+    expect((await p.execute('write', { path: f, content: 'S2' })).success).toBe(true);
+    expect((await p.execute('remove', { path: f })).success).toBe(true);
+    expect(existsSync(recycle)).toBe(false);
+    expect(existsSync(join(tree, 'recycle_ledger.json'))).toBe(false);
+  });
+
+  it('正例：remove 带 keep=0 永久删除后,同一 run 里该路径被工具之外的手段重新建出（如外部命令）,再用缺省 keep 覆盖也不留存（run 前的内容已被本 run 删掉,接管账记 created）', async () => {
+    const { ws, p, tree, recycle } = setup();
+    writeFileSync(join(ws, 'g.txt'), 'v0');
+    const key = realpathSync(join(ws, 'g.txt'));
+    expect((await p.execute('remove', { path: 'g.txt', keep: 0 }, 'workspace')).success).toBe(true);
+    expect(JSON.parse(readFileSync(join(tree, 'recycle_ledger.json'), 'utf-8'))[key]).toEqual({ created: true });
+    writeFileSync(join(ws, 'g.txt'), 'ext');
+    expect((await p.execute('write', { path: 'g.txt', content: 'v2' }, 'workspace')).success).toBe(true);
+    expect(copiesOf(recycle, 'g.txt')).toEqual([]);
+  });
+
+  it('反例：目标是目录（不是普通文件）→ 不留存、回收站不建件;write 与 remove 按原语自身的报错失败,报文不是"旧版本留存失败"', async () => {
+    const { ws, p, recycle } = setup();
+    mkdirSync(join(ws, 'dir1'));
+    const rw = await p.execute('write', { path: 'dir1', content: 'x' }, 'workspace');
+    expect(rw.success).toBe(false);
+    expect(String(rw.result)).not.toContain('旧版本留存失败');
+    const rr = await p.execute('remove', { path: 'dir1' }, 'workspace');
+    expect(rr.success).toBe(false);
+    expect(String(rr.result)).not.toContain('旧版本留存失败');
+    expect(existsSync(join(ws, 'dir1'))).toBe(true);
+    expect(existsSync(recycle)).toBe(false);
+  });
+
+  it('反例：work_zone 内新建文件、keep=0 覆盖也不入接管账（noteLedger 的 work_zone 跳过）', async () => {
+    const { p, tree } = setup();
+    const wz = join(tree, 'work_zone');
+    expect((await p.execute('write', { path: join(wz, 'fresh.txt'), content: 'F' })).success).toBe(true);
+    expect((await p.execute('create', { path: join(wz, 'fresh2.txt'), content: 'F' })).success).toBe(true);
+    writeFileSync(join(wz, 'old.txt'), 'O');
+    expect((await p.execute('write', { path: join(wz, 'old.txt'), content: 'O2', keep: 0 })).success).toBe(true);
+    expect(existsSync(join(tree, 'recycle_ledger.json'))).toBe(false);
+  });
+
+  it('正例：edit_file 改已有文件 → 改之前的旧版本留存进回收站并入账', async () => {
+    const { ws, p, tree, recycle } = setup();
+    writeFileSync(join(ws, 'ed.txt'), 'hello world');
+    const r = await p.execute('edit_file', { path: 'ed.txt', old_text: 'world', new_text: 'there' }, 'workspace');
+    expect(r.success).toBe(true);
+    expect(String(r.result)).toContain('旧版本已存到');
+    expect(readFileSync(join(ws, 'ed.txt'), 'utf-8')).toBe('hello there');
+    const copies = copiesOf(recycle, 'ed.txt');
+    expect(copies.length).toBe(1);
+    expect(readFileSync(join(recycle, copies[0]!), 'utf-8')).toBe('hello world');
+    const ledger = JSON.parse(readFileSync(join(tree, 'recycle_ledger.json'), 'utf-8'));
+    expect(ledger[realpathSync(join(ws, 'ed.txt'))]).toEqual({ copy: join(recycle, copies[0]!) });
+  });
+
+  it('正例：父子实例两个提供者共用同一个 tree → 同一 run 内同一文件只留存一次', async () => {
+    const { ws, p, tree, recycle } = setup();
+    const child = makeProvider(ws);
+    const childWz = join(tree, 'children', 'c1', 'work_zone');
+    mkdirSync(childWz, { recursive: true });
+    child.setWorkZoneScope({ own: childWz, tree });
+    writeFileSync(join(ws, 'shared.txt'), 'v0');
+    expect((await p.execute('write', { path: 'shared.txt', content: 'v1' }, 'workspace')).success).toBe(true);
+    const r2 = await child.execute('write', { path: 'shared.txt', content: 'v2' }, 'workspace');
+    expect(r2.success).toBe(true);
+    expect(String(r2.result)).toContain('本次运行开始前的版本已存于');
+    const copies = copiesOf(recycle, 'shared.txt');
+    expect(copies.length).toBe(1);
+    expect(readFileSync(join(recycle, copies[0]!), 'utf-8')).toBe('v0');
+  });
+
+  it('反例：留存拷贝失败（回收站位置被普通文件占住）→ 写入与删除都不执行,原文件不变', async () => {
+    const { ws, p, recycle } = setup();
+    mkdirSync(join(ws, '.hopstate'), { recursive: true });
+    writeFileSync(recycle, 'not a dir');
+    writeFileSync(join(ws, 'f.txt'), 'ORIG');
+    const rw = await p.execute('write', { path: 'f.txt', content: 'NEW' }, 'workspace');
+    expect(rw.success).toBe(false);
+    expect(String(rw.result)).toContain('旧版本留存失败');
+    expect(readFileSync(join(ws, 'f.txt'), 'utf-8')).toBe('ORIG');
+    const rd = await p.execute('remove', { path: 'f.txt' }, 'workspace');
+    expect(rd.success).toBe(false);
+    expect(existsSync(join(ws, 'f.txt'))).toBe(true);
+  });
+
+  it('反例：接管账文件损坏（不是 JSON、是数组）→ 按空账处理,覆盖照常留存旧版本、不抛错,账被重写成合法对象', async () => {
+    for (const bad of ['{not json', '[1,2]']) {
+      const { ws, p, tree, recycle } = setup();
+      mkdirSync(tree, { recursive: true });
+      writeFileSync(join(tree, 'recycle_ledger.json'), bad);
+      writeFileSync(join(ws, 'c.txt'), 'C0');
+      const r = await p.execute('write', { path: 'c.txt', content: 'C1' }, 'workspace');
+      expect(r.success).toBe(true);
+      expect(copiesOf(recycle, 'c.txt').length).toBe(1);   // 坏账当空账:按"本 run 第一次碰"留存——多留一份,不丢内容
+      const ledger = JSON.parse(readFileSync(join(tree, 'recycle_ledger.json'), 'utf-8'));
+      expect(Array.isArray(ledger)).toBe(false);
+      expect(Object.keys(ledger).length).toBe(1);
+    }
+  });
+
+  it('正例：没有实例目录（未推 tree）时用内存接管账——同一提供者两次覆盖同一文件只留存一次', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'keep-mem-'));
+    const p = makeProvider(ws);
+    const name = `mem-${ws.slice(-6)}.txt`;   // 内存账模式的回收站在系统临时区,文件名带随机后缀免与并行用例撞名
+    writeFileSync(join(ws, name), 'v0');
+    const r1 = await p.execute('write', { path: name, content: 'v1' }, 'workspace');
+    expect(r1.success).toBe(true);
+    const m = /旧版本已存到 (\S+)（/.exec(String(r1.result));
+    expect(m).not.toBeNull();
+    expect(readFileSync(m![1]!, 'utf-8')).toBe('v0');
+    const r2 = await p.execute('write', { path: name, content: 'v2' }, 'workspace');
+    expect(String(r2.result)).toContain(`本次运行开始前的版本已存于 ${m![1]}`);
+    expect(existsSync(join(ws, '.hopstate'))).toBe(false);   // 不落账文件
+  });
+
+  it('正例：move 把源文件的接管账条目移交给目标——之后再覆盖目标按"本 run 自己建的"不留存', async () => {
+    const { ws, p, tree, recycle } = setup();
+    expect((await p.execute('write', { path: 'born.txt', content: 'B' }, 'workspace')).success).toBe(true);   // 本 run 新建 → {created:true}
+    writeFileSync(join(ws, 'target.txt'), 'T0');
+    expect((await p.execute('move', { from: 'born.txt', to: 'target.txt' }, 'workspace')).success).toBe(true);
+    const ledger = JSON.parse(readFileSync(join(tree, 'recycle_ledger.json'), 'utf-8'));
+    const realWs = realpathSync(ws);
+    expect(ledger[join(realWs, 'target.txt')]).toEqual({ created: true });
+    expect(ledger[join(realWs, 'born.txt')]).toBeUndefined();
+    expect(readFileSync(join(recycle, copiesOf(recycle, 'target.txt')[0]!), 'utf-8')).toBe('T0');   // 被替换的旧目标照常留存
+    await p.execute('write', { path: 'target.txt', content: 'T2' }, 'workspace');
+    expect(copiesOf(recycle, 'target.txt').length).toBe(1);
+  });
+
+  it('正例：已留存过的文件再用 keep=0 覆盖或 edit_file → 接管账改记 created（write 的"!existed 或 keep == 0"、edit_file 的"keep == 0"入账条件）', async () => {
+    const { ws, p, tree, recycle } = setup();
+    writeFileSync(join(ws, 'r.txt'), 'v0');
+    await p.execute('write', { path: 'r.txt', content: 'v1' }, 'workspace');
+    const key = join(realpathSync(ws), 'r.txt');
+    const read = () => JSON.parse(readFileSync(join(tree, 'recycle_ledger.json'), 'utf-8'));
+    expect(read()[key]).toHaveProperty('copy');
+    expect((await p.execute('write', { path: 'r.txt', content: 'v2', keep: 0 }, 'workspace')).success).toBe(true);
+    expect(read()[key]).toEqual({ created: true });
+    expect(copiesOf(recycle, 'r.txt').length).toBe(1);   // 本次运行开始前的版本仍在回收站
+    writeFileSync(join(ws, 'q.txt'), 'hello world');
+    await p.execute('write', { path: 'q.txt', content: 'hello world' }, 'workspace');
+    const keyQ = join(realpathSync(ws), 'q.txt');
+    expect(read()[keyQ]).toHaveProperty('copy');
+    expect((await p.execute('edit_file', { path: 'q.txt', old_text: 'world', new_text: 'there', keep: 0 }, 'workspace')).success).toBe(true);
+    expect(read()[keyQ]).toEqual({ created: true });   // edit_file 的"keep == 0"入账条件
+  });
+
+  it('create 与 append 的接管账:create 新建记 created;append 让原本不存在的文件出现记 created;append 到已有文件不记——之后覆盖照常留存 run 前的内容', async () => {
+    const { ws, p, tree, recycle } = setup();
+    const read = () => JSON.parse(readFileSync(join(tree, 'recycle_ledger.json'), 'utf-8'));
+    const key = (name: string) => join(realpathSync(ws), name);
+    expect((await p.execute('create', { path: 'c.txt', content: 'C1' }, 'workspace')).success).toBe(true);
+    expect(read()[key('c.txt')]).toEqual({ created: true });
+    await p.execute('write', { path: 'c.txt', content: 'C2' }, 'workspace');
+    expect(copiesOf(recycle, 'c.txt')).toEqual([]);   // 本 run 自己建的,覆盖不留存
+    expect((await p.execute('append', { path: 'n.txt', content: 'N1' }, 'workspace')).success).toBe(true);
+    expect(read()[key('n.txt')]).toEqual({ created: true });
+    await p.execute('write', { path: 'n.txt', content: 'N2' }, 'workspace');
+    expect(copiesOf(recycle, 'n.txt')).toEqual([]);
+    writeFileSync(join(ws, 'e.txt'), 'E0');
+    expect((await p.execute('append', { path: 'e.txt', content: '+E1' }, 'workspace')).success).toBe(true);
+    expect(read()[key('e.txt')]).toBeUndefined();   // 文件里仍含 run 前的内容,不算本 run 建的
+    await p.execute('write', { path: 'e.txt', content: 'E2' }, 'workspace');
+    const copies = copiesOf(recycle, 'e.txt');
+    expect(copies.length).toBe(1);
+    expect(readFileSync(join(recycle, copies[0]!), 'utf-8')).toBe('E0+E1');
+  });
+
+  it('反例：move 的源文件不存在 → 报 ENOENT,已有目标不动、不留存、不入账（源在场才留存目标）', async () => {
+    const { ws, p, tree, recycle } = setup();
+    writeFileSync(join(ws, 'kept.txt'), 'K0');
+    const r = await p.execute('move', { from: 'ghost.txt', to: 'kept.txt' }, 'workspace');
+    expect(r.success).toBe(false);
+    expect(String(r.result)).toMatch(/ENOENT/);
+    expect(readFileSync(join(ws, 'kept.txt'), 'utf-8')).toBe('K0');
+    expect(copiesOf(recycle, 'kept.txt')).toEqual([]);
+    expect(existsSync(join(tree, 'recycle_ledger.json'))).toBe(false);
+  });
+
+  it('反例：keep 不是非负整数（负数、小数、字符串）→ 拒,原文件不动', async () => {
+    const { ws, p } = setup();
+    writeFileSync(join(ws, 'k.txt'), 'K');
+    for (const keep of [-1, 1.5, '3']) {
+      const r = await p.execute('write', { path: 'k.txt', content: 'x', keep }, 'workspace');
+      expect(r.success).toBe(false);
+      expect(String(r.result)).toContain('keep 须是非负整数');
+    }
+    expect(readFileSync(join(ws, 'k.txt'), 'utf-8')).toBe('K');
+  });
+
+  it('keep 缺省值是 3（DEFAULT_KEEP 住 ast-types.ts,引擎停点模板与工具轮转同源）:不传 keep 时连续五次 run 覆盖只留三份', async () => {
+    expect(DEFAULT_KEEP).toBe(3);
+    const ws = mkdtempSync(join(tmpdir(), 'keep-default-'));
+    for (let i = 0; i < 5; i++) {
+      const p = makeProvider(ws);
+      const tree = join(ws, '.hopstate', `run${i}`);
+      ownWz(p, join(tree, 'work_zone'), tree);
+      mkdirSync(join(tree, 'work_zone'), { recursive: true });
+      if (i === 0) writeFileSync(join(ws, 'k.txt'), 'v0');
+      expect((await p.execute('write', { path: 'k.txt', content: `v${i + 1}` }, 'workspace')).success).toBe(true);
+    }
+    expect(copiesOf(join(ws, '.hopstate', 'recycle'), 'k.txt').length).toBe(3);
+  });
+
+  it('工具定义:write / edit_file / move / remove 的 keep 参数类型是 integer、下限 0', () => {
+    const defs = makeProvider().list();
+    for (const name of ['write', 'edit_file', 'move', 'remove']) {
+      const keep = (defs.find(t => t.name === name)!.input_schema as any).properties.keep;
+      expect(keep, name).toEqual(expect.objectContaining({ type: 'integer', minimum: 0 }));
+    }
+  });
+
+  it('回执:move 替换已有目标、remove 删除已有文件,回执都写明旧版本存到了哪里;move 带 keep=0 替换目标不留存', async () => {
+    const { ws, p, recycle } = setup();
+    writeFileSync(join(ws, 'ms.txt'), 'NEW');
+    writeFileSync(join(ws, 'md.txt'), 'OLD');
+    const rm = await p.execute('move', { from: 'ms.txt', to: 'md.txt' }, 'workspace');
+    expect(String(rm.result)).toMatch(/^Moved ms\.txt → md\.txt 旧版本已存到 /);
+    writeFileSync(join(ws, 'del.txt'), 'D');
+    const rd = await p.execute('remove', { path: 'del.txt' }, 'workspace');
+    expect(String(rd.result)).toMatch(/^Deleted del\.txt 旧版本已存到 /);
+    writeFileSync(join(ws, 'ks.txt'), 'NEW');
+    writeFileSync(join(ws, 'kd.txt'), 'OLD');
+    const rk = await p.execute('move', { from: 'ks.txt', to: 'kd.txt', keep: 0 }, 'workspace');
+    expect(rk.success).toBe(true);
+    expect(String(rk.result)).toBe('Moved ks.txt → kd.txt');
+    expect(copiesOf(recycle, 'kd.txt')).toEqual([]);
+  });
+
+  it('轮转只删本文件的留存件:文件名里的点按字面匹配,名字只是以本文件名结尾的别的文件不受影响;刚留存的这份即使排序靠前也不删', async () => {
+    const { ws, p, recycle } = setup();
+    mkdirSync(recycle, { recursive: true });
+    // aXtxt 在点不转义时会被 a.txt 的模式匹配;xa.txt 在模式不锚定开头时会被匹配
+    for (const f of ['aXtxt.20200101-000000', 'xa.txt.20200101-000000']) writeFileSync(join(recycle, f), 'other');
+    writeFileSync(join(ws, 'a.txt'), 'A0');
+    const r = await p.execute('write', { path: 'a.txt', content: 'A1', keep: 1 }, 'workspace');
+    expect(r.success).toBe(true);
+    expect(existsSync(join(recycle, 'aXtxt.20200101-000000'))).toBe(true);
+    expect(existsSync(join(recycle, 'xa.txt.20200101-000000'))).toBe(true);
+    // 回收站里已有一份时间戳在未来的留存件:按时间排序后刚留存的这份排在前面,轮转也不删它
+    writeFileSync(join(recycle, 'f.txt.29991231-235959'), 'future');
+    writeFileSync(join(ws, 'f.txt'), 'F0');
+    const rf = await p.execute('write', { path: 'f.txt', content: 'F1', keep: 1 }, 'workspace');
+    const copy = /旧版本已存到 (\S+)（/.exec(String(rf.result))![1]!;
+    expect(readFileSync(copy, 'utf-8')).toBe('F0');
+  });
+
+  it('内存接管账:move 之后源路径的条目删除——源路径被重新建出后再覆盖,按 run 前已有的文件留存', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'keep-memmv-'));
+    const p = makeProvider(ws);
+    const tag = ws.slice(-6);
+    const src = `src-${tag}.txt`;
+    const dst = `dst-${tag}.txt`;
+    expect((await p.execute('write', { path: src, content: 'S' }, 'workspace')).success).toBe(true);   // 本 run 新建 → created
+    expect((await p.execute('move', { from: src, to: dst }, 'workspace')).success).toBe(true);
+    writeFileSync(join(ws, src), 'EXT');   // 工具之外重新建出源路径
+    const r = await p.execute('write', { path: src, content: 'S2' }, 'workspace');
+    const m = /旧版本已存到 (\S+)（/.exec(String(r.result));
+    expect(m).not.toBeNull();
+    expect(m![1]!.startsWith(join(tmpdir(), 'hopjit-recycle') + '/')).toBe(true);   // 无实例目录时回收站在系统临时区
+    expect(readFileSync(m![1]!, 'utf-8')).toBe('EXT');
+  });
+
+  // 以下用例逐分支侧钉住被审批次改动的函数（commit 安全分析批次 review 第五次阅卷后,机器枚举分支侧的 run20 存活项）
+  // @v: anc-exec-file-keep-recycle
+  it('同一秒内多份留存件:序号接着现有最大值加 1（跨过轮转删出的空位）;前缀相同但后缀不是纯数字的文件不算序号', async () => {
+    const { ws, p, recycle } = setup();
+    mkdirSync(recycle, { recursive: true });
+    const fixed = new Date(2030, 0, 2, 3, 4, 5);
+    vi.useFakeTimers({ now: fixed, toFake: ['Date'] });
+    try {
+      const stamp = '20300102-030405';
+      // 回收站里已有 a.txt.<stamp>（序号 1）与 a.txt.<stamp>-4,还有一个 a.txt.<stamp>-x（后缀不是数字,不算）
+      for (const f of [`a.txt.${stamp}`, `a.txt.${stamp}-4`, `a.txt.${stamp}-x`]) writeFileSync(join(recycle, f), 'old');
+      writeFileSync(join(ws, 'a.txt'), 'A0');
+      const r = await p.execute('write', { path: 'a.txt', content: 'A1', keep: 9 }, 'workspace');
+      expect(String(r.result)).toContain(`旧版本已存到 ${join(recycle, `a.txt.${stamp}-5`)}（`);
+      expect(readFileSync(join(recycle, `a.txt.${stamp}-5`), 'utf-8')).toBe('A0');
+      // 回收站里这一秒还没有任何留存件:文件名不带序号
+      writeFileSync(join(ws, 'b.txt'), 'B0');
+      const rb = await p.execute('write', { path: 'b.txt', content: 'B1', keep: 9 }, 'workspace');
+      expect(String(rb.result)).toContain(`旧版本已存到 ${join(recycle, `b.txt.${stamp}`)}（`);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // @v: anc-exec-file-keep-recycle
+  it('轮转排序按（时间戳,序号数值）:同一秒的 -2 与 -10 按数值排,-2 先被删;没有序号的那份当作序号 1', async () => {
+    const { ws, p, recycle } = setup();
+    mkdirSync(recycle, { recursive: true });
+    const old = '20200101-000000';
+    for (const [f, c] of [[`c.txt.${old}`, 's1'], [`c.txt.${old}-2`, 's2'], [`c.txt.${old}-10`, 's10']] as const) writeFileSync(join(recycle, f), c);
+    writeFileSync(join(ws, 'c.txt'), 'C0');
+    const r = await p.execute('write', { path: 'c.txt', content: 'C1', keep: 2 }, 'workspace');
+    expect(r.success).toBe(true);
+    // 四份里留最近两份:刚留存的这份 + 同秒序号最大的 -10;s1（序号 1）与 -2 被删
+    expect(existsSync(join(recycle, `c.txt.${old}`))).toBe(false);
+    expect(existsSync(join(recycle, `c.txt.${old}-2`))).toBe(false);
+    expect(existsSync(join(recycle, `c.txt.${old}-10`))).toBe(true);
+  });
+
+  // @v: anc-exec-file-keep-recycle
+  it('留存后清理旧件失败（旧留存件的名字被一个非空目录占住,unlink 报 EPERM/EISDIR）→ 写入照常完成,回执末尾带"清理旧留存件失败"', async () => {
+    const { ws, p, recycle } = setup();
+    mkdirSync(recycle, { recursive: true });
+    // 一个名字形如留存件、实际是非空目录的条目:匹配轮转模式,unlinkSync 对目录抛错
+    mkdirSync(join(recycle, 'd.txt.20200101-000000', 'inner'), { recursive: true });
+    writeFileSync(join(recycle, 'd.txt.20200101-000000', 'inner', 'f'), 'x');
+    writeFileSync(join(ws, 'd.txt'), 'D0');
+    const r = await p.execute('write', { path: 'd.txt', content: 'D1', keep: 1 }, 'workspace');
+    expect(r.success).toBe(true);
+    expect(String(r.result)).toMatch(/;清理旧留存件失败：.+/);
+    expect(readFileSync(join(ws, 'd.txt'), 'utf-8')).toBe('D1');
+    expect(existsSync(join(recycle, 'd.txt.20200101-000000', 'inner', 'f'))).toBe(true);
+  });
+
+  // @v: anc-exec-file-keep-recycle
+  it('接管账文件内容是 JSON 的 null 或数字 → 按空账处理（对象判断的两个条件）;move 的源文件在账上没有条目时目标不继承条目', async () => {
+    const { ws, p, tree, recycle } = setup();
+    mkdirSync(tree, { recursive: true });
+    for (const content of ['null', '42', '"str"']) {
+      writeFileSync(join(tree, 'recycle_ledger.json'), content);
+      writeFileSync(join(ws, 'e.txt'), 'E0');
+      const r = await p.execute('write', { path: 'e.txt', content: 'E1' }, 'workspace');
+      expect(r.success, content).toBe(true);
+      expect(String(r.result)).toContain('旧版本已存到');
+    }
+    // move 的源在账上没有条目:目标不继承;之后覆盖目标（run 前就有的文件内容已换成源内容,目标仍按"run 前已有"留存一次）
+    writeFileSync(join(tree, 'recycle_ledger.json'), '{}');
+    writeFileSync(join(ws, 'src.txt'), 'S');
+    expect((await p.execute('move', { from: 'src.txt', to: 'dst.txt', keep: 0 }, 'workspace')).success).toBe(true);
+    const ledger = JSON.parse(readFileSync(join(tree, 'recycle_ledger.json'), 'utf-8'));
+    expect(ledger[realpathSync(join(ws, 'dst.txt'))]).toBeUndefined();
+    const r2 = await p.execute('write', { path: 'dst.txt', content: 'D2' }, 'workspace');
+    expect(String(r2.result)).toContain('旧版本已存到');
+    expect(copiesOf(recycle, 'dst.txt').length).toBe(1);
+  });
+
+  // @v: anc-exec-file-keep-recycle
+  it('setWorkZoneScope:own 为空串时写根集合为空（任何 work_zone 写都按工作区路径处理）;tree 缺席时回收站锚回退为系统临时区', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'keep-scope-'));
+    const p = makeProvider(ws);
+    p.setWorkZoneScope({ own: '' });
+    expect((p as any).ownRoots.size).toBe(0);
+    expect((p as any).treeRoots.size).toBe(0);
+    expect((p as any).recycleTree).toBeUndefined();
+    p.setWorkZoneScope({ own: join(ws, 'wz'), tree: '' });
+    expect((p as any).ownRoots.size).toBeGreaterThan(0);
+    expect((p as any).recycleTree).toBeUndefined();
   });
 });

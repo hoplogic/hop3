@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// @v: anc-driver-codex-agent-roles, anc-driver-codex-inline-fallback, anc-driver-codex-rule-parity, anc-driver-codex-static-lint, anc-cli-json-io, anc-driver-opencode-carrier
+// @v: anc-driver-codex-agent-roles, anc-driver-codex-inline-fallback, anc-driver-codex-rule-parity, anc-driver-codex-static-lint, anc-cli-json-io, anc-driver-opencode-carrier, anc-cli-hop-ops-parity
 // Codex carrier 静态纪律 + CC/Codex/opencode 三载体稳定协议签名检查（opencode 自包含核+续接 token 核 2026-09-19 扩员）。
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
@@ -292,11 +292,49 @@ for (const path of [...ccBundle, ...codexBundle, ...opencodeBundle, 'driver/refe
 
 // /hop 六动作两载体 parity（^anc-exec-reuse-distill,2026-08-28 提纯批）。// @v: anc-exec-reuse-distill
 // distill 提纯与查现成流程是一对机制（生产/消费半边）——任一载体缺 token 即动作面漂移。
-for (const path of ['driver/hop-skill.md', 'driver/codex/hop-skill.md']) {
+for (const path of ['driver/hop-skill.md', 'driver/codex/hop-skill.md', 'driver/opencode/hop-skill.md']) {   // opencode 2026-10-09 纳入（此前只核两载体,todo/0142 子卡 C/E 批）
   const content = readProjectFile(path);
-  for (const token of ['distill', '提纯', 'hop_tasks/specs/', '查现成流程', '总结', '改动阶段进 worktree']) {   // 末 token=act/commit 分界兑现(^anc-exec-reuse-worktree-act) // @a: anc-exec-reuse-worktree-act
+  for (const token of ['distill', '总结', 'hop_tasks/ants', '查现成流程', '改动阶段进 worktree', 'ant pack', 'ant share', 'owner_prompt_required', 'hopjit --json doctor', 'USAGE.md', 'ant_pack', 'ant_share', 'ant_list', 'ant_adapt', 'ant_install', '不走 shell', '按此封装成 Hop 流程元件？', '现在有现成的 HopSpec 流程，下面按 HopSpec 运行。']) {   // 末 token=走现成 HopSpec 文件那一路对用户的固定开场白（2026-10-12 作者抓"这个描述也很土",hop-cli ^anc-cli-hop-dispatch）   // 末 token=总结确认问句固定文案（2026-10-12 作者抓"封吗？——这是啥鬼话",reuse-mode-prompt-flow ^anc-exec-reuse-distill 落盘与验收条）   // '不走 shell' token=读原料用只读文件工具不经 shell（2026-10-11 作者抓,hop-cli.md ^anc-cli-hop-dispatch 读原料条）   // 2026-10-10 todo/0155：'提纯' 与 'hop_tasks/specs/' 退役（动作改名"总结",产物直接成项目级 HopAnt 落 hop_tasks/ants/）   // ant_* token=管理动作走 hopjit MCP 工具（todo/0154,^anc-mcp-admin-tools）——三载体写法各异（mcp__hopjit__ / 裸名 / hopjit_ 前缀）,裸工具名是公共子串   // doctor token=§0 排障先体检（todo/0139,^anc-cli-doctor）;USAGE.md token=§2 命令行回退指向命令行手册（2026-10-10 USAGE 定位批,三载体同改的最小探针）   // 末三 token=封装/分享动作面（todo/0142 子卡 C/E,^anc-hopant-pack）   // 末 token=act/commit 分界兑现(^anc-exec-reuse-worktree-act) // @a: anc-exec-reuse-worktree-act, anc-exec-reuse-distill
     if (!content.includes(token)) {
       errors.push(`${path} missing /hop distill token: ${token}（六动作 parity,^anc-exec-reuse-distill）`);
+    }
+  }
+}
+
+// 三载体 hop-skill.md 的 description 契约（hop-cli.md ^anc-cli-hop-dispatch「/hop 的定位与 description 契约」,todo/0139 定位改写批 2026-10-09）。
+// description 是模型决定调不调 /hop 的唯一依据,四条形态约束各有出处：①单物理行非空——Codex provider / 本脚本 / readSkillFrontmatter 三处都按行取键,
+// `description: |` 块标量读出空;②≤1024 字符（JavaScript 字符串长度）——Agent Skills 开放标准上限,超限 skill 可能被校验器拒或静默跳过（现行英文版 1042 超限没人发现,就是缺这条）;
+// ③不含 XML 标签（同标准）;④含"总入口"或"single entry point"字样——定位改了没同步到某一载体的最小探针。// @a: anc-cli-hop-dispatch
+for (const path of ['driver/hop-skill.md', 'driver/codex/hop-skill.md', 'driver/opencode/hop-skill.md']) {
+  const content = readProjectFile(path);
+  if (!content) continue;
+  const fmEnd = content.startsWith('---\n') ? content.indexOf('\n---', 4) : -1;
+  const fm = fmEnd > 0 ? content.slice(4, fmEnd) : '';
+  const m = fm.match(/^description:[ \t]*(.*)$/m);
+  const raw = m ? m[1].trim() : '';
+  const desc = /^[|>][-+0-9]*$/.test(raw) ? '' : raw;   // `description: |` / `>` 块标量指示符不是内容——行级读到的只有这个符号
+  if (!desc) {
+    errors.push(`${path} frontmatter description 为空或不是单物理行——三处行级解析读不到（^anc-cli-hop-dispatch description 契约）`);
+    continue;
+  }
+  if (desc.length > 1024) {
+    errors.push(`${path} frontmatter description ${desc.length} 字符,超过 Agent Skills 标准的 1024 上限（^anc-cli-hop-dispatch description 契约）`);
+  }
+  if (/<[a-zA-Z/][^>]*>/.test(desc)) {
+    errors.push(`${path} frontmatter description 含 XML 标签（Agent Skills 标准禁止,^anc-cli-hop-dispatch description 契约）`);
+  }
+  if (!desc.includes('总入口') && !desc.includes('single entry point')) {
+    errors.push(`${path} frontmatter description 缺"总入口"/"single entry point"字样——定位没同步到此载体（^anc-cli-hop-dispatch description 契约）`);
+  }
+}
+
+// 三载体 hop-ops.md 字节同文（^anc-cli-hop-ops-parity,todo/0133 挂账②——此前只靠阅卷手核 md5,机检零感知）。
+// CC 源 driver/hop-references/hop-ops.md 是基准,codex / opencode 两份须逐字节相等;改一份即红点名,三份一起改。// @v: anc-cli-hop-ops-parity
+{
+  const base = readProjectFile('driver/hop-references/hop-ops.md');
+  for (const path of ['driver/codex/hop-references/hop-ops.md', 'driver/opencode/hop-references/hop-ops.md']) {
+    if (readProjectFile(path) !== base) {
+      errors.push(`${path} 与 driver/hop-references/hop-ops.md 不同文——三载体 hop-ops.md 是载体中立件一份内容三处落,改一份须三份一起改（^anc-cli-hop-ops-parity）`);
     }
   }
 }

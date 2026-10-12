@@ -3,7 +3,7 @@
 	source: [[../design/opencode-driver-carrier]]
 	source_id: hopjit-opencode-driver-carrier
 	type: compact
-	last_sync: 2026-10-01T16:04+0800
+	last_sync: 2026-10-10T00:26+0800
 	note: 教程 1 opencode 版——第四载体入口,与 CC/Codex/cfuse 版平列（opencode 真适配批+hop 补装批后补引导链:教程/README/USAGE 三面此前零覆盖或口径过时,作者抓"tutorial 还没写?"）。安装与驱动机制源=opencode-driver-carrier（原语映射/装载布局）;真机 E2E 两轮已验（v1.18.31+deepseek,coffee-week 全链）。
 %%
 
@@ -31,10 +31,10 @@
 
 ```bash
 npm install -g @hoplogic/hopjit
-hopjit install-skill --carrier opencode --demo
+hopjit setup --carrier opencode
 ```
 
-装出六件 skill 到 `~/.config/opencode/skills/`：`hopspec`（跑 spec 的缺省入口）、`hopspec-mcp`（独立模式薄壳）、`hop`（日常任务管护）、`hopbuild`/`hopbuild2`（自然语言 skill 翻译器）、`hopfix`（定向修正器）；`--demo` 另装演示件到项目 `.claude/skills/`（opencode 主动兼容该路径，演示材料跟项目走）。
+装出六件 skill 到 `~/.config/opencode/skills/`：`hopspec`（跑 spec 的缺省入口）、`hopspec-mcp`（独立模式薄壳）、`hop`（日常任务管护）、`hopbuild`/`hopbuild2`（自然语言 skill 翻译器）、`hopfix`（定向修正器）；另外缺省装三个演示 HopAnt 到 `~/.hopjit/ants/`（`demo-coffee-week` / `demo-fact-check` / `demo-rename`，与载体无关，由 hop 调用）。
 
 验证装载：
 
@@ -71,7 +71,7 @@ opencode run "用 hopspec skill 执行 coffee-week.md,参数 sales_data_path=cof
 
 | 症状 | 处置 |
 |---|---|
-| opencode 不认 skill | `ls ~/.config/opencode/skills/hopspec/SKILL.md` 确认在场；设过 `OPENCODE_CONFIG_DIR` 的确认装到了它指的目录（install-skill 读同一变量，两边一致才对上） |
+| opencode 不认 skill | `ls ~/.config/opencode/skills/hopspec/SKILL.md` 确认在场；设过 `OPENCODE_CONFIG_DIR` 的确认装到了它指的目录（setup 读同一变量，两边一致才对上） |
 | 找不到引擎 | `npm i -g @hoplogic/hopjit`；确认全局 bin 在 PATH 里 |
 | 执行中它自己回答了该问你的问题 | 确认装的是适配版（见第 3 步第二条）——旧版驱动件对问人协议无保证 |
 | validate 报 errors | 按提示修 spec——errors 挡执行，warnings 不挡 |
@@ -82,10 +82,10 @@ opencode run "用 hopspec skill 执行 coffee-week.md,参数 sales_data_path=cof
 任务跑得久、想换轻量 API 模型省成本时，配置一次独立模式（执行搬进 hopjit MCP server 进程）：
 
 ```bash
-hopjit install-skill --carrier opencode
+hopjit setup --carrier opencode
 ```
 
-这一条做两件事：把 hopjit MCP server 注册进 `~/.config/opencode/opencode.jsonc`（保留你文件里的注释与格式）；并从 opencode 的配置里学习你的模型设置自举 standalone 缺省配置（只记凭证的环境变量名，不抄值）。配置详情见 `USAGE.md` §6。同一份 spec 两种模式通用，零修改。
+这一条做两件事：把 hopjit MCP server 注册进 `~/.config/opencode/opencode.jsonc`（保留你文件里的注释与格式）；并从 opencode 的配置里学习你的模型设置自举 standalone 缺省配置（只记凭证的环境变量名，不抄值）。配置详情见 `USAGE.md` §4。同一份 spec 两种模式通用，零修改。
 
 注意：装出来的 `mcp.hopjit` 条目**默认是 `enabled: false`**——这是有意的：防止模型在复用模式（hopspec skill）下看到 hopjit 的 MCP 工具就自作主张去调独立模式工具，劫持本该走复用协议的执行。所以要真走独立模式，先打开 `~/.config/opencode/opencode.jsonc`，把 `mcp.hopjit.enabled` 改成 `true`，再对 opencode 说"走 MCP 跑某某 spec"。
 

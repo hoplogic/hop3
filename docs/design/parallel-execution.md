@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-09-27T20:38+0800
+	last_sync: 2026-10-08T23:22+0800
 	note: parallel 执行设计。§U 现行权威。2026-08-11：P0/P0.5/P2 交付+真机九场景验收过；P1 生产可靠四契约设计定形（对账/超时/协作中断/收割入轨），第三件 paused 让名额摘除归 HITL 挂账。
 %%
 
@@ -61,7 +61,7 @@ Constraints:
 StateFile 增可选字段 `inflight: [InflightCall]`——随既有 writeAtomic + load 通道持久化，不设独立文件。
 
 ```
-struct: InflightCall
+HopType: InflightCall
   Id: inflight-call
   Fields:
     - step_id % line         # 标注步骤 id（call 或 subtask，两派发单位共用本账）
@@ -81,7 +81,7 @@ struct: InflightCall
   - **已终态未收割** → 补收割（`reapFromChildDir` 现成——值在盘上，纯捡账，两模式同一入口）；
   - **未终态** → 重建：独立模式重起子 Dispatcher 续跑子实例（子实例自身恢复走既有 `ExecutionEngine.load`+resumeSpec；worker 门不开）；复用模式不重建进程——`advance`/`reap_and_fetch_next` 对账后响应附 `stale: string[]` 清单，driver 对清单项重起 worker；
     - **DrainWait 与 DispatchReady 都带 stale**——2026-08-13 随 dispatch-lost 降级补：对账后主线若还有活可派,响应是 dispatch_ready,stale 只挂 drain_wait 就丢了;driver 契约=任一响应见 stale 即自查；
-    - **如实注**：run 子实例入口撞已有目录是**重新 init 从头跑**、非断点续跑——act 可安全重做语义下结果等价,半跑状态被覆盖;真断点续跑待需求再立。2026-08-13 review 实测修正原'续跑'措辞；
+    - **如实注**：`run` 子实例入口撞已有目录是**重新 init 从头跑**（[[exec-engine#^anc-exec-call-reinit-clean]] 净室）、非断点续跑。**2026-10-08 起 `stale_launch` 不再把跑过的子实例送进这个入口**：子实例目录下有 state.json 的 stale 项拼 `resume --state-dir <父实例目录>/parallel --instance <子实例>`（load+复位悬空续跑,已执行且已批准的 commit 不重放）,没有的才拼 `run`（从未跑过,从头跑零损失）——判据与 U4b 第 6 条同一个 `stateExists`。此前恒拼 run,子实例内已执行的 commit 随重建被重放（review 面二 probe3b 实证）,作者定 commit 不重复执行是宪法级原则。2026-08-13 review 实测修正原'续跑'措辞,2026-10-08 续跑成真；
   - **子实例目录不存在** → 按账龄二分（2026-08-11 真机实撞修正：复用模式 worker 是 driver 异步后台起的，advance 续推时目录未建是**常态启动窗口**而非崩溃——无宽限期即误杀启动中的活，首轮真机 cc:parallel 实红）：
     - 账龄 ≤ 启动宽限期（`DISPATCH_GRACE_SECONDS=60`，常量——覆盖 subagent 启动延迟的保守值）→ 视为启动中，保持在飞（drain_wait 正常等待，不判死不判 stale）；
     - 账龄 > 宽限期 → **两模式分道**（2026-08-13 作者批准，真机二撞修正：cc:parallel-partial 中主 agent 收到 dispatch_ready 后合法耗时 67s 才起 worker——读文档/思考没有上界，固定宽限必然再撞；引擎单凭墙钟判"driver 有没有派活"是判不了的，**只有 driver 自己知道起没起**）：
@@ -201,12 +201,15 @@ struct: InflightCall
      ```
      - 拒因文字单一来源:dispatcher 导出 `childNotInQueueMessage(childInstance)`,异步拒收分支与 MCP 同步核对共用——两处各写一份文字会漂移（agent 自定,实现细节不请拍）;
 5. **杀活连坐**：主线失败杀活时 paused 子实例同杀（killed——主线死了答案无处安放;卡随杀清除,同 35 轮死卡纪律）;stop_run 级联同理;
-6. **跨进程恢复（重派发重暂停,36 轮 review 修正原'队列重建';分派判据 2026-08-29 随子实例落盘批再修——[[step-dispatcher#^anc-exec-call-child-persist]] 使子目录恒在,原"目录在=stale 重建"判据失效）**：paused 状态随在飞账入 state.json;crash-resume 对账时 paused 项按**退火标记**分派——
-   - 子实例**无已执行 commit** → 清账+标注步骤回 pending 重派发+**残目录清场**（重跑到暂停点重新入队:subtask/call 是事务边界重跑合法,人还没答过零损失;残目录不清会误导下轮对账）;
-   - **有已执行 commit** → 走 stale 续跑（load 重建后**先复位悬空态再** runSpec 推进——盘上暂停中的 confirm/ask 步是 running 态,不复位则 runSpec 撞 WAITING_WRITEBACK 防线直接 failed,paused 分支成死代码〔0830 review 变异核证实锤:删该分支 2293 全绿,顺藤摸出分支不可达〕）;
-     - 复位用 recoverDanglingRunning〔悬空 running→pending,幂等重跑到暂停点重新暂停〕,已完成步骤由持久化状态跳过;重派发=commit 重放,恰是落盘要防的第④坑,此形态是"目录在场才能续"的真消费方;
-   - stale 重建路径的 runSpec 三态分派补 paused 分支（重建后到暂停点=重新入队,与首派发 paused 分支同款——原只兜 completed/failed,paused 被 else 当失败收割:该洞在子实例纯内存时代不可达,落盘通电当场露头,U4b 重启钉 vals=[] 实锤）;
-   - 配套:ExecutionEngine.load 尽力回填 rawSource（从 state.json 的 spec_path 重读原文——重派发需原文重建子实例,原 null 让恢复路直判 failed）。
+6. **跨进程恢复（分派判据=子实例 state.json 是否在场,2026-10-07 hopissues/0126 改定、2026-10-08 工程链 review 修复批把措辞与复用模式真链收准;此前两版：36 轮 review 定"重派发重暂停"、2026-08-29 子实例落盘批改按退火标记分派）**：paused 状态随在飞账入 state.json;crash-resume 对账时 paused 项按**子实例目录下 state.json 是否在场**分派（判据是 `stateExists`——子实例跑过至少一步才有 state.json;派发时 `writeChildParams` 建目录只写 params.json,不算在场。设计此前写"目录在场",与代码判据不是一回事,review 面二抓出：按目录字面判会把"目录在、state.json 不在"的中间态送进续跑路,独立模式 load 失败被当失败收割）——
+   - **state.json 在场** → **走 stale 续跑**,不论子实例有没有执行过 commit。独立模式：`reconcileAndRebuild` 对它 load 重建、先复位悬空态再 runSpec（盘上暂停中的 confirm/ask/commit 步是 running 态,不复位则 runSpec 撞 WAITING_WRITEBACK 防线直接 failed——复位用 recoverDanglingRunning,悬空 running→pending,已完成步骤由持久化状态跳过）,跑到暂停点重新入队（runSpec 三态分派的 paused 分支,与首派发 paused 分支同款）。复用模式：对账把该条目从 paused 翻回 inflight 并进 `stale`——**续跑的载体是 `stale_launch` 里拼的命令**,见下一条。
+   - **state.json 不在场**（父实例无 instanceDir 的纯内存形态——子实例内存态崩溃即灭,这是 36 轮 review 的原始场景）→ 清账+标注步骤回 pending 重派发（重跑到暂停点重新入队：subtask/call 是事务边界重跑合法,人还没答过零损失）。不再清残目录：下轮对账只看 state.json,残 params.json 由下次派发的 `writeChildParams` 覆盖。
+   - **复用模式真链如实（review 面二探针实证,2026-10-08）**：CLI 通道里 worker 是独立进程,停在卡上时父账的条目**仍是 inflight**——`markInflightPaused` 的全部调用点都在独立模式 dispatcher,CLI 没有写入者。所以复用模式的 for-each × parallel 子实例停卡后换进程 `advance`/`reap_and_fetch_next` 对账,走的是 [[#^anc-exec-parallel-inflight-reconcile]] 既有的"inflight 且子实例非终态 → stale"分支,不经上面的 paused 分支;paused→inflight 翻转只对独立模式建的账（或独立模式建账后换 CLI 口对账的混合形态）生效。两条路汇到同一份 `stale`/`stale_launch`。
+   - **`stale_launch` 按子实例是否跑过分叉拼命令（2026-10-08 作者定"同一个工作的 commit 不能被反复执行,是宪法级原则",修法=引擎拼命令处分叉）**：对每个 stale 项判 `stateExists(<父实例目录>/parallel|calls/<子实例>)`——**在场拼 `resume --state-dir <父实例目录>/parallel --instance <子实例>`**（call worker 同形,目录段 calls）：worker 进程 load 子实例快照 + 复位悬空态接着跑,已执行的步骤由持久化状态跳过,已执行且已批准的 commit 不再执行;**不在场拼 `run --parallel-parent … --parallel-child …`**（首派发同形,worker 入口 init 从头跑——此时子实例从未跑过,从头跑零损失）。此前恒拼 run：worker 入口对已有目录走 [[exec-engine#^anc-exec-call-reinit-clean]] 净室整目录重建从头跑,子实例里已执行并已批准的 commit 被静默重放一次（review 面二 probe3b 实证：两句 commit 的子实例,第一句批准执行后停第二张卡,新进程重起后第一句又执行一遍,账已批准不停卡无提示）——违反 [[../concepts/HopSpec V3核心规范#^anc-step-commit]] 退火条"引擎不制造重放"。净室条款不动：它管的是 worker 入口撞已有目录时的语义,stale_launch 不再把跑过的子实例送进那个入口。
+   - **子实例的 commit 批准账与父共用一份**（0126 修法成立的前提,此前只能从代码推出）：批准账路径按 `findRunRoot(instanceDir)` 上溯到顶层实例再取上一级目录（[[exec-engine#^anc-exec-commit-approval]]）,子实例 instanceDir=`<父>/parallel/<子>/` 上溯到父 → 与父同一份 `commit_approvals.json`。父上记的批准子实例都查得到:指纹只覆盖 body,N 个跑同一份 spec 的子实例在同一步上指纹相同;分析模型判定安全的记录与人选"这一步以后都通过"（scope=task）的记录不分运行,人选"只批准这一次"（scope=once）的记录带 run_id,run_id 取 run 根实例目录名,子实例与父同一个 run_id——所以人批过一次后,N 个停在同一句 commit 上的子实例续跑时都查到已批,不再停卡。批准动作本身要落在子实例的引擎上（批准账按子实例跑的 spec 路径与步骤号记）:独立模式 approve_commit 带那张卡的 child_instance,复用模式照停点载荷的 instance_id 与 state_dir 原样传（[[exec-engine#^anc-exec-commit-approval]] 子实例条）。
+   - **为什么不再按退火标记分派**（hopissues/0126,hopkb 2026-10-07 实撞 306 组只回 1 组）：旧判据对"无 commit"的 paused 子实例清账、置步骤 pending、删目录,指望下一轮 dfs 重新派发——这个假设只对兄弟位单个子实例成立。`[loop for-each] × [subtask parallel]` 下 N 个子实例是在 for-each 的派发游标走到最后一项之后才全部停下的,步骤置回 pending 后 dfs 只按当前游标派最后一项,前 N-1 项账已删、目录已清、游标不回退,它们的 commit 一次没执行,run 却以 completed 收尾,收集列表只剩最后一项,无任何 failed/reaped 记账。入口不限 commit 卡——任何 for-each × parallel 子实例 paused 的跨进程恢复都走这条分支（ask/confirm 子实例卡同理）。"state.json 在场即续跑"不碰 stepStates、不碰 loopCounters、不删目录,N 项天然保住;对单个子实例,续跑到暂停点与重派发重跑在人没答过时结果相同。有 commit 的子实例 state.json 必在场,自然落到续跑路,退火标记在分派里不再需要;
+   - 配套:ExecutionEngine.load 尽力回填 rawSource（从 state.json 的 spec_path 重读原文——不在场路的重派发需原文重建子实例,原 null 让恢复路直判 failed）。
+   - **MCP 跨进程应答的入口**：server 重启后的 run 是 restoreRun 重建的,`resume_run` 的 step_id 结构预检只认父 spec 里能找到且类型为 confirm/ask 的步、网络暂停步、升层待答步、父账上 running 的 commit 步、悬空崩溃步（[[mcp-server#^anc-mcp-run-restore]]）。因此 `resume_run(child_instance=…)` 只对 **subtask-parallel 子实例的 ask/confirm 卡**走第 4 条的跨进程应答路（队列 miss 但账上 paused → 先 resumeSpec 对账续跑,同名 child 新卡入队后按原答继续）;**子实例的 commit 卡**（父账上该步是 done 不是 running,0126 的真实形态）与 **call-parallel 子实例的任何卡**（callee 步骤在父 spec 里找不到）被预检 INVALID_STATE 拒——这是既有限制,放行子实例卡另议。此时调用方走 `resume_run(step_id=<for-each 容器步>)`：容器步因有在飞子实例保持 running、非 confirm/ask/commit → 判悬空崩溃步 → recoverDanglingRunning（对父实例只改 state_seq/last_writer,已进圈 loop 与 done/skipped 子步一个不动）+ resumeSpec → 经本条对账,N 个子实例全部续跑到各自停点重新入队。
 
 **范围注记**：v1 覆盖独立模式两形态（subtask parallel/call parallel）;复用模式 driver 逐请求问人的协议扩展另批（driver 现走 stale 对账兜底不受损）。
 
@@ -276,7 +279,7 @@ Constraints:
 
 **类型约定（HopType）**——cli-types 增量：
 
-- `DispatchReady` 补 `launch_command: string`（复用模式引擎拼好；独立模式缺省——dispatcher 进程内直起不需要;命令里 `--params` 恒为 `"@<参数文件绝对路径>"`,参数表由引擎写进父实例目录 `cmd_args/`,命令行不含数据值——[[exec-engine#^anc-exec-cmd-args-file]],hopissues/0097）与 `dispatch_kind: 'subtask' | 'call'`；
+- `DispatchReady` 补 `launch_command: string`（复用模式引擎拼好；独立模式缺省——dispatcher 进程内直起不需要;命令里 `--params` 恒为 `"@<参数文件绝对路径>"`,参数表由引擎写进父实例目录 `cmd_args/`,命令行不含数据值——[[exec-engine#^anc-exec-cmd-args-file]],hopissues/0097;命令恒带 `--workspace "<父 workspace_dir>"`,子进程 cwd 由 driver 的 Bash 决定,不带即父子工作区分叉——[[hop-cli#^anc-cli-workspace-arg]],2026-10-07）与 `workspace_dir`（派发项并列回显,与 work_zone 同族）与 `dispatch_kind: 'subtask' | 'call'`；
 - `ExecutionFailed` 补 `kill_list?: string[]`（主线失败时在飞被杀清单，driver 尽力终止）；
 - 新 CLI 命令 `reap_and_fetch_next <child-instance> --status <s>`：引擎读子实例目录收割（reapParallelSubtask/Call 既有 API）+ advanceToCaller 返回下一介入点——一次原子往返（对称 submit_and_fetch_next）；
 - 新 CLI 命令 `advance`：dispatch_ready 后续推主线（advanceToCaller 薄壳——run/submit 之外主线推进的第三入口，仅此场景使用）。

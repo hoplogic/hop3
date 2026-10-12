@@ -28,8 +28,11 @@ const LAYER = {
 
   // 驱动适配层（2）
   'cli': 2, 'cli-types': 2, 'dispatcher': 2, 'protocol-openai': 2, 'tools': 2, 'tools-registry': 2, 'tools-composite': 2, 'tools-mcp-binding': 2, 'tools-inprocess-binding': 2, 'tools-notify': 2, 'persistence': 2,   // protocol-openai 属 step-dispatcher；tools-registry/composite 属 tools 模块
-  'postinstall': 2,   // npm postinstall 钩子入口（hop-cli 模块,只 import cli 的纯函数——^anc-cli-postinstall）
+  'config-load': 2,   // 两级配置读取合并（config-load 模块,两种模式共用一份——家目录/项目根由组合根传入,见 design/config-load.md ^anc-struct-config-load）
+  'hopant': 2,   // HopAnt 安装/适配/索引（hopant 模块,纯函数——home/env 由组合根注入,见 design/hopant.md ^anc-struct-hopant）
+  'hop-admin': 2,   // hop 管理面业务体：doctor 八问 + ant 七动作 + 载体探测助手（属 hop-cli 模块的出口文件,cli 与 mcp-server 两个组合根各套薄壳;不读进程状态——AdminContext 注入,见 design/mcp-server.md ^anc-mcp-admin-tools）
   'mcp-server': 2,   // standalone MCP 协议壳（薄壳包 dispatcher，见 design/mcp-server.md）
+  'reuse-driver': 2,   // 复用模式驱动工具的引擎调用序（属 mcp-server 模块,七件驱动工具的实现,不 import cli——见 design/mcp-server.md ^anc-mcp-reuse-driver-tools）
 };
 
 // 豁免名单：与 ARCHITECTURE.md「分层桥接点」逐条对应（kind 仅注释用途）。

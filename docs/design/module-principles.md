@@ -49,7 +49,7 @@
 ```
 载体层（driver/ 驱动文档，不是 TS 代码）
    ↑ 只依赖 CLI 的 JSON 契约（cli-types），不 import 任何实现
-驱动适配层：hop-cli · step-dispatcher · tools（含 tools-notify.ts 钉钉通道——不可逆工具通道属工具面适配层,与 mcp-binding 同位） · persistence(File)
+驱动适配层：hop-cli · step-dispatcher · tools（含 tools-notify.ts 钉钉通道——不可逆工具通道属工具面适配层,与 mcp-binding 同位） · persistence(File) · config-load（两级配置读取合并,两种模式共用——文件 config-load.ts,见 [[config-load#^anc-struct-config-load]]）
    ↑ 可 import 引擎核心与共享层
 引擎核心层：exec-engine · spec-parser · spec-ast（含 spec-tree-edit.ts——AST 级树编辑核心,仅依赖 ast-types;契约归 tools 模块 ^anc-exec-builtin-edit-tree-tool 两层结构之第一层,文件定层按依赖事实归核心层） · act-body（含 command-exec.ts——命令执行原语,仅依赖 node 内置;两个消费口分处两层〔本模块的 subprocess.run + 适配层 tools 的 run_script〕,文件按依赖事实归核心层,适配层向下 import 是合规方向） · py-sandbox（Python 语法沙箱——产物脚本白名单静态审查+受控执行;仅依赖 node 内置与同层 command-exec,被适配层 tools 的 run_script 调,见 [[py-sandbox#^anc-struct-py-sandbox]]） · prompt-assembler · doc-ref · hoplog
    ↑ 可 import 共享层；【禁止】import 驱动适配层
@@ -130,12 +130,15 @@
 
 ## 7. 现状盘点【说明·快照 2026-08-06】
 
-16 模块规模（`npm run check:audit` 产物 module_scale，过期以实测为准）：
+17 模块规模（`npm run check:audit` 产物 module_scale，过期以实测为准）：
 
 - exec-engine 1923 行 / spec-parser 1558 / prompt-assembler 893 / hop-cli 697 / step-dispatcher 627 / act-body 601 / spec-ast 493 / hoplog 421；
 - **mcp-server 389**（2026-08-06 新增，standalone MCP 协议壳，适配层）；
 - doc-ref 163 / persistence 155 / shared-providers 132 / tools 122 / shared-errors 47 / anchor-audit-scripts（纯脚本）；
 - **py-sandbox**（2026-09-23 新增，Python 语法沙箱，核心层；src 一件 + 随包检查器脚本 `scripts/pysb/pysb_check.py`；^anc-struct-py-sandbox 定位+边界声明✓、@module 归属✓、专属 py-sandbox.test.ts✓）。
+- **hop-cli** 的文件在 2026-10-10 todo/0154 起为 cli.ts / cli-types.ts / hop-admin.ts 三件（hop-admin.ts=管理面业务体出口文件,doctor 八问 + ant 七动作 + 载体探测助手,mcp-server 组合根经它挂管理工具;出口文件与公开符号登记在 hop-cli 设计的「②b 对外接口清单」节）。
+- **hopant**（2026-10-06 新增，HopAnt 安装/配置适配/本机索引，适配层；src 一件 hopant.ts,CLI `ant` 命令族经 hop-cli 的 hop-admin.ts 薄接线（2026-10-10 todo/0154 从 cli.ts 搬出,mcp-server 的 ant_* 工具同一业务体）；^anc-struct-hopant 定位+边界声明✓、@module 归属✓、专属 hopant.test.ts✓）。
+- **config-load**（2026-10-08 新增，两级配置读取合并，适配层；从 mcp-server 挪出的 parseConfigFile / mergeConfigs / validateMergedRefs 与类型,cli 与 mcp-server 共用;src 一件 config-load.ts；^anc-struct-config-load 定位+边界声明✓、@module 归属✓、专属 config-load.test.ts✓）。
 
 - 健康：≤900 行的 12 个模块全部满足 §1 四判据（mcp-server：^anc-struct-mcp-server 定位+边界声明✓、@module 归属✓、独立收链✓、专属 mcp-server.test.ts✓）；
 - 观察名单：exec-engine（T1 接近线，T3 到来时拆）、spec-parser（parser+validator 1558 行，关注点尚单一，无信号）；

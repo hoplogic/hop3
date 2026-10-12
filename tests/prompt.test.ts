@@ -1,9 +1,10 @@
 // @module: prompt-assembler ^anc-struct-prompt-assembler
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
+import { HUMAN_PREVIEW_THRESHOLD } from '../src/ast-helpers.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { PromptAssembler, formatPromptText, actRoleKind, roleGuideText , stripAssemblyNotes, buildToolManifest, renderPromptParts, stepDeliversReadTool, detectTextToolCall, buildTextToolCallHint, TEXT_TOOLCALL_HINT_MARKER, SCHEMA_KICK_MARKER, EMPTY_RETRY_NOTE, stepDescriptionIsChinese } from '../src/prompt.js';
+import { PromptAssembler, formatPromptText, formatHumanContext, actRoleKind, roleGuideText , stripAssemblyNotes, buildToolManifest, renderPromptParts, stepDeliversReadTool, detectTextToolCall, buildTextToolCallHint, TEXT_TOOLCALL_HINT_MARKER, SCHEMA_KICK_MARKER, EMPTY_RETRY_NOTE, stepDescriptionIsChinese } from '../src/prompt.js';
 import { ExecutionEngine } from '../src/engine.js';
 import type { HostConfig } from '../src/provider-types.js';
 import type { AssembledContext } from '../src/runtime-types.js';
@@ -995,6 +996,67 @@ g
 });
 
 // @v: anc-exec-l1-skeleton —— 重构跟进:骨架渲染 for-each/parallel 属性(itemVar 对 LLM 的唯一声明)
+// 2026-10-12 语义审计 #9 #10 #11：worker 子实例的 L1 骨架裁剪（父 parallel 身份头 + 子树）与 task_context 的
+// [你的子任务] / 交付输出 两行此前全库零断言——buildSubtreeSkeleton 改返回空串、去掉身份行全绿。本组钉住两处裁剪。
+// @v: anc-exec-parallel-worker-prompt, anc-exec-l1-skeleton
+describe('worker 子实例的 L1 骨架与身份标注（语义审计 #9 #10 #11）', () => {
+  const WORKER_SPEC = `# W
+Id: w
+## Goal
+分片处理
+## Inputs
+- shards: [int]
+## Outputs
+- marked: [yaml]
+## Steps
+1. [loop for-each shard in shards, collect mark into marked] 逐片
+  + → marked: [yaml]
+  1.1. [subtask parallel] 单片标记
+    + → mark: yaml
+    1.1.1. [reason] 标一下
+      - ← shard
+      + → mark: yaml
+      > 标
+2. [exit] 交付
+`;
+  const mkWorker = () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(WORKER_SPEC, HOST, { stateDir: mkdtempSync(join(tmpdir(), 'prompt-worker-')), subtreeRoot: '1.1', params: { shard: 2 } });
+    return engine;
+  };
+
+  it('正例（语义审计 #9 #11）：worker 的 task_context 含 [你的子任务] <子树根摘要> 与 交付输出: <子树根输出 名%类型>', () => {
+    const engine = mkWorker();
+    const assembler = new PromptAssembler(engine);
+    const leaf = ((engine.getSpec()!.steps![0] as any).children[0]).children[0];
+    const ctx = assembler.assembleReasonContext(leaf);
+    expect(ctx.task_context).toContain('[你的子任务] 单片标记');
+    expect(ctx.task_context).toMatch(/交付输出: mark\s*%\s*yaml/);
+  });
+
+  it('正例（语义审计 #10）：worker 的 L1 骨架裁到子树视图——父 loop 行带"← 你负责 1.1 分支（与其它分支并行执行，无需关心兄弟）"身份头,子树 1.1 / 1.1.1 在场,兄弟顶层步骤 2 不在场', () => {
+    const engine = mkWorker();
+    const assembler = new PromptAssembler(engine);
+    const leaf = ((engine.getSpec()!.steps![0] as any).children[0]).children[0];
+    const ctx = assembler.assembleReasonContext(leaf);
+    expect(ctx.task_context).toContain('← 你负责 1.1 分支（与其它分支并行执行，无需关心兄弟）');
+    expect(ctx.task_context).toContain('1.1.1. [reason] 标一下');
+    expect(ctx.task_context).not.toContain('2. [exit] 交付');
+  });
+
+  it('反例（语义审计 #9 #10）：非 worker（无 subtreeRoot）的同一 spec 同一叶子 → 无 [你的子任务] / 交付输出 / 你负责 身份行,骨架含顶层步骤 2（全视图）', () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(WORKER_SPEC, HOST, { params: { shards: [1, 2] } });
+    const assembler = new PromptAssembler(engine);
+    const leaf = ((engine.getSpec()!.steps![0] as any).children[0]).children[0];
+    const ctx = assembler.assembleReasonContext(leaf);
+    expect(ctx.task_context).not.toContain('[你的子任务]');
+    expect(ctx.task_context).not.toContain('交付输出:');
+    expect(ctx.task_context).not.toContain('你负责');
+    expect(ctx.task_context).toContain('2. [exit] 交付');
+  });
+});
+
 describe('L1 骨架容器属性渲染（v0.1.1）', () => {
   // @v: anc-step-break — 目标随骨架渲染（丢渲染=执行 LLM 眼里多层跳出降级为最近循环）
   it('break/continue 目标步骤号入骨架行,裸形态不带', () => {
@@ -1978,7 +2040,7 @@ g
 });
 
 // @v: anc-exec-llm-inline-context — 判定函数 stepDeliversReadTool 的逐条规则（todo/0115 v3:
-// 禁用优先 → act/commit 恒有基础工具 → reason 看声明 → 其余没有）
+// 禁用优先 → act/commit 恒有基础工具 → reason 与 check 看声明 → 其余没有）
 describe('stepDeliversReadTool：本步下发的工具面里有没有 read', () => {
   const mk = (step_type: string, extra: Record<string, unknown> = {}) =>
     ({ step_id: '1', step_type, ...extra }) as unknown as Parameters<typeof stepDeliversReadTool>[0];
@@ -2001,8 +2063,16 @@ describe('stepDeliversReadTool：本步下发的工具面里有没有 read', () 
   it('reason 声明 * 但禁 read → false', () => {
     expect(stepDeliversReadTool(mk('reason', { tool_grants: [{ name: '*' }], tool_denies: [{ name: 'read' }] }))).toBe(false);
   });
-  it('check / subtask 等其余类型 → false', () => {
+  it('正例（语义审计 #14,todo/0161）：check 声明 read 或 * → true——check 与 reason 同一套声明制,声明了 read 的 check 在 inline 模式下拿预览条目而非全量内联', () => {
+    expect(stepDeliversReadTool(mk('check', { tool_grants: [{ name: 'read' }] }))).toBe(true);
+    expect(stepDeliversReadTool(mk('check', { tool_grants: [{ name: '*' }] }))).toBe(true);
+  });
+  it('反例（语义审计 #14）：check 零声明 → false;check 只声明别的工具 → false;check 声明 * 但禁 read → false', () => {
     expect(stepDeliversReadTool(mk('check'))).toBe(false);
+    expect(stepDeliversReadTool(mk('check', { tool_grants: [{ name: 'web_search' }] }))).toBe(false);
+    expect(stepDeliversReadTool(mk('check', { tool_grants: [{ name: '*' }], tool_denies: [{ name: 'read' }] }))).toBe(false);
+  });
+  it('subtask 等其余类型 → false（replan 借用的 subtask 节点零工具面）', () => {
     expect(stepDeliversReadTool(mk('subtask'))).toBe(false);
   });
 });
@@ -2032,6 +2102,48 @@ describe('递归 HopSchema 渲染护栏与边角行为（0064 review 增量批�
     expect(out).toContain('渲染超 20000 字符,值降级 YAML 块');   // degraded 标注（变异 B:条件改 Infinity 本行红）
     expect(out).toContain('- 条目0内容片段');                    // yamlDump 块形态(裸 YAML 元素)
     expect(out).not.toContain("- '条目0内容片段'");              // HopSchema 引号接法不在场(整值已换形态)
+  });
+
+  // @v: anc-config-yaml-dump-opts —— hopissues/0127：三处 yamlDump 降级分支的缺省 lineWidth 80 把多行字符串折成折叠标量,prompt 里的原文被折行、空行翻倍
+  it('钉4 正例（0127 主灶）：21K 多行字段整值降级后,prompt 里每一行原样可见、段间空行数不变（变异：去掉 YAML_DUMP_OPTS → 折叠标量,185 行丢失本例红）', () => {
+    const para = '这是一段混排长句 §12 第 3 条 locator=docs/x.md/[7] 含空格与拉丁字母 abc def 的行,重复到够长。';
+    const lines: string[] = [];
+    for (let i = 0; i < 300; i++) { lines.push(`${i}: ${para}`); if (i % 7 === 6) lines.push(''); }   // 含 42 个单空行
+    const content = lines.join('\n');
+    expect(content.length).toBeGreaterThan(20000);
+    const out = formatPromptText(mkCtx({ card: { state: 'ok', version: 3, content } }), 'reason');
+    expect(out).toContain('渲染超 20000 字符,值降级 YAML 块');
+    const missing = lines.filter(l => l && !out.includes(l));
+    expect(missing).toEqual([]);                               // 每行逐字在场（折叠标量会在空格处切断长行）
+    expect(out).not.toMatch(/\n\s*\n\s*\n\s*\n/);         // 原文最多单空行,输出里不得出现连续两空行以上（折叠标量把单空行翻倍）
+    expect(out).toMatch(/content: \|/);                        // 字面块形态
+  });
+  it('钉5 正例（0127 第二受害面）：195 字符含空格的列表元素兜底档整行原样,不出 `- >-` 折叠三段（小值即触发,与整值阈值无关）', () => {
+    const long = Array.from({ length: 13 }, (_, i) => `token${i} locator=docs/x.md/[${i}]`).join(' ');   // >120 字符含空格
+    expect(long.length).toBeGreaterThan(120);
+    const out = formatPromptText(mkCtx({ refs: ['短元素', long] }), 'reason');
+    expect(out).toContain(`- ${long}`);
+    expect(out).not.toContain('- >-');
+  });
+  it('钉6 正例（0127 第三处）：7 层嵌套子树降级块里的多行字符串出字面块逐行原样', () => {
+    const multi = 'line one with spaces and more words here\n\nline three after blank';
+    const deep = { l1: { l2: { l3: { l4: { l5: { l6: { l7: { note: multi } } } } } } } };
+    const out = formatPromptText(mkCtx({ deep }), 'reason');
+    expect(out).toContain('本子树降级 YAML 块');
+    expect(out).toContain('line one with spaces and more words here');
+    expect(out).toContain('line three after blank');
+    expect(out).not.toContain('note: >');
+  });
+  it('对账钉（0127 立规）：src/*.ts 里每一处 yamlDump( 调用第二参都是 YAML_DUMP_OPTS——新增裸调即红', () => {
+    const srcDir = join(__dirname, '..', 'src');
+    const bad: string[] = [];
+    for (const f of readdirSync(srcDir).filter(n => n.endsWith('.ts'))) {
+      const text = readFileSync(join(srcDir, f), 'utf-8');
+      text.split('\n').forEach((line, i) => {
+        if (/\byamlDump\(/.test(line) && !/yamlDump\([^;]*?,\s*YAML_DUMP_OPTS\)/.test(line)) bad.push(`${f}:${i + 1}: ${line.trim()}`);
+      });
+    }
+    expect(bad).toEqual([]);
   });
 
   it('钉3 正例（D1 配套）：循环引用对象不炸渲染;渲染+序列化双抛时兜底安全字面', () => {
@@ -2711,6 +2823,21 @@ describe('L4 工具清单（buildToolManifest,0054）', () => {
     { name: 'ocr_image', description: '图片 OCR', input_schema: { type: 'object', properties: {} }, category: 'special' as const },
   ];
 
+  // reason 清单与下发面同源（^anc-exec-reason-tools 2026-09-18 修订：reason 全按声明,basic 不恒下发;dispatcher 已改、本清单漏改——todo/0129 B8）
+  // @v: anc-exec-reason-tools
+  it('反例（reason）：reason 步只声明 special 子集 → 清单只列声明件,basic 的 read 不出现（与 dispatcher 下发面同源）;act 步同声明 basic 仍恒列（对照）', () => {
+    const outReason = buildToolManifest({ tool_grants: [{ name: 'pdf_extract', note: '提取合同页' }] }, DEFS, { stepType: 'reason' });
+    expect(outReason).toContain('- pdf_extract：');
+    expect(outReason).not.toContain('- read：');
+    expect(outReason).not.toContain('ocr_image');
+    const outAct = buildToolManifest({ tool_grants: [{ name: 'pdf_extract', note: '提取合同页' }] }, DEFS, { stepType: 'act' });
+    expect(outAct).toContain('- read：');
+    // reason 声明 basic 件本身 → 列（声明什么列什么,basic 与 special 同一文法）
+    const outReasonBasic = buildToolManifest({ tool_grants: [{ name: 'read' }] }, DEFS, { stepType: 'reason' });
+    expect(outReasonBasic).toContain('- read：');
+    expect(outReasonBasic).not.toContain('pdf_extract');
+  });
+
   it('正例：basic 恒列;声明的 special 在场带真身参数与意图注释;未声明 special 不出现', () => {
     const out = buildToolManifest({ tool_grants: [{ name: 'pdf_extract', note: '提取合同页' }] }, DEFS);
     expect(out).toContain('- read：读文件');
@@ -2863,5 +2990,47 @@ describe('正文疑似工具调用识别与附加提示文案', () => {
     expect(buildTextToolCallHint('<tool_call></tool_call>', ['write', 'read'])).toBe(`${TEXT_TOOLCALL_HINT_MARKER}\n如果你本意是调用工具：写在正文里的调用引擎收不到，工具要通过工具调用功能发起，不能写成文字；你这一步可用的工具有：write、read。${tail}`);
     expect(buildTextToolCallHint('<tool_call>read', [])).toBe(`${TEXT_TOOLCALL_HINT_MARKER}\n如果你本意是调用工具 read：写在正文里的调用引擎收不到；你这一步没有任何可用工具，需要的内容只能从本步输入材料里取。${tail}`);
     expect(buildTextToolCallHint('<tool_call></tool_call>', [])).toBe(`${TEXT_TOOLCALL_HINT_MARKER}\n如果你本意是调用工具：写在正文里的调用引擎收不到；你这一步没有任何可用工具，需要的内容只能从本步输入材料里取。${tail}`);
+  });
+});
+
+// 人通道 deflate（todo/0129 B9——HUMAN_PREVIEW_THRESHOLD / formatHumanContext / "完整内容见文件" 五个测试文件此前全零命中;
+// 设计 shared-types ^anc-exec-deflate 人通道阈 5000 + {$file, preview} 复合形态 + workZone 空串跳过三支）
+// @v: anc-exec-deflate
+describe('formatHumanContext 人通道 deflate（三支：超阈落盘+preview / ≤阈直返 / workZone 空串跳过）', () => {
+  it('正例：超阈字符串 → 写 <workZone>/vars/<key>.json,返 {$file, preview},preview = 头 5000 字 + "...[完整内容见文件]";其他键原样', () => {
+    const wz = mkdtempSync(join(tmpdir(), 'hc-'));
+    mkdirSync(join(wz, 'vars'));
+    const big = 'x'.repeat(HUMAN_PREVIEW_THRESHOLD + 100);
+    const out = formatHumanContext({ big, small: 'ok', n: 42, nothing: null }, wz);
+    const v = out.big as { $file: string; preview: string };
+    expect(v.$file).toBe(join(wz, 'vars', 'big.json'));
+    expect(existsSync(v.$file)).toBe(true);
+    expect(JSON.parse(readFileSync(v.$file, 'utf-8'))).toBe(big);
+    expect(v.preview.startsWith('x'.repeat(HUMAN_PREVIEW_THRESHOLD))).toBe(true);
+    expect(v.preview.endsWith('\n...[完整内容见文件]')).toBe(true);
+    expect(v.preview.length).toBe(HUMAN_PREVIEW_THRESHOLD + '\n...[完整内容见文件]'.length);
+    expect(out.small).toBe('ok'); expect(out.n).toBe(42); expect(out.nothing).toBeNull();
+  });
+  it('正例：结构值按 JSON 序列化长度判阈,超阈同样落盘（文件存 JSON）', () => {
+    const wz = mkdtempSync(join(tmpdir(), 'hc2-'));
+    mkdirSync(join(wz, 'vars'));
+    const obj = { items: Array.from({ length: 600 }, (_, i) => `item-${i}`) };
+    const out = formatHumanContext({ obj }, wz);
+    expect((out.obj as { $file: string }).$file).toBe(join(wz, 'vars', 'obj.json'));
+    expect(JSON.parse(readFileSync(join(wz, 'vars', 'obj.json'), 'utf-8'))).toEqual(obj);
+  });
+  it('反例：恰等于阈值不落盘（≤ 阈直返原值）;恰超一字才落盘', () => {
+    const wz = mkdtempSync(join(tmpdir(), 'hc3-'));
+    mkdirSync(join(wz, 'vars'));
+    const edge = 'y'.repeat(HUMAN_PREVIEW_THRESHOLD);
+    expect(formatHumanContext({ edge }, wz).edge).toBe(edge);
+    expect(existsSync(join(wz, 'vars', 'edge.json'))).toBe(false);
+    const over = edge + 'y';
+    expect((formatHumanContext({ over }, wz).over as { $file?: string }).$file).toBeDefined();
+  });
+  it('反例：workZone 空串（独立模式无涂鸦区）→ 超阈值原样返回,不写文件、不截断', () => {
+    const big = 'z'.repeat(HUMAN_PREVIEW_THRESHOLD * 2);
+    const out = formatHumanContext({ big }, '');
+    expect(out.big).toBe(big);
   });
 });

@@ -585,6 +585,82 @@ describe('work_zone_path 契约边界', () => {
   });
 });
 
+// spec_dir 契约边界（design ^anc-exec-spec-dir,todo/0145）：与 work_zone_path 同族——条件侧/无上下文/.. 穿越三反例 + 拼接正例。
+// 端到端（engine/dispatcher 注入 dirname(specPath)）在 dispatcher.test.ts "spec_dir 内置函数（独立模式注入）" 组。 // @v: anc-exec-spec-dir
+describe('spec_dir 契约边界', () => {
+  it('反例：case 条件里调用 → 计算异常折 undefined（需实例上下文）', () => {
+    const errs: ParseError[] = [];
+    const e = parseExpression('spec_dir("x") == None', errs);
+    const warns: string[] = [];
+    const v = evalExprSync(e!, () => undefined, m => warns.push(m));
+    expect(v).toBe(true);
+    expect(warns.some(w => w.includes('实例上下文'))).toBe(true);
+  });
+
+  it('反例：body 执行环境未注入 specDir（内存态 spec）→ TOOL_EXEC_ERROR 步骤失败,不回退 workspace', async () => {
+    const errors: ParseError[] = [];
+    const body = parseActBody(['p = spec_dir("scripts/x.py")'], 1, errors);
+    expect(errors).toHaveLength(0);
+    const interp = new BodyInterpreter({
+      inputs: {}, toolProvider: { list: () => [], execute: async () => ({ result: '', success: true }) },
+      allowCommit: false, workZone: '/wz', toolCallLog: [],
+    });
+    await expect(interp.run(body!, [{ name: 'p', var_type: 'line' }] as OutputDecl[]))
+      .rejects.toThrow(/spec_dir 不可用.*没有 spec 文件/);
+  });
+
+  it('反例：rel 含 .. → TOOL_EXEC_ERROR 禁穿越', async () => {
+    const errors: ParseError[] = [];
+    const body = parseActBody(['p = spec_dir("../other/x.py")'], 1, errors);
+    const interp = new BodyInterpreter({
+      inputs: {}, toolProvider: { list: () => [], execute: async () => ({ result: '', success: true }) },
+      allowCommit: false, specDir: '/ants/demo', toolCallLog: [],
+    });
+    await expect(interp.run(body!, [{ name: 'p', var_type: 'line' }] as OutputDecl[]))
+      .rejects.toThrow(/spec_dir 禁 \.\. 穿越/);
+  });
+
+  it('正例：注入 specDir 后返回拼接路径;无参返回 spec 目录本身', async () => {
+    const errors: ParseError[] = [];
+    const body = parseActBody(['p = spec_dir("scripts/x.py")', 'root = spec_dir()'], 1, errors);
+    const interp = new BodyInterpreter({
+      inputs: {}, toolProvider: { list: () => [], execute: async () => ({ result: '', success: true }) },
+      allowCommit: false, specDir: '/ants/demo', toolCallLog: [],
+    });
+    const out = await interp.run(body!, [
+      { name: 'p', var_type: 'line' }, { name: 'root', var_type: 'line' },
+    ] as OutputDecl[]);
+    expect(out.p).toBe('/ants/demo/scripts/x.py');
+    expect(out.root).toBe('/ants/demo');
+  });
+
+  // HopAnt 自带脚本的端到端形态（hopant ^anc-struct-hopant-runtime-dirs）：spec 目录下的 .py 由 spec_dir 取路径、
+  // 经白名单 python3 跑、数据文件路径也由 spec_dir 给、输出落 work_zone——三件都在真目录上发生,不是 mock
+  it('正例：subprocess.run(["python3", spec_dir("scripts/x.py"), spec_dir("data/a.txt")]) 真跑——脚本读到自带数据,stdout 回传', async () => {
+    const specDir = mkdtempSync(join(tmpdir(), 'hop-specdir-e2e-'));
+    const { mkdirSync } = await import('node:fs');
+    mkdirSync(join(specDir, 'scripts')); mkdirSync(join(specDir, 'data'));
+    writeFileSync(join(specDir, 'scripts', 'x.py'), 'import sys\nprint("DATA=" + open(sys.argv[1]).read().strip())\n');
+    writeFileSync(join(specDir, 'data', 'a.txt'), 'hello-from-ant\n');
+    const errors: ParseError[] = [];
+    const body = parseActBody([
+      'r = subprocess.run(["python3", spec_dir("scripts/x.py"), spec_dir("data/a.txt")])',
+      'out = r.stdout', 'code = r.returncode',
+    ], 1, errors);
+    expect(errors).toHaveLength(0);
+    const interp = new BodyInterpreter({
+      inputs: {}, toolProvider: { list: () => [], execute: async () => ({ result: '', success: true }) },
+      allowCommit: false, specDir, workZone: mkdtempSync(join(tmpdir(), 'hop-wz-')), toolCallLog: [],
+      commandWhitelist: ['python3'],
+    });
+    const o = await interp.run(body!, [
+      { name: 'out', var_type: 'text' }, { name: 'code', var_type: 'int' },
+    ] as OutputDecl[]);
+    expect(o['code']).toBe(0);
+    expect(String(o['out'])).toContain('DATA=hello-from-ant');
+  });
+});
+
 // A 档能力实装（2026-08-10 作者定：列表/对象字面量、f-string、%//**、sorted/reversed/
 // range/startswith/endswith）——每项正反例。 // @v: anc-exec-act-body-interp
 describe('A 档：字面量构造与 f-string', () => {

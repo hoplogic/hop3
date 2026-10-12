@@ -69,13 +69,13 @@ Outputs:
     - ← project_root, scan_done
     + → scan_ok % bool  # 判定槽：6 份 YAML 齐备
     + → scan_issue % text  # 说明槽：缺失/空文件清单（通过时不查看）
-    > **机械检查、非 LLM 判断**（2026-09-01 body 化——原说明教"driver 用 test -s 判"系复用模式写法,standalone 判官 LLM 无文件工具判不了,如实拒判耗尽;确定性检查的正形=check body 引擎直执零 LLM;文件工具走 workspace 相对路径——沙箱拒 workspace 外的绝对路径,规约里写相对路径才可移植,0042 doc-review 第十一次同款实撞）：六份文件均存在且非空（concept_anchors 即便无概念层也由脚本写空壳带 note，仍应存在）。任一缺失或空 → scan_ok=false，scan_issue 列问题文件，触发 subtask retry 重跑 scan.py。
+    > **机械检查、非 LLM 判断**（2026-09-01 body 化——原说明教"driver 用 test -s 判"系复用模式写法,standalone 判官 LLM 无文件工具判不了,如实拒判耗尽;确定性检查的正形=check body 引擎直执零 LLM;文件路径从 project_root 拼——scan.py 写在 {project_root}/.anchor-audit/,project_root 不等于 workspace 根时（如 e2e 审 fixture 子目录）写 workspace 相对的 ".anchor-audit/" 会查错地方,2026-10-08 live:deep 实撞;project_root 须落在 workspace 内,沙箱拒 workspace 外的绝对路径）：六份文件均存在且非空（concept_anchors 即便无概念层也由脚本写空壳带 note，仍应存在）。任一缺失或空 → scan_ok=false，scan_issue 列问题文件，触发 subtask retry 重跑 scan.py。
     > 注：用 `[check final]` 而非 act，是因它是 subtask 的契约验收门——失败才能触发 subtask retry 重跑扫描。
     > ```hop_python
     > names = ["concept_anchors.yaml", "design_anchors.yaml", "code_anchors.yaml", "test_anchors.yaml", "traceability_cards.yaml", "module_anchors.yaml"]
-    > probes = [parse_json(exists(path: ".anchor-audit/" + n)) for n in names]
+    > probes = [parse_json(exists(path: project_root + "/.anchor-audit/" + n)) for n in names]
     > present = [names[i] for i in range(len(names)) if probes[i].exists]
-    > contents = [read(path: ".anchor-audit/" + n) for n in present]
+    > contents = [read(path: project_root + "/.anchor-audit/" + n) for n in present]
     > empty = [present[i] for i in range(len(present)) if len(strip(contents[i])) == 0]
     > missing = [n for n in names if n not in present]
     > scan_ok = len(missing) == 0 and len(empty) == 0
@@ -124,7 +124,7 @@ Outputs:
     > mods_arg = ["--modules", modules] if modules else []
     > resume_arg = ["--resume"] if audit_mode == "resume" else []
     > r = subprocess.run(["uv", "run", "--with", "pyyaml", "python3", scripts_dir + "/make_batches.py", project_root] + mods_arg + resume_arg, cwd: project_root, timeout: 120)
-    > raw = read(path: ".anchor-audit/batches.json") if r.returncode == 0 else ""
+    > raw = read(path: project_root + "/.anchor-audit/batches.json") if r.returncode == 0 else ""
     > batches = parse_json(raw).batches
     > ```
 
@@ -205,7 +205,7 @@ Outputs:
       > 不可逆操作（建立可回滚锚点）：在 {project_root} 若为 git 仓库，建立修复前快照。安全流程见 [[anchor-audit-knowledge#自动修复安全流程]]。
       > 运行前提：sandbox.runtime.available 白名单须含 git——白名单空时本步响亮拒，属环境配置缺失。
       > ```hop_python
-      > probe = parse_json(exists(path: ".git"))
+      > probe = parse_json(exists(path: project_root + "/.git"))
       > added = subprocess.run(["git", "add", "-A"], cwd: project_root) if probe.exists else ""
       > committed = subprocess.run(["git", "commit", "-m", "pre-anchor-audit snapshot"], cwd: project_root) if probe.exists else ""
       > snapshot_done = "snapshot-created" if probe.exists else "not-a-git-repo"

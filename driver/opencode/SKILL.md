@@ -1,6 +1,6 @@
 ---
 name: hopspec
-description: Run an existing HopSpec file (reuse mode — opencode itself is the reasoning LLM via CLI, zero API key): confirm parameters, answer intervention points, present the final state by contract. Dispatched by the hop skill; users do not invoke it directly. Ad-hoc tasks without a spec go through hop.
+description: Run an existing HopSpec file (reuse mode — opencode itself is the reasoning LLM; hopjit driver tools via MCP first, CLI fallback; zero API key): confirm parameters, answer intervention points, present the final state by contract. Dispatched by the hop skill; users do not invoke it directly. Ad-hoc tasks without a spec go through hop.
 user-invocable: false
 ---
 
@@ -9,7 +9,7 @@ user-invocable: false
 	source: [[opencode-driver-carrier]]
 	source_id: hopjit-opencode-driver-carrier
 	type: extract
-	last_sync: 2026-10-01T15:45+0800
+	last_sync: 2026-10-09T00:52+0800
 	note: opencode 复用模式驱动件——派生自 driver/hopspec-skill.md（CC 源）,按 opencode-driver-carrier 原语映射表适配:AskUserQuestion→question 工具/Agent 工具 driver subagent→opencode subagent（无 subagent 能力时 inline 自跑,与 Codex 载体同款降级）/斜杠触发→隐式触发。执行语义/CLI 协议/介入点纪律与 CC 版逐条同构,CC 源改协议面时本件同批随改（rule-parity 同款"接受两份"）。§2 paused:question 工具降级约束贯穿段头+confirm/ask 各分派项——question 工具按 client 类型启用（不按 provider 过滤）,某些 OpenAI 兼容服务端（如 theta）拒收该工具,不可用时降级普通文本消息。
 %%
 
@@ -35,8 +35,8 @@ user-invocable: false
 `run` 是主体（下方执行流程）。其余三个各自简单：
 
 - **list [目录]** — 列出可执行 spec 供挑选。完整流程 + recent-dirs LRU 见 `references/discovery.md`。
-- **status** — 跑 `<CLI> --json status --state-dir .hopstate [--instance <id>]`，展示进度。
-- **resume** — 跑 `<CLI> --json resume --state-dir .hopstate [--instance <id>]`，recover + 推进到下一介入点/终态，回主编排循环（§2）分派。仅用于崩溃恢复，正常流程不碰。
+- **status** — 调 hopjit 的 `status` 工具（命令行回退：`<CLI> --json status --state-dir .hopstate [--instance <id>]`），展示进度。
+- **resume** — 调 hopjit 的 `resume` 工具（命令行回退：`<CLI> --json resume --state-dir .hopstate [--instance <id>]`），recover + 推进到下一介入点/终态，回主编排循环（§2）分派。仅用于崩溃恢复，正常流程不碰。
 
 ## 执行流程
 
@@ -56,10 +56,10 @@ user-invocable: false
 
 **执行节奏归引擎**：主 agent 与 subagent 都**不主动推进**——只在引擎给的介入点应答。
 
-**⚠️ bash 命令纪律（硬约束，主 agent 与 subagent 都遵守）**：
-- **每条 bash 调用只做一件事**：不链式（`&&`）、不管道（`|`）、不变量赋值（唯一例外：spec 含 doc-ref 时前置 `cd <VAULT> &&` 锁 cwd）
+**驱动通道：hopjit MCP 工具优先，命令行回退（todo/0146）**：本篇与 references/ 里的命令写成 `<CLI> --json <子命令> ...`，会话里能调 hopjit MCP 的工具时一律改用同名工具——`run` / `submit_and_fetch_next` / `reap_and_fetch_next` / `status` / `resume` / `abort` / `validate` 七个子命令各对应一个工具，引擎调用与响应相同，参数名是 CLI 参数去掉 `--`、连字符换下划线（`--instance` → `instance_id`，`--child-instance` → `child_instance`，`--output '<JSON>'` → `output = <对象>`，`@<路径>` 形态照用）。工具不调 LLM，推理仍在本会话与执行 subagent 里。opencode 安装缺省 `mcp.hopjit.enabled: false`，工具多半不可见：用户把它改为 `true` 并放行 hopjit 工具后新会话才可用，你不改用户配置。派执行 subagent 时在 prompt 里写明"有 hopjit 工具就用工具"。工具不可见时用命令行，纪律如下（硬约束，主 agent 与 subagent 都遵守）：
+- **每条 bash 调用只做一件事**：不链式（`&&`）、不管道（`|`）、不变量赋值、不截断输出（唯一例外：spec 含 doc-ref 时前置 `cd <VAULT> &&` 锁 cwd）。`| head -c 400` 一类截断会多触发一次确认，并丢掉响应后半截的字段
 - **直接写完整命令**：`<CLI> <子命令> <参数>`，不缩写、不用 shell 变量
-- **自己读 JSON**：每条 CLI 命令**必须带全局 `--json`**——返回单行 JSON 直接读懂按 `status` 分派，不 `| python3 -c` / `| node -e` 提取
+- **自己读 JSON**：每条 CLI 命令**必须带全局 `--json`**——返回的 JSON 原样读完按 `status` 分派，不 `| python3 -c` / `| node -e` 提取
 
 > 主 agent 自己**只**跑 §2 paused/adaptive 的 `submit_and_fetch_next --answer/--replan`（注入问人结果），**不跑 run、不跑执行步的 submit**（inline 降级形态除外）。
 > **不要 `rm -rf .hopstate`**——run 在 state-dir 下创建带唯一 instance_id 的新实例，旧实例不干扰。需要干净环境时用新的 `--state-dir` 名。
@@ -82,6 +82,17 @@ subagent **一直跑到下一个介入点**（paused / adaptive_needed / tool_re
 
 按 `pause_reason` 分派：
 
+**`dirs`（Config.dirs 目录授权,run 起跑后第一个停点,todo/0148）→ 必须问人同不同意**：spec 在 `## Config` 的 `dirs` 里声明了 workspace 之外的目录、而本机没批过这份清单时停下。`presented_data.context` 带 `dirs`（每条 `path` + `mode`,mode 是 read 只读或 readwrite 读写）与 `dirs_hash`;`step_id` 为空（run 级前置条件,不属于任何步骤）。
+1. 先用普通 text 消息把清单逐条列出（路径 + 只读/读写），一句话说清"这个活要碰 workspace 之外的这几个目录，读写的那几个 commit 步骤会往里写文件";
+2. 用 question 工具问同不同意——**这一问就是批准**，每份清单只问一次;
+3. 同意 → `approve_dirs(instance_id, dirs_hash)`（工具不可用时走命令行 `<CLI> --json approve_dirs <dirs_hash> --state-dir .hopstate --instance <instance_id>`），再 `resume` 续跑;不同意 → 不调，告诉用户活没开始，问是改 spec 还是放弃;
+4. 同一份清单批过一次后重跑、续跑都不再停;声明或 Inputs 传的目录变了会重新问。起跑时带 `approve_dirs`（命令行 `--approve-dirs`）可直接记账跳过停点。
+
+**`commit`（不可逆步骤需要人确认）→ 必须问人批不批**：每个 `[commit]` 步骤第一次执行前，引擎先做安全分析：body 里的动作全部可逆或低危（新建文件、追加、建目录、移动、写入前已把旧版本留存进回收站的覆盖与删除、只写 work_zone 的写入）时直接执行，不出现停点，driver 什么也不用做；有动作会销毁内容且找不回（`keep: 0` 的覆盖与删除）、运行命令、发通知或调外部工具时，由 hopjit 配置的模型分析一次——模型判全部安全同样直接执行、以后不再问，否则转人工停在这里；本宿主没有分析模型（命令行 hopjit 不配置分析模型）或分析出错时也转人工。driver 自己不做安全判断。`presented_data.context` 带 `step_id`、`fingerprint`（指纹）、`analysis`、`body` 原文;`analysis` 是 `{summary, actions, recommendation, model, source}`——`actions` 每条有 `line`（动作所在的 spec 行号）、`category`（动作种类）、`verdict`（`safe` 或 `human`，`human` 是需要人确认的）、`consequence`（这个动作执行后的后果，已经写成不懂代码的人也读得懂的话）;`source` 为 `template` 表示没有分析模型或分析出错，后果说明来自固定模板。`presented_data.response_options` 是三个选项：`once`"只批准这一次"、`task`"这一步以后都通过"、`deny`"不批准"。
+1. 大部分用户不懂代码，所以**代码不先贴**：先用一句话讲 `analysis.summary`，再逐条列出 verdict 为 `human` 的动作的 `consequence`，最后讲 `analysis.recommendation`;用户要看代码时再贴 `context.body`。然后用 question 工具（不可用时按段头降级）给出这三个选项——**这一问就是批准**。对话里这一问就是批准，载体对 approve_commit 弹不弹窗与批准无关。
+2. 用户选"只批准这一次"或"这一步以后都通过" → `approve_commit(instance_id, step_id, fingerprint, scope)`（`fingerprint` 取 `context.fingerprint`，`scope` 取所选项的 value：`once` 或 `task`）（工具不可用时走命令行 `<CLI> --json approve_commit <step_id> --fingerprint <fingerprint> --scope once|task --state-dir .hopstate --instance <instance_id>`），再 `resume` 续跑，引擎执行 body；用户选"不批准" → 不调 approve_commit，告诉用户这一步没执行，问是改 spec 重跑还是 `abort`。**禁止**替用户回答，也不许自己判断这一步安全就调 approve_commit——安全分析已经由引擎和分析模型做过，转到人这里只认人的选择。
+3. 指纹只覆盖 body 原文，body 改了指纹就变，引擎重新分析、重新问。"只批准这一次"只在本次运行里有效：本次运行里 for-each 的各轮、并行子实例、续跑都不再停，下次运行这份 spec 还会再问;选"这一步以后都通过"之后，这一步的 body 不变就一直直接执行。提交前 HOP 的核验（check final）或确认（confirm）照常把关。被拒返回 COMMIT_NOT_APPROVED 时，报文里写着完整的 approve_commit 参数，照报文做（先按上面的方式讲给用户听并用三个选项问，用户选批准后再调）。带 body 的 commit 不能用 submit 提交产出（COMMIT_BODY_ENGINE_ONLY）。续跑拿到下一步 JSON → **回编排循环分派**。
+
 **`confirm`（审批闸门）→ 必须问人批不批**：
 1. 用 question 工具展示 `presented_data.question` + `response_options`（approve/reject），等用户选（question 工具不可用时按段头降级——用普通文本消息呈现问题与 approve/reject 选项，等用户下条消息回答后再注入）
 2. 用户选定后注入（**带 `--instance <id>` 跨进程定位**）：
@@ -99,12 +110,15 @@ subagent **一直跑到下一个介入点**（paused / adaptive_needed / tool_re
    - **`{$file, preview}` 复合**（≥ 5K 字符，引擎自动卸载）：preview = 头 5K 字符 + "...[完整内容见文件]"。完整 dump preview 给用户，**并提示**"完整内容见 `{$file 路径}`"。用户想看完整时你读该文件再展示
 
    **禁止二次摘要**：preview 已经是引擎按"人友好阈值"卸载的产物，你不应再压缩它。
-2. 用 question 工具展示 `presented_data.question`，并把 `output_schema`（要填的变量+类型）、`default_value`（前序推断默认值）、`context`（候选来源）一并呈现（question 工具不可用时按段头降级——用普通文本消息呈现问题与选项，等用户下条消息回答后再注入）
+2. 用 question 工具展示 `presented_data.question`，并把 `output_schema`（要填的变量+类型）、`default_value` / `default_values`（前序推断的建议值——后者按声明名分键，每个声明一份）、`context`（候选来源）一并呈现（question 工具不可用时按段头降级——用普通文本消息呈现问题与选项，等用户下条消息回答后再注入）
 3. 选项构造：若有推断默认值，第一项给"采用默认：<default_value>"；再列其它候选（来自 context）；用户可自由输入
+   **结构化类型的声明（yaml / 列表 / 类型面）先给人一个可以改的东西，不让人凭空写**：`default_values` 里有这个声明（按声明名分键，值是前序步骤产出的同名变量）→ 把它完整呈给用户（可读的 YAML 块，不缩略），问"照这个用，还是改哪里"，用户改完按声明名提交；`default_values` 里没有它、也没有 `present_inputs` 样板 → 如实告诉用户"这一步要你给完整的 <名>（<类型>），没有样板"并列出 `output_schema` 的字段名，不替用户编——这种 spec 写得不对（validate 会给 V17 warn），事后回写卡时前置一个备料步骤。
 4. 用户给值后注入（用用户提供的**真实值**，不是 approve；带 `--instance`）：
 ```bash
 <CLI> --json submit_and_fetch_next <step_id> --answer '{"value":"<用户提供的真实数据值>"}' --state-dir .hopstate --instance <instance_id>
 ```
+
+   **多输出 ask（步骤声明了两个以上 `+ →`）按声明名提交**：`--answer '{"<声明名1>":"<值1>","<声明名2>":"<值2>"}'`——放进 `{"value": {...}}` 信封里引擎也认（按键拆开）,但不要把一个值裸给多个声明;文本型声明（line/text/markdown）给的不是字符串会被 `ASK_ANSWER_SHAPE` 拒收并带样例,照样例改后重交同一步。
    **值大时（如整份大纲/草稿）**：把 `{"value":"..."}` 整个写到 paused 响应给的 `work_zone` 目录下（如 `<work_zone>/answer_<step_id>.json`），再整包 `--answer @<该路径>`。`@` 只贴 `--answer` 参数最前面，绝不写进 JSON 字段值；只写 work_zone、不写 /tmp。
 5. **禁止**把 approve 当数据值——ask 要的是业务值（如"技术规范"），不是审批信号。用户若想采用默认，把 default_value 的真实内容作为 value 注入
 6. 注入后拿到下一步 JSON → **回编排循环分派**
@@ -146,7 +160,7 @@ reason: <原始 failure_reason>
 
 #### `dispatch_ready` / `drain_wait` → 并行派发（首版按串行退化处理）
 
-parallel 标注步骤在无后台 subagent 能力的载体上按顺序执行（引擎保证结果与并行一致）。收到 `dispatch_ready`：`dispatch_kind: call` 时 `launch_command` 含 `<CALLEE_SPEC_PATH:id>` 占位——先按 `references/discovery.md` 的 spec 发现流程解析 callee 真实路径填入（唯一允许的改动,其余参数禁改）；然后在当前窗口顺序执行该命令到 worker 终态，再 `<CLI> --json reap_and_fetch_next <child_instance> --status <completed|failed> --instance <id>` 收割，继续循环；`drain_wait` 且无在飞=继续 advance。**reap 只用于引擎 dispatch_ready 派发过的 child**；没跑过的 child 不许凭空报 completed。
+parallel 标注步骤在无后台 subagent 能力的载体上按顺序执行（引擎保证结果与并行一致）。收到 `dispatch_ready`：`dispatch_kind: call` 时 callee 路径引擎已填好（同目录 `<id>.md` 优先,其次已装 HopAnt `~/.hopjit/ants/<id>/<id>.md`）;命令里仍留 `<CALLEE_SPEC_PATH:id>` 占位说明两处都没找到,先按 `references/discovery.md` 的 spec 发现流程解析 callee 真实路径填入（唯一允许的改动,其余参数禁改）；然后在当前窗口顺序执行该命令到 worker 终态，再 `<CLI> --json reap_and_fetch_next <child_instance> --status <completed|failed> --instance <id>` 收割，继续循环；`drain_wait` 且无在飞=继续 advance。**reap 只用于引擎 dispatch_ready 派发过的 child**；没跑过的 child 不许凭空报 completed。
 
 ### 3. 异常处理
 

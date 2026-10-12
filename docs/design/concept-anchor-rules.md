@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: intent
-	last_sync: 2026-08-16T22:51+0800
+	last_sync: 2026-10-08T19:32+0800
 	note: 概念锚点追溯规则——从概念到测试的细粒度追溯机制。元文档：定义 anc-* 命名约定、各层嵌入语法、TRACEABILITY 卡片格式与维护规则
 %%
 
@@ -100,7 +100,7 @@ Obsidian block ID 仅支持字母、数字、连字符（`[a-zA-Z0-9-]`），不
 | `anc-rule-*` | 验证规则 | `anc-rule-s1` `anc-rule-c3` `anc-rule-v1` `anc-rule-p5` |
 | `anc-cli-*` | CLI 响应/请求类型与 CLI 行为约定（命令分发、JSON I/O、参数安全、实例解析、幂等性） | `anc-cli-init-response` `anc-cli-dispatch` `anc-cli-idempotency` |
 | `anc-provider-*` | Provider 接口 | `anc-provider-tool` `anc-provider-knowledge` |
-| `anc-config-*` | 配置类型 | `anc-config-host` `anc-config-sandbox` |
+| `anc-config-*` | 配置类型与配置加载/合并/消费约定（HostConfig、沙箱、两级配置文件 schema、加载与合并规则、复用模式消费面） | `anc-config-host` `anc-config-sandbox` `anc-config-standalone-schema` `anc-config-two-level-merge` `anc-config-reuse-consume` |
 | `anc-error-*` | 错误模型 | `anc-error-error-code` `anc-error-parse-error` |
 | `anc-exec-*` | 执行模型概念 | `anc-exec-none-propagation` `anc-exec-retry-adaptive` |
 | `anc-struct-*` | HopType struct | `anc-struct-spec-parser` `anc-struct-exec-engine` |
@@ -112,7 +112,7 @@ Obsidian block ID 仅支持字母、数字、连字符（`[a-zA-Z0-9-]`），不
 | `anc-viz-*` | 可视化支持（编辑器插件:折叠/大纲/落点高亮——2026-08-16 随 Obsidian 插件立） | `anc-viz-obsidian-fold` `anc-viz-outline` |
 | `anc-tool-*` | 工具契约跨切面（声明两面/注册面语义/参数展开——2026-08-25 随工具一等公民批立,横跨 tool-interface/parser/engine/dispatcher 四模块故不归单模块类） | `anc-tool-two-faces` `anc-tool-params-notes` |
 | `anc-obs-*` | 可观测性（HopLog） | `anc-obs-log-levels` `anc-obs-file-layout` `anc-obs-hitl-record` |
-| `anc-layer-*` | HopAnt 四维度 | `anc-layer-knowledge` `anc-layer-capability` |
+| `anc-layer-*` | 引擎四维度能力模型（Knowledge/Capability/Data/Identity,原 HopAnt 四维度,2026-10-06 迁至配套运行时能力文档） | `anc-layer-knowledge` `anc-layer-capability` |
 | `anc-surface-*` | 语法表层表述变种（同一 AST 的不同书写形态：标准/大纲语法、内联/标题风） | `anc-surface-heading-flavor` |
 | `anc-mcp-*` | MCP server 协议面（standalone 执行的工具面、run 生命周期、key 隔离、载体注册） | `anc-mcp-tools` `anc-mcp-run-lifecycle` `anc-mcp-key-isolation` |
 | `anc-meta-*` | 工程实现链规范（元规范） | `anc-meta-layer-division` `anc-meta-constitution` `anc-meta-content-grading` |
@@ -123,6 +123,7 @@ Obsidian block ID 仅支持字母、数字、连字符（`[a-zA-Z0-9-]`），不
 | `anc-release-*` | 发版工程设施（快照制发版生命周期/凭证闸/收编协议——2026-09-04 随发版快照制批立） | `anc-release-snapshot` |
 | `anc-pysb-*` | Python 语法沙箱（产物代码的白名单静态审查与受控执行——2026-09-23 随概念层扩展篇立） | `anc-pysb-defenses` `anc-pysb-exec` |
 | `anc-hoptype-*` | HopType 体系自身的元级约定（区别于 `anc-struct-*` 的具体组件实例） | `anc-hoptype-desc-spec` |
+| `anc-hopant-*` | HopAnt 实体的引擎侧机制（安装/配置适配/适配戳/本机索引——2026-10-06 随 hopant 模块立;概念侧 HopAnt 实体与生命周期仍用 `anc-struct-hopant-*`） | `anc-hopant-install` `anc-hopant-adapt` |
 
 类别表可扩展——新增类别时更新本文件。
 
@@ -174,6 +175,7 @@ Markdown 表格行的**末单元格尾部** ` ^anc-{id} |` 形态（锚点后跟
 
 - **中文句尾粘连形态非法**（`// ……保留。@a: anc-x`——审计采集正则 `(?://|#)\s*@a:` 只认注释符后紧跟,句中粘连收不到,锚点隐形链上断环;2026-09-04 todo/0057 G-采集实撞:parser.ts 两处粘连形态已移正,同类会再犯,收敛书写形态比放宽采集稳〔放宽=散文提及误采〕）;
 - **块注释形态同属隐形**（` * @a: anc-x */` 星号行——scan 采集正则与格式钉双双收不到,2026-09-04 review 面二实抓活体 11 行含 anc-exec-durable-resume 唯一代码落点;书写收敛为行首 `// @a:` 形态,块注释内不放标注）。
+- **TRACEABILITY 卡片行的 `— @a:/@v:` 归属声明同受尾粘检（2026-10-08 todo/0133 挂账③）**：卡片行末 `— @a: anc-x` 声明的是这条引用归属哪个锚（^anc-meta-card-ref-owner）,锚名尾粘全角括号（实撞 `anc-exec-callee-kernel（行注指向本锚）`）时 scan 的 parse_anchor_ids 解析为空、归属静默回退为所在卡 id,引用照样"有效",审计照绿——同一个尾粘病在 md 层的形态。机检：check-anchor-format.mjs 尾粘检扩到 TRACEABILITY.md 的 `@a:`/`@v:` 声明段（判据与 .ts 同：锚 id 后只许空白/行尾/半角逗号）;scan.py parse_anchor_ids 遇到"有逗号段但首词不是合法锚 id"时不再静默丢弃——坏段记进该卡的 bad_owner_decls,scan 末尾转 invalid_refs 点名;归属本身按解析出的合法段取,一段都解析不出时仍落回所在卡 id（这一行的引用照样核,只是核错对象也会红,不再静默绿）——记进 `invalid_refs`（reason 写明"归属声明解析失败：<原段>"）,让它在 check:audit 的 invalid_refs 计数上红,不回退为卡 id。
 
 **⚠️ 硬格式要求：锚点前必须有一个半角空格【契约】** ^anc-meta-anchor-space
 
@@ -276,7 +278,7 @@ it('parses commit irreversible_action from instruction', () => {
 - **可校验引用的判据 = 行内带 `@a:`/`@v:` 声明**：卡片行只有形如 `- 文件 — @a: anc-{id}` 才是**机检校验的落点引用**；散文行里提到文件名（如"(未覆盖) types.ts 无 trace_id"、"`src/engine.ts` getLogEvents() 消费……"）是**说明不是引用**，扫描器不得当引用校验（否则散文提一次文件名就背一条"无效引用"，卡片被迫回避文件名——毁可读性换指标）。2026-08-03 定，scan.py 同步。
 - **引用路径以仓库根为基准**：`src/`、`tests/`、`scripts/`、`examples/` 前缀都合法；扫描器不得强行补 `src/` 前缀。
 
-**引用行归属契约【契约】** ^anc-meta-card-ref-owner：卡片是**嵌套树**，一张卡片下常列出**相关锚点**的落点（上例 `anc-step-commit` 卡片下列了 `anc-rule-p5` 的 validator 落点）。因此每条引用行归属**该行 `— @a:`/`— @v:` 声明的锚点**，而非所在卡片的 id：
+**引用行归属契约【契约】** ^anc-meta-card-ref-owner：卡片是**嵌套树**，一张卡片下常列出**相关锚点**的落点（上例 `anc-step-commit` 卡片下列了 `anc-rule-p5` 的 validator 落点）。因此每条引用行归属**该行 `— @a:`/`— @v:` 声明的锚点**，而非所在卡片的 id（声明段里有解析不出的坏段时记 invalid_refs 点名,不再静默按卡 id 过——2026-10-08 todo/0133,见 ^anc-meta-anchor-head 卡片行条）：
 
 - 引用行**必须**以 `— @a: anc-x`（代码）或 `— @v: anc-x`（测试）结尾声明归属；省略则默认归属所在卡片。
 - 校验语义（`scan.py` 实现）：对每条引用，去目标文件里找**标注了该行归属锚点 id** 的 `@a:`/`@v:` 行——找不到即 `invalid_refs`。**"标注了该 id"按整词判，不按子串判**（2026-09-30 todo/0125 条目 6——原实现 `target in ln` 是子串包含，`anc-exec-work-zone` 会被 `anc-exec-work-zone-registry` 的标注行误命中，卡指向已删标注仍判有效，假绿；整词=把标注行 `@a:`/`@v:` 之后的逗号段逐段取首词与 id 全等，与采集侧 `parse_anchor_ids` 同一解析）。**不拿卡片 id 去嵌套锚点的文件里找**（那必然找不到，是假报缺失：2026-08-01 曾因此在 58 处报缺里误报 25 处）。

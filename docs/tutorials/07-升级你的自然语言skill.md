@@ -3,7 +3,7 @@
 	source: [[../../hopbuild/SKILL]]
 	source_id: hopbuild-skill
 	type: compact
-	last_sync: 2026-10-01T17:01+0800
+	last_sync: 2026-10-10T00:25+0800
 	note: 教程 7——收官应用:经 /hop 分派 hopbuild 把自然语言 skill 翻译成 hopskill（SKILL.md 是翻译器的完整契约，本文是用户视角的上手版）
 %%
 
@@ -98,7 +98,7 @@ hopjit pack 生成的spec.md
 
 你已经能跑、能读、能写、能把自己的 skill 升级成引擎强制执行的 hopskill。之后按需取用：
 
-- **任务变长变频、想换轻量模型省成本** → 独立模式，配置一次：`USAGE.md` §6；
+- **任务变长变频、想换轻量模型省成本** → 独立模式，配置一次：`USAGE.md` §4；
 - **写更大的 spec** → 拿 `examples/hop-fact-check.md`（完整版）当范本——自查回路、推演分流那些进阶件的讲解在 [[06-实战-事实核查器]]；语法权威随手查：`docs/concepts/HopSpec V3语法参考.md`；
 - **翻译器的深层判据**（审计产物时用）：四类纪律落点判据/模板/反例、NL 措辞→步骤类型映射——统一在 `skills/hopbuild/hopbuild-primer.md`（统一知识源——判据/语法/骨架单文档）；
 - **要让 spec 调外部能力**（搜索/知识库/云端 API）→ [[08-接入MCP服务]]；

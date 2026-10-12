@@ -3,7 +3,7 @@
 	source: [[../concepts/工程实现链规范]]
 	source_id: engineering-chain-spec
 	type: extend
-	last_sync: 2026-08-06T15:20+0800
+	last_sync: 2026-10-08T19:32+0800
 	note: CI/CD 流程设计——三关口（pre-commit / GitHub Actions / prepublishOnly）× 检查分级 × 基线锁定策略；补充带凭证、带费用的 carrier live E2E opt-in 关口。
 %%
 
@@ -29,6 +29,7 @@
 | 三关口分工 | 契约 | `anc-meta-ci-gates` |
 | 检查清单与分级 | 契约 | `anc-meta-ci-checks` |
 | 基线锁定策略 | 决策+契约 | `anc-meta-ci-baseline` |
+| 明细基线（三张孤儿/缺卡列表只许减不许增） | 决策+契约 | `anc-meta-ci-detail-baseline` |
 | 实施阶段 | 说明 | — |
 | 待补：发版流程收口 | 说明 | — |
 | Carrier Live E2E | 契约 | `anc-meta-ci-carrier-live` |
@@ -135,12 +136,24 @@ npm 包已是 `@hoplogic/hopjit`，scope 与组织名对齐。仓库位置顺理
 **机制**：基线数字入库为 `audits/baselines/anchor-baseline.json`，新建 `scripts/check-anchor-baseline.mjs` 跑扫描并比对：
 
 - **变差 → exit 1**（如无效引用 27→28）：报出新增项，红灯；
-- **变好 → exit 0 + 提示更新基线**（如 27→25）：不自动改基线文件（避免"悄悄放松"），提示人确认后更新；
+- **变好 → exit 0 + 提示更新基线**（如 27→25）：脚本不自动改基线文件，由提交该批次的 agent 按实测值收紧基线，不经人确认（2026-10-07 作者定"以后自动上升,不要再问我了"——收紧方向不存在"悄悄放松"的风险）；放松方向（覆盖数下调、违规计数上调）仍须人确认后改；
 - **持平 → exit 0**。
 
 **基线文件**：`audits/baselines/anchor-baseline.json`（2026-08-03 实测，锚定 `_baseline_commit`）。字段：`naming_violations`(0，不许回升)、`invalid_refs`(27)、`status_issues`(36)、`module_deps_mismatch`(1)、三个覆盖分子下限 `*_covered_min`(185/189/181——分母随新锚点变化，故只锁分子下限)。
 
 **已归零项的特殊地位**：命名违规 / 模块边界 / 出口注释三项已修到 0，基线设 0 意味着**任何回升都红**。这是本次审计成果的锁定——防止再次腐坏。
+
+**明细基线（2026-10-08 todo/0133,作者拍 b 形态：另建文件）** ^anc-meta-ci-detail-baseline：数字基线只比 11 个计数,三份明细列表的**增量**不在比对面——`code_to_design.orphans`（代码 @a 挂着、设计侧没有真身的锚）、`code_to_traceability.missing`（代码落点没有卡）、`design_to_traceability.missing`（设计锚没有卡）。实撞：d147fbed 把设计锚写在散文行里,scan 三种合法形态都不命中,orphans 当时就列着它,但 11 个数字一个没变差,check:audit 报绿,独立阅卷与基线上调两道都以绿为凭过了。修法：
+
+- 新文件 `audits/baselines/anchor-detail-baseline.json`,三个键各存一张 `{id, file}` 对的列表（`file` 取 location 去掉行号——行号必然腐坏,id+file 才是稳定定位器）,首版=立卡时实测快照;
+- `check-anchor-baseline.mjs` 读它,对每张表算"当前有、基线没有"的差集,非空即 exit 1 并逐条点名（锚 id + 文件）——与 card_missing 差集同律：只许减不许增;
+- 收紧方向同口径自动做：当前列表比基线短（修掉了一些）时,提交该批次的 agent 把基线列表收紧到实测（删掉已修条目）,不问作者;放松方向（要把新条目加进基线）须作者确认——那等于承认一个新孤儿;
+- 为什么另建文件不塞进数字基线：三张表加起来三百多条,塞进数字文件会把 `_note` 那段人读的账淹掉;分文件后数字基线仍是人一眼看完的 11 个数,明细归机器比;
+- 缺文件按守卫可信度条款显式失败 exit 2,不静默跳过;
+- 判据有常驻回归测试（2026-10-08 review 修复补——此前只有准入时一次性负向实录,面三 mut-14 实证"局部放宽"无人拦）：`check-anchor-baseline.mjs` 接 `HOPJIT_CHECK_ROOT` 替身仓库根（与 check-driver-carriers 等同款可测性通道）,`tests/guard-scripts.test.ts` 造"明细基线之外多一条孤儿"→ exit 1 点名、"持平"→ exit 0 两态;check-anchor-format 的 TRACEABILITY 尾粘检与 check-driver-carriers 的 hop-ops 同文检同批补常驻用例。
+- **面内/面外如实边界**：`test_to_code.orphans`（只有 @v 落点、无 @a 的锚）**不进本基线**——守卫类锚（落点=scripts 的 @v,无 src 代码面）按惯例恒在这张表里,把它锁进基线等于把一个按设计存在的集合当缺陷冻结。但这留下一个空档：一枚新锚只有守卫 @v、设计真身又写坏了（散文行形态被 scan 漏采）时,前三张表与 invalid_refs 都不红——批次四独立阅卷实抓本批自己的两枚新锚正是这形态（当场把两处真身改成合法形态修掉）。这类锚的把关归阅卷第⑤项"新锚在设计有真身"的人核,以及 `design_to_traceability.missing`（真身合法后若无卡仍会红）。
+
+负向验证（准入第③步,立守卫时实跑）：在任一设计文档加一行散文行锚（锚名随手起一个库内不存在的,例如 `anc-exec-probe-orphan`——它只在这条验证里出现,不是库内锚;写成 `- 某条说明 ^anc-exec-probe-orphan：` 的散文行形态）并在 src 任一处挂同名 `// @a:` → check:audit 红并点名该锚;撤掉后绿。第四张表（test_to_code 孤儿 × 设计真身缺席的交集）要不要加,与 4 张单元格中段卡的处置,归 [[todo/0150_明细基线第四张表与placement_exempt单元格中段卡_评估待做_open|todo/0150]]。
 
 ## 5. 实施阶段【说明】
 

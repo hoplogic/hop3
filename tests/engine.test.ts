@@ -1,16 +1,18 @@
 // @module: exec-engine ^anc-struct-exec-engine
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { ExecutionEngine, splitInstanceDir, classifyFailReason } from '../src/engine.js';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { ExecutionEngine, splitInstanceDir, classifyFailReason, templateAnalysis, mergeAnalysis, commitNotApprovedMessage, commitAuthorizedBy, COMMIT_ARG_UNKNOWN } from '../src/engine.js';
+import { DEFAULT_KEEP } from '../src/ast-types.js';
+import { B9_WRITE_TOOLS } from '../src/validator.js';
 import { formatPromptText, TEXT_TOOLCALL_HINT_MARKER, ACT_EVIDENCE_GATE_PREFIX } from '../src/prompt.js';
 import { subtreeContainsPausePoint } from '../src/engine-traverse.js';
 import { VariableStore } from '../src/ast-runtime.js';
 import type { HostConfig } from '../src/provider-types.js';
 import { ErrorCode } from '../src/errors.js';
 import { writeChildParams } from '../src/persistence.js';
-import { mkdtempSync, writeFileSync, existsSync, readFileSync, mkdirSync, readdirSync, rmSync, realpathSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, readFileSync, mkdirSync, readdirSync, rmSync, realpathSync, symlinkSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { join, win32 as pathWin32, posix as pathPosix } from 'node:path';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 
 const MINIMAL_HOST_CONFIG: HostConfig = {
   workspace_dir: '/tmp/test',
@@ -204,6 +206,62 @@ describe('ExecutionEngine.nextStep', () => {
       expect(next.failed_step_id).toBe('1');
       expect(next.failure_reason).toBe('LLM error');
     }
+  });
+
+  // 对终态失败实例的重复推进记 resume_rejected 事件（hopissues/0122——此前只有响应通道带原因,状态与日志零痕迹）
+  // @v: anc-exec-resume-rejected-event
+  it('正例：终态失败的实例 recover 后再推进 → exec_events 增一条 resume_rejected 带失败步与原因,且落盘', () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'rr-'));
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(THREE_STEP_SPEC, MINIMAL_HOST_CONFIG, { stateDir, params: { source: 's' } });
+    if (init.status !== 'ok') throw new Error('init');
+    engine.nextStep();
+    engine.failStep('1', 'TOOL_EXEC_ERROR: ENOENT 模拟');
+    expect(engine.nextStep().status).toBe('failed');   // 首次到达终态
+    const before = engine.getExecEvents().filter(e => e.event === 'resume_rejected').length;
+    expect(before).toBe(0);
+    const rec = ExecutionEngine.recover(join(stateDir, init.instance_id));
+    const again = rec.nextStep();
+    expect(again.status).toBe('failed');
+    const evs = rec.getExecEvents().filter(e => e.event === 'resume_rejected');
+    expect(evs).toHaveLength(1);
+    expect(evs[0].step_id).toBe('1');
+    expect(evs[0].detail).toBe('TOOL_EXEC_ERROR: ENOENT 模拟');
+    const onDisk = JSON.parse(readFileSync(join(stateDir, init.instance_id, 'state.json'), 'utf-8'));
+    expect((onDisk.exec_events as any[]).filter(e => e.event === 'resume_rejected')).toHaveLength(1);
+  });
+  it('正例（review 面三 G5,mut-18）：不经 terminalFailure 短路、走"全部顶层终态且有失败步"扫描出口的重复推进同样记 resume_rejected（旧快照无 terminal_failure 字段的跨版本形态）', () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'rr2-'));
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(THREE_STEP_SPEC, MINIMAL_HOST_CONFIG, { stateDir, params: { source: 's' } });
+    if (init.status !== 'ok') throw new Error('init');
+    engine.nextStep();
+    engine.failStep('1', 'X: 旧版失败');
+    expect(engine.nextStep().status).toBe('failed');
+    // 模拟旧版引擎写的快照：没有 terminal_failure 字段,只有 step_states 里的 failed——恢复后 nextStepRaw 走 allTerminal 扫描出口
+    const p = join(stateDir, init.instance_id, 'state.json');
+    const st = JSON.parse(readFileSync(p, 'utf-8'));
+    expect(st.terminal_failure).toBeDefined();
+    delete st.terminal_failure;
+    writeFileSync(p, JSON.stringify(st));
+    const rec = ExecutionEngine.recover(join(stateDir, init.instance_id));
+    expect((rec as any).terminalFailure ?? null).toBeNull();
+    const again = rec.nextStep();
+    expect(again.status).toBe('failed');
+    const evs = rec.getExecEvents().filter(e => e.event === 'resume_rejected');
+    expect(evs).toHaveLength(1);   // 变异：单删 allTerminal 出口那一处 recordResumeRejected → 0 条红
+    expect(evs[0]).toMatchObject({ step_id: '1', detail: 'X: 旧版失败' });
+  });
+  it('反例：首次到达终态不记 resume_rejected（step_failed 已在,不重复记账）', () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(THREE_STEP_SPEC, MINIMAL_HOST_CONFIG, { params: { source: 's' } });
+    engine.nextStep();
+    engine.failStep('1', 'LLM error');
+    engine.nextStep();
+    engine.nextStep();   // 同进程内再问一次——terminalState 已是 failed,这一次算重复推进
+    const evs = engine.getExecEvents();
+    expect(evs.filter(e => e.event === 'step_failed')).toHaveLength(1);
+    expect(evs.filter(e => e.event === 'resume_rejected')).toHaveLength(1);   // 只有第二次 nextStep 记
   });
 
   it('returns failed when all steps are terminal with at least one failure', () => {
@@ -4050,6 +4108,43 @@ g
     if (fb.status === 'step_ready') expect(fb.step_id).toBe('1.1');   // 重跑本步非兜底——预算未扣（复发例另核扣减）
   });
 
+  // 2026-10-12 语义审计 #2（作者拍甲案）：免扣轮也写 retryHistory（标 waived,attempt 不加一）,否则重跑拿不到反馈、是同输入重放
+  it('正例（语义审计 #2）：OUTPUT_TRUNCATED 首撞免扣后重派 1.1 时 getActiveRetryFeedback 有值且 reason 含 OUTPUT_TRUNCATED——免扣轮的失败原因进了账,下一轮真带新反馈', () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(DET_SPEC, MINIMAL_HOST_CONFIG);
+    engine.nextStep();
+    engine.failStep('1.1', 'OUTPUT_TRUNCATED: 本轮输出被 max_tokens 掐断（output_tokens=16384）');
+    const fb = engine.nextStep();
+    expect(fb.status).toBe('step_ready');
+    if (fb.status === 'step_ready') expect(fb.step_id).toBe('1.1');
+    const feedback = engine.getActiveRetryFeedback('1.1');
+    expect(feedback).toBeDefined();
+    expect(feedback!.reason).toContain('OUTPUT_TRUNCATED');
+    expect(feedback!.attempt).toBe(0);   // 免扣轮不算一次 attempt
+    const rec = ((engine as unknown as { retryHistory: Map<string, { attempt: number; waived?: boolean }[]> }).retryHistory.get('1') ?? []);
+    expect(rec.length).toBe(1);
+    expect(rec[0].waived).toBe(true);
+  });
+
+  it('反例（语义审计 #2）：waived 记录不计 attempt——免扣首撞后再正常失败一次,retryHistory 两条但第二条 attempt 仍是 1,adaptive 阶梯不因 waived 记录升到重规划', () => {
+    const ADAPTIVE_SPEC = DET_SPEC.replace('[subtask retry=3] 主活', '[subtask retry=3 adaptive] 主活');
+    const engine = new ExecutionEngine();
+    engine.initExecution(ADAPTIVE_SPEC, MINIMAL_HOST_CONFIG);
+    engine.nextStep();
+    engine.failStep('1.1', 'OUTPUT_TRUNCATED: 首撞（免扣）');
+    engine.nextStep();
+    engine.failStep('1.1', '普通失败：产出不合格');
+    const after = engine.nextStep();
+    // adaptive 第 2 次 attempt 起才重规划;免扣轮不算 attempt,所以这次仍是第 1 次 → 带反馈重跑 1.1,不是 adaptive_needed
+    expect(after.status).toBe('step_ready');
+    if (after.status === 'step_ready') expect(after.step_id).toBe('1.1');
+    const rec = ((engine as unknown as { retryHistory: Map<string, { attempt: number; waived?: boolean }[]> }).retryHistory.get('1') ?? []);
+    expect(rec.length).toBe(2);
+    expect(rec[0].waived).toBe(true);
+    expect(rec[1].waived).toBeUndefined();
+    expect(rec[1].attempt).toBe(1);
+  });
+
   it('正例：OUTPUT_TRUNCATED 同步骤二撞 → 照扣预算走正常阶梯（免预算有界化:瞬态假设被证伪,防预算永不减兜底永不到）', () => {
     const engine = new ExecutionEngine();
     engine.initExecution(DET_SPEC, MINIMAL_HOST_CONFIG);
@@ -4222,6 +4317,45 @@ describe('CalleeFailure 内核提取', () => {
       stepFailReasons: {},
     });
     expect(engine.getFailureReason('1')).toContain('缺失败明细');
+  });
+
+  // 2026-10-11 语义审计 0156 B4：规则 2 对 call parallel 的 reapParallelCall 失败分支同律（此前只在 failCallStep,
+  // 并行深链孙层 JSON 透传父层;变异=reapParallelCall 处改回直接用 rawKernel.reason → 本例红）
+  it('正/反（并行收割路径）：reapParallelCall 失败分支的孙层 CalleeFailure 同样消化成一跳摘要;非 CalleeFailure 前缀原样', () => {
+    const PAR = `# P
+Id: p
+## Goal
+g
+## Inputs
+- items: [text]  # 列表
+## Outputs
+- outs: [text]  # 收集
+## Steps
+1. [loop for-each it in items, collect out into outs] 逐个
+  + → outs: [text]  # 收集
+  1.1. [call child(it) parallel] 调
+    + → out: r  # 映射
+2. [exit]
+`;
+    const mk = () => {
+      const engine = new ExecutionEngine();
+      engine.initExecution(PAR, { ...MINIMAL_HOST_CONFIG, spec_provider: { resolve: async () => null } }, { params: { items: ['a'] } });
+      engine.setUnifiedDispatch(true);
+      const n = engine.nextStep() as { status: string; child_instance: string };
+      expect(n.status).toBe('dispatch_ready');
+      return { engine, child: n.child_instance };
+    };
+    const grand = 'CalleeFailure: ' + JSON.stringify({ callee_spec_id: 'grand', child_instance: 'ci-g', failed_step: '2', reason: 'boom（孙层真因）', attempts: 1, fail_kind: 'error' });
+    const { engine, child } = mk();
+    engine.reapParallelCall(child, { failure: { specId: 'mid', childInstanceId: child, stepStates: { '1': 'failed' }, stepFailReasons: { '1': { reason: grand, fail_kind: 'error' } } } as never });
+    const ev = ((engine as any).execEvents as { event: string; detail?: string }[]).filter(e => e.event === 'parallel_reap').map(e => e.detail ?? '').join('\n');
+    expect(ev).toContain("调用 'grand' 失败于其步骤 '2'（已试 1 次）：boom");   // 反例半边：父侧看到的是一跳摘要
+    expect(ev).not.toContain('"callee_spec_id"');                              // 不含孙层 JSON 原文
+    // 正例半边：非 CalleeFailure 前缀的 reason 原样进事件
+    const { engine: e2, child: c2 } = mk();
+    e2.reapParallelCall(c2, { failure: { specId: 'mid', childInstanceId: c2, stepStates: { '1': 'failed' }, stepFailReasons: { '1': { reason: 'CHECK_FAILED: 普通失败原文', fail_kind: 'error' } } } as never });
+    const ev2 = ((e2 as any).execEvents as { event: string; detail?: string }[]).filter(e => e.event === 'parallel_reap').map(e => e.detail ?? '').join('\n');
+    expect(ev2).toContain('CHECK_FAILED: 普通失败原文');
   });
 });
 
@@ -4861,12 +4995,13 @@ test
   });
 });
 
-describe('selectBranch', () => {
+// @v: anc-exec-branch-select-internal —— todo/0168：原「selectBranch 手动覆盖条件求值」三例删;选路只由引擎按 case 条件求值,引擎没有 selectBranch 公开方法
+describe('branch 选路只由 case 条件求值,没有外部选择入口（todo/0168）', () => {
   const BRANCH_SPEC = `# Branch Select
 Id: branch-select
 
 ## Goal
-Test manual branch selection
+Test branch by value
 
 ## Inputs
 - mode: text  # input
@@ -4875,45 +5010,39 @@ Test manual branch selection
 - out: text  # output
 
 ## Steps
-1. [branch] Choose path
-  1.1. [case] {mode}==fast
-    1.1.1. [act] Fast path
+1. [reason] 前面
+  + → a: text  # 前置
+2. [branch] Choose path
+  2.1. [case] {mode}==fast
+    2.1.1. [act] Fast path
+      - ← a
       + → out: text  # output
-  1.2. [case] {mode}==slow
-    1.2.1. [act] Slow path
+  2.2. [case] {mode}==slow
+    2.2.1. [act] Slow path
+      - ← a
       + → out: text  # output
 `;
 
-  it('overrides automatic condition evaluation', () => {
+  it('正例（todo/0168）：mode=slow 时引擎进入 branch 按条件命中 2.2——账上 2 running / 2.2 running / 2.1 与 2.1.1 skipped,停在 2.2.1;hoplog 事件里 branch 命中由引擎自己记', () => {
     const engine = new ExecutionEngine();
-    engine.initExecution(BRANCH_SPEC, MINIMAL_HOST_CONFIG);
-
-    // mode is undefined, so neither condition matches normally
-    // Manual override selects case 1.2
-    const result = engine.selectBranch('1', '1.2', 'user chose slow');
-    expect(result.status).toBe('ok');
-
+    engine.initExecution(BRANCH_SPEC, MINIMAL_HOST_CONFIG, { params: { mode: 'slow' } });
+    engine.nextStep();
+    engine.completeStep('1', { a: 'x' });
     const s = engine.nextStep();
     expect(s.status).toBe('step_ready');
-    if (s.status === 'step_ready') expect(s.step_id).toBe('1.2.1');
+    if (s.status === 'step_ready') expect(s.step_id).toBe('2.2.1');
+    const st = engine.getStepStates();
+    expect(st.get('2')).toBe('running');
+    expect(st.get('2.2')).toBe('running');
+    expect(st.get('2.1')).toBe('skipped');
+    expect(st.get('2.1.1')).toBe('skipped');
   });
 
-  it('returns error for invalid branch step', () => {
+  it('反例（todo/0168）：引擎对外没有 selectBranch——调用方拿不到任何替引擎选 case 的方法（旧接口允许 running 态改选,把账改一半后 No executable step found）', () => {
     const engine = new ExecutionEngine();
-    engine.initExecution(BRANCH_SPEC, MINIMAL_HOST_CONFIG);
-
-    const result = engine.selectBranch('99', '1.1');
-    expect(result.status).toBe('error');
-    expect(result.code).toBe(ErrorCode.INVALID_STEP_ID);
-  });
-
-  it('returns error for invalid case id', () => {
-    const engine = new ExecutionEngine();
-    engine.initExecution(BRANCH_SPEC, MINIMAL_HOST_CONFIG);
-
-    const result = engine.selectBranch('1', '1.99');
-    expect(result.status).toBe('error');
-    expect(result.code).toBe(ErrorCode.INVALID_STEP_ID);
+    engine.initExecution(BRANCH_SPEC, MINIMAL_HOST_CONFIG, { params: { mode: 'slow' } });
+    expect((engine as unknown as Record<string, unknown>)['selectBranch']).toBeUndefined();
+    expect((ExecutionEngine.prototype as unknown as Record<string, unknown>)['selectBranch']).toBeUndefined();
   });
 });
 
@@ -5280,37 +5409,6 @@ Test
     });
   });
 
-  describe('selectBranch state guard', () => {
-    it('rejects branch in done state', () => {
-      const spec = `# Branch
-Id: branch-guard
-## Goal
-Test
-## Inputs
-- mode: text  # input
-## Outputs
-- out: text  # output
-## Steps
-1. [branch] Choose
-  1.1. [case] {mode}==a
-    1.1.1. [reason] A
-      + → out: text  # output
-      > A
-  1.2. [case] {mode}==b
-    1.2.1. [reason] B
-      + → out: text  # output
-      > B
-`;
-      const engine = new ExecutionEngine();
-      engine.initExecution(spec, MINIMAL_HOST_CONFIG);
-      // Force branch to done state
-      (engine as any).stepStates.set('1', 'done');
-      const result = engine.selectBranch('1', '1.1', 'test');
-      expect(result.status).toBe('error');
-      expect((result as any).code).toBe(ErrorCode.INVALID_STATE);
-    });
-  });
-
   describe('resume restores counters', () => {
     it('preserves retry and loop counters through persist/resume', () => {
       const loopSpec = `# Loop
@@ -5601,6 +5699,36 @@ Test replan circuit breaker
     if (result.status === 'error') {
       expect(result.code).toBe(ErrorCode.REPLAN_LIMIT_EXCEEDED);
     }
+  });
+
+  // 退化检测（熔断机制第 3 项,todo/0129 B3——设计自立文起零实装,2026-09-30 语义审计抓）
+  // @v: anc-exec-retry-adaptive
+  it('正例：第二次 replan 步数 ≥ 上次 2 倍 → 记 [replan-inflation] replan 事件 + hoplog warn,仍接受（计划膨胀警告不拒绝）', () => {
+    const engine = new ExecutionEngine();
+    const logDir = mkdtempSync(join(tmpdir(), 'infl-'));
+    engine.initExecution(ADAPTIVE_SPEC_CB, MINIMAL_HOST_CONFIG, { logDir });
+    triggerInitialAdaptive(engine);
+    expect(engine.submitReplan('1', `1. [act] A one\n  + → final_out: text  # output\n`).status).toBe('ok');
+    triggerAdaptiveNeeded(engine);
+    const md2 = `1. [act] B first\n  + → t1: text  # x\n2. [act] B second\n  + → final_out: text  # output\n`;
+    const r = engine.submitReplan('1', md2);
+    expect(r.status).toBe('ok');   // 仍接受
+    const ev = engine.getExecEvents().filter(e => e.event === 'replan' && String(e.detail).startsWith('[replan-inflation]'));
+    expect(ev).toHaveLength(1);
+    expect(ev[0].detail).toContain('新计划 2 步是上次 1 步的 2.0 倍');
+    const mainYaml = readFileSync(join(engine.getHopLog()!.getRunDir(), 'main.yaml'), 'utf-8');
+    expect((mainYaml.match(/\[replan-inflation\]/g) ?? []).length).toBe(1);   // hoplog warn 一行
+  });
+  it('反例：步数未到 2 倍不记;首次 replan 无基线不记（proactive 提交在更早分支返回,走不到膨胀检查——不在本例造）', () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(ADAPTIVE_SPEC_CB, MINIMAL_HOST_CONFIG);
+    triggerInitialAdaptive(engine);
+    // 首次 replan（无基线）3 步：不记
+    expect(engine.submitReplan('1', `1. [act] A\n  + → a: text  # x\n2. [act] B\n  + → b: text  # y\n3. [act] C\n  + → final_out: text  # output\n`).status).toBe('ok');
+    triggerAdaptiveNeeded(engine);
+    // 3 → 5 步（< 2 倍）：不记
+    expect(engine.submitReplan('1', `1. [act] D\n  + → a: text  # x\n2. [act] E\n  + → b: text  # y\n3. [act] F\n  + → c: text  # z\n4. [act] G\n  + → d: text  # w\n5. [act] H\n  + → final_out: text  # output\n`).status).toBe('ok');
+    expect(engine.getExecEvents().filter(e => e.event === 'replan' && String(e.detail).startsWith('[replan-inflation]'))).toHaveLength(0);
   });
 
   it('rejects duplicate replan (same structure and similar summaries)', () => {
@@ -5973,6 +6101,40 @@ Id: caller-dyn-proto
     expect(cp).toBeDefined();
     expect(cp.init_command).toContain('<CALLEE_SPEC_PATH:cleaner-v2>');   // 求值结果进占位
     expect(cp.init_command).not.toContain('{picked_spec}');               // 原文决不漏进命令
+  });
+
+  // @v: anc-exec-callee-resolver —— 引擎填路径:注册了解析器就填它给的绝对路径,解析不到或没注册留占位;
+  // 解析器收三参 (callerSpecPath, calleeId, workspaceDir)——第三参是 HostConfig.workspace_dir 原值（项目级 HopAnt 根由它算,变异 M11 改传 '' → 红）
+  it('callee 路径解析器:注册时 init_command 填解析出的路径;解析器收到 [调用方绝对路径, callee id, HostConfig.workspace_dir] 三元组;解析器返回 null 或未注册时留 <CALLEE_SPEC_PATH:id> 占位', () => {
+    const SPEC = `# Caller
+Id: caller-resolver
+## Goal
+解析器填路径
+## Outputs
+- out: text  # result
+## Steps
+1. [call sub-x(n: 1)] 调
+  + → out: result
+`;
+    const seen: string[][] = [];
+    const WS_HOST = { ...MINIMAL_HOST_CONFIG, workspace_dir: '/ws/for-resolver' } as HostConfig;   // 与进程 cwd、spec 目录都不同,证明第三参来自 HostConfig
+    const runOnce = () => {
+      const engine = new ExecutionEngine();
+      engine.initExecution(SPEC, WS_HOST);
+      (engine as any).cliAbsPath = '/abs/cli.js';
+      (engine as any).specPath = '/abs/dir/p.md';
+      return (engine.nextStep() as any).call_protocol.init_command as string;
+    };
+    try {
+      ExecutionEngine.setCalleeSpecResolver((caller, id, workspaceDir) => { seen.push([caller, id, workspaceDir]); return id === 'sub-x' ? '/resolved/sub-x.md' : null; });
+      expect(runOnce()).toContain('init "/resolved/sub-x.md"');
+      expect(seen[0]).toEqual(['/abs/dir/p.md', 'sub-x', '/ws/for-resolver']);   // 解析器拿到的是调用方 spec 的绝对路径、callee id、本 run 的 workspace_dir（变异 M11：第三参传 '' → 红）
+      ExecutionEngine.setCalleeSpecResolver(() => null);
+      expect(runOnce()).toContain('init "<CALLEE_SPEC_PATH:sub-x>"');
+    } finally {
+      ExecutionEngine.resetCalleeSpecResolver();
+    }
+    expect(runOnce()).toContain('init "<CALLEE_SPEC_PATH:sub-x>"');
   });
 
   // @v: anc-step-call-dynamic-callee —— 复用模式解引用失败形态:buildCallProtocol 求值不出
@@ -6943,6 +7105,67 @@ Test confirm answer mapping
     const vars = engine.getVariableStore();
     expect(vars.read('approval', 'root')).toBe(true);   // value→approval=true（按 bool 槽映射）
     expect(vars.read('value', 'root')).toBeUndefined();  // 原始 key 不污染变量空间
+  });
+
+  // @v: anc-exec-confirm-answer —— 取不到决定值拒收（todo/0146 review 决策 2）
+  it('反例：confirm 回答取不到决定值（{}、{value:null}、多键无决定键、非对象）→ SCHEMA_MISMATCH,不写变量、仍停在确认点;正例 {value:"approve"} 推进', () => {
+    const SPEC = `# Confirm Empty
+Id: confirm-empty
+## Goal
+g
+## Outputs
+- approval: bool  # 审批结果
+## Steps
+1. [confirm] 审批
+  + → approval: bool  # 审批结果
+  > 请审批
+`;
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC, MINIMAL_HOST_CONFIG);
+    engine.nextStep();
+    const empties: unknown[] = [{}, { value: null }, { decision: null }, { a: 1, b: 2 }, 'approve', ['approve'], null];
+    for (const ans of empties) {
+      const r = engine.completeStep('1', ans as Record<string, unknown>) as any;
+      expect(r.status, JSON.stringify(ans)).toBe('error');
+      expect(r.code).toBe(ErrorCode.SCHEMA_MISMATCH);
+      expect(r.message).toContain('没有决定值');
+      expect(engine.getStepStates().get('1')).toBe('running');
+      expect(engine.getVariableStore().read('approval', 'root')).toBeUndefined();
+    }
+    const ok = engine.completeStep('1', { value: 'approve' });
+    expect(ok.status).toBe('ok');
+    expect(engine.getVariableStore().read('approval', 'root')).toBe(true);
+  });
+
+  // @v: anc-exec-stale-resubmit —— 决策 2 的第二个使用点:向已批准的 confirm 步重发
+  it('反例：confirm 已批准后重发决定值为 null 的回答（{value:null}、{decision:null}）→ STALE_RESUBMIT,不当幂等;正例重发 {value:"approve"} 与空对象 {} → ALREADY_DONE（空对象按"不带 outputs"处理）', () => {
+    const SPEC = `# Confirm Resend
+Id: confirm-resend
+## Goal
+g
+## Outputs
+- approval: bool  # 审批结果
+## Steps
+1. [confirm] 审批
+  + → approval: bool  # 审批结果
+  > 请审批
+`;
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC, MINIMAL_HOST_CONFIG);
+    engine.nextStep();
+    expect(engine.completeStep('1', { value: 'approve' }).status).toBe('ok');
+    for (const ans of [{ value: null }, { decision: null }]) {
+      const r = engine.completeStep('1', ans as Record<string, unknown>) as any;
+      expect(r.status, JSON.stringify(ans)).toBe('error');
+      expect(r.code).toBe(ErrorCode.INVALID_STATE);
+      expect(String(r.message)).toContain('STALE_RESUBMIT');
+    }
+    for (const ans of [{ value: 'approve' }, {}]) {
+      const repeat = engine.completeStep('1', ans) as any;
+      expect(repeat.status, JSON.stringify(ans)).toBe('ok');
+      expect(repeat.code).toBe(ErrorCode.ALREADY_DONE);
+    }
+    expect(engine.getVariableStore().read('approval', 'root')).toBe(true);
   });
 
   // @v: anc-step-ask, anc-exec-hitl-presentation
@@ -8681,12 +8904,12 @@ describe('注册件直执(0076)', () => {
       api_key: 'test-key',
     };
   }
-  // 生产件全链(makeEngineToolProviderFactory+loadProjectToolRegistry——2026-09-06 review 抓
+  // 生产件全链(makeEngineToolProviderFactory+config-load loadToolRegistry——2026-09-06 review 抓
   // loadRegistry 三份同构后真收敛:测试与两组合根同 import 两件生产件,load 半边也真锁)
   async function registerFactoryLikeCli(): Promise<void> {
     const { makeEngineToolProviderFactory } = await import('../src/tools-composite.js');
-    const { loadProjectToolRegistry } = await import('../src/tools-registry.js');
-    ExecutionEngine.setEngineToolProviderFactory(makeEngineToolProviderFactory(() => loadProjectToolRegistry(process.cwd())));
+    const { loadToolRegistry, configPaths } = await import('../src/config-load.js');   // 两级（todo/0131）——与 cli 组合根同 import 同形
+    ExecutionEngine.setEngineToolProviderFactory(makeEngineToolProviderFactory(() => loadToolRegistry(configPaths(mkdtempSync(join(tmpdir(), 'cl-nohome-')), process.cwd()), process.cwd())));
   }
   afterAll(() => {
     process.chdir(origCwd);
@@ -13689,6 +13912,9 @@ probe
     }
   });
 
+  // @v: anc-exec-parallel-foreach-barrier —— 屏障语义现行落点（parallel-execution §9b' 字面废止,由 §U7 统一派发门承担）：
+  // 派发后主线 nextStep 返回 drain_wait,不把 parallel 下游的步当作下一可执行步;reap 齐后才推进。
+  // 2026-10-11 语义审计 0156 A1：原 @v 挂在 cli.test.ts 一段说明注释上,迁至此处真断言 drain_wait 的用例。
   it('正例（D1 晚收割——阅卷实抓恒丢末元素后修）：主线先走完全部派发再收割 → 收集清单仍两元素齐（修前:末收割的传播级联触发 loop finalize,后喂元素成孤儿恒丢）', () => {
     const engine = new ExecutionEngine();
     const init = engine.initExecution(`# T
@@ -15065,5 +15291,2538 @@ ${approved}
     expect(msg).toContain('缺少: ls');
     expect(msg).toContain('hopjit.yaml 的 commands');
     expect(msg).toContain('## 已批准命令');
+  });
+});
+
+// spec_dir 复用模式注入（design act-body ^anc-exec-spec-dir 类型约定：engine.ts advanceToCaller 构造 BodyInterpreter 处注入
+// dirname(resolve(specPath));load 回填 spec_path 后续跑不丢;check 与 commit 步 body 同样可调）。
+// spec_dir 批 review 面三变异 c（engine 注入恒 undefined）四份 1547 例全绿后补——此前复用模式注入零保护。 // @v: anc-exec-spec-dir
+describe('spec_dir 复用模式注入（engine advanceToCaller）', () => {
+  const SPEC = `# SDR
+Id: sdr
+## Goal
+g
+## Outputs
+- d: line  # act 步取的目录
+- c: text  # check 步取的目录（check 的说明槽须 text）
+- m: line  # commit 步取的文件路径
+## Steps
+1. [act] act 步取 spec 目录
+  + → d: line  # 目录
+  > \`\`\`hop_python
+  > d = spec_dir()
+  > \`\`\`
+2. [subtask]
+  - ← d
+  + → c: text  # check 步取的
+  2.1. [act] 占位
+    - ← d
+    + → c0: line  # 透传
+    > \`\`\`hop_python
+    > c0 = d
+    > \`\`\`
+  2.2. [check final] check 步 body 也能调 spec_dir
+    - ← c0
+    + → ok: bool  # 判定
+    + → c: text  # check 步取的目录（说明槽承载,text 型）
+    > \`\`\`hop_python
+    > c = spec_dir()
+    > ok = c == c0
+    > \`\`\`
+3. [commit] commit 步 body 也能调 spec_dir
+  - ← c
+  + → m: line  # 文件路径
+  > \`\`\`hop_python
+  > m = spec_dir("scripts/x.py")
+  > \`\`\`
+`;
+  const SPEC_PATH = '/ants/demo-r/demo-r.md';
+
+  it('正例：initExecution 带 specPath → act / check / commit 三种步骤的 body 里 spec_dir() 都等于 spec 所在目录', async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'eng-specdir-'));
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC, MINIMAL_HOST_CONFIG, { stateDir, specPath: SPEC_PATH });
+    expect(init.status).toBe('ok');
+    const r = await engine.advanceToCaller();
+    expect(r.status, JSON.stringify(r)).toBe('completed');
+    expect(r.outputs?.d).toBe('/ants/demo-r');
+    expect(r.outputs?.c).toBe('/ants/demo-r');
+    expect(r.outputs?.m).toBe('/ants/demo-r/scripts/x.py');
+  });
+
+  it('正例：load 从快照回填 spec_path 后续跑,spec_dir() 仍为原目录（崩溃恢复不丢）', async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'eng-specdir-load-'));
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC, MINIMAL_HOST_CONFIG, { stateDir, specPath: SPEC_PATH });
+    expect(init.status).toBe('ok');
+    if (init.status !== 'ok') return;
+    // 另起引擎 load（模拟下一进程）,从头推进——body 全在 load 后执行
+    const restored = ExecutionEngine.load(join(stateDir, init.instance_id));
+    const r = await restored.advanceToCaller();
+    expect(r.status, JSON.stringify(r)).toBe('completed');
+    expect(r.outputs?.d).toBe('/ants/demo-r');
+    expect(r.outputs?.m).toBe('/ants/demo-r/scripts/x.py');
+  });
+
+  it('反例：内存态（不带 specPath）→ act 步 body 调 spec_dir 失败,失败原因点名 spec_dir 不可用（不回退 workspace）', async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'eng-specdir-mem-'));
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC, MINIMAL_HOST_CONFIG, { stateDir });
+    expect(init.status).toBe('ok');
+    const r = await engine.advanceToCaller();
+    expect(r.status).not.toBe('completed');
+    expect(JSON.stringify(r)).toContain('spec_dir 不可用');
+  });
+});
+
+// commit 批准（todo/0146 起,2026-10-08 改为安全分析）：body 里的动作按分类表判 safe / review / human,全部 safe 直接放行;
+// 其余交模型分析一次或转人工。批准账按 spec 路径 + 步骤号 + body 指纹记（指纹只覆盖 body,分析不看输入值）;
+// once 只在本次运行内有效,task 只管批准的那一步;body 改了要重新分析;driver 递交产出绕不过关卡。
+// @v: anc-exec-commit-approval
+describe('commit 批准：安全分析与人的批准（todo/0146,2026-10-08 改为安全分析）', () => {
+  // 闸用例的 body 带一个 subprocess.run——外部命令一律 human,保证停下;宿主白名单放行 echo 让批准后真能执行
+  const HOST = { ...MINIMAL_HOST_CONFIG, sandbox: { ...(MINIMAL_HOST_CONFIG as any).sandbox, runtime: { available: ['echo'] } } } as HostConfig;
+  const gateSpec = (body: string) => `# 批准闸
+Id: approve-gate
+
+## Goal
+g
+
+## Outputs
+- out: line  # 交付
+
+## Steps
+1. [subtask] 把关
+  + → ok: bool
+  1.1. [check final] 核对
+    + → ok: bool  # 判定
+    + → note: text  # 说明
+    > pass
+2. [commit] 交付
+  + → out: line
+  > 跑一条命令再赋值
+  > \`\`\`hop_python
+  > r = subprocess.run(["echo", "${body}"])
+  > out = "${body}"
+  > \`\`\`
+`;
+  // 只做计算的 body:动作清单为空,引擎判全部安全
+  const pureSpec = (body: string) => gateSpec(body).replace(`  > r = subprocess.run(["echo", "${body}"])\n`, '');
+  const LOOP_SPEC = `# 循环批准
+Id: approve-loop
+
+## Goal
+g
+
+## Inputs
+- items: [line]  # 待处理项
+
+## Outputs
+- receipts: [text]  # 回执列表
+
+## Steps
+1. [loop for-each it in items, collect receipt into receipts] 逐项提交
+  + → receipts: [text]  # 回执列表
+  1.1. [commit] 提交本项
+    - ← it
+    + → receipt: text  # 回执
+    > \`\`\`hop_python
+    > r = subprocess.run(["echo", it])
+    > receipt = "done:" + it
+    > \`\`\`
+`;
+  let root: string;
+  let store: string;
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), 'commit-approve-'));
+    store = join(root, 'commit_approvals.json');
+    ExecutionEngine.setCommitApprovalStoreResolver(() => store);
+  });
+  afterAll(() => { ExecutionEngine.resetCommitApprovalStoreResolver(); });
+  afterEach(() => { ExecutionEngine.resetCommitAnalyzer(); });
+
+  function start(specFile: string, content: string, params?: Record<string, unknown>): ExecutionEngine {
+    writeFileSync(specFile, content);
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(content, HOST, { stateDir: join(root, 'state'), specPath: specFile, ...(params ? { params } : {}) });
+    expect(init.status).toBe('ok');
+    engine.setUnifiedDispatch(true);
+    return engine;
+  }
+  async function toGate(e: ExecutionEngine): Promise<any> {
+    await e.advanceToCaller();
+    return e.completeAndAdvance('1.1', { ok: true, note: '' });
+  }
+  const recsOf = (spec: string) => (existsSync(store) ? JSON.parse(readFileSync(store, 'utf-8')) as any[] : []).filter(r => r.spec_path === realpathSync(spec));
+
+  it('正例：首次停下带模板分析与三选项,记一条 referred;批准 once 后续跑执行;once 只管本次运行,下次运行再停但不重新分析;task 之后都放行', async () => {
+    const spec = join(root, 'gate.md');
+    const e = start(spec, gateSpec('v1'));
+    const s1 = await e.advanceToCaller() as any;
+    expect(s1.step_id).toBe('1.1');
+    const paused = await e.completeAndAdvance('1.1', { ok: true, note: '' }) as any;
+    expect(paused.status).toBe('paused');
+    expect(paused.pause_reason).toBe('commit');
+    const ctx = paused.presented_data.context;
+    expect(ctx.step_id).toBe('2');
+    expect(ctx.body).toContain('subprocess.run(["echo", "v1"])');
+    expect(ctx.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(ctx.analysis.source).toBe('template');
+    expect(ctx.analysis.recommendation).toContain('本机没有配置安全分析模型');
+    expect(ctx.analysis.summary).toBe('这一步共有 1 个动作,其中 1 个需要你确认');
+    expect(ctx.analysis.actions).toEqual([expect.objectContaining({ callee: 'subprocess.run', category: 'run_command', verdict: 'human' })]);
+    expect(ctx.analysis.actions[0].consequence).toContain('运行命令 echo v1');
+    expect(paused.response_options.map((o: any) => o.value)).toEqual(['once', 'task', 'deny']);
+    expect(paused.presented_data.output_schema).toEqual([expect.objectContaining({ name: 'out' })]);   // 停点载荷的输出面取自本步 + → 声明
+    expect(paused.presented_data.question).toContain('这一步有需要你确认的动作');
+    expect(recsOf(spec)).toEqual([expect.objectContaining({ outcome: 'referred', decided_by: 'analysis', step_id: '2', scope: null, run_id: null, fingerprint: ctx.fingerprint })]);
+
+    // 反例：driver 递交产出绕不过闸
+    const bypass = await e.completeAndAdvance('2', { out: 'forged' }) as any;
+    expect(bypass.code).toBe(ErrorCode.COMMIT_BODY_ENGINE_ONLY);
+    // 反例：未批准时推进仍停在批准点,body 不执行,也不重新分析
+    const again = await e.advanceToCaller() as any;
+    expect(again.pause_reason).toBe('commit');
+    expect(recsOf(spec)).toHaveLength(1);
+    // 反例：指纹不符拒批;scope 非法拒;非 commit 步骤无需批准
+    expect((e.approveCommit('2', 'deadbeef', 'once') as any).code).toBe(ErrorCode.COMMIT_NOT_APPROVED);
+    expect((e.approveCommit('2', ctx.fingerprint, 'forever') as any).code).toBe(ErrorCode.INVALID_STATE);
+    expect((e.approveCommit('1.1', ctx.fingerprint, 'once') as any).code).toBe(ErrorCode.INVALID_STATE);
+
+    const ok = e.approveCommit('2', ctx.fingerprint, 'once') as any;
+    expect(ok.status).toBe('ok');
+    expect(ok.already_approved).toBeUndefined();
+    expect((e.approveCommit('2', ctx.fingerprint, 'once') as any).already_approved).toBe(true);   // 幂等
+    const onceRec = recsOf(spec).at(-1);
+    expect(onceRec).toEqual(expect.objectContaining({ outcome: 'approved', decided_by: 'human', scope: 'once', step_id: '2' }));
+    expect(onceRec.run_id).toBe(paused.instance_id);
+    // 续跑（另起进程形态:从快照 recover）→ 执行 body 到终态
+    const resumed = ExecutionEngine.recover(join(root, 'state', paused.instance_id));
+    resumed.setUnifiedDispatch(true);
+    const done = await resumed.advanceToCaller() as any;
+    expect(done.status).toBe('completed');
+    expect(done.outputs.out).toBe('v1');
+
+    // 同一 spec 新起一次 run：once 不跨运行,再停;分析取账里的 referred 记录,不重新分析（装上分析函数也不调）
+    let calls = 0;
+    ExecutionEngine.setCommitAnalyzer(async () => { calls++; throw new Error('不该被调'); });
+    const e2 = start(spec, gateSpec('v1'));
+    const p2 = await toGate(e2);
+    expect(p2.pause_reason).toBe('commit');
+    expect(p2.presented_data.context.analysis.recommendation).toContain('本机没有配置安全分析模型');
+    expect(calls).toBe(0);
+    expect(e2.approveCommit('2', p2.presented_data.context.fingerprint, 'task').status).toBe('ok');
+    expect((await e2.advanceToCaller() as any).status).toBe('completed');
+    // 选了"这一步以后都通过":第三次运行直接执行
+    const done3 = await toGate(start(spec, gateSpec('v1')));
+    expect(done3.status).toBe('completed');
+  });
+
+  it('反例：body 改了指纹变,要重新分析与批准;旧指纹批新 body 被拒', async () => {
+    const spec = join(root, 'gate-change.md');
+    const e = start(spec, gateSpec('a'));
+    const p1 = await toGate(e);
+    expect(e.approveCommit('2', p1.presented_data.context.fingerprint, 'task').status).toBe('ok');
+    const e2 = start(spec, gateSpec('b'));
+    const p2 = await toGate(e2);
+    expect(p2.pause_reason).toBe('commit');
+    expect(p2.presented_data.context.fingerprint).not.toBe(p1.presented_data.context.fingerprint);
+    expect((e2.approveCommit('2', p1.presented_data.context.fingerprint, 'once') as any).code).toBe(ErrorCode.COMMIT_NOT_APPROVED);
+    expect(recsOf(spec).filter(r => r.outcome === 'referred')).toHaveLength(2);   // 新 body 重新分析了一次
+  });
+
+  it('for-each：指纹不含输入值,批一次 once 放行本次运行的全部轮次;下次运行再停', async () => {
+    const spec = join(root, 'loop.md');
+    const e = start(spec, LOOP_SPEC, { items: ['a', 'b', 'c'] });
+    const p = await e.advanceToCaller() as any;
+    expect(p.pause_reason).toBe('commit');
+    expect(p.step_id).toBe('1.1');
+    expect(e.approveCommit('1.1', p.presented_data.context.fingerprint, 'once').status).toBe('ok');
+    const done = await e.advanceToCaller() as any;
+    expect(done.status).toBe('completed');
+    expect(done.outputs.receipts).toEqual(['done:a', 'done:b', 'done:c']);
+    const p2 = await start(spec, LOOP_SPEC, { items: ['x'] }).advanceToCaller() as any;
+    expect(p2.pause_reason).toBe('commit');
+    expect(p2.presented_data.context.fingerprint).toBe(p.presented_data.context.fingerprint);
+  });
+
+  it('引擎判全部安全直接执行并记 engine_safe（commit 安全分析 review 缺陷 D41）:只做计算的 body;只追加的 body;checkCommitApproval 只读不写账', async () => {
+    const spec = join(root, 'safe-pure.md');
+    const done = await toGate(start(spec, pureSpec('p')));
+    expect(done.status).toBe('completed');
+    expect(done.outputs.out).toBe('p');
+    expect(recsOf(spec)).toEqual([expect.objectContaining({ outcome: 'approved', decided_by: 'engine_safe', step_id: '2', scope: 'task', run_id: null, analysis: null })]);
+    const appendSpec = join(root, 'safe-append.md');
+    const e = start(appendSpec, pureSpec('q').replace('  > out = "q"', '  > r = append(path: "log.txt", content: "x")\n  > out = "q"'));
+    expect(e.checkCommitApproval('2')).toEqual(expect.objectContaining({ approved: true, decided_by: 'engine_safe', from_ledger: false }));
+    expect(recsOf(appendSpec)).toEqual([]);   // checkCommitApproval 只读:resume 与 approve_commit 调它不留账
+    const r = await toGate(e);
+    expect(r.status).not.toBe('paused');   // 本组没注册直执工厂,append 交 caller 执行——过了闸就够
+    expect(recsOf(appendSpec)).toEqual([expect.objectContaining({ decided_by: 'engine_safe', scope: 'task' })]);
+  });
+
+  it('先查账后扫描（commit 安全分析 review 缺陷 D41）:引擎判过安全的步骤再跑不扫描、不重复记账;人选过以后都通过的步骤再跑也不扫描', async () => {
+    const spec = join(root, 'ledger-first.md');
+    await toGate(start(spec, pureSpec('lf')));
+    expect(recsOf(spec)).toHaveLength(1);
+    const e2 = start(spec, pureSpec('lf'));
+    const scan2 = vi.spyOn(e2, 'extractCommitActions');
+    expect(e2.checkCommitApproval('2')).toEqual(expect.objectContaining({ approved: true, decided_by: 'engine_safe', from_ledger: true, actions: [] }));
+    const done2 = await toGate(e2);
+    expect(done2.status).toBe('completed');
+    expect(scan2).not.toHaveBeenCalled();
+    expect(recsOf(spec)).toHaveLength(1);   // 查账命中不再追加
+    // 需要人确认的步骤:人选了这一步以后都通过,下次运行查账放行,不扫描
+    const hspec = join(root, 'ledger-first-human.md');
+    const e3 = start(hspec, gateSpec('h'));
+    const p3 = await toGate(e3);
+    expect(e3.approveCommit('2', p3.presented_data.context.fingerprint, 'task').status).toBe('ok');
+    const e4 = start(hspec, gateSpec('h'));
+    const scan4 = vi.spyOn(e4, 'extractCommitActions');
+    expect((await toGate(e4)).status).toBe('completed');
+    expect(scan4).not.toHaveBeenCalled();
+  });
+
+  it('反例（commit 安全分析 review 缺陷 D41）:引擎判过安全后 body 改了,查账不命中,重新扫描;改成需要人确认的动作就停下', async () => {
+    const spec = join(root, 'ledger-change.md');
+    await toGate(start(spec, pureSpec('c1')));
+    const e2 = start(spec, gateSpec('c1'));   // 同一步加了一条外部命令
+    const scan2 = vi.spyOn(e2, 'extractCommitActions');
+    const p2 = await toGate(e2);
+    expect(scan2).toHaveBeenCalled();
+    expect(p2.pause_reason).toBe('commit');
+    expect(recsOf(spec).map(r => r.decided_by)).toEqual(['engine_safe', 'analysis']);
+  });
+
+  it('反例（commit 安全分析 review 缺陷 D41）:once 批准只在本次运行内命中;换一次运行查账不命中,照常扫描', async () => {
+    const spec = join(root, 'ledger-once.md');
+    const e = start(spec, gateSpec('o'));
+    const p = await toGate(e);
+    expect(e.approveCommit('2', p.presented_data.context.fingerprint, 'once').status).toBe('ok');
+    const scan1 = vi.spyOn(e, 'extractCommitActions');
+    expect(e.checkCommitApproval('2')).toEqual(expect.objectContaining({ approved: true, decided_by: 'human', from_ledger: true }));
+    expect(scan1).not.toHaveBeenCalled();
+    const e2 = start(spec, gateSpec('o'));
+    const scan2 = vi.spyOn(e2, 'extractCommitActions');
+    expect(e2.checkCommitApproval('2')?.approved).toBe(false);
+    expect(scan2).toHaveBeenCalledTimes(1);
+  });
+
+  it('边界：没有注册账位置（内存态/宿主未接）时批准闸关闭,commit 照旧直接执行', async () => {
+    ExecutionEngine.resetCommitApprovalStoreResolver();
+    try {
+      const done = await toGate(start(join(root, 'nogate.md'), gateSpec('n')));
+      expect(done.status).toBe('completed');
+    } finally {
+      ExecutionEngine.setCommitApprovalStoreResolver(() => store);
+    }
+  });
+
+  it('停点响应带 workspace_dir（hop-cli ^anc-cli-workspace-arg 回显契约列了 ExecutionPaused）', async () => {
+    const p = await toGate(start(join(root, 'ws-echo.md'), gateSpec('ws')));
+    expect(p.pause_reason).toBe('commit');
+    expect(p.workspace_dir).toBe('/tmp/test');
+  });
+
+  // @v: anc-exec-commit-approval, anc-exec-dirs-grant —— 账位置解析器收三参 (specPath, instanceDir, workspaceDir):第三参是 HostConfig.workspace_dir 原值,
+  // 组合根用它算项目级 HopAnt 根再判 spec 是否在 HopAnt 内（变异 M11：引擎第三参改传 '' → 红）;checkCommitApproval 与 checkDirsApproval 两处调用同形
+  it('账位置解析器收到 [规范化 spec 路径, 实例目录, HostConfig.workspace_dir] 三元组——commit 账与 dirs 账两处调用都传', () => {
+    const seen: string[][] = [];
+    ExecutionEngine.setCommitApprovalStoreResolver((specPath, instanceDir, workspaceDir) => { seen.push([specPath, instanceDir, workspaceDir]); return store; });
+    try {
+      const spec = join(root, 'three-args.md');
+      const e = start(spec, gateSpec('t'));
+      const st = e.checkCommitApproval('2');
+      expect(st?.store_path).toBe(store);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]).toEqual([realpathSync(spec), (e as any).instanceDir, '/tmp/test']);   // workspace_dir 来自 HOST（MINIMAL_HOST_CONFIG.workspace_dir）
+      // dirs 账走同一个解析器:spec 带 workspace 外目录声明时 checkDirsApproval 也以三参调它
+      const outside = mkdtempSync(join(tmpdir(), 'dirs-three-'));
+      const dSpec = join(root, 'three-args-dirs.md');
+      const content = gateSpec('d').replace('## Outputs', `## Config\ndirs:\n  read: ["${outside}"]\n\n## Outputs`);
+      writeFileSync(dSpec, content);
+      const e2 = new ExecutionEngine();
+      expect(e2.initExecution(content, HOST, { stateDir: join(root, 'state'), specPath: dSpec }).status).toBe('ok');
+      seen.length = 0;
+      const d = e2.checkDirsApproval();
+      expect(d?.store_path).toBe(join(root, 'dirs_approvals.json'));
+      expect(seen[0]).toEqual([realpathSync(dSpec), (e2 as any).instanceDir, '/tmp/test']);
+    } finally {
+      ExecutionEngine.setCommitApprovalStoreResolver(() => store);
+    }
+  });
+
+  it('账键取解析软链后的路径：经软链批准 task 后经真实路径再跑不再停', async () => {
+    const real = join(root, 'real-gate.md');
+    const link = join(root, 'link-gate.md');
+    writeFileSync(real, gateSpec('sym'));
+    symlinkSync(real, link);
+    const p = await toGate(start(link, gateSpec('sym')));
+    expect(p.pause_reason).toBe('commit');
+    expect(start(link, gateSpec('sym')).approveCommit('2', p.presented_data.context.fingerprint, 'task').status).toBe('ok');
+    const done = await toGate(start(real, gateSpec('sym')));
+    expect(done.status).toBe('completed');
+    const recs = JSON.parse(readFileSync(store, 'utf-8')) as Array<{ spec_path: string }>;
+    expect(recs.some(r => r.spec_path === realpathSync(real))).toBe(true);
+    expect(recs.some(r => r.spec_path === link)).toBe(false);
+  });
+
+  it('反例：两份 spec 共用一个账文件,同步骤号同 body,批了 A 不放行 B（账键 spec_path 维度）', async () => {
+    const a = join(root, 'share-a.md');
+    const b = join(root, 'share-b.md');
+    const pa = await toGate(start(a, gateSpec('same')));
+    expect(start(a, gateSpec('same')).approveCommit('2', pa.presented_data.context.fingerprint, 'task').status).toBe('ok');
+    const pb = await toGate(start(b, gateSpec('same')));
+    expect(pb.pause_reason).toBe('commit');
+    expect(pb.presented_data.context.fingerprint).toBe(pa.presented_data.context.fingerprint);
+  });
+
+  // 两句 body 相同的 commit:批准账按 spec 文件 + 步骤号 + body 指纹三项匹配（概念 V3 核心规范 ^anc-step-commit 的记账键）
+  const TWO_SAME = (tag: string, body?: string) => (body ? pureSpec(tag).replace(`  > out = "${tag}"`, `  > ${body}\n  > out = "${tag}"`) : gateSpec(tag)) + `3. [commit] 第二句
+  + → out: line
+  > \`\`\`hop_python
+  > ${body ?? `r = subprocess.run(["echo", "${tag}"])`}
+  > out = "${tag}"
+  > \`\`\`
+`;
+
+  it('同 spec 两句 body 相同的 commit:once 只放行批的那一步;task 也只放行批的那一步,下次运行该步照样放行、另一步仍停', async () => {
+    const spec = join(root, 'two.md');
+    const e = start(spec, TWO_SAME('same'));
+    const p2 = await toGate(e);
+    expect(p2.step_id).toBe('2');
+    expect(e.approveCommit('2', p2.presented_data.context.fingerprint, 'once').status).toBe('ok');
+    const p3 = await e.advanceToCaller() as any;
+    expect(p3.status).toBe('paused');
+    expect(p3.step_id).toBe('3');
+    expect(p3.presented_data.context.fingerprint).toBe(p2.presented_data.context.fingerprint);
+    expect(e.approveCommit('3', p3.presented_data.context.fingerprint, 'once').status).toBe('ok');
+    expect((await e.advanceToCaller() as any).status).toBe('completed');
+    // 第二次运行:步骤 2 选"这一步以后都通过",步骤 3 仍停
+    const e2 = start(spec, TWO_SAME('same'));
+    const q2 = await toGate(e2);
+    expect(q2.step_id).toBe('2');
+    expect(e2.approveCommit('2', q2.presented_data.context.fingerprint, 'task').status).toBe('ok');
+    expect(e2.checkCommitApproval('3')?.approved).toBe(false);
+    const q3 = await e2.advanceToCaller() as any;
+    expect(q3.status).toBe('paused');
+    expect(q3.step_id).toBe('3');
+    // 第三次运行:步骤 2 直接执行（task_always）,步骤 3 照样停
+    const e3 = start(spec, TWO_SAME('same'));
+    const r3 = await toGate(e3);
+    expect(r3.step_id).toBe('3');
+    expect(r3.pause_reason).toBe('commit');
+  });
+
+  it('同 spec 两句 body 相同的 commit:模型对步骤 2 判安全记的 model_safe 不放行步骤 3,步骤 3 自己再分析一次', async () => {
+    const spec = join(root, 'two-model.md');
+    let calls = 0;
+    ExecutionEngine.setCommitAnalyzer(async (req) => {
+      calls++;
+      return { summary: 's', model: 'svc/m1', source: 'model', recommendation: 'r', actions: req.actions.map(a => ({ line: a.line, callee: a.callee, category: 'data_op', cited_lines: [a.line], verdict: 'safe' as const, consequence: 'c' })) };
+    });
+    const e = start(spec, TWO_SAME('tm', 'w = write(path: "o-tm.txt", content: "x", keep: 0)'));
+    await toGate(e);
+    expect(calls).toBe(1);
+    expect(e.checkCommitApproval('3')?.approved).toBe(false);
+    await (e as any).commitGate('3');
+    expect(calls).toBe(2);
+    expect(recsOf(spec).filter(r => r.decided_by === 'model_safe').map(r => r.step_id)).toEqual(['2', '3']);
+  });
+
+  // 作者 2026-10-09 口径"核心是研判的时候，应该判断这个过程，不应该是实例化的参数":分析材料只有 body 的写法与参数来源,
+  // 不含本步输入的实际值。探针 p_bypass / p_stale 的回归用例。
+  const INPUT_SPEC = `# 按输入删除
+Id: approve-input
+
+## Goal
+g
+
+## Inputs
+- target: line  # 要删除的文件
+
+## Outputs
+- out: line  # 交付
+
+## Steps
+1. [subtask] 把关
+  + → ok: bool
+  1.1. [check final] 核对
+    + → ok: bool  # 判定
+    + → note: text  # 说明
+    > pass
+2. [commit] 删除
+  - ← target
+  + → out: line
+  > \`\`\`hop_python
+  > r = remove(path: target, keep: 0)
+  > out = "done"
+  > \`\`\`
+`;
+
+  it('分析材料不含输入值(p_bypass):参数按名字渲染;模型对写法判安全后换一个输入值照样复用,第二次不再分析', async () => {
+    const spec = join(root, 'input-bypass.md');
+    const seen: any[] = [];
+    ExecutionEngine.setCommitAnalyzer(async (req) => {
+      seen.push(req);
+      return { summary: 's', model: 'svc/m1', source: 'model', recommendation: 'r', actions: req.actions.map(a => ({ line: a.line, callee: a.callee, category: 'data_op', cited_lines: [a.line], verdict: 'safe' as const, consequence: 'c' })) };
+    });
+    const e1 = start(spec, INPUT_SPEC, { target: 'old.bak' });
+    expect((await toGate(e1)).status).not.toBe('paused');
+    expect(seen).toHaveLength(1);
+    expect(seen[0].actions).toEqual([expect.objectContaining({ callee: 'remove', category: 'remove_permanent', risk: 'review', args: { path: 'target(本步输入,运行时取值)' } })]);
+    expect(JSON.stringify(seen[0])).not.toContain('old.bak');
+    expect(JSON.stringify(recsOf(spec))).not.toContain('old.bak');
+    const e2 = start(spec, INPUT_SPEC, { target: 'important.txt' });
+    expect(e2.extractCommitActions((e2 as any).findStepById('2'))).toEqual(seen[0].actions);
+    expect(e2.checkCommitApproval('2')?.decided_by).toBe('model_safe');
+    expect((await toGate(e2)).status).not.toBe('paused');
+    expect(seen).toHaveLength(1);
+  });
+
+  it('停点后果不带上一次的输入值(p_stale):第二次运行复用分析,后果写参数名,两次的输入值都不出现', async () => {
+    const spec = join(root, 'input-stale.md');
+    const p1 = await toGate(start(spec, INPUT_SPEC, { target: 'old.bak' }));
+    expect(p1.pause_reason).toBe('commit');
+    expect(p1.presented_data.context.analysis.actions[0].consequence).toBe('永久删除 target(本步输入,运行时取值),不进回收站,找不回');
+    const p2 = await toGate(start(spec, INPUT_SPEC, { target: 'important.txt' }));
+    expect(p2.pause_reason).toBe('commit');
+    const shown = JSON.stringify(p2.presented_data.context.analysis);
+    expect(shown).toContain('target(本步输入,运行时取值)');
+    expect(shown).not.toContain('old.bak');
+    expect(shown).not.toContain('important.txt');
+    expect(recsOf(spec).filter(r => r.outcome === 'referred')).toHaveLength(1);
+  });
+
+  it('人的批准从 once 升级为 task:不按幂等返回,追加 task 记录;再批 task 才幂等', async () => {
+    const spec = join(root, 'upgrade.md');
+    const e = start(spec, gateSpec('up'));
+    const p = await toGate(e);
+    const fp = p.presented_data.context.fingerprint as string;
+    expect(e.approveCommit('2', fp, 'once').status).toBe('ok');
+    expect(e.checkCommitApproval('2')?.decided_by).toBe('human');
+    const up = e.approveCommit('2', fp, 'task') as any;
+    expect(up.status).toBe('ok');
+    expect(up.already_approved).toBeUndefined();
+    expect(e.checkCommitApproval('2')?.decided_by).toBe('task_always');
+    expect((e.approveCommit('2', fp, 'task') as any).already_approved).toBe(true);
+    expect(recsOf(spec).filter(r => r.decided_by === 'human').map(r => r.scope)).toEqual(['once', 'task']);
+  });
+
+  it('账损坏按空表：非 JSON、非数组、取值非法、v0.54 自动研判记录、缺 run_id 的 once 记录、body_hash 旧记录——不抛、仍停;approveCommit 写成合法账', async () => {
+    const spec = join(root, 'corrupt.md');
+    const p = await toGate(start(spec, gateSpec('c')));
+    const fp = p.presented_data.context.fingerprint as string;
+    const specKey = realpathSync(spec);
+    const good = { outcome: 'approved', decided_by: 'human', spec_path: specKey, step_id: '2', fingerprint: fp, scope: 'task', run_id: null, analysis: null, decided_at: 'x' };
+    const bad = [
+      '{not json',
+      JSON.stringify(good),   // 不是数组
+      JSON.stringify([{ ...good, fingerprint: null }, { ...good, spec_path: 1 }]),
+      JSON.stringify([{ ...good, outcome: 'yes' }, { ...good, scope: 'forever' }, { ...good, decided_by: 'agent' }]),
+      JSON.stringify([{ ...good, decided_by: 'auto_review', scope: 'once', model: 'm', reason: 'r' }]),   // v0.54 自动研判记录
+      JSON.stringify([{ ...good, scope: 'once' }, { ...good, scope: 'once', run_id: 'r', step_id: 2 }]),   // once 缺 run_id / step_id 非字符串
+      JSON.stringify([{ spec_path: specKey, step_id: '2', body_hash: fp, approved_at: 'x' }]),   // 旧形态记录
+    ];
+    for (const content of bad) {
+      writeFileSync(store, content);
+      const e = start(spec, gateSpec('c'));
+      const again = await toGate(e);
+      expect(again.pause_reason).toBe('commit');
+      expect(e.checkCommitApproval('2')?.approved).toBe(false);
+    }
+    writeFileSync(store, bad[5]!);   // 留着两条不合法的 once 记录,approveCommit 重写账时要丢掉
+    const e = start(spec, gateSpec('c'));
+    await toGate(e);
+    expect(e.approveCommit('2', fp, 'task').status).toBe('ok');
+    const recs = JSON.parse(readFileSync(store, 'utf-8')) as any[];
+    expect(Array.isArray(recs)).toBe(true);
+    // 账里只剩停点前记的 referred 与这次的批准——两条不合法的 once 记录被丢掉
+    expect(recs.map(r => r.outcome)).toEqual(['referred', 'approved']);
+    expect(recs.some(r => r.scope === 'once')).toBe(false);
+    expect(recs.at(-1)).toEqual({ ...good, decided_at: expect.any(String) });
+    writeFileSync(store, '[]');
+  });
+
+  describe('安全分析函数', () => {
+    const REVIEW_BODY = (tag: string) => pureSpec(tag).replace(`  > out = "${tag}"`, `  > r = write(path: "o-${tag}.txt", content: "x", keep: 0)\n  > out = "${tag}"`);
+
+    it('模型判全部安全:记 model_safe 授权（scope=task,run_id 为空）,不停;再跑查账放行,不再分析;分析材料带动作清单、带行号的 body 与前序把关', async () => {
+      const spec = join(root, 'an-safe.md');
+      const seen: any[] = [];
+      ExecutionEngine.setCommitAnalyzer(async (req) => {
+        seen.push(req);
+        return {
+          summary: '只写一个新文件', model: 'svc/m1', source: 'model', recommendation: '可以执行',
+          actions: req.actions.map(a => ({ line: a.line, callee: a.callee, category: 'data_op', cited_lines: [a.line], verdict: 'safe' as const, consequence: '写一个新文件' })),
+        };
+      });
+      const e = start(spec, REVIEW_BODY('ms'));
+      const r = await toGate(e);
+      expect(r.status).not.toBe('paused');
+      expect(seen).toHaveLength(1);
+      expect(seen[0].step.step_id).toBe('2');
+      expect(seen[0].actions).toEqual([expect.objectContaining({ callee: 'write', category: 'overwrite_no_keep', risk: 'review', keep: 0 })]);
+      expect(seen[0].body_lines).toMatch(new RegExp(`^${seen[0].actions[0].line}: r = write\\(`, 'm'));
+      expect(seen[0].gate_fact).toBe('本步之前已通过的把关:1.1 check final');
+      expect(recsOf(spec)).toEqual([expect.objectContaining({ outcome: 'approved', decided_by: 'model_safe', scope: 'task', run_id: null })]);
+      expect(recsOf(spec)[0].analysis.model).toBe('svc/m1');
+      const e2 = start(spec, REVIEW_BODY('ms'));
+      expect(e2.checkCommitApproval('2')?.decided_by).toBe('model_safe');
+      expect((await toGate(e2)).status).not.toBe('paused');
+      expect(seen).toHaveLength(1);
+    });
+
+    it('模型不能降低引擎判的 human:模型把外部命令判 safe 仍停下,verdict 为 human;记 referred,再跑不重新分析', async () => {
+      const spec = join(root, 'an-human.md');
+      let calls = 0;
+      ExecutionEngine.setCommitAnalyzer(async (req) => {
+        calls++;
+        return { summary: '跑 echo', model: 'svc/m1', source: 'model', recommendation: '无害', actions: req.actions.map(a => ({ line: a.line, callee: a.callee, category: 'data_op', cited_lines: [a.line], verdict: 'safe' as const, consequence: '打印一行字' })) };
+      });
+      const p = await toGate(start(spec, gateSpec('h')));
+      expect(p.pause_reason).toBe('commit');
+      const an = p.presented_data.context.analysis;
+      expect(an.source).toBe('model');
+      expect(an.actions[0]).toEqual(expect.objectContaining({ verdict: 'human', category: 'run_command', consequence: '打印一行字' }));
+      expect(recsOf(spec)).toEqual([expect.objectContaining({ outcome: 'referred', decided_by: 'analysis' })]);
+      expect((await toGate(start(spec, gateSpec('h')))).pause_reason).toBe('commit');
+      expect(calls).toBe(1);
+    });
+
+    it('分析函数抛错:改用模板分析,建议里写明出错原因,记 referred', async () => {
+      const spec = join(root, 'an-throw.md');
+      ExecutionEngine.setCommitAnalyzer(async () => { throw new Error('网关 502'); });
+      const p = await toGate(start(spec, REVIEW_BODY('th')));
+      expect(p.pause_reason).toBe('commit');
+      const an = p.presented_data.context.analysis;
+      expect(an.source).toBe('template');
+      expect(an.recommendation).toContain('安全分析出错:网关 502');
+      expect(an.actions[0]).toEqual(expect.objectContaining({ verdict: 'human', category: 'overwrite_no_keep' }));
+      expect(an.actions[0].consequence).toContain('不留旧版本,找不回');
+      expect(recsOf(spec)).toEqual([expect.objectContaining({ outcome: 'referred' })]);
+    });
+  });
+
+  // @v: anc-exec-commit-action-facts
+  it('templateAnalysis / mergeAnalysis:模板按 risk 判;合并时模型漏掉的动作补 human 与模板后果,清单外的动作丢弃,human 不降', () => {
+    const acts = [
+      { line: 10, callee: 'append', category: 'append', risk: 'safe' as const, args: { path: 'a.log', content: '<1 字的内容>' }, keep: null, reason: '' },
+      { line: 11, callee: 'remove', category: 'remove_permanent', risk: 'review' as const, args: { path: 'b.txt' }, keep: 0, reason: '' },
+      { line: 12, callee: 'subprocess.run', category: 'run_command', risk: 'human' as const, args: { argv: ['echo', 'x'] }, keep: null, reason: '' },
+    ];
+    const t = templateAnalysis(acts, '本机没有配置安全分析模型');
+    expect(t.summary).toBe('这一步共有 3 个动作,其中 2 个需要你确认');
+    expect(t.actions.map(a => a.verdict)).toEqual(['safe', 'human', 'human']);
+    expect(t.actions[1].consequence).toBe('永久删除 b.txt,不进回收站,找不回');
+    expect(t.actions[2].consequence).toContain('运行命令 echo x');
+    expect(t.source).toBe('template');
+    const m = mergeAnalysis(acts, {
+      summary: 's', recommendation: 'r', model: 'svc/m1', source: 'template',
+      actions: [
+        { line: 12, callee: 'subprocess.run', category: 'rotation', cited_lines: [12], verdict: 'safe', consequence: 'c12' },
+        { line: 99, callee: 'write', category: 'x', cited_lines: [99], verdict: 'safe', consequence: '清单外' },
+        { line: 10, callee: 'append', category: 'append', cited_lines: [10], verdict: 'safe', consequence: 'c10' },
+      ],
+    });
+    expect(m.source).toBe('model');
+    expect(m.actions.map(a => [a.line, a.verdict, a.category])).toEqual([[10, 'safe', 'append'], [11, 'human', 'remove_permanent'], [12, 'human', 'run_command']]);
+    expect(m.actions[1].consequence).toBe('永久删除 b.txt,不进回收站,找不回');
+  });
+
+  // @v: anc-exec-commit-action-facts
+  it('mergeAnalysis 的分类:review 动作被判 safe 时才采信 rotation / data_op;说不出可放行模式的改判 human;引擎 safe / human 动作的分类模型不能改', () => {
+    const rv = { line: 11, callee: 'remove', category: 'remove_permanent', risk: 'review' as const, args: { path: 'b.txt' }, keep: 0, reason: '' };
+    const sf = { line: 10, callee: 'append', category: 'append', risk: 'safe' as const, args: { path: 'a.log' }, keep: null, reason: '' };
+    const run = (acts: any[], ret: any[]) => mergeAnalysis(acts, { summary: '', recommendation: '', model: 'm', source: 'model', actions: ret }).actions;
+    const r = (category: string, verdict: string, extra: any = {}) => ({ line: 11, callee: 'remove', category, cited_lines: [11], verdict, consequence: 'c', ...extra });
+    // 正例:review → safe 且分类是可放行模式
+    expect(run([rv], [r('rotation', 'safe')])[0]).toEqual(expect.objectContaining({ verdict: 'safe', category: 'rotation' }));
+    expect(run([rv], [r('data_op', 'safe')])[0]).toEqual(expect.objectContaining({ verdict: 'safe', category: 'data_op' }));
+    // 反例:review → safe 但分类不是可放行模式（自造分类、或照抄引擎分类）→ human,保留引擎分类
+    expect(run([rv], [r('whatever_i_like', 'safe')])[0]).toEqual(expect.objectContaining({ verdict: 'human', category: 'remove_permanent' }));
+    expect(run([rv], [r('remove_permanent', 'safe')])[0]).toEqual(expect.objectContaining({ verdict: 'human', category: 'remove_permanent' }));
+    // 反例:review → human 时模型分类不采信
+    expect(run([rv], [r('rotation', 'human')])[0]).toEqual(expect.objectContaining({ verdict: 'human', category: 'remove_permanent' }));
+    // 反例:引擎 safe 的动作模型改不了分类
+    expect(run([sf], [{ line: 10, callee: 'append', category: 'whatever', cited_lines: [10], verdict: 'safe', consequence: 'c' }])[0])
+      .toEqual(expect.objectContaining({ verdict: 'safe', category: 'append' }));
+    // 行号或引用行不是整数:对不上动作按漏报补 human;引用行不合法取引擎行号（分析函数用 Number() 转换,非数字得 NaN）
+    expect(run([rv], [r('rotation', 'safe', { line: NaN })])[0]).toEqual(expect.objectContaining({ verdict: 'human', cited_lines: [11] }));
+    expect(run([rv], [r('rotation', 'safe', { cited_lines: [NaN] })])[0]).toEqual(expect.objectContaining({ verdict: 'safe', cited_lines: [11] }));
+  });
+
+  // @v: anc-exec-commit-action-facts
+  it('extractCommitActions 按写法判 work_zone:work_zone_path 开头且只拼不含 .. 的字面量才算;move 两端都在才算;目标在 work_zone 内不论 keep;if 两分支赋值不同的变量记定不了', () => {
+    const body = [
+      'a = write(path: work_zone_path("o.txt"), content: "x", keep: 0)',
+      'b = write(path: work_zone_path("d") + "/o.txt", content: "x", keep: 0)',
+      'c = write(path: work_zone_path(target), content: "x", keep: 0)',
+      'd = write(path: work_zone_path("../o.txt"), content: "x", keep: 0)',
+      'e1 = write(path: work_zone_path("d") + target, content: "x", keep: 0)',
+      'f = move(from: target, to: work_zone_path("m"), keep: 0)',
+      'g = move(from: work_zone_path("a"), to: work_zone_path("b"), keep: 0)',
+      'h = write(path: work_zone_path("k.txt"), content: "x")',
+      'i = write(path: spec_dir("s.txt"), content: target, keep: 0)',
+      'q = write(path: spec_dir(target), content: "x", keep: 0)',
+      'p = target',
+      'if target == "x":',
+      '    p = work_zone_path("x")',
+      'j = write(path: p, content: "x", keep: 0)',
+      'n = f"{target}.bak"',
+      'l = remove(path: n, keep: 0)',
+      'm = remove(path: target if target else "x", keep: 0)',
+      'z = write(path: work_zone_path() + "/z.txt", content: "x", keep: 0)',
+      'out = "done"',
+    ].map(l => `  > ${l}`).join('\n');
+    const spec = INPUT_SPEC.replace('  > r = remove(path: target, keep: 0)\n  > out = "done"', body);
+    const e = start(join(root, 'wz-forms.md'), spec, { target: 'important.txt' });
+    const acts = e.extractCommitActions((e as any).findStepById('2'));
+    expect(acts.map(a => [a.callee, a.category, a.risk, a.args.path ?? a.args.to])).toEqual([
+      ['write', 'work_zone_write', 'safe', '任务临时工作区里的 o.txt'],
+      ['write', 'work_zone_write', 'safe', '任务临时工作区里的 d/o.txt'],
+      ['write', 'work_zone_write', 'safe', '任务临时工作区里的 target(本步输入,运行时取值)'],
+      ['write', 'overwrite_no_keep', 'review', COMMIT_ARG_UNKNOWN],                          // 含 .. 解释器会拒,不算 work_zone
+      ['write', 'overwrite_no_keep', 'review', '任务临时工作区里的 dtarget(本步输入,运行时取值)'],   // 后段是输入,可能拼出 ..
+      ['move', 'move_no_keep', 'review', '任务临时工作区里的 m'],                              // 源是用户文件
+      ['move', 'work_zone_write', 'safe', '任务临时工作区里的 b'],
+      ['write', 'work_zone_write', 'safe', '任务临时工作区里的 k.txt'],                        // keep 缺省也判 work_zone,不写"可以找回"
+      ['write', 'overwrite_no_keep', 'review', 'spec 所在目录下的 s.txt'],
+      ['write', 'overwrite_no_keep', 'review', 'spec 所在目录下的 target(本步输入,运行时取值)'],   // spec_dir 拼本步输入也不算 work_zone
+      ['write', 'overwrite_no_keep', 'review', COMMIT_ARG_UNKNOWN],                          // 走 else 时 p 仍是 target
+      ['remove', 'remove_permanent', 'review', 'target(本步输入,运行时取值).bak'],
+      ['remove', 'remove_permanent', 'review', '由本步输入 target 算出(运行时取值)'],
+      ['write', 'work_zone_write', 'safe', '任务临时工作区/z.txt'],                           // 无参 work_zone_path() 是 work_zone 根
+    ]);
+    expect(acts[5].args.from).toBe('target(本步输入,运行时取值)');
+    expect(acts[8].args.content).toBe('<运行时生成的内容>');
+    expect(JSON.stringify(acts)).not.toContain('important.txt');
+    expect(acts[7].keep).toBe(DEFAULT_KEEP);
+  });
+
+  // @v: anc-exec-commit-approval, anc-rule-act-body-line
+  it('buildCommitAnalysisRequest 分析材料:把关事实只列本步之前已完成的 check final 与 confirm（非 final 的 check、未完成的步骤不列,一个都没有时写明没有）;body 逐行带行号,if / else 两个分支按层缩进、else 单列一行', async () => {
+    const body = [
+      'if 1 == 1:',
+      '    r = write(path: "a.txt", content: "x", keep: 0)',
+      'else:',
+      '    r = write(path: "b.txt", content: "y", keep: 0)',
+      'out = "done"',
+    ].map(l => `  > ${l}`).join('\n');
+    const content = `# 分析材料
+Id: analysis-request
+
+## Goal
+g
+
+## Outputs
+- out: line  # 交付
+
+## Steps
+1. [confirm] 批一下
+  + → approval: bool  # 审批
+2. [subtask] 把关
+  + → ok: bool
+  2.1. [check] 中间核对
+    + → mid_ok: bool  # 判定
+    + → mid_note: text  # 说明
+    > pass
+  2.2. [check final] 核对
+    + → ok: bool  # 判定
+    + → note: text  # 说明
+    > pass
+3. [commit] 交付
+  + → out: line
+  > \`\`\`hop_python
+${body}
+  > \`\`\`
+`;
+    const seen: any[] = [];
+    ExecutionEngine.setCommitAnalyzer(async (req) => { seen.push(req); throw new Error('不分析'); });
+    const e = start(join(root, 'an-request.md'), content);
+    const step3 = (e as any).findStepById('3');
+    // 什么都没做:三个把关步骤都未完成,一个都不列
+    expect(e.buildCommitAnalysisRequest(step3, []).gate_fact).toBe('本步之前没有已通过的 check final 或 confirm');
+    expect(e.nextStep().status).toBe('paused');
+    e.completeStep('1', { approval: true });
+    // confirm 完成算一道把关;2.2 check final 还没完成不列
+    expect(e.buildCommitAnalysisRequest(step3, []).gate_fact).toBe('本步之前已通过的把关:1 confirm');
+    await e.advanceToCaller();
+    await e.completeAndAdvance('2.1', { mid_ok: true, mid_note: '' });
+    // 非 final 的 check 完成了也不列
+    expect(e.buildCommitAnalysisRequest(step3, []).gate_fact).toBe('本步之前已通过的把关:1 confirm');
+    const paused = await e.completeAndAdvance('2.2', { ok: true, note: '' }) as any;
+    expect(paused.pause_reason).toBe('commit');
+    expect(seen).toHaveLength(1);
+    expect(seen[0].gate_fact).toBe('本步之前已通过的把关:1 confirm, 2.2 check final');
+    // 只看文档顺序在本步之前的步骤:以 2.1 为准时,已完成的 2.2 在它之后,不列
+    expect(e.buildCommitAnalysisRequest((e as any).findStepById('2.1'), []).gate_fact).toBe('本步之前已通过的把关:1 confirm');
+    const specLines = content.split('\n');
+    const lineOf = (text: string): number => specLines.findIndex(l => l === `  > ${text}`) + 1;
+    const rows = (seen[0].body_lines as string).split('\n');
+    expect(rows.map(r => r.replace(/^\d+: /, ''))).toEqual([
+      'if 1 == 1:',
+      '    r = write(path: "a.txt", content: "x", keep: 0)',
+      'else:',
+      '    r = write(path: "b.txt", content: "y", keep: 0)',
+      'out = "done"',
+    ]);
+    expect(rows[0]).toBe(`${lineOf('if 1 == 1:')}: if 1 == 1:`);
+    expect(rows[1]!.startsWith(`${lineOf('    r = write(path: "a.txt", content: "x", keep: 0)')}: `)).toBe(true);
+    expect(rows[2]).toBe(`${lineOf('else:')}: else:`);   // else 行取 IfStmt.else_line,不是 else 分支第一条语句的行
+    expect(rows[3]!.startsWith(`${lineOf('    r = write(path: "b.txt", content: "y", keep: 0)')}: `)).toBe(true);
+    expect(rows[4]).toBe(`${lineOf('out = "done"')}: out = "done"`);
+    expect(seen[0].actions.map((a: any) => a.args.path)).toEqual(['a.txt', 'b.txt']);
+  });
+
+  // @v: anc-exec-commit-action-facts
+  it('extractCommitActions 参数渲染的其余形态:列表逐项渲染;超长字面量截断;列表推导的迭代变量不算外部引用;if 两分支赋值相同或没动过的变量照常可用;字面量求值出错记运行前无法确定;工具结果出现在拼接、列表、其他表达式、work_zone_path 参数里都记运行前无法确定,覆盖同名输入后不回落', () => {
+    const body = [
+      'r1 = subprocess.run(["rm", target])',
+      'r2 = remove(path: "LONG", keep: 0)',
+      'r3 = remove(path: str([x for x in ["a", "b"]]), keep: 0)',
+      'keepme = "k.txt"',
+      'if target == "x":',
+      '    same = "s.txt"',
+      'else:',
+      '    same = "s.txt"',
+      'r4 = remove(path: same, keep: 0)',
+      'r5 = remove(path: keepme, keep: 0)',
+      'r6 = remove(path: str(-"x"), keep: 0)',
+      'q = read(path: "a.txt")',
+      'r7 = remove(path: "d/" + q, keep: 0)',
+      'r8 = subprocess.run(["rm", q])',
+      'r9 = remove(path: q if q else "x", keep: 0)',
+      'r10 = write(path: work_zone_path(q), content: "x", keep: 0)',
+      'target = read(path: "b.txt")',
+      'r11 = remove(path: target, keep: 0)',
+      'r12 = remove(path: "d-" + str(read(path: "c.txt")), keep: 0)',
+      'out = "done"',
+    ].map(l => `  > ${l}`).join('\n').replace('"LONG"', `"${'L'.repeat(250)}"`);
+    const spec = INPUT_SPEC.replace('  > r = remove(path: target, keep: 0)\n  > out = "done"', body);
+    const e = start(join(root, 'arg-forms.md'), spec, { target: 'important.txt' });
+    const acts = e.extractCommitActions((e as any).findStepById('2'));
+    expect(acts[0].args.argv).toEqual(['rm', 'target(本步输入,运行时取值)']);           // 列表逐项渲染,不笼统写"由输入算出"
+    expect(acts[1].args.path).toBe(`${'L'.repeat(200)}…（共 250 字）`);
+    expect(acts[2].args.path).not.toBe(COMMIT_ARG_UNKNOWN);                             // x 是推导内部变量,整个表达式只由字面量决定
+    expect(acts[3].args.path).toBe('s.txt');                                            // 两个分支赋值相同
+    expect(acts[4].args.path).toBe('k.txt');                                            // if 之前赋值、分支里没动过
+    expect(acts[5].args.path).toBe(COMMIT_ARG_UNKNOWN);                                 // 只含字面量但求值抛错（负号作用在字符串上）
+    // q 是工具结果:拼接、列表、其他表达式、work_zone_path 的参数里出现它,整个参数都记运行前无法确定
+    expect(acts[6].args.path).toBe(COMMIT_ARG_UNKNOWN);
+    expect(acts[7].args.argv).toBe(COMMIT_ARG_UNKNOWN);
+    expect(acts[8].args.path).toBe(COMMIT_ARG_UNKNOWN);
+    expect([acts[9].args.path, acts[9].category]).toEqual([COMMIT_ARG_UNKNOWN, 'overwrite_no_keep']);   // 不算 work_zone 内
+    expect(acts[10].args.path).toBe(COMMIT_ARG_UNKNOWN);                                // 输入名被工具结果覆盖,不回落到输入形态
+    expect(acts[11].args.path).toBe(COMMIT_ARG_UNKNOWN);                                // 工具调用包进纯函数 str() 也拦得住
+    expect(acts).toHaveLength(12);
+    expect(JSON.stringify(acts)).not.toContain('important.txt');
+  });
+
+  it('分类表与 validator 的写类工具名单一致:B9_WRITE_TOOLS 的每个成员都不落到外部工具（新增写类工具忘了进分类表时变红）', () => {
+    const ARGS: Record<string, string> = {
+      write: 'path: "a.txt", content: "x"', append: 'path: "a.txt", content: "x"', create: 'path: "a.txt", content: "x"',
+      edit_file: 'path: "a.txt", old_text: "x", new_text: "y"', makedirs: 'path: "d"', move: 'from: "a.txt", to: "b.txt"', remove: 'path: "a.txt"',
+    };
+    const tools = [...B9_WRITE_TOOLS];
+    for (const t of tools) expect(ARGS[t], `对账测试缺 ${t} 的参数样例`).toBeDefined();
+    const body = tools.map((t, i) => `  > v${i} = ${t}(${ARGS[t]})`).join('\n');
+    const e = start(join(root, 'b9-recon.md'), pureSpec('ok').replace('  > out = "ok"', `${body}\n  > out = "ok"`));
+    const acts = e.extractCommitActions((e as any).findStepById('2'));
+    expect(acts.map(a => a.callee)).toEqual(tools);
+    expect(acts.filter(a => a.category === 'external_tool')).toEqual([]);
+  });
+
+  // @v: anc-exec-commit-action-facts
+  it('extractCommitActions:分类表逐类、参数摘要、不进清单的调用、if 两个分支都列、运行前定不了的值不猜', () => {
+    const body = [
+      'p = work_zone_path("tmp.txt")',
+      'a = create(path: "n.txt", content: "abc")',
+      'b = append(path: "log.txt", content: "x")',
+      'c = makedirs(path: "d")',
+      'd = write(path: "w.txt", content: "hello")',
+      'e0 = write(path: "w0.txt", content: "hello", keep: 0)',
+      'f = write(path: p, content: "x", keep: 0)',
+      'g = move(from: "m1", to: "m2")',
+      'h = remove(path: "old.txt", keep: 0)',
+      'i = remove(path: "r.txt", keep: 2)',
+      't = read(path: "x.txt")',
+      'vs = validate_spec(text: "x")',
+      'u = write(path: t, content: "y", keep: 0)',
+      'k = 1',
+      'v = write(path: "kv.txt", content: "y", keep: k)',
+      'r = subprocess.run(["echo", "hi"])',
+      'if t == "y":',
+      '    q = dingtalk_notify(title: "t", text: "x")',
+      'else:',
+      '    z = write(path: "e-" + now(), content: "y")',
+      'w1 = write(path: "k1.txt", content: "y", keep: 1)',
+      'y2 = write(path: "d-" + str(today()), content: "y")',
+      's = run_script(path: "x.py")',
+      'x = my_ext_tool(a: "1")',
+      'out = "ok"',
+    ].map(l => `  > ${l}`).join('\n');
+    const spec = pureSpec('ok').replace('  > out = "ok"', body)
+      .replace('## Steps', '## Tools\n- my_ext_tool(a)  # 外部工具（commit 步调用须在 Tools 段声明）\n  - a: text  # 参数\n\n## Steps');
+    const e = start(join(root, 'facts.md'), spec);
+    const acts = e.extractCommitActions((e as any).findStepById('2'));
+    expect(acts.map(a => [a.callee, a.category, a.risk, a.keep])).toEqual([
+      ['create', 'create_file', 'safe', null],
+      ['append', 'append', 'safe', null],
+      ['makedirs', 'make_dir', 'safe', null],
+      ['write', 'overwrite_keep', 'safe', 3],
+      ['write', 'overwrite_no_keep', 'review', 0],
+      ['write', 'work_zone_write', 'safe', 0],
+      ['move', 'move_keep', 'safe', 3],
+      ['remove', 'remove_permanent', 'review', 0],
+      ['remove', 'remove_keep', 'safe', 2],
+      ['write', 'overwrite_no_keep', 'review', 0],
+      ['write', 'overwrite_no_keep', 'review', null],
+      ['subprocess.run', 'run_command', 'human', null],
+      ['dingtalk_notify', 'notify', 'human', null],
+      ['write', 'overwrite_keep', 'safe', 3],          // else 分支里的动作同样列出
+      ['write', 'overwrite_keep', 'safe', 1],          // keep=1 是留存的下限
+      ['write', 'overwrite_keep', 'safe', 3],
+      ['run_script', 'run_script', 'human', null],
+      ['my_ext_tool', 'external_tool', 'human', null],
+    ]);
+    expect(acts[0].args).toEqual({ path: 'n.txt', content: '<3 字的内容>' });
+    expect(acts[5].args.path).toBe('任务临时工作区里的 tmp.txt');   // 按写法渲染,不是绝对路径
+    expect(acts[13].args.path).toBe(COMMIT_ARG_UNKNOWN);   // now() 运行时才有值,不猜
+    // today() 包在纯函数里:静态求值会得到 "d-undefined",必须由运行期调用守卫记成定不了
+    expect(acts[15].args.path).toBe(COMMIT_ARG_UNKNOWN);
+    expect(acts[9].args.path).toBe(COMMIT_ARG_UNKNOWN);   // read 的结果运行时才有
+    expect(acts[10].reason).toContain('运行前无法确定');
+    expect(acts[11].args.argv).toEqual(['echo', 'hi']);
+    expect(acts.every((a, i) => i === 0 || a.line > acts[i - 1]!.line)).toBe(true);
+    // 引擎判全部安全只在清单全 safe 时成立:本例有 review 与 human
+    expect(e.checkCommitApproval('2')?.approved).toBe(false);
+  });
+
+  // 以下用例逐个分支钉住被审批次改动的函数（commit 安全分析批 review 变异覆盖,run17 存活项）
+  // @v: anc-exec-commit-approval
+  it('读账时丢弃取值不合法的记录:outcome / decided_by / scope / spec_path / fingerprint 各有一处不合法的记录,在下一次写账时都被丢掉', async () => {
+    const spec = join(root, 'drop-bad.md');
+    const p0 = await toGate(start(spec, gateSpec('d')));
+    const fp = p0.presented_data.context.fingerprint as string;
+    const specKey = realpathSync(spec);
+    const good = { outcome: 'approved', decided_by: 'human', spec_path: specKey, step_id: '2', fingerprint: fp, scope: 'task', run_id: null, analysis: null, decided_at: 'x' };
+    writeFileSync(store, JSON.stringify([
+      { ...good, outcome: 'yes' }, { ...good, decided_by: 'agent' }, { ...good, scope: 'forever' },
+      { ...good, spec_path: 1 }, { ...good, fingerprint: null }, null, 7,
+    ]));
+    // 这几条都不构成授权:仍停下;停下时记 referred 要重写账,不合法的记录不写回
+    const e = start(spec, gateSpec('d'));
+    expect(e.checkCommitApproval('2')?.approved).toBe(false);
+    expect((await toGate(e)).pause_reason).toBe('commit');
+    const recs = JSON.parse(readFileSync(store, 'utf-8')) as any[];
+    expect(recs).toEqual([expect.objectContaining({ outcome: 'referred', decided_by: 'analysis', fingerprint: fp })]);
+    writeFileSync(store, '[]');
+  });
+
+  // @v: anc-exec-commit-action-facts
+  it('extractCommitActions 逐分支:纯函数件不进清单;new_text 按内容摘要;推导的来源与过滤条件里的输入都算引用;只含字面量但求值为空记定不了;未赋值的变量记定不了;字面量拼接与字面量列表按值摘要;嵌套在其他调用里与写在 if 条件里的调用都列出', () => {
+    const body = [
+      'n = insert_node(spec_text: "x", node_path: "1", fragment: "y")',
+      'a = edit_file(path: "e.txt", old_text: "x", new_text: "yy", keep: 0)',
+      'b = remove(path: str([x for x in target]), keep: 0)',
+      'c = remove(path: str([x for x in ["a"] if x == target]), keep: 0)',
+      'd = remove(path: "a" - "b", keep: 0)',
+      'f = append(path: "f.txt", content: "ab" + "c")',
+      'g = append(path: "g.txt", content: ["ab", "c"])',
+      'h = str(write(path: "h.txt", content: "x", keep: 0))',
+      'if write(path: "i.txt", content: "x", keep: 0):',
+      '    k = 1',
+      'out = "done"',
+    ].map(l => `  > ${l}`).join('\n');
+    const spec = INPUT_SPEC.replace('  > r = remove(path: target, keep: 0)\n  > out = "done"', body);
+    const e = start(join(root, 'branch-forms.md'), spec, { target: 'important.txt' });
+    const acts = e.extractCommitActions((e as any).findStepById('2'));
+    expect(acts.map(a => a.callee)).toEqual(['edit_file', 'remove', 'remove', 'remove', 'append', 'append', 'write', 'write']);   // insert_node 不在其中
+    expect(acts[0].args.new_text).toBe('<2 字的内容>');
+    expect(acts[1].args.path).toBe('由本步输入 target 算出(运行时取值)');   // 输入出现在推导的来源里
+    expect(acts[2].args.path).toBe('由本步输入 target 算出(运行时取值)');   // 输入出现在推导的过滤条件里
+    expect(acts[3].args.path).toBe(COMMIT_ARG_UNKNOWN);                    // 字符串相减得 None
+    expect(acts[4].args.content).toBe('<3 字的内容>');                       // 字面量拼接按值算长度
+    expect(acts[5].args.content).toBe(`<${JSON.stringify(['ab', 'c']).length} 字的内容>`);   // 字面量列表按值算长度
+    expect(acts[6].args.path).toBe('h.txt');                               // 嵌套在 str() 里
+    expect(acts[7].args.path).toBe('i.txt');                               // 写在 if 条件里
+  });
+
+  // @v: anc-exec-commit-action-facts
+  it('extractCommitActions:body 里引用的变量既不是局部变量也不是本步输入时记运行前无法确定（validator 在加载时拒这种 body,此处直接构造步骤节点测防御分支）', () => {
+    const e = start(join(root, 'ghost-var.md'), INPUT_SPEC, { target: 'important.txt' });
+    const step = (e as any).findStepById('2');
+    const ghost = {
+      ...step,
+      body: { statements: [{ type: 'assign', target: 'r', line: 1, value: { type: 'call', callee: 'remove', args: [
+        { name: 'path', value: { type: 'var', name: 'ghost' } },
+        { name: 'keep', value: { type: 'literal', value: 0, literal_kind: 'number' } },
+      ] } }] },
+    };
+    expect(e.extractCommitActions(ghost).map(a => a.args.path)).toEqual([COMMIT_ARG_UNKNOWN]);
+  });
+
+  // @v: anc-exec-commit-action-facts
+  it('templateAnalysis 逐分支:缺参数写运行前无法确定;非字符串参数按 JSON 写;引用行取动作行号', () => {
+    const t = templateAnalysis([
+      { line: 7, callee: 'create', category: 'create_file', risk: 'safe', args: {}, keep: null, reason: '' },
+      { line: 8, callee: 'append', category: 'append', risk: 'safe', args: { path: { a: 1 } }, keep: null, reason: '' },
+    ], 'n');
+    expect(t.actions[0].consequence).toBe(`新建文件 ${COMMIT_ARG_UNKNOWN};文件已存在时不会覆盖,操作失败`);
+    expect(t.actions[1].consequence).toBe('在 {"a":1} 末尾追加内容,原有内容不变');
+    expect(t.actions.map(a => a.cited_lines)).toEqual([[7], [8]]);
+  });
+
+  // @v: anc-exec-commit-approval
+  it('mergeAnalysis 逐分支:返回值没有动作列表时全部补 human;同一行同名的两个动作各自对上一条模型结论;safe / human 以外的结论按 human;summary / recommendation / model 是字符串才采信,否则取空', () => {
+    const rv = (line: number) => ({ line, callee: 'remove', category: 'remove_permanent', risk: 'review' as const, args: { path: 'b.txt' }, keep: 0, reason: '' });
+    const none = mergeAnalysis([rv(5)], { summary: 1, recommendation: null, model: 2 } as any);
+    expect(none.actions).toEqual([expect.objectContaining({ verdict: 'human', consequence: '永久删除 b.txt,不进回收站,找不回' })]);
+    expect([none.summary, none.recommendation, none.model]).toEqual(['', '', null]);
+    const two = mergeAnalysis([rv(5), rv(5)], {
+      summary: 's', recommendation: 'r', model: 'svc/m', source: 'model',
+      actions: [
+        { line: 5, callee: 'remove', category: 'rotation', cited_lines: [5], verdict: 'safe', consequence: 'c1' },
+        { line: 5, callee: 'remove', category: 'rotation', cited_lines: [5], verdict: 'safe', consequence: 'c2' },
+      ],
+    });
+    expect(two.actions.map(a => a.consequence)).toEqual(['c1', 'c2']);
+    expect([two.summary, two.recommendation, two.model]).toEqual(['s', 'r', 'svc/m']);
+    const odd = mergeAnalysis([rv(5)], { summary: '', recommendation: '', model: 'm', source: 'model', actions: [{ line: 5, callee: 'remove', category: 'rotation', cited_lines: [5], verdict: 'maybe' as any, consequence: 'c' }] });
+    expect(odd.actions[0]).toEqual(expect.objectContaining({ verdict: 'human', category: 'remove_permanent' }));
+  });
+
+  // @v: anc-exec-commit-approval
+  it('commitGate 逐分支:模型只把部分动作判 safe 时转人并记 referred;模型判全部安全后立即把分析事件写进实例快照', async () => {
+    const twoWrites = (tag: string) => pureSpec(tag).replace(`  > out = "${tag}"`,
+      `  > r1 = write(path: "a-${tag}.txt", content: "x", keep: 0)\n  > r2 = write(path: "b-${tag}.txt", content: "x", keep: 0)\n  > out = "${tag}"`);
+    ExecutionEngine.setCommitAnalyzer(async (req) => ({
+      summary: 's', model: 'svc/m', source: 'model', recommendation: 'r',
+      actions: req.actions.map((a, i) => ({ line: a.line, callee: a.callee, category: 'data_op', cited_lines: [a.line], verdict: (i === 0 ? 'safe' : 'human') as 'safe' | 'human', consequence: 'c' })),
+    }));
+    const pSpec = join(root, 'gate-partial.md');
+    const p = await toGate(start(pSpec, twoWrites('gp')));
+    expect(p.pause_reason).toBe('commit');
+    expect(recsOf(pSpec)).toEqual([expect.objectContaining({ outcome: 'referred' })]);
+
+    ExecutionEngine.setCommitAnalyzer(async (req) => ({
+      summary: 's', model: 'svc/m', source: 'model', recommendation: 'r',
+      actions: req.actions.map(a => ({ line: a.line, callee: a.callee, category: 'data_op', cited_lines: [a.line], verdict: 'safe' as const, consequence: 'c' })),
+    }));
+    const e = start(join(root, 'gate-persist.md'), twoWrites('gs'));
+    const st = await e.commitGate('2');
+    expect(st?.decided_by).toBe('model_safe');
+    const onDisk = JSON.parse(readFileSync(join(root, 'state', e.getInstanceId(), 'state.json'), 'utf-8'));
+    expect((onDisk.exec_events as any[]).filter(ev => ev.event === 'commit_analysis' && ev.step_id === '2')).toHaveLength(1);
+  });
+
+  it('关卡关闭与非 commit 步骤:账位置解析函数返回 null 时关卡关闭（gate_closed,不扫描、不写账）;commitGate 对非 commit 步骤返回 null 不经关卡', async () => {
+    const e = start(join(root, 'gate-null.md'), gateSpec('gn'));
+    expect(await e.commitGate('1.1')).toBeNull();
+    expect(e.checkCommitApproval('1.1')).toBeNull();
+    ExecutionEngine.setCommitApprovalStoreResolver(() => null);
+    try {
+      const spec = join(root, 'gate-nostore.md');
+      const st = e.checkCommitApproval('2');
+      expect(st).toEqual(expect.objectContaining({ approved: true, decided_by: 'gate_closed', from_ledger: false, store_path: null, actions: [] }));
+      const g = start(spec, gateSpec('gs2'));
+      expect((await toGate(g)).status).toBe('completed');
+      expect(recsOf(spec)).toEqual([]);
+    } finally {
+      ExecutionEngine.setCommitApprovalStoreResolver(() => store);
+    }
+  });
+
+  it('停点写 paused.json,批准续跑后删除;未批准时崩溃恢复仍停在批准点', async () => {
+    const spec = join(root, 'card.md');
+    const p = await toGate(start(spec, gateSpec('card')));
+    const instDir = join(root, 'state', p.instance_id);
+    const card = JSON.parse(readFileSync(join(instDir, 'paused.json'), 'utf-8'));
+    expect(card.pause_reason).toBe('commit');
+    expect(card.presented_data.context.fingerprint).toBe(p.presented_data.context.fingerprint);
+    // 未批准就崩溃:从快照 recover（悬空 running 重置）后推进,仍停在批准点、body 不执行
+    const crashed = ExecutionEngine.recover(instDir);
+    crashed.setUnifiedDispatch(true);
+    const still = await crashed.advanceToCaller() as any;
+    expect(still.status).toBe('paused');
+    expect(still.pause_reason).toBe('commit');
+    expect(crashed.getVariableStore().read('out', 'root')).toBeUndefined();
+    // 批准 → 续跑完成 → 卡已删。续跑用 load 而不是 recover:recover 自己会删陈卡,用它就测不到
+    // 闸点「已批准则删卡」那一句;load 续跑对应 CLI advance 与同一引擎对象批准后直接推进两条真实路径
+    expect(crashed.approveCommit('2', p.presented_data.context.fingerprint, 'once').status).toBe('ok');
+    expect(existsSync(join(instDir, 'paused.json'))).toBe(true);
+    const resumed = ExecutionEngine.load(instDir);
+    resumed.setUnifiedDispatch(true);
+    const done = await resumed.advanceToCaller() as any;
+    expect(done.status).toBe('completed');
+    expect(existsSync(join(instDir, 'paused.json'))).toBe(false);
+  });
+
+  // 复用模式 commit 执行后记 commit_audit,authorized_by 跟批准来源走
+  // @v: anc-exec-commit-approval, anc-obs-audit
+  it('复用模式 commit_audit：引擎判安全 → engine_safe;人批准(once) → human;这一步以后都通过 → task_always（当次与再跑）;关卡关闭 → policy', async () => {
+    const auditOf = (e: ExecutionEngine) => /authorized_by: (\S+)/.exec(readFileSync(e.getHopLog()!.getFilePath(), 'utf-8'))?.[1];
+    const startLogged = (specFile: string, content: string): ExecutionEngine => {
+      writeFileSync(specFile, content);
+      const engine = new ExecutionEngine();
+      expect(engine.initExecution(content, HOST, { stateDir: join(root, 'state'), specPath: specFile, logDir: mkdtempSync(join(tmpdir(), 'reuse-audit-log-')) }).status).toBe('ok');
+      engine.setUnifiedDispatch(true);
+      return engine;
+    };
+    const s0 = startLogged(join(root, 'reuse-audit-safe.md'), pureSpec('rs'));
+    expect((await toGate(s0)).status).toBe('completed');
+    expect(auditOf(s0)).toBe('engine_safe');
+    const spec = join(root, 'reuse-audit.md');
+    const e = startLogged(spec, gateSpec('ra'));
+    const p = await toGate(e);
+    expect(p.pause_reason).toBe('commit');
+    expect(auditOf(e)).toBeUndefined();   // 停点上还没执行,不记
+    expect(e.getExecEvents().some(ev => ev.event === 'commit_analysis' && (ev.detail ?? '').includes('source=template'))).toBe(true);
+    expect(e.approveCommit('2', p.presented_data.context.fingerprint, 'once').status).toBe('ok');
+    expect((await e.advanceToCaller() as any).status).toBe('completed');
+    expect(auditOf(e)).toBe('human');
+    const specT = join(root, 'reuse-audit-task.md');
+    const t = startLogged(specT, gateSpec('rt'));
+    const pt = await toGate(t);
+    expect(t.approveCommit('2', pt.presented_data.context.fingerprint, 'task').status).toBe('ok');
+    expect((await t.advanceToCaller() as any).status).toBe('completed');
+    expect(auditOf(t)).toBe('task_always');
+    const t2 = startLogged(specT, gateSpec('rt'));
+    expect((await toGate(t2)).status).toBe('completed');
+    expect(auditOf(t2)).toBe('task_always');
+    ExecutionEngine.resetCommitApprovalStoreResolver();
+    try {
+      const e3 = startLogged(join(root, 'reuse-audit-nogate.md'), gateSpec('rn'));
+      expect((await toGate(e3)).status).toBe('completed');
+      expect(auditOf(e3)).toBe('policy');
+    } finally {
+      ExecutionEngine.setCommitApprovalStoreResolver(() => store);
+    }
+  });
+
+  // 以下用例逐分支侧钉住被审批次改动的函数（commit 安全分析批次 review 第五次阅卷后,机器枚举分支侧的 run20 存活项）
+  // @v: anc-mcp-commit-approve
+  it('COMMIT_NOT_APPROVED 报文:带 child_instance 时 approve_commit 参数里多一项 child_instance、续跑提示带同一个 child_instance;不带时两段都没有', () => {
+    const withChild = commitNotApprovedMessage('2', 'fp1', 'inst-a', 'child-b');
+    expect(withChild).toContain('approve_commit(instance_id: "inst-a", child_instance: "child-b", step_id: "2", fingerprint: "fp1"');
+    expect(withChild).toContain('再 resume_run（带同一个 child_instance）');
+    const noChild = commitNotApprovedMessage('2', 'fp1', 'inst-a');
+    expect(noChild).toContain('approve_commit(instance_id: "inst-a", step_id: "2", fingerprint: "fp1"');
+    expect(noChild).not.toContain('child_instance');
+    expect(noChild).toContain('再 resume_run;选不批准则不调');
+  });
+
+  // @v: anc-exec-commit-approval
+  it('账里夹着 null 元素:合法记录照样命中（过滤器先剔除 null,不是整张账按坏账丢掉）;outcome 不是 approved 的 task / model_safe / once 记录不放行', async () => {
+    const spec = join(root, 'null-entry.md');
+    const p = await toGate(start(spec, gateSpec('ne')));
+    const fp = p.presented_data.context.fingerprint as string;
+    const specKey = realpathSync(spec);
+    const good = { outcome: 'approved', decided_by: 'human', spec_path: specKey, step_id: '2', fingerprint: fp, scope: 'task', run_id: null, analysis: null, decided_at: 'x' };
+    writeFileSync(store, JSON.stringify([null, good]));
+    expect(start(spec, gateSpec('ne')).checkCommitApproval('2')).toEqual(expect.objectContaining({ approved: true, decided_by: 'task_always' }));
+    // outcome 是 referred 的记录即使 decided_by / scope 都像批准,也不算批准
+    for (const rec of [
+      { ...good, outcome: 'referred', decided_by: 'human', scope: 'task' },
+      { ...good, outcome: 'referred', decided_by: 'model_safe', scope: null },
+      { ...good, outcome: 'referred', decided_by: 'human', scope: 'once', run_id: 'whatever' },
+      { ...good, decided_by: 'model_safe', scope: 'task', outcome: 'referred' },
+    ]) {
+      writeFileSync(store, JSON.stringify([rec]));
+      expect(start(spec, gateSpec('ne')).checkCommitApproval('2')?.approved).toBe(false);
+    }
+    // once 记录三个条件缺一不可:decided_by 不是 human、scope 不是 once、run_id 不是本次运行,都不按 once 命中
+    for (const rec of [
+      { ...good, decided_by: 'analysis', outcome: 'approved', scope: 'once', run_id: 'r' },
+      { ...good, scope: null, run_id: 'r' },
+      { ...good, scope: 'once', run_id: 'some-other-run' },
+    ]) {
+      writeFileSync(store, JSON.stringify([rec]));
+      expect(start(spec, gateSpec('ne')).checkCommitApproval('2')?.approved, JSON.stringify(rec)).toBe(false);
+    }
+    // 多条 referred 记录时取最后一条的 analysis;analysis 缺席时为 null
+    writeFileSync(store, JSON.stringify([
+      { ...good, outcome: 'referred', decided_by: 'analysis', scope: null, analysis: { summary: '第一次', recommendation: '', model: null, source: 'template', actions: [] } },
+      { ...good, outcome: 'referred', decided_by: 'analysis', scope: null, analysis: { summary: '第二次', recommendation: '', model: null, source: 'template', actions: [] } },
+    ]));
+    expect(start(spec, gateSpec('ne')).checkCommitApproval('2')?.analysis?.summary).toBe('第二次');
+    writeFileSync(store, JSON.stringify([{ ...good, outcome: 'referred', decided_by: 'analysis', scope: null, analysis: undefined }]));
+    expect(start(spec, gateSpec('ne')).checkCommitApproval('2')?.analysis).toBeNull();
+  });
+
+  // @v: anc-exec-commit-approval
+  it('commitGate 的分析事件:分析函数抛非 Error 值时建议里写 String(值);模型字段缺席时事件里 model 写 -,在场时写模型名;engine_safe 以外的已批准状态不记 engine_safe 账', async () => {
+    ExecutionEngine.setCommitAnalyzer(async () => { throw 'plain-string-failure'; });
+    const spec = join(root, 'gate-throw-str.md');
+    const e = start(spec, gateSpec('ts1'));
+    const p = await toGate(e);
+    expect(p.pause_reason).toBe('commit');
+    expect(p.presented_data.context.analysis.recommendation).toContain('安全分析出错:plain-string-failure');
+    const ev = e.getExecEvents().filter(x => x.event === 'commit_analysis').pop() as any;
+    expect(ev.detail).toContain('source=template model=-');
+    ExecutionEngine.resetCommitAnalyzer();
+    ExecutionEngine.setCommitAnalyzer(async () => ({ summary: 's', recommendation: 'r', model: 'svc/mx', source: 'model', actions: [] }));
+    const e2 = start(join(root, 'gate-model.md'), gateSpec('ts2'));
+    await toGate(e2);
+    const ev2 = e2.getExecEvents().filter(x => x.event === 'commit_analysis').pop() as any;
+    expect(ev2.detail).toContain('model=svc/mx');
+    // 人批过 task 的步骤再跑:approved 但 decided_by 是 task_always,commitGate 不追加 engine_safe 记录
+    const spec3 = join(root, 'gate-task-rerun.md');
+    const e3 = start(spec3, gateSpec('ts3'));
+    const p3 = await toGate(e3);
+    expect(e3.approveCommit('2', p3.presented_data.context.fingerprint, 'task').status).toBe('ok');
+    const before = recsOf(spec3).length;
+    const e4 = start(spec3, gateSpec('ts3'));
+    expect((await toGate(e4)).status).toBe('completed');
+    expect(recsOf(spec3)).toHaveLength(before);
+    expect(recsOf(spec3).some(r => r.decided_by === 'engine_safe')).toBe(false);
+  });
+
+  // @v: anc-exec-commit-approval
+  it('approveCommit 的返回与账:有账位置时返回值带 store_path 且写账;幂等返回只对"已批准且不是人把 once 升成 task"成立', async () => {
+    const spec = join(root, 'approve-ret.md');
+    const e = start(spec, gateSpec('ar'));
+    const p = await toGate(e);
+    const fp = p.presented_data.context.fingerprint as string;
+    const r1 = e.approveCommit('2', fp, 'once') as any;
+    expect(r1).toEqual(expect.objectContaining({ status: 'ok', step_id: '2', scope: 'once', store_path: store }));
+    expect(r1.already_approved).toBeUndefined();
+    // 同一 scope 再批:幂等返回,不再写账
+    const n = recsOf(spec).length;
+    const r2 = e.approveCommit('2', fp, 'once') as any;
+    expect(r2).toEqual(expect.objectContaining({ status: 'ok', already_approved: true, store_path: store }));
+    expect(recsOf(spec)).toHaveLength(n);
+    // once 之后人改选 task:不是幂等返回,追加一条 task 记录
+    const r3 = e.approveCommit('2', fp, 'task') as any;
+    expect(r3.already_approved).toBeUndefined();
+    expect(recsOf(spec)).toHaveLength(n + 1);
+    expect(recsOf(spec).pop()).toEqual(expect.objectContaining({ scope: 'task', decided_by: 'human' }));
+  });
+
+  // @v: anc-exec-commit-action-facts
+  it('commitActionTemplate 逐类模板文字:make_dir / overwrite_keep 带份数 / move_keep / remove_keep / work_zone_write 的 move 取 to、其余取 path / move_no_keep / run_script / notify / 清单外分类走外部工具模板', () => {
+    const a = (callee: string, category: string, args: Record<string, unknown>, keep: number | null = null) =>
+      ({ line: 1, callee, category, risk: 'safe' as const, args, keep, reason: '' });
+    const t = templateAnalysis([
+      a('makedirs', 'make_dir', { path: 'd1' }),
+      a('write', 'overwrite_keep', { path: 'w.txt' }, 5),
+      a('move', 'move_keep', { from: 'm1', to: 'm2' }, 3),
+      a('remove', 'remove_keep', { path: 'r.txt' }, 3),
+      a('move', 'work_zone_write', { from: 'wz-from', to: 'wz-to' }, 0),
+      a('write', 'work_zone_write', { path: 'wz-path' }, 0),
+      a('move', 'move_no_keep', { from: 'n1', to: 'n2' }, 0),
+      a('run_script', 'run_script', { path: 'x.py' }),
+      a('dingtalk_notify', 'notify', { title: 't' }),
+      a('my_ext_tool', 'external_tool', { a: '1' }),
+      a('remove', 'rotation', { path: 'rot.txt' }, 0),   // 模型给的分类不在模板表里,也按外部工具模板补位
+    ], 'n').actions.map(x => x.consequence);
+    expect(t).toEqual([
+      '新建目录 d1',
+      '写入 w.txt;如果文件已存在,旧版本先存进回收站（最多保留 5 份）,可以找回',
+      '把 m1 移到 m2;如果目标已存在,旧版本先存进回收站,可以找回',
+      '删除 r.txt,文件进回收站,可以找回',
+      '改动任务的临时工作区 wz-to,不影响你的文件',
+      '改动任务的临时工作区 wz-path,不影响你的文件',
+      '把 n1 移到 n2;如果目标已存在,它被直接替换、找不回',
+      '运行脚本 x.py;脚本做了什么在任务之外,引擎判断不了',
+      '向外发送通知,发出后收不回',
+      '调用外部工具 my_ext_tool,它对外部系统的影响引擎判断不了',
+      '调用外部工具 remove,它对外部系统的影响引擎判断不了',
+    ]);
+  });
+
+  // @v: anc-exec-commit-action-facts
+  it('mergeAnalysis 逐守卫:返回清单里的 null 跳过;同行号不同 callee 不算对上;consequence 不是字符串或是空白串时用模板;cited_lines 合法才采信,空数组或字符串退回动作行号', () => {
+    const rv = { line: 11, callee: 'remove', category: 'remove_permanent', risk: 'review' as const, args: { path: 'b.txt' }, keep: 0, reason: '' };
+    const run = (ret: any[]) => mergeAnalysis([rv], { summary: '', recommendation: '', model: 'm', source: 'model', actions: ret }).actions[0]!;
+    const r = (extra: any = {}) => ({ line: 11, callee: 'remove', category: 'rotation', cited_lines: [11], verdict: 'safe', consequence: 'c', ...extra });
+    expect(run([null, r()])).toEqual(expect.objectContaining({ verdict: 'safe', consequence: 'c' }));
+    expect(run([r({ callee: 'write' })])).toEqual(expect.objectContaining({ verdict: 'human', consequence: '永久删除 b.txt,不进回收站,找不回' }));
+    expect(run([r({ consequence: 42 })]).consequence).toBe('永久删除 b.txt,不进回收站,找不回');
+    expect(run([r({ consequence: '   ' })]).consequence).toBe('永久删除 b.txt,不进回收站,找不回');
+    expect(run([r({ cited_lines: [3, 4] })]).cited_lines).toEqual([3, 4]);
+    expect(run([r({ cited_lines: [] })]).cited_lines).toEqual([11]);
+    expect(run([r({ cited_lines: '11' })]).cited_lines).toEqual([11]);
+    expect(run([r({ cited_lines: { length: 1 } })]).cited_lines).toEqual([11]);
+  });
+
+  // @v: anc-exec-commit-action-facts
+  it('extractCommitActions 逐守卫:keep=0 的 reason 写明 keep=0;now() / subprocess.run() 包在纯函数里仍记运行前无法确定;content 为非字符串值按 JSON 长度计;超长字面量截断;subprocess.run 的位置参数记 argv、其他工具的位置参数记 arg0;move 一端不在 work_zone 不算;if 分支只在一侧赋值的变量定不了', () => {
+    const long = 'x'.repeat(250);
+    const body = [
+      'a = remove(path: "a.txt", keep: 0)',
+      'b = write(path: str(now()), content: "y", keep: 0)',
+      'c = write(path: str(subprocess.run(["pwd"])), content: "y", keep: 0)',
+      'g = write(path: "g.txt", content: [1, 2, 3], keep: 0)',
+      `h = write(path: "${long}", content: "y", keep: 0)`,
+      'i = subprocess.run(["ls", "-l"])',
+      'j = my_ext_tool("pos0", "pos1")',
+      'k = move(from: work_zone_path("in"), to: "out.txt", keep: 0)',
+      'l = move(from: "in.txt", to: work_zone_path("out"), keep: 0)',
+      'tgt = "before.txt"',
+      'if 1 == 1:',
+      '    tgt = "only-then.txt"',
+      'n = write(path: tgt, content: "y", keep: 0)',
+      'out = "ok"',
+    ].map(l => `  > ${l}`).join('\n');
+    const spec = pureSpec('ok').replace('  > out = "ok"', body)
+      .replace('## Steps', '## Tools\n- my_ext_tool(a, b)  # 外部工具\n  - a: text  # 参数\n  - b: text  # 参数\n\n## Steps');
+    const e = start(join(root, 'facts-guards.md'), spec);
+    const acts = e.extractCommitActions((e as any).findStepById('2'));
+    expect(acts[0]!.reason).toBe('keep=0,不留存旧版本');
+    expect(acts[1]!.args.path).toBe(COMMIT_ARG_UNKNOWN);
+    expect(acts[2]!.args.path).toBe(COMMIT_ARG_UNKNOWN);
+    expect(acts.find(x => x.args.path === 'g.txt')!.args.content).toBe('<7 字的内容>');   // JSON.stringify([1,2,3]) 长 7
+    expect(String(acts.find(x => String(x.args.path).startsWith('xxx'))!.args.path)).toBe(`${'x'.repeat(200)}…（共 250 字）`);
+    expect(acts.filter(x => x.callee === 'subprocess.run').pop()!.args).toEqual({ argv: ['ls', '-l'] });
+    expect(acts.find(x => x.callee === 'my_ext_tool')!.args).toEqual({ arg0: 'pos0', arg1: 'pos1' });
+    expect(acts.filter(x => x.callee === 'move').map(x => x.category)).toEqual(['move_no_keep', 'move_no_keep']);
+    expect(acts[acts.length - 1]!.args.path).toBe(COMMIT_ARG_UNKNOWN);   // tgt 在 if 之前与 then 分支里赋了不同的值
+  });
+
+  // @v: anc-exec-commit-action-facts
+  it('extractCommitActions 的 keep 字面量守卫:keep 不是数字字面量、不是整数或是负数时 keep 记 null、归为 no_keep（validator 在加载时拒这种 body,此处直接构造步骤节点）', () => {
+    const e = start(join(root, 'keep-lit.md'), pureSpec('kl'));
+    const step = (e as any).findStepById('2');
+    const call = (keepValue: any) => ({ type: 'assign', target: 'r', line: 1, value: { type: 'call', callee: 'write', args: [
+      { name: 'path', value: { type: 'literal', value: 'k.txt', literal_kind: 'string' } },
+      { name: 'content', value: { type: 'literal', value: 'y', literal_kind: 'string' } },
+      { name: 'keep', value: keepValue },
+    ] } });
+    const node = (keepValue: any) => ({ ...step, body: { statements: [call(keepValue)] } });
+    for (const kv of [
+      { type: 'literal', value: '3', literal_kind: 'string' },
+      { type: 'literal', value: 1.5, literal_kind: 'number' },
+      { type: 'literal', value: -1, literal_kind: 'number' },
+      { type: 'var', name: 'k' },
+    ]) {
+      const [a] = e.extractCommitActions(node(kv));
+      expect([a!.keep, a!.category], JSON.stringify(kv)).toEqual([null, 'overwrite_no_keep']);
+    }
+    const [ok] = e.extractCommitActions(node({ type: 'literal', value: 2, literal_kind: 'number' }));
+    expect([ok!.keep, ok!.category]).toEqual([2, 'overwrite_keep']);
+  });
+
+  // @v: anc-exec-commit-approval, anc-obs-audit
+  it('commitAuthorizedBy 逐取值:engine_safe / model_safe / human / task_always 原样记;gate_closed、analysis、undefined 都记 policy', () => {
+    for (const v of ['engine_safe', 'model_safe', 'human', 'task_always'] as const) expect(commitAuthorizedBy(v)).toBe(v);
+    expect(commitAuthorizedBy('gate_closed')).toBe('policy');
+    expect(commitAuthorizedBy('analysis' as any)).toBe('policy');
+    expect(commitAuthorizedBy(undefined)).toBe('policy');
+    expect(commitAuthorizedBy(null)).toBe('policy');
+  });
+
+  // @v: anc-exec-commit-action-facts
+  it('extractCommitActions 位置参数不按 content 类摘要:外部工具的位置参数字面量原样记（只有具名的 content / new_text / old_text 才写"<N 字的内容>"）', () => {
+    const spec = pureSpec('ok').replace('  > out = "ok"', '  > x = my_ext_tool("content", "abc")\n  > out = "ok"')
+      .replace('## Steps', '## Tools\n- my_ext_tool(a, b)  # 外部工具\n  - a: text  # 参数\n  - b: text  # 参数\n\n## Steps');
+    const e = start(join(root, 'pos-args.md'), spec);
+    const [a] = e.extractCommitActions((e as any).findStepById('2'));
+    expect(a!.args).toEqual({ arg0: 'content', arg1: 'abc' });
+  });
+
+  // @v: anc-exec-commit-approval
+  it('buildCommitAnalysisRequest 的 header 回落:spec 没有 Goal 文本与背景章节时 goal 为空串、narratives 为空数组;有背景章节时原样带上', async () => {
+    const withBg = gateSpec('bg').replace('## Steps', '## 背景\n这是背景段。\n\n## Steps');
+    const e = start(join(root, 'req-bg.md'), withBg);
+    const req = e.buildCommitAnalysisRequest((e as any).findStepById('2'), []);
+    expect(req.goal).toBe('g');
+    expect(req.narratives).toEqual([{ title: '背景', content: '这是背景段。' }]);
+    const e2 = start(join(root, 'req-nobg.md'), gateSpec('nb'));
+    const req2 = e2.buildCommitAnalysisRequest((e2 as any).findStepById('2'), []);
+    expect(req2.narratives).toEqual([]);
+    expect(req2.goal).toBe('g');
+  });
+});
+
+
+// @v: anc-cli-workspace-arg —— 响应回显与子实例命令继承（引擎侧）
+describe('workspace_dir 回显与子实例继承（^anc-cli-workspace-arg）', () => {
+  function mkHostWs(): { host: HostConfig; dir: string } {
+    const dir = mkdtempSync(join(tmpdir(), 'ws-eng-'));
+    return { dir, host: { workspace_dir: dir, sandbox: { filesystem: { workspace_dir: dir, read_access: { allowed: [dir], denied: [], confirm_required: [] } }, network: { trusted_hosts: [] }, runtime: { available: [] } }, api_key: '' } };
+  }
+  const PAR = `# T
+
+## Goal
+G
+
+## Inputs
+- nums: [int]  # 列表
+
+## Outputs
+- outs: [int]  # 收集
+
+## Steps
+1. [loop for-each n in nums, collect o into outs] 逐项
+  + → outs: [int]  # 收集列表
+  1.1. [subtask parallel] 处理一项
+    + → o: int  # 单项
+    1.1.1. [act] 算
+      - ← n
+      + → o: int  # 结果
+      > 纯计算
+      > \`\`\`hop_python
+      > o = n * 7
+      > \`\`\`
+2. [exit] 交付
+`;
+
+  it('正例：step_ready / completed 响应并列带 workspace_dir = hostConfig.workspace_dir（与 work_zone 同族同位）', async () => {
+    const { host, dir } = mkHostWs();
+    const engine = new ExecutionEngine();
+    const stateDir = mkdtempSync(join(dir, 'st-'));
+    const init = engine.initExecution(THREE_STEP_SPEC, host, { stateDir, params: { source: 's' } });
+    expect(init.status).toBe('ok');
+    const r = engine.nextStep() as any;
+    expect(r.status).toBe('step_ready');
+    expect(r.work_zone).toBeTruthy();
+    expect(r.workspace_dir).toBe(host.workspace_dir);
+    const done = await engine.completeAndAdvance('1', { analysis: 'a' }) as any;
+    expect(done.status).toBe('step_ready');
+    expect('workspace_dir' in done).toBe(true);   // 推进后的下一响应同样带（completed/step_ready 任一形态）
+    expect(done.workspace_dir).toBe(host.workspace_dir);
+  });
+
+  it('正例：dispatch_ready 派发项带 workspace_dir,其 launch_command 含 --workspace "<父 workspace_dir>"', () => {
+    const { host, dir } = mkHostWs();
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(PAR, host, { stateDir: join(dir, '.hopstate'), canFanout: true, params: { nums: [3] }, specPath: join(dir, 'spec.md'), cliAbsPath: '/fake/cli.js' });
+    expect(init.status).toBe('ok');
+    engine.setUnifiedDispatch(true);
+    const next = engine.nextStep() as any;
+    expect(next.status).toBe('dispatch_ready');
+    expect(next.workspace_dir).toBe(dir);
+    expect(next.launch_command).toContain(`--workspace "${dir}"`);
+  });
+
+  it('正例：call 的 call_protocol.init_command 含 --workspace "<父 workspace_dir>"', () => {
+    const CALL_SPEC = `# C
+Id: c-ws
+
+## Goal
+G
+## Outputs
+- out: text  # r
+## Steps
+1. [call helper(n: 1)] 调
+  + → out: result
+`;
+    const { host } = mkHostWs();
+    const engine = new ExecutionEngine();
+    engine.initExecution(CALL_SPEC, host);
+    (engine as any).cliAbsPath = '/abs/cli.js';
+    (engine as any).specPath = '/abs/p.md';
+    const r = engine.nextStep() as any;
+    expect(r.status).toBe('step_ready');
+    expect(r.call_protocol.init_command).toContain(`--workspace "${host.workspace_dir}"`);
+  });
+
+  it('正例：escalate 首发 paused（经 completeStep → completeAndAdvance 非 ok 直返,不过 nextStep）也带 workspace_dir——阅卷实抓首发无、重放有', async () => {
+    const ESC_SPEC = `# Esc
+Id: esc-t
+## Goal
+g
+## Inputs
+- x: int  # 入
+## Outputs
+- r: text  # 出
+## Steps
+1. [subtask retry=2] 探索循环
+  + → r: text  # 出
+  1.1. [check escalatable] 收敛判定
+    - ← x
+    + → ok: bool  # 判定槽
+    + → gap: yaml  # 缺口槽
+    > 判收敛
+  1.2. [act] 出结果
+    + → r: text  # 出
+    > \`\`\`hop_python
+    > r = "done"
+    > \`\`\`
+`;
+    const { host, dir } = mkHostWs();
+    const engine = new ExecutionEngine();
+    engine.initExecution(ESC_SPEC, host, { stateDir: join(dir, '.hopstate'), params: { x: 1 } });
+    expect(engine.nextStep().status).toBe('step_ready');
+    const first = await engine.completeAndAdvance('1.1', { ok: false, gap: { escalate: true, need: '要口径' } }) as any;
+    expect(first.status).toBe('paused');
+    expect(first.work_zone).toBeTruthy();
+    expect(first.workspace_dir).toBe(dir);   // 首发即带,与 nextStep 重放同卡一致
+    const again = engine.nextStep() as any;
+    expect(again.status).toBe('paused');
+    expect(again.workspace_dir).toBe(dir);
+  });
+
+  it('反例：hostConfig 无 workspace_dir（内存态最小配置）→ 不回显字段、命令不带 --workspace,不抛', () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(THREE_STEP_SPEC, { ...MINIMAL_HOST_CONFIG, workspace_dir: '' } as HostConfig);
+    const r = engine.nextStep() as any;
+    expect(r.status).toBe('step_ready');
+    expect('workspace_dir' in r).toBe(false);
+  });
+});
+
+// @v: anc-exec-dirs-grant —— Config.dirs 展开 / INIT_FAILED / 授权闸 / 批准续跑 / 持久化（todo/0148）
+describe('Config.dirs 任务级目录声明与授权', () => {
+  let root: string; let store: string;
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), 'dirs-grant-'));
+    store = join(root, 'commit_approvals.json');   // 引擎用同目录换名 dirs_approvals.json
+    ExecutionEngine.setCommitApprovalStoreResolver(() => store);
+  });
+  afterAll(() => { ExecutionEngine.resetCommitApprovalStoreResolver(); });
+
+  function hostFor(ws: string): HostConfig {
+    return { workspace_dir: ws, sandbox: { filesystem: { workspace_dir: ws, read_access: { allowed: [ws], denied: [], confirm_required: [] } }, network: { trusted_hosts: [] }, runtime: { available: [] } }, api_key: '', hop_env: { hop_env_kb_root: join(root, 'kb') } };
+  }
+  const SPEC = (dirsYaml: string) => `# D
+Id: d-dirs
+
+## Goal
+G
+
+## Inputs
+- target % line  # t
+- out % line  # o
+
+## Outputs
+- r % line  # r
+
+## Config
+${dirsYaml}
+
+## Steps
+1. [reason] a
+  - ← target
+  + → r % line  # r
+`;
+  function start(dirsYaml: string, params: Record<string, unknown>, opts: { specPath?: string; memory?: boolean } = {}) {
+    const ws = mkdtempSync(join(root, 'ws-'));
+    const specFile = opts.specPath ?? join(mkdtempSync(join(root, 'spec-')), 'd.md');
+    const content = SPEC(dirsYaml);
+    writeFileSync(specFile, content);
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(content, hostFor(ws), { ...(opts.memory ? {} : { stateDir: join(root, 'state') }), specPath: specFile, params });
+    return { engine, init, ws, specFile };
+  }
+  function dirs(): { ro: string; rw: string } {
+    const ro = mkdtempSync(join(root, 'ro-')); const rw = mkdtempSync(join(root, 'rw-'));
+    return { ro, rw };
+  }
+
+  it('正例：三种值形态展开——{Inputs 变量} / {hop_env_*} / ~ 家目录 / 绝对路径;read∪readwrite 入读白名单,readwrite 入写白名单;outside 只含 workspace 外;dirs_hash 带 mode', () => {
+    const { ro, rw } = dirs(); mkdirSync(join(root, 'kb'), { recursive: true });
+    const { engine, init, ws } = start('dirs:\n  read: ["{target}", "{hop_env_kb_root}", "~", "/tmp"]\n  readwrite: ["{out}"]', { target: ro, out: rw });
+    expect(init.status).toBe('ok');
+    const d = engine.getDeclaredDirs()!;
+    expect(d.read).toEqual(expect.arrayContaining([ro, join(root, 'kb'), homedirOf(), '/tmp']));
+    expect(d.readwrite).toEqual([rw]);
+    expect(d.outside.map(o => `${o.mode}:${o.path}`)).toEqual(expect.arrayContaining([`read:${ro}`, `readwrite:${rw}`]));
+    expect(d.dirs_hash).toMatch(/^[0-9a-f]{64}$/);
+    const hc = (engine as any).hostConfig;
+    expect(hc.sandbox.filesystem.read_access.allowed).toEqual(expect.arrayContaining([ro, rw, ws]));
+    expect(hc.sandbox.filesystem.write_access.allowed).toEqual([rw]);
+  });
+
+  it('正例：目录落在 workspace 内 → 不算 outside,首次推进不停（checkDirsApproval 返 null）', async () => {
+    const wsIn = mkdtempSync(join(root, 'wsin-'));
+    const sub = join(wsIn, 'sub'); mkdirSync(sub);
+    const specFile = join(mkdtempSync(join(root, 'spec-')), 'd.md');
+    writeFileSync(specFile, SPEC('dirs:\n  readwrite: ["{out}"]'));
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC('dirs:\n  readwrite: ["{out}"]'), hostFor(wsIn), { stateDir: join(root, 'state'), specPath: specFile, params: { target: '/tmp', out: sub } });
+    expect(init.status).toBe('ok');
+    expect(engine.checkDirsApproval()).toBeNull();
+    expect((await engine.advanceToCaller()).status).toBe('step_ready');
+  });
+
+  it('反例：{var} 缺值 / 值是相对路径 / 目录不存在 / 相对字面 / ~user / 含 .. → 各 INIT_FAILED 且报文指路,不建实例', () => {
+    const { ro } = dirs();
+    const cases: Array<[string, Record<string, unknown>, RegExp]> = [
+      ['dirs:\n  read: ["{target}"]', { out: '/tmp' }, /\{target\} 没有值/],
+      ['dirs:\n  read: ["{target}"]', { target: 'rel/path', out: '/tmp' }, /不是 \/ 开头的绝对路径/],
+      ['dirs:\n  read: ["{target}"]', { target: join(root, 'no-such'), out: '/tmp' }, /目录不存在/],
+      ['dirs:\n  read: ["data/x"]', { target: ro, out: '/tmp' }, /不支持相对路径/],
+      ['dirs:\n  read: ["~alice/x"]', { target: ro, out: '/tmp' }, /不支持 ~用户名/],
+      ['dirs:\n  read: ["/a/../b"]', { target: ro, out: '/tmp' }, /含 \.\. 段/],
+    ];
+    for (const [y, params, re] of cases) {
+      const { init } = start(y, params);
+      expect(init.status, y).toBe('error');
+      expect((init as any).errors[0].message, y).toMatch(/^INIT_FAILED/);
+      expect((init as any).errors[0].message, y).toMatch(re);
+    }
+  });
+
+  it('正例：同一目录同时在 read 与 readwrite → 按 readwrite 计并 warn 一条', () => {
+    const { rw } = dirs();
+    const { engine, init } = start('dirs:\n  read: ["{out}"]\n  readwrite: ["{out}"]', { target: '/tmp', out: rw });
+    expect(init.status).toBe('ok');
+    expect((init as any).warnings.some((w: any) => w.rule === 'CONFIG' && /同时出现在 read 与 readwrite/.test(w.message))).toBe(true);
+    const d = engine.getDeclaredDirs()!;
+    expect(d.read).not.toContain(rw); expect(d.readwrite).toEqual([rw]);
+  });
+
+  it('正例：有 workspace 外目录且未批 → 首次推进 paused/dirs（presented_data.context.dirs 列全、dirs_hash 在场、workspace_dir 回显）;approveDirs 记账后 resume 到 step_ready;账文件是 dirs_approvals.json 与 commit 账同目录', async () => {
+    const { ro, rw } = dirs();
+    const { engine, init } = start('dirs:\n  read: ["{target}"]\n  readwrite: ["{out}"]', { target: ro, out: rw });
+    expect(init.status).toBe('ok');
+    const p = await engine.advanceToCaller() as any;
+    expect(p.status).toBe('paused'); expect(p.pause_reason).toBe('dirs');
+    expect(p.presented_data.context.dirs).toEqual(expect.arrayContaining([{ path: ro, mode: 'read' }, { path: rw, mode: 'readwrite' }]));
+    expect(p.presented_data.context.dirs_hash).toBe(engine.getDeclaredDirs()!.dirs_hash);
+    expect(p.workspace_dir).toBeTruthy();
+    // 哈希不符拒
+    const bad = engine.approveDirs('deadbeef');
+    expect(bad.status).toBe('error'); expect((bad as any).code).toBe('DIRS_NOT_APPROVED');
+    const ok = engine.approveDirs(p.presented_data.context.dirs_hash) as any;
+    expect(ok.status).toBe('ok'); expect(ok.store_path).toBe(join(root, 'dirs_approvals.json'));
+    expect(JSON.parse(readFileSync(join(root, 'dirs_approvals.json'), 'utf-8'))[0]).toMatchObject({ dirs_hash: p.presented_data.context.dirs_hash });
+    expect(engine.approveDirs(p.presented_data.context.dirs_hash)).toMatchObject({ status: 'ok', already_approved: true });
+    expect((await engine.advanceToCaller()).status).toBe('step_ready');
+  });
+
+  it('正例：同一 spec 同一清单第二次 run 不再停;Inputs 换了目录（哈希变）再停', async () => {
+    const { ro, rw } = dirs();
+    const specFile = join(mkdtempSync(join(root, 'spec-')), 'd.md');
+    const a = start('dirs:\n  readwrite: ["{out}"]', { target: ro, out: rw }, { specPath: specFile });
+    const p = await a.engine.advanceToCaller() as any; expect(p.status).toBe('paused');
+    a.engine.approveDirs(p.presented_data.context.dirs_hash);
+    const b = start('dirs:\n  readwrite: ["{out}"]', { target: ro, out: rw }, { specPath: specFile });
+    expect((await b.engine.advanceToCaller()).status).toBe('step_ready');   // 已批
+    const rw2 = mkdtempSync(join(root, 'rw-'));
+    const c = start('dirs:\n  readwrite: ["{out}"]', { target: ro, out: rw2 }, { specPath: specFile });
+    expect((await c.engine.advanceToCaller()).status).toBe('paused');   // 清单变了
+    // 同一目录从 readwrite 改成 read 也是新清单（哈希带 mode——变异：hash 不含 mode 本例绿）
+    const d = start('dirs:\n  read: ["{out}"]', { target: ro, out: rw }, { specPath: specFile });
+    expect(d.engine.getDeclaredDirs()!.dirs_hash).not.toBe(a.engine.getDeclaredDirs()!.dirs_hash);
+    expect((await d.engine.advanceToCaller()).status).toBe('paused');
+  });
+
+  // ── dirs 批工程链 review 修复批补测（2026-10-07）──
+  it('正例：parallel worker 继承父 declared_dirs——launch_command 参数文件带保留键,worker init 不重展开（{var} 子树未绑定也不 INIT_FAILED）且两白名单在场', async () => {
+    const { ro, rw } = dirs();
+    const PAR_DIRS = `# PD
+Id: pd
+
+## Goal
+G
+
+## Inputs
+- nums % [int]  # 列表
+- out % line  # 报告目录
+
+## Outputs
+- outs % [int]  # 收集
+
+## Config
+dirs:
+  readwrite: ["{out}"]
+
+## Steps
+1. [loop for-each n in nums, collect o into outs] 逐项
+  + → outs % [int]  # 收集列表
+  1.1. [subtask parallel] 处理一项
+    + → o % int  # 单项
+    1.1.1. [act] 算
+      - ← n
+      + → o % int  # 结果
+      > 纯计算
+      > \`\`\`hop_python
+      > o = n * 7
+      > \`\`\`
+2. [exit] 交付
+`;
+    const ws = mkdtempSync(join(root, 'ws-')); const specFile = join(mkdtempSync(join(root, 'spec-')), 'pd.md'); writeFileSync(specFile, PAR_DIRS);
+    const parent = new ExecutionEngine();
+    const init = parent.initExecution(PAR_DIRS, hostFor(ws), { stateDir: join(root, 'state'), specPath: specFile, params: { nums: [3], out: rw }, canFanout: true, cliAbsPath: '/fake/cli.js' });
+    expect(init.status).toBe('ok');
+    const p = await parent.advanceToCaller() as any; expect(p.status).toBe('paused');
+    parent.approveDirs(p.presented_data.context.dirs_hash);
+    parent.setUnifiedDispatch(true);
+    const d = await parent.advanceToCaller() as any;
+    expect(d.status).toBe('dispatch_ready');
+    const m = /--params "@([^"]+)"/.exec(d.launch_command); expect(m).not.toBeNull();
+    const sent = JSON.parse(readFileSync(m![1], 'utf-8'));
+    expect(sent['__hop_declared_dirs']).toEqual(parent.getDeclaredDirs());   // 保留键透传父清单
+    expect('out' in sent).toBe(false);   // 子树没 ← out,params_for_child 里没有它——worker 若重展开必缺值
+    // worker：组合根摘出保留键进 inheritedDirs（cli.extractInheritedDirs 同款）,init 不重展开
+    const inherited = sent['__hop_declared_dirs']; delete sent['__hop_declared_dirs'];
+    const worker = new ExecutionEngine();
+    const wi = worker.initExecution(PAR_DIRS, hostFor(ws), { stateDir: join(root, 'state', init.instance_id!, 'parallel'), specPath: specFile, params: sent, subtreeRoot: d.child_instance.split('.').slice(0, 2).join('.'), parentInstanceId: init.instance_id!, inheritedDirs: inherited, canFanout: false });
+    expect(wi.status, JSON.stringify(wi)).toBe('ok');
+    const whc = (worker as any).hostConfig;
+    expect(whc.sandbox.filesystem.write_access.allowed).toEqual([rw]);
+    expect(worker.getDeclaredDirs()).toEqual(inherited);
+    expect((await worker.advanceToCaller()).status).not.toBe('paused');   // 父批过,worker 不再问
+  });
+
+  it('正例：status 对 dirs 停点报 paused/dirs 且无 paused_step_id（源⑥）;批准后报 running', async () => {
+    const { rw } = dirs();
+    const { engine } = start('dirs:\n  readwrite: ["{out}"]', { target: '/tmp', out: rw });
+    const p = await engine.advanceToCaller() as any; expect(p.status).toBe('paused');
+    const st = engine.getStatus() as any;
+    expect(st.execution_status).toBe('paused'); expect(st.pause_reason).toBe('dirs'); expect('paused_step_id' in st).toBe(false);
+    engine.approveDirs(p.presented_data.context.dirs_hash);
+    expect((engine.getStatus() as any).execution_status).not.toBe('paused');
+  });
+
+  it('正例：approveDirs 记账后 persist——state.json exec_events 含 dirs_approved,paused.json 已删', async () => {
+    const { rw } = dirs();
+    const { engine, init } = start('dirs:\n  readwrite: ["{out}"]', { target: '/tmp', out: rw });
+    const p = await engine.advanceToCaller() as any;
+    const idir = join(root, 'state', init.instance_id!);
+    expect(existsSync(join(idir, 'paused.json'))).toBe(true);
+    engine.approveDirs(p.presented_data.context.dirs_hash);
+    expect(existsSync(join(idir, 'paused.json'))).toBe(false);
+    const st = JSON.parse(readFileSync(join(idir, 'state.json'), 'utf-8'));
+    expect(st.exec_events.some((e: any) => e.event === 'dirs_approved')).toBe(true);
+  });
+
+  it('反例：workspace 兄弟目录（<ws>2）不算 workspace 内——进 outside 要问人（变异：inWs 去分隔符边界本例红）', async () => {
+    const ws = mkdtempSync(join(root, 'ws-')); const sib = ws + '2'; mkdirSync(sib);
+    const specFile = join(mkdtempSync(join(root, 'spec-')), 'd.md'); writeFileSync(specFile, SPEC('dirs:\n  readwrite: ["{out}"]'));
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC('dirs:\n  readwrite: ["{out}"]'), hostFor(ws), { stateDir: join(root, 'state'), specPath: specFile, params: { target: '/tmp', out: sib } });
+    expect(engine.getDeclaredDirs()!.outside.map(o => o.path)).toEqual([sib]);
+    expect((await engine.advanceToCaller()).status).toBe('paused');
+  });
+
+  it('反例：同清单不同 spec 不互认——spec A 批过,spec B（另一路径,同 dirs）仍停（变异：账比对去 spec_path 条件本例红）', async () => {
+    const { rw } = dirs();
+    const a = start('dirs:\n  readwrite: ["{out}"]', { target: '/tmp', out: rw });
+    const pa = await a.engine.advanceToCaller() as any; a.engine.approveDirs(pa.presented_data.context.dirs_hash);
+    const b = start('dirs:\n  readwrite: ["{out}"]', { target: '/tmp', out: rw });   // 另一个 spec 文件路径
+    expect(a.specFile).not.toBe(b.specFile);
+    expect((await b.engine.advanceToCaller()).status).toBe('paused');
+  });
+
+  it('反例：引擎兜底形态拒——dirs 非映射 / read 非列表 / 条目非字符串 / 存在但是文件 → 各 INIT_FAILED', () => {
+    const f = join(root, 'afile.txt'); writeFileSync(f, 'x');
+    for (const [y, re] of [['dirs: ["/tmp"]', /须是 \{read\?/], ['dirs:\n  read: "/tmp"', /须是列表/], ['dirs:\n  read: [1]', /非空字符串/], [`dirs:\n  read: ["${f}"]`, /目录不存在/]] as const) {
+      const { init } = start(y, { target: '/tmp', out: '/tmp' });
+      expect(init.status, y).toBe('error'); expect((init as any).errors[0].message, y).toMatch(re);
+    }
+  });
+
+  it('正例：停点 context.dirs 只列 workspace 外条目——workspace 内的 read 不进清单', async () => {
+    const wsIn = mkdtempSync(join(root, 'wsin-')); const inner = join(wsIn, 'in'); mkdirSync(inner); const { rw } = dirs();
+    const specFile = join(mkdtempSync(join(root, 'spec-')), 'd.md'); writeFileSync(specFile, SPEC('dirs:\n  read: ["{target}"]\n  readwrite: ["{out}"]'));
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC('dirs:\n  read: ["{target}"]\n  readwrite: ["{out}"]'), hostFor(wsIn), { stateDir: join(root, 'state'), specPath: specFile, params: { target: inner, out: rw } });
+    const p = await engine.advanceToCaller() as any;
+    expect(p.presented_data.context.dirs).toEqual([{ path: rw, mode: 'readwrite' }]);
+  });
+
+  it('正例：resume 不重算——load 后改 params 文件也不影响 declared_dirs（取自快照）', async () => {
+    const { rw } = dirs();
+    const { engine, init } = start('dirs:\n  readwrite: ["{out}"]', { target: '/tmp', out: rw });
+    await engine.advanceToCaller();
+    const loaded = ExecutionEngine.load(join(root, 'state', init.instance_id!));
+    expect(loaded.getDeclaredDirs()!.dirs_hash).toBe(engine.getDeclaredDirs()!.dirs_hash);
+    expect(loaded.checkDirsApproval()!.outside).toEqual([{ path: rw, mode: 'readwrite' }]);
+  });
+
+  it('正例：{中文变量名} 引用 Inputs 中文名——展开成功', () => {
+    const { rw } = dirs();
+    const Z = `# Z
+Id: z
+## Goal
+G
+## Inputs
+- 报告目录 % line  # o
+## Outputs
+- r % line  # r
+## Config
+dirs:
+  readwrite: ["{报告目录}"]
+## Steps
+1. [reason] a
+  + → r % line  # r
+`;
+    const ws = mkdtempSync(join(root, 'ws-')); const specFile = join(mkdtempSync(join(root, 'spec-')), 'z.md'); writeFileSync(specFile, Z);
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(Z, hostFor(ws), { stateDir: join(root, 'state'), specPath: specFile, params: { '报告目录': rw } });
+    expect(init.status, JSON.stringify(init)).toBe('ok');
+    expect(engine.getDeclaredDirs()!.readwrite).toEqual([rw]);
+  });
+
+  it('独立模式 dirsGrant：缺 → INIT_FAILED 不建实例目录;realpath 形态对上 → ok 且记账;多传 → warnings 回显原路径不授', async () => {
+    const { rw } = dirs(); const extra = mkdtempSync(join(root, 'extra-'));
+    const ws = mkdtempSync(join(root, 'ws-')); const specFile = join(mkdtempSync(join(root, 'spec-')), 'g.md'); writeFileSync(specFile, SPEC('dirs:\n  readwrite: ["{out}"]'));
+    const sd = mkdtempSync(join(root, 'st-'));
+    const e1 = new ExecutionEngine();
+    const miss = e1.initExecution(SPEC('dirs:\n  readwrite: ["{out}"]'), hostFor(ws), { stateDir: sd, specPath: specFile, params: { target: '/tmp', out: rw }, dirsGrant: {} });
+    expect(miss.status).toBe('error'); expect((miss as any).errors[0].message).toContain(`readwrite:${rw}`);
+    expect(readdirSync(sd).filter(n => n !== 'dirs_approvals.json')).toEqual([]);   // 不建实例
+    // 调用方传"同一目录的另一写法"——经软链别名（macOS /tmp→/private/tmp 同形）:对账键两边取真实路径才对得上
+    const linkRoot = mkdtempSync(join(root, 'ln-')); symlinkSync(rw, join(linkRoot, 'rwlink'));
+    const alias = join(linkRoot, 'rwlink');
+    expect(alias).not.toBe(rw);
+    const e2 = new ExecutionEngine();
+    const ok = e2.initExecution(SPEC('dirs:\n  readwrite: ["{out}"]'), hostFor(ws), { stateDir: sd, specPath: specFile, params: { target: '/tmp', out: rw }, dirsGrant: { readwrite: [alias], read: [extra] } });
+    expect(ok.status, JSON.stringify(ok)).toBe('ok');
+    expect((ok as any).warnings.some((w: any) => w.message.includes(`read:${extra}`) && w.message.includes('不授权'))).toBe(true);
+    expect(e2.checkDirsApproval()!.approved).toBe(true);
+    const recs = JSON.parse(readFileSync(join(root, 'dirs_approvals.json'), 'utf-8'));   // 本 describe 的 resolver 把账放 root
+    // 批准账的 spec 路径键取真实路径（canonicalSpecPath,与 commit 账同一取法;macOS 临时区 /var→/private/var）
+    expect(recs.some((r: any) => r.spec_path === realpathSync(specFile) && r.dirs_hash === e2.getDeclaredDirs()!.dirs_hash)).toBe(true);
+  });
+
+  it('正例：load 从快照回填 declared_dirs——跨进程 resume 仍知道清单与哈希,不重算', async () => {
+    const { rw } = dirs();
+    const { engine, init } = start('dirs:\n  readwrite: ["{out}"]', { target: '/tmp', out: rw });
+    await engine.advanceToCaller();
+    const loaded = ExecutionEngine.load(join(root, 'state', init.instance_id!));
+    expect(loaded.getDeclaredDirs()).toEqual(engine.getDeclaredDirs());
+    expect(loaded.checkDirsApproval()?.approved).toBe(false);
+  });
+
+  it('反例：内存态（无 stateDir）或 resolver 缺席 → 闸关,approved=true 不停', async () => {
+    const { rw } = dirs();
+    const { engine } = start('dirs:\n  readwrite: ["{out}"]', { target: '/tmp', out: rw }, { memory: true });
+    expect(engine.checkDirsApproval()?.approved).toBe(true);
+    expect((await engine.advanceToCaller()).status).toBe('step_ready');
+  });
+
+  function homedirOf(): string { return homedir(); }
+});
+
+// 容器收口的失败判据（hopissues/0121,2026-10-07）：全部直接子步到终态、其中有 failed 且失败未被本容器 on fail
+// 消化 → subtask/case/loop 容器 failed（与 branch 同款）。此前无条件 done——子步 failed、容器 done、整场 failed 同框。
+// 设计 exec-engine ^anc-exec-container-fail-close。
+describe('容器收口的失败判据（hopissues/0121）', () => {
+  function states(e: ExecutionEngine): Map<string, string> { return (e as unknown as { stepStates: Map<string, string> }).stepStates; }
+
+  // @v: anc-exec-container-fail-close
+  it('反例（0121 probe 形态）：subtask retry=2 内已有成功 commit 把边界退火、后续子步 failed → 失败走"未捕获=实例终止"分支,级联收口时容器 failed（修前 done）,hoplog 容器块 failed,terminal_failure 指子步（变异：删 childFailed 判据本例红）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cfc-'));
+    const spec = `# T\nId: t\n## Goal\ng\n## Outputs\n- o: text  # x\n## Steps\n1. [subtask retry=2] 组\n  + → o: text  # x\n  1.1. [act] 备\n    + → a: text  # a\n  1.2. [act] 落\n    - ← a\n    + → b: text  # b\n  1.3. [act] 败\n    - ← b\n    + → o: text  # x\n`;
+    const e = new ExecutionEngine();
+    e.initExecution(spec, MINIMAL_HOST_CONFIG, { logDir: dir });
+    e.nextStep(); e.completeStep('1.1', { a: 'ok' });
+    e.nextStep(); e.completeStep('1.2', { b: 'ok' });
+    e.markCommitted('1.2');                                                    // 等价于 1.2 是已执行的 commit——边界 1 退火,retry=2 不可用
+    e.nextStep(); e.failStep('1.3', 'ENOENT');
+    const r = e.nextStep();
+    expect(r.status).toBe('failed');
+    const st = (e as unknown as { terminalFailure?: { stepId: string } }).terminalFailure;
+    expect(st?.stepId).toBe('1.3');
+    expect(states(e).get('1.3')).toBe('failed');
+    expect(states(e).get('1')).toBe('failed');                               // 修前 done——子 failed、组 done、整场 failed 同框
+    const log = readFileSync(join(e.getHopLog()!.getRunDir(), 'main.yaml'), 'utf-8');
+    expect(log).toMatch(/"1":\n\s+status: failed/);
+    expect(log).not.toMatch(/"1":\n\s+status: completed/);
+  });
+
+  // @v: anc-exec-container-fail-close
+  it('反例：subtask retry=0 子步 failed → 容器 failed（retry 耗尽路径 markSubtaskFailed 本就标 failed;本例钉住两条路终态一致,级联不把它改回 done）', () => {
+    const spec = `# T\nId: t\n## Goal\ng\n## Outputs\n- o: text  # x\n## Steps\n1. [subtask retry=0] 组\n  + → o: text  # x\n  1.1. [act] 备\n    + → a: text  # a\n  1.2. [act] 败\n    - ← a\n    + → o: text  # x\n`;
+    const e = new ExecutionEngine();
+    e.initExecution(spec, MINIMAL_HOST_CONFIG);
+    e.nextStep(); e.completeStep('1.1', { a: 'ok' });
+    e.nextStep(); e.failStep('1.2', 'ENOENT');
+    expect(e.nextStep().status).toBe('failed');
+    expect(states(e).get('1')).toBe('failed');
+  });
+
+  // @v: anc-exec-container-fail-close
+  it('正例：同结构 retry=1 第一次失败被 retry 接住、重跑成功 → 容器 done（判据只在无人接住时生效）', () => {
+    const spec = `# T\nId: t\n## Goal\ng\n## Outputs\n- o: text  # x\n## Steps\n1. [subtask retry=1] 组\n  + → o: text  # x\n  1.1. [act] 干\n    + → o: text  # x\n`;
+    const e = new ExecutionEngine();
+    e.initExecution(spec, MINIMAL_HOST_CONFIG);
+    e.nextStep(); e.failStep('1.1', '第1败');
+    const again = e.nextStep();
+    expect(again.status).toBe('step_ready');
+    e.completeStep('1.1', { o: '修好' });
+    const r = e.nextStep();
+    expect(r.status).toBe('completed');
+    expect(states(e).get('1')).toBe('done');
+  });
+
+  // @v: anc-exec-container-fail-close, anc-exec-on-fail
+  it('正例：retry 耗尽转 on fail,兜底走完 → 失败被消化,容器 done（failed 子步仍在 children 里,靠 onFailConsumed 豁免;变异：删豁免本例红）', () => {
+    const spec = `# T\nId: t\n## Goal\ng\n## Outputs\n- o: text  # x\n## Steps\n1. [subtask retry=0] 组\n  + → o: text  # x\n  1.1. [act] 干\n    + → o: text  # x\n  1.2. [on fail] 兜底\n    1.2.1. [act] 降级\n      + → o: text  # x\n`;
+    const e = new ExecutionEngine();
+    e.initExecution(spec, MINIMAL_HOST_CONFIG);
+    e.nextStep(); e.failStep('1.1', '败');
+    const fb = e.nextStep();
+    expect(fb.status).toBe('step_ready');
+    if (fb.status === 'step_ready') expect(fb.step_id).toBe('1.2.1');
+    e.completeStep('1.2.1', { o: '兜底' });
+    const r = e.nextStep();
+    expect(r.status).toBe('completed');
+    expect(states(e).get('1.1')).toBe('failed');
+    expect(states(e).get('1')).toBe('done');
+  });
+
+  // @v: anc-exec-container-fail-close
+  it('反例：loop for-each 唯一子步 commit 失败（todo/0146 探针自撞形态：无 retry 边界、无 committed_steps）→ loop failed,收集列表为已完成部分', () => {
+    const spec = `# T\nId: t\n## Goal\ng\n## Inputs\n- xs: [int]  # 列\n## Outputs\n- ys: [int]  # 收\n## Steps\n1. [loop for-each x in xs, collect y into ys] 逐项\n  + → ys: [int]  # 收\n  1.1. [act] 算\n    - ← x\n    + → y: int  # 值\n`;
+    const e = new ExecutionEngine();
+    e.initExecution(spec, MINIMAL_HOST_CONFIG, { params: { xs: [1, 2, 3] } });
+    e.nextStep(); e.completeStep('1.1', { y: 10 });
+    e.nextStep(); e.failStep('1.1', '第二轮败');
+    const r = e.nextStep();
+    expect(r.status).toBe('failed');
+    expect(states(e).get('1')).toBe('failed');                               // 修前 done
+    expect(states(e).get('1.1')).toBe('failed');
+    expect(e.getVariableStore().readLocal('ys', 'root')).toEqual([10]);     // 收集列表为已完成部分写回 root（概念 ^anc-step-loop;getVars 会摊平 loop scope 的缓冲所以这里读 root 本地;变异：删 loop 分支失败时的 finalizeForEachCollect 本断言红）
+  });
+
+  // @v: anc-exec-container-fail-close
+  it('反例：case 子步 failed 无人接住 → case failed → branch failed（既有 branch 判据与新判据接力）', () => {
+    const spec = `# T\nId: t\n## Goal\ng\n## Inputs\n- k: int  # 键\n## Outputs\n- o: text  # x\n## Steps\n1. [branch] 选\n  + → o: text  # x\n  1.1. [case retry=0] k == 1\n    + → o: text  # x\n    1.1.1. [act] 干\n      + → o: text  # x\n  1.2. [case retry=0] k == 2\n    + → o: text  # x\n    1.2.1. [act] 干\n      + → o: text  # x\n`;
+    const e = new ExecutionEngine();
+    e.initExecution(spec, MINIMAL_HOST_CONFIG, { params: { k: 1 } });
+    e.nextStep(); e.failStep('1.1.1', '败');
+    const r = e.nextStep();
+    expect(r.status).toBe('failed');
+    expect(states(e).get('1.1')).toBe('failed');
+    expect(states(e).get('1')).toBe('failed');
+  });
+
+  // @v: anc-exec-container-fail-close
+  it('正例：子步全 done 的 subtask 照常 done;子步 skipped+done 混合（branch 未选 case）照常 done——判据只看 failed', () => {
+    const spec = `# T\nId: t\n## Goal\ng\n## Inputs\n- k: int  # 键\n## Outputs\n- o: text  # x\n## Steps\n1. [subtask] 组\n  + → o: text  # x\n  1.1. [branch] 选\n    + → o: text  # x\n    1.1.1. [case] k == 1\n      + → o: text  # x\n      1.1.1.1. [act] 干\n        + → o: text  # x\n    1.1.2. [case] k == 2\n      + → o: text  # x\n      1.1.2.1. [act] 干\n        + → o: text  # x\n`;
+    const e = new ExecutionEngine();
+    e.initExecution(spec, MINIMAL_HOST_CONFIG, { params: { k: 1 } });
+    e.nextStep(); e.completeStep('1.1.1.1', { o: 'v' });
+    const r = e.nextStep();
+    expect(r.status).toBe('completed');
+    expect(states(e).get('1.1.2')).toBe('skipped');
+    expect(states(e).get('1')).toBe('done');
+  });
+
+  // 六卡批 review 修复批补钉（面三 G6/G7/G8/G11,设计"不受影响路径"点名却无钉）
+  // @v: anc-exec-container-fail-close, anc-exec-on-fail
+  it('反例：on fail 块自身失败 → 不再兜,容器 failed、on_fail 容器 skipped（走 markSubtaskFailed 升级路,不经级联步 2——设计写明的依赖）', () => {
+    const spec = `# T\nId: t\n## Goal\ng\n## Outputs\n- o: text  # x\n## Steps\n1. [subtask retry=0] 组\n  + → o: text  # x\n  1.1. [act] 干\n    + → o: text  # x\n  1.2. [on fail] 兜底\n    1.2.1. [act] 也崩\n      + → o: text  # x\n`;
+    const e = new ExecutionEngine();
+    e.initExecution(spec, MINIMAL_HOST_CONFIG);
+    e.nextStep(); e.failStep('1.1', '败');
+    const fb = e.nextStep();
+    expect(fb.status).toBe('step_ready');
+    e.failStep('1.2.1', '兜底也崩');
+    expect(e.nextStep().status).toBe('failed');
+    expect(states(e).get('1')).toBe('failed');
+    expect(states(e).get('1.2')).toBe('skipped');
+    expect(states(e).get('1.2.1')).toBe('failed');
+  });
+
+  // @v: anc-exec-container-fail-close
+  it('反例：条件 loop（max_iterations）子步 failed 无人接住 → loop failed', () => {
+    const spec = `# T\nId: t\n## Goal\ng\n## Outputs\n- o: int  # x\n## Steps\n1. [loop max_iterations=3] 重复\n  + → o: int  # x\n  1.1. [act] 干\n    + → o: int  # x\n  1.2. [act] 败\n    - ← o\n    + → o: int  # x\n`;
+    const e = new ExecutionEngine();
+    e.initExecution(spec, MINIMAL_HOST_CONFIG);
+    e.nextStep(); e.completeStep('1.1', { o: 1 });
+    e.nextStep(); e.failStep('1.2', '败');
+    expect(e.nextStep().status).toBe('failed');
+    expect(states(e).get('1')).toBe('failed');
+    expect(states(e).get('1.2')).toBe('failed');
+  });
+
+  // @v: anc-exec-container-fail-close, anc-exec-parallel-reap-drain
+  it('正例：退化串行（unifiedDispatch 关）的 parallel subtask 耗尽 → 集合语义就地消化,子孙全 skipped、容器 done、主线继续（新判据看不到 failed）', () => {
+    const spec = `# T\nId: t\n## Goal\ng\n## Inputs\n- xs: [int]  # 列\n## Outputs\n- ys: [int]  # 收\n## Steps\n1. [loop for-each x in xs, collect y into ys] 逐项\n  + → ys: [int]  # 收\n  1.1. [subtask parallel retry=0] 项\n    + → y: int  # 值\n    1.1.1. [act] 干\n      - ← x\n      + → y: int  # 值\n`;
+    const e = new ExecutionEngine();
+    e.initExecution(spec, MINIMAL_HOST_CONFIG, { params: { xs: [1, 2] } });
+    e.nextStep(); e.completeStep('1.1.1', { y: 10 });
+    e.nextStep(); e.failStep('1.1.1', '第二项败');
+    const r = e.nextStep();
+    expect(r.status).toBe('completed');
+    expect(states(e).get('1.1')).toBe('done');
+    expect(states(e).get('1.1.1')).toBe('skipped');
+    if (r.status === 'completed') expect(r.outputs?.['ys']).toEqual([10]);
+  });
+
+  // @v: anc-exec-container-fail-close
+  it('反例：失败容器不提升声明输出——父 scope 读不到容器声明的 o（子步失败前已写的 a 原样保留,fail 不碰值空间）', () => {
+    const spec = `# T\nId: t\n## Goal\ng\n## Outputs\n- o: text  # x\n## Steps\n1. [subtask retry=0] 组\n  + → o: text  # x\n  1.1. [act] 备\n    + → a: text  # a\n  1.2. [act] 败\n    - ← a\n    + → o: text  # x\n`;
+    const e = new ExecutionEngine();
+    e.initExecution(spec, MINIMAL_HOST_CONFIG);
+    e.nextStep(); e.completeStep('1.1', { a: 'ok' });
+    e.nextStep(); e.failStep('1.2', '败');
+    expect(e.nextStep().status).toBe('failed');
+    expect(states(e).get('1')).toBe('failed');
+    expect(e.getVars().variables['o']).toBeUndefined();
+    expect(e.getVars().variables['a']).toBe('ok');
+  });
+});
+
+// ask 应答映射四分支（hopissues/0119,2026-10-07）：信封里按声明名分好家的对象按键拆解;文本型声明收到对象/数组拒收。
+// 设计 step-dispatcher ^anc-exec-hitl-presentation。
+describe('ask 信封应答按声明名分拆与文本型拒收（hopissues/0119）', () => {
+  const SPEC2 = `# T\nId: t\n## Goal\ng\n## Inputs\n- p: line  # 占位\n## Outputs\n- r: text  # r\n## Steps\n1. [ask] 两值\n  - ← p\n  + → decl_a: line  # 甲\n  + → decl_b: line  # 乙\n2. [reason] 用\n  - ← decl_a, decl_b\n  + → r: text  # r\n`;
+  function fresh(): ExecutionEngine { const e = new ExecutionEngine(); e.initExecution(SPEC2, MINIMAL_HOST_CONFIG, { params: { p: 'x' } }); e.nextStep(); return e; }
+
+  // @v: anc-exec-hitl-presentation
+  it('正例：信封 {value:{decl_a,decl_b}} → 按声明名分拆,两声明各得各值（0119 probe 场景一;变异：删分支①b 本例红——两声明都成整对象）', () => {
+    const e = fresh();
+    const r = e.completeStep('1', { value: { decl_a: 'x', decl_b: 'y' } });
+    expect(r.status).toBe('ok');
+    expect(e.getVars().variables['decl_a']).toBe('x');
+    expect(e.getVars().variables['decl_b']).toBe('y');
+  });
+
+  // @v: anc-exec-hitl-presentation
+  it('正例：顶层直接按声明名提交（分支①）与单声明 {value:"x"}（分支②）行为不变', () => {
+    const e = fresh();
+    expect(e.completeStep('1', { decl_a: 'x', decl_b: 'y' }).status).toBe('ok');
+    expect(e.getVars().variables['decl_b']).toBe('y');
+    const one = `# T\nId: t\n## Goal\ng\n## Outputs\n- r: text  # r\n## Steps\n1. [ask] 一值\n  + → only: line  # 唯一\n2. [reason] 用\n  - ← only\n  + → r: text  # r\n`;
+    const e2 = new ExecutionEngine(); e2.initExecution(one, MINIMAL_HOST_CONFIG); e2.nextStep();
+    expect(e2.completeStep('1', { value: 'solo' }).status).toBe('ok');
+    expect(e2.getVars().variables['only']).toBe('solo');
+  });
+
+  // @v: anc-exec-hitl-presentation
+  it('反例：line 声明收到对象（信封内对象键与声明零交集,落分支②整对象灌满）→ SCHEMA_MISMATCH 带 ASK_ANSWER_SHAPE,不写表、卡保留可重交（变异：删拒收本例红）', () => {
+    const e = fresh();
+    const r = e.completeStep('1', { value: { foo: 1, bar: 2 } });
+    expect(r.status).toBe('error');
+    expect(r.code).toBe(ErrorCode.SCHEMA_MISMATCH);
+    expect(r.message).toContain('ASK_ANSWER_SHAPE');
+    expect(r.message).toContain('decl_a');
+    expect(r.message).toContain('"decl_a": "<值>"');                        // 按声明名提交的样例
+    expect(e.getVars().variables['decl_a']).toBeUndefined();
+    expect(e.completeStep('1', { decl_a: 'x', decl_b: 'y' }).status).toBe('ok');   // 卡保留,再交合法应答续
+  });
+
+  // @v: anc-exec-hitl-presentation
+  it('反例：line 声明收到数组同样拒;正例：yaml 声明收对象是合法值放行（拒收面只管文本三型）', () => {
+    const e = fresh();
+    const r = e.completeStep('1', { decl_a: ['x'], decl_b: 'y' });
+    expect(r.status).toBe('error');
+    expect(r.message).toContain('数组');
+    const yspec = `# T\nId: t\n## Goal\ng\n## Outputs\n- r: text  # r\n## Steps\n1. [ask] 结构\n  + → cfg: yaml  # 配置\n2. [reason] 用\n  - ← cfg\n  + → r: text  # r\n`;
+    const e2 = new ExecutionEngine(); e2.initExecution(yspec, MINIMAL_HOST_CONFIG); e2.nextStep();
+    expect(e2.completeStep('1', { value: { host: 'h', port: 1 } }).status).toBe('ok');
+    expect((e2.getVars().variables['cfg'] as Record<string, unknown>)['port']).toBe(1);
+  });
+
+  // @v: anc-exec-hitl-presentation
+  it('正例：approve 快捷（分支③）不受影响——前序有同名推断值时 {value:"approve"} 采用之', () => {
+    const spec = `# T\nId: t\n## Goal\ng\n## Outputs\n- r: text  # r\n## Steps\n1. [reason] 推\n  + → name: line  # 名\n2. [ask] 确认\n  - ← name\n  + → name: line  # 名\n3. [reason] 用\n  - ← name\n  + → r: text  # r\n`;
+    const e = new ExecutionEngine(); e.initExecution(spec, MINIMAL_HOST_CONFIG);
+    e.nextStep(); e.completeStep('1', { name: '推断值' });
+    e.nextStep();
+    expect(e.completeStep('2', { value: 'approve' }).status).toBe('ok');
+    expect(e.getVars().variables['name']).toBe('推断值');
+  });
+
+  // 六卡批 review 修复批补钉（面三 G10,变异 e/j 全绿）
+  // @v: anc-exec-hitl-presentation
+  it('反例：text 与 markdown 声明收到对象同样 ASK_ANSWER_SHAPE 拒（变异：TEXT_DECL_TYPES 去 markdown 本例红）', () => {
+    const spec = `# T\nId: t\n## Goal\ng\n## Outputs\n- r: text  # r\n## Steps\n1. [ask] 两段\n  + → body: text  # 正文\n  + → doc: markdown  # 文档\n2. [reason] 用\n  - ← body, doc\n  + → r: text  # r\n`;
+    const e = new ExecutionEngine(); e.initExecution(spec, MINIMAL_HOST_CONFIG); e.nextStep();
+    const r1 = e.completeStep('1', { body: { k: 1 }, doc: 'ok' });
+    expect(r1.status).toBe('error'); expect(r1.message).toContain('ASK_ANSWER_SHAPE'); expect(r1.message).toContain("'body' 是 text");
+    const r2 = e.completeStep('1', { body: 'ok', doc: ['x'] });
+    expect(r2.status).toBe('error'); expect(r2.message).toContain("'doc' 是 markdown");
+    expect(e.completeStep('1', { body: 'ok', doc: '# t' }).status).toBe('ok');
+  });
+
+  // @v: anc-exec-hitl-presentation
+  it('正例：信封内对象只命中部分声明名 → 按信封内键命中采用,未命中的声明落 undefined 由部分映射容忍放行;文本型声明值为 null 不撞 SHAPE（归零映射闸管,部分 null 放行）', () => {
+    const e = fresh();
+    expect(e.completeStep('1', { value: { decl_a: 'x', other: 1 } }).status).toBe('ok');
+    expect(e.getVars().variables['decl_a']).toBe('x');
+    expect(e.getVars().variables['decl_b']).toBeUndefined();
+    const e2 = fresh();
+    expect(e2.completeStep('1', { decl_a: 'x', decl_b: null }).status).toBe('ok');   // 变异：SHAPE 判删 !== null 排除 → 本行拒,红
+    const e3 = fresh();
+    const r = e3.completeStep('1', { decl_a: null, decl_b: { k: 1 } });              // 混合：先撞 SHAPE,点名装对象的 decl_b
+    expect(r.status).toBe('error'); expect(r.message).toContain('ASK_ANSWER_SHAPE'); expect(r.message).toContain("'decl_b'");
+  });
+
+  // @v: anc-exec-hitl-presentation, anc-exec-stale-resubmit
+  it('正例：幂等重发同一信封应答 → ALREADY_DONE（比对路径经信封内键命中后与已存值相等）;重发坏形态（line 收对象）→ STALE_RESUBMIT 不出 SHAPE（拒收面只在写入路径）', () => {
+    const e = fresh();
+    expect(e.completeStep('1', { value: { decl_a: 'x', decl_b: 'y' } }).status).toBe('ok');
+    const again = e.completeStep('1', { value: { decl_a: 'x', decl_b: 'y' } });
+    expect(again.status).toBe('ok'); expect(again.code).toBe(ErrorCode.ALREADY_DONE);
+    const bad = e.completeStep('1', { value: { foo: 1 } });
+    expect(bad.status).toBe('error'); expect(bad.code).toBe(ErrorCode.INVALID_STATE);
+    expect(bad.message).toContain('STALE_RESUBMIT'); expect(bad.message).not.toContain('ASK_ANSWER_SHAPE');
+  });
+
+  // 2026-10-08 作者定"拒收并说明原因"（六卡批 review N1）：两个以上声明被同一个对象灌满 → ASK_ANSWER_FLOOD。
+  // 定性为防御性兜底——多声明结构化 ask 不是推荐写法（概念 ask 要数据值,结构化数据由前置步骤备好）。
+  // @v: anc-exec-hitl-presentation
+  it('反例：两个 yaml 声明收到信封内键与声明名零交集的对象 → ASK_ANSWER_FLOOD 拒收并说明原因,不写表、卡保留;按声明名分键重交放行（变异：删灌满判据本例红——修前两声明各装同一份对象,引擎报成功）', () => {
+    const spec = `# T\nId: t\n## Goal\ng\n## Outputs\n- r: text  # r\n## Steps\n1. [ask] 部署配置\n  + → db_config: yaml  # 数据库\n  + → cache_config: yaml  # 缓存\n2. [reason] 用\n  - ← db_config, cache_config\n  + → r: text  # r\n`;
+    const e = new ExecutionEngine(); e.initExecution(spec, MINIMAL_HOST_CONFIG); e.nextStep();
+    const r = e.completeStep('1', { value: { host: 'db1', port: 5432 } });
+    expect(r.status).toBe('error'); expect(r.code).toBe(ErrorCode.SCHEMA_MISMATCH);
+    expect(r.message).toContain('ASK_ANSWER_FLOOD');
+    expect(r.message).toContain('同一份对象'); expect(r.message).toContain('按声明名分键');     // 说明原因
+    expect(r.message).toContain('"db_config": <yaml 值>');                                      // 样例
+    expect(e.getVars().variables['db_config']).toBeUndefined();
+    expect(e.getVars().variables['cache_config']).toBeUndefined();
+    const ok = e.completeStep('1', { value: { db_config: { host: 'db1' }, cache_config: { host: 'redis1' } } });
+    expect(ok.status).toBe('ok');
+    expect((e.getVars().variables['cache_config'] as Record<string, unknown>)['host']).toBe('redis1');
+  });
+
+  // @v: anc-exec-hitl-presentation
+  it('正例：单个 yaml 声明收对象不经 FLOOD 闸;两个 yaml 声明顶层按声明名提交放行;两声明显式各写一份同值对象放行（两份是不同引用,不算灌满）', () => {
+    const one = `# T\nId: t\n## Goal\ng\n## Outputs\n- r: text  # r\n## Steps\n1. [ask] 配置\n  + → cfg: yaml  # 配置\n2. [reason] 用\n  - ← cfg\n  + → r: text  # r\n`;
+    const e1 = new ExecutionEngine(); e1.initExecution(one, MINIMAL_HOST_CONFIG); e1.nextStep();
+    expect(e1.completeStep('1', { value: { host: 'h' } }).status).toBe('ok');
+    const two = `# T\nId: t\n## Goal\ng\n## Outputs\n- r: text  # r\n## Steps\n1. [ask] 两份\n  + → a: yaml  # 甲\n  + → b: yaml  # 乙\n2. [reason] 用\n  - ← a, b\n  + → r: text  # r\n`;
+    const e2 = new ExecutionEngine(); e2.initExecution(two, MINIMAL_HOST_CONFIG); e2.nextStep();
+    expect(e2.completeStep('1', { a: { x: 1 }, b: { y: 2 } }).status).toBe('ok');
+    const e3 = new ExecutionEngine(); e3.initExecution(two, MINIMAL_HOST_CONFIG); e3.nextStep();
+    expect(e3.completeStep('1', { a: { same: 1 }, b: { same: 1 } }).status).toBe('ok');            // 显式各写一份,合法
+  });
+
+  // @v: anc-exec-hitl-presentation
+  it('判序：文本型 + yaml 型混合声明被同一对象灌满 → 先报 ASK_ANSWER_SHAPE（文本型报文更具体）,不报 FLOOD', () => {
+    const spec = `# T\nId: t\n## Goal\ng\n## Outputs\n- r: text  # r\n## Steps\n1. [ask] 混合\n  + → name: line  # 名\n  + → cfg: yaml  # 配置\n2. [reason] 用\n  - ← name, cfg\n  + → r: text  # r\n`;
+    const e = new ExecutionEngine(); e.initExecution(spec, MINIMAL_HOST_CONFIG); e.nextStep();
+    const r = e.completeStep('1', { value: { host: 'h' } });
+    expect(r.status).toBe('error'); expect(r.message).toContain('ASK_ANSWER_SHAPE'); expect(r.message).not.toContain('FLOOD');
+  });
+
+  // 2026-10-08 作者定"至少要给一个建议输入让人来改"：ask 停点载荷 default_values 按声明名分键,每个声明前序同名产出当建议值。
+  // @v: anc-exec-hitl-presentation
+  it('正例：两声明的 ask,前序各有同名产出 → paused 载荷 default_values 两键各带值,default_value 仍只给第一个声明（向后兼容）;只有一个有前序值 → default_values 只含那一键;都没有 → 字段缺席（变异：删 default_values 拼装本例红）', () => {
+    const spec = `# T\nId: t\n## Goal\ng\n## Outputs\n- r: text  # r\n## Steps\n1. [reason] 推荐\n  + → db_config: yaml  # 库\n  + → cache_config: yaml  # 缓存\n2. [ask] 确认两份配置\n  - ← db_config, cache_config\n  + → db_config: yaml  # 库\n  + → cache_config: yaml  # 缓存\n3. [reason] 用\n  - ← db_config, cache_config\n  + → r: text  # r\n`;
+    const e = new ExecutionEngine(); e.initExecution(spec, MINIMAL_HOST_CONFIG);
+    e.nextStep(); e.completeStep('1', { db_config: { host: 'db1' }, cache_config: { host: 'redis1' } });
+    const p = e.nextStep();
+    expect(p.status).toBe('paused');
+    if (p.status === 'paused') {
+      expect(p.presented_data.default_values).toEqual({ db_config: { host: 'db1' }, cache_config: { host: 'redis1' } });
+      expect(p.presented_data.default_value).toEqual({ host: 'db1' });
+    }
+    const spec2 = `# T\nId: t\n## Goal\ng\n## Outputs\n- r: text  # r\n## Steps\n1. [reason] 推荐\n  + → db_config: yaml  # 库\n2. [ask] 两份\n  - ← db_config\n  + → db_config: yaml  # 库\n  + → cache_config: yaml  # 缓存\n3. [reason] 用\n  - ← db_config, cache_config\n  + → r: text  # r\n`;
+    const e2 = new ExecutionEngine(); e2.initExecution(spec2, MINIMAL_HOST_CONFIG);
+    e2.nextStep(); e2.completeStep('1', { db_config: { host: 'db1' } });
+    const p2 = e2.nextStep();
+    if (p2.status === 'paused') expect(Object.keys(p2.presented_data.default_values ?? {})).toEqual(['db_config']);
+    const spec3 = `# T\nId: t\n## Goal\ng\n## Outputs\n- r: text  # r\n## Steps\n1. [ask] 裸问\n  + → cfg: yaml  # 配置\n2. [reason] 用\n  - ← cfg\n  + → r: text  # r\n`;
+    const e3 = new ExecutionEngine(); e3.initExecution(spec3, MINIMAL_HOST_CONFIG);
+    const p3 = e3.nextStep();
+    if (p3.status === 'paused') { expect(p3.presented_data.default_values).toBeUndefined(); expect(p3.presented_data.default_value).toBeUndefined(); }
+  });
+});
+
+// ============================================================
+// todo/0162：state.json 持久化字段跨进程往返。
+// 缺口：引擎往 state.json 写的六个运行时字段（on_fail_active / on_fail_consumed / deterministic_waived /
+// pending_chain_feeds / subtree_root / expansion_count）此前只有同进程内存态断言,没有一条是
+// "写盘 → 用同一目录新建 ExecutionEngine.load → 字段还在且值对"。每个字段一条正例,形态固定：
+// 把引擎跑到该字段有非缺省值 → persist（failStep / submitReplan / reapParallelCall 内部都会写盘）→
+// load 出新引擎 → 优先用可观察行为断言（nextStep 响应 / getter / 事件流）,没有可观察面的才读私有字段。
+// 另一条反例：手工删掉盘上 state.json 里的键 → load 后按"缺席缺省"走,证明 load 真的在读这个键。
+// 变异证明（记在 TRACEABILITY 对应卡）：对每个字段,注释掉 buildStateFile 的写出行或 load 的回填行,
+// 对应正例必须红——十二次重放各红。
+// ============================================================
+describe('state.json 持久化字段跨进程往返（todo/0162）', () => {
+  const ROUNDTRIP_OF_SPEC = `# RT-OF
+Id: rt-of
+## Goal
+g
+## Outputs
+- out: text  # o
+## Steps
+1. [subtask retry=0] 主活
+  + → out: text  # o
+  1.1. [act] 干活
+    + → out: text  # 产出
+  1.2. [on fail] 失败兜底
+    1.2.1. [act] 记档降级
+      + → out: text  # 兜底值
+2. [exit]
+`;
+
+  // 把引擎跑到"兜底已激活、兜底首步 1.2.1 已交付 caller 正等回写"的状态并落盘,返回实例目录。
+  function driveToOnFailActivated(): { engine: ExecutionEngine; instanceDir: string } {
+    const stateDir = mkdtempSync(join(tmpdir(), 'rt0162-of-'));
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(ROUNDTRIP_OF_SPEC, MINIMAL_HOST_CONFIG, { stateDir }) as { status: string; instance_id: string };
+    expect(init.status).toBe('ok');
+    engine.nextStep();
+    engine.failStep('1.1', 'retry=0 首败即激活兜底');   // failStep 末尾 persist——此刻盘上 on_fail_active=['1.2']
+    const fb = engine.nextStep();
+    expect(fb.status).toBe('step_ready');
+    if (fb.status === 'step_ready') expect(fb.step_id).toBe('1.2.1');
+    return { engine, instanceDir: join(stateDir, init.instance_id) };
+  }
+
+  // @v: anc-exec-pause-persist
+  it('正例（0162）：on_fail_active 写盘后新引擎 load 回填——load 出的引擎继续推进时兜底子树仍按激活态执行（dfs 不把 1.2 整树改标 skipped）,兜底值成为容器输出', () => {
+    const { instanceDir } = driveToOnFailActivated();
+    const resumed = ExecutionEngine.load(instanceDir);
+    // 可观察面一：load 出的引擎看到的 1.2.1 仍是 running（上一进程交付的步骤）,1.2 没有被改成 skipped
+    expect(resumed.getStepStates().get('1.2')).not.toBe('skipped');
+    // 可观察面二：兜底步的失败上下文供给只对"祖先链上有激活态 on_fail"的步骤给——load 后仍给
+    expect(resumed.getOnFailContext('1.2.1')).toBeDefined();
+    // 可观察面三：回写兜底值后,完成级联经 on_fail 容器把它登记进消耗集,容器按"失败被消化"收 done,实例 completed 携兜底值
+    expect(resumed.completeStep('1.2.1', { out: '兜底值' }).status).toBe('ok');
+    const r = resumed.nextStep();
+    expect(r.status).toBe('completed');
+    if (r.status === 'completed') expect(r.outputs?.['out']).toBe('兜底值');
+    // 直接比对：激活集跨进程后与写盘前相等
+    expect([...(resumed as unknown as { onFailActive: Set<string> }).onFailActive]).toEqual(['1.2']);
+  });
+
+  // @v: anc-exec-pause-persist
+  it('正例（0162）：on_fail_consumed 写盘后新引擎 load 回填——兜底走完后再 load,消耗集含 1.2,findNearestSubtaskAncestor 不再把已用过兜底的容器当可入选边界', () => {
+    const { engine, instanceDir } = driveToOnFailActivated();
+    engine.completeStep('1.2.1', { out: '兜底值' });   // 兜底子树走完 → on_fail 容器完结登记消耗集 → completeStep 末尾 persist
+    expect(engine.nextStep().status).toBe('completed');
+    const resumed = ExecutionEngine.load(instanceDir);
+    // 直接比对：消耗集跨进程后与写盘前相等
+    expect([...(resumed as unknown as { onFailConsumed: Set<string> }).onFailConsumed]).toEqual(['1.2']);
+    // 可观察面：activateOnFail 对已消耗的兜底块返回 false（"兜底已用过,不再兜"）——这是消耗集唯一的拒绝判据
+    const container = (resumed as unknown as { findStepById(id: string): unknown }).findStepById('1');
+    const activated = (resumed as unknown as { activateOnFail(c: unknown, failed?: string): boolean }).activateOnFail(container, '1.1');
+    expect(activated).toBe(false);
+  });
+
+  // @v: anc-exec-deterministic-no-retry
+  it('正例（0162）：deterministic_waived 写盘后新引擎 load 回填——OUTPUT_TRUNCATED 首撞免扣后 load,同步骤同前缀二撞照扣预算（记 attempt 1/3 且 retryCounters 减一）,免扣记账没有因换进程被清零', () => {
+    const DET_RT_SPEC = `# RT-DT
+Id: rt-dt
+## Goal
+g
+## Outputs
+- out: text  # o
+## Steps
+1. [subtask retry=3] 主活
+  + → out: text  # o
+  1.1. [act] 干活
+    + → out: text  # 产出
+2. [exit]
+`;
+    const stateDir = mkdtempSync(join(tmpdir(), 'rt0162-dt-'));
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(DET_RT_SPEC, MINIMAL_HOST_CONFIG, { stateDir }) as { status: string; instance_id: string };
+    expect(init.status).toBe('ok');
+    engine.nextStep();
+    engine.failStep('1.1', 'OUTPUT_TRUNCATED: 首撞（免扣）');   // 首撞：免扣预算 + 记 deterministicWaived + persist
+    expect((engine as unknown as { retryCounters: Map<string, number> }).retryCounters.has('1')).toBe(false);   // 首撞没扣
+    const resumed = ExecutionEngine.load(join(stateDir, init.instance_id));
+    expect([...(resumed as unknown as { deterministicWaived: Set<string> }).deterministicWaived]).toEqual(['1.1|OUTPUT_TRUNCATED']);
+    // 可观察面：新进程里同步骤同前缀二撞 → 不再免扣,走正常阶梯记 attempt 1/3 并扣一格
+    const again = resumed.nextStep();
+    expect(again.status).toBe('step_ready');
+    resumed.failStep('1.1', 'OUTPUT_TRUNCATED: 二撞（照扣）');
+    const retryDetails = resumed.getExecEvents().filter(e => e.step_id === '1' && e.event === 'retry').map(e => e.detail ?? '');
+    expect(retryDetails).toContain('attempt 1/3');
+    expect((resumed as unknown as { retryCounters: Map<string, number> }).retryCounters.get('1')).toBe(2);
+  });
+
+  // @v: anc-exec-parallel-reap-chain
+  it('正例（0162）：pending_chain_feeds 写盘后新引擎 load 回填——隔壳形态首个并行子实例失败投回壳后 load,待喂账仍在;新进程里兜底走完、第二项收割,收集清单仍是 [FALLBACK, PATH-B]（账丢了兜底产物就不进清单）', () => {
+    const CHAIN_RT_SPEC = `# RT-CH
+Id: rt-ch
+## Goal
+probe
+## Inputs
+- items: [line]  # in
+## Outputs
+- paths: [line]  # out
+## Steps
+1. [loop for-each x in items, collect p into paths] 循环
+  + → paths: [line]  # collected
+  1.1. [subtask retry=0] 壳
+    + → p: line  # unit
+    1.1.1. [call callee(x) parallel] 派发
+      + → p: result  # map
+    1.1.2. [on fail] 兜底
+      1.1.2.1. [act] 兜底产出
+        + → p: line  # fallback
+2. [exit]
+`;
+    const stateDir = mkdtempSync(join(tmpdir(), 'rt0162-ch-'));
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(CHAIN_RT_SPEC, MINIMAL_HOST_CONFIG, { stateDir, params: { items: ['a', 'b'] } }) as { status: string; instance_id: string };
+    expect(init.status).toBe('ok');
+    engine.setUnifiedDispatch(true);
+    const d1 = engine.nextStep();
+    expect(d1.status).toBe('dispatch_ready');
+    if (d1.status !== 'dispatch_ready') return;
+    // 首个子实例失败 → deliverReapedFailureAlongChain 先记待喂账再投回壳 → 壳 retry=0 激活兜底 → reapParallelCall 末尾 persist
+    engine.reapParallelCall(d1.child_instance!, { failure: { specId: 'callee', childInstanceId: 'x', stepFailReasons: { '1': { reason: 'boom', fail_kind: 'error' } }, stepStates: { '1': 'failed' } } } as never);
+    const feedsBefore = (engine as unknown as { pendingChainFeeds: unknown[] }).pendingChainFeeds;
+    expect(feedsBefore).toEqual([{ chain_child_id: '1.1', loop_id: '1', iter: 1, unit_var: 'p', list_var: 'paths' }]);
+    // 新进程接手：兜底步交付 → 回写 → 壳完结时按账喂 collect 缓冲 → 第二项派发收割 → 终态
+    const resumed = ExecutionEngine.load(join(stateDir, init.instance_id));
+    expect((resumed as unknown as { pendingChainFeeds: unknown[] }).pendingChainFeeds).toEqual(feedsBefore);
+    resumed.setUnifiedDispatch(true);
+    let guard = 0;
+    let terminal: ReturnType<ExecutionEngine['nextStep']> | null = null;
+    while (guard++ < 20) {
+      const r = resumed.nextStep();
+      if (r.status === 'dispatch_ready') { resumed.reapParallelCall(r.child_instance!, { vars: { result: 'PATH-B' } }); continue; }
+      if (r.status === 'step_ready') { resumed.completeStep(r.step_id, { p: 'FALLBACK' }); continue; }
+      terminal = r; break;
+    }
+    expect(terminal?.status).toBe('completed');
+    if (terminal?.status === 'completed') expect(terminal.outputs?.['paths']).toEqual(['FALLBACK', 'PATH-B']);
+  });
+
+  // @v: anc-exec-pause-persist
+  it('正例（0162）：subtree_root 写盘后新引擎 load 回填——worker 子实例 load 后 getSubtreeRoot 仍是 1.1,且顶层 Outputs 未赋值的完备性豁免仍生效（子树跑完判 completed 而不是 never assigned 的 failed）', async () => {
+    const WORKER_RT_SPEC = `# RT-WK
+Id: rt-wk
+## Goal
+g
+## Inputs
+- items: [int]  # 输入
+## Outputs
+- outs: [int]  # 收集
+## Steps
+1. [loop for-each n in items, collect o into outs] 逐项
+  + → outs: [int]  # 收集
+  1.1. [subtask parallel] 处理单项
+    + → o: int  # 单项
+    1.1.1. [reason] 算
+      - ← n
+      + → o: int  # 结果
+`;
+    const stateDir = mkdtempSync(join(tmpdir(), 'rt0162-wk-'));
+    const worker = new ExecutionEngine();
+    const init = worker.initExecution(WORKER_RT_SPEC, MINIMAL_HOST_CONFIG, {
+      stateDir, subtreeRoot: '1.1', params: { n: 7 }, parentInstanceId: 'parent-x', callStepId: '1.1',
+    });
+    expect(init.status).toBe('ok');
+    const first = worker.nextStep();   // 1.1.1 交付 → persist（subtree_root 随之落盘）
+    expect(first.status).toBe('step_ready');
+    const resumed = ExecutionEngine.load(join(stateDir, '1.1'));
+    expect(resumed.getSubtreeRoot()).toBe('1.1');
+    // 可观察面：worker 只负责子树,顶层 Outputs 的 outs 由父实例 join 后检查——load 出的引擎仍按 worker 豁免完备性闸
+    expect(resumed.completeStep('1.1.1', { o: 8 }).status).toBe('ok');
+    const r = await resumed.advanceToCaller();
+    expect(r.status).toBe('completed');
+  });
+
+  // @v: anc-exec-subtask-free-expand
+  it('正例（0162）：expansion_count 写盘后新引擎 load 回填——Config expansion_max: 1 下首次展开后 load,新进程里第二次到步展开被拒 EXPANSION_LIMIT（计数清零则会放行）', () => {
+    const FREE_RT_SPEC = `# RT-FR
+Id: rt-fr
+## Goal
+g
+## Config
+expansion_max: 1
+## Outputs
+- out: text  # o
+## Steps
+1. [reason] 前面
+  + → a: text  # p
+2. [subtask free retry=2 adaptive] 到步展开一
+  - ← a
+  + → mid: text  # m
+3. [subtask free retry=2 adaptive] 到步展开二
+  - ← mid
+  + → out: text  # o
+`;
+    const stateDir = mkdtempSync(join(tmpdir(), 'rt0162-fr-'));
+    const e = new ExecutionEngine();
+    const init = e.initExecution(FREE_RT_SPEC, MINIMAL_HOST_CONFIG, { stateDir }) as { status: string; instance_id: string };
+    expect(init.status).toBe('ok');
+    e.nextStep(); e.completeStep('1', { a: 'v' });
+    expect((e.nextStep() as { reason?: string }).reason).toBe('initial_plan');
+    const md1 = '1. [act free] 干\n  - ← a\n  + → mid: text  # m\n2. [check final] 核\n  - ← mid\n  + → ok: bool  # k\n  + → note: text  # n\n';
+    expect((e.submitReplan('2', md1) as { status: string }).status).toBe('ok');   // 第 1 次展开落地 → expansionCount=1 → persist
+    // 新进程：把展开物跑完,走到容器 3 的到步展开
+    const resumed = ExecutionEngine.load(join(stateDir, init.instance_id));
+    expect((resumed as unknown as { expansionCount: number }).expansionCount).toBe(1);
+    let guard = 0;
+    let n = resumed.nextStep() as { status: string; step_id?: string; subtask_id?: string; step_type?: string; reason?: string };
+    while (guard++ < 10 && n.status === 'step_ready') {
+      if (n.step_type === 'check') resumed.completeStep(n.step_id!, { ok: true, note: '行' });
+      else resumed.completeStep(n.step_id!, { mid: 'M' });
+      n = resumed.nextStep() as typeof n;
+    }
+    expect(n.status).toBe('adaptive_needed');
+    expect(n.reason).toBe('initial_plan');
+    expect(n.subtask_id).toBe('3');
+    const md2 = '1. [act free] 干\n  - ← mid\n  + → out: text  # o\n2. [check final] 核\n  - ← out\n  + → ok: bool  # k\n  + → note: text  # n\n';
+    const r = resumed.submitReplan('3', md2) as { status: string; errors?: unknown };
+    expect(r.status).toBe('error');
+    expect(JSON.stringify(r.errors)).toContain('EXPANSION_LIMIT');
+  });
+
+  // @v: anc-exec-pause-persist
+  it('反例（0162）：手工删掉盘上 state.json 的 on_fail_active 键再 load——新引擎按"键缺席=空集"走：兜底步拿不到失败上下文,兜底走完也不登记消耗集,宿主容器按"失败未被消化"收 failed（证明 load 读的是盘上这个键,不是内存残留）', () => {
+    const { instanceDir } = driveToOnFailActivated();
+    const statePath = join(instanceDir, 'state.json');
+    const onDisk = JSON.parse(readFileSync(statePath, 'utf-8')) as Record<string, unknown>;
+    expect(onDisk['on_fail_active']).toEqual(['1.2']);   // 先确认写盘前键在场且值对
+    delete onDisk['on_fail_active'];
+    writeFileSync(statePath, JSON.stringify(onDisk, null, 2));
+    const resumed = ExecutionEngine.load(instanceDir);
+    expect((resumed as unknown as { onFailActive: Set<string> }).onFailActive.size).toBe(0);
+    // 可观察面一：与正例相反,兜底步拿不到失败上下文（getOnFailContext 只认激活集）
+    expect(resumed.getOnFailContext('1.2.1')).toBeUndefined();
+    // 可观察面二：回写兜底值后,on_fail 容器完结时因不在激活集里不登记消耗集 → 宿主容器 1 的直接子步 1.1 failed 且"未被消化"→ 容器 1 按 fail-close 收 failed（正例里同一时点容器 1 是 done）
+    expect(resumed.completeStep('1.2.1', { out: '兜底值' }).status).toBe('ok');
+    expect(resumed.getStepStates().get('1')).toBe('failed');
+    expect((resumed as unknown as { onFailConsumed: Set<string> }).onFailConsumed.size).toBe(0);
+  });
+});
+
+// @v: anc-exec-container-fail-close —— 2026-10-12 todo/0167 作者拍甲案：容器 failed 级联到顶且无祖先消化即实例终止
+//（终态 failed、terminal_failure 指向容器带叶子真因、后续顶层兄弟不执行）。此前级联到顶就停,nextStep 把 failed 容器
+// 当已终态步跳过、顶层兄弟照跑、run completed（0162 反例实撞）——概念 ^anc-exec-none-propagation 否掉的第三态。
+describe('容器 fail-close 级联到顶即实例终止（todo/0167）', () => {
+  const SPEC = `# FC
+Id: fc
+## Goal
+g
+## Outputs
+- out: text  # o
+## Steps
+1. [subtask retry=0] 处理数据
+  + → mid: text  # 中间产物
+  1.1. [act] 读文件
+    + → mid: text  # 读到的内容
+  1.2. [on fail] 兜底处理
+    1.2.1. [act] 降级
+      + → mid: text  # 兜底值
+2. [act] 输出结果
+  - ← mid
+  + → out: text  # o
+3. [exit]
+`;
+  const states = (e: ExecutionEngine) => (e as unknown as { stepStates: Map<string, string> }).stepStates;
+
+  it('反例（0162 原形态——只走级联不经叶子升级链）：兜底步走完但失败没登记进消耗集 → 容器 1 按步 3 判 failed 级联到顶 → run 终态 failed、terminal_failure 指向容器 1 且 reason 点名叶子 1.1 与原因,顶层步骤 2 标 skipped 从未派发', () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC, MINIMAL_HOST_CONFIG);
+    engine.nextStep(); engine.failStep('1.1', '文件不存在');
+    const fb = engine.nextStep();
+    expect(fb.status).toBe('step_ready');
+    if (fb.status === 'step_ready') expect(fb.step_id).toBe('1.2.1');
+    // 模拟 0162 反例：激活集丢失（跨进程键缺席）→ 兜底走完,完成级联不登记消耗,容器按"失败未被消化"收 failed。
+    // 这条路径不经 failStep 的叶子升级链（那条链本就会终止）,是纯级联到顶——修前恰在这里停下、步骤 2 照跑。
+    (engine as unknown as { onFailActive: Set<string> }).onFailActive.clear();
+    expect(engine.completeStep('1.2.1', { mid: '兜底值' }).status).toBe('ok');
+    const r = engine.nextStep();
+    expect(r.status).toBe('failed');   // 变异：删 propagateAndRecord 里的到顶终止分支 → 这里回到 completed 红
+    if (r.status === 'failed') {
+      expect(r.failed_step_id).toBe('1');
+      expect(r.failure_reason).toContain("container '1' failed");
+      expect(r.failure_reason).toContain("'1.1'");
+      expect(r.failure_reason).toContain('文件不存在');
+    }
+    expect(states(engine).get('1')).toBe('failed');
+    expect(states(engine).get('2')).toBe('skipped');   // 后续顶层兄弟没跑
+    expect(states(engine).get('3')).toBe('skipped');
+  });
+
+  it('反例（兜底步自己也失败）：走叶子升级链到顶终止——既有路径,run failed、步骤 2 不执行（与级联到顶路径终态一致）', () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC, MINIMAL_HOST_CONFIG);
+    engine.nextStep(); engine.failStep('1.1', '文件不存在');
+    engine.nextStep(); engine.failStep('1.2.1', '兜底也崩');
+    const r = engine.nextStep();
+    expect(r.status).toBe('failed');
+    if (r.status === 'failed') expect(r.failed_step_id).toBe('1');
+    expect(states(engine).get('2')).toBe('skipped');
+  });
+
+  it('反例（无兜底块的容器）：子步失败 retry 为 0 直接级联到顶 → run failed,terminal_failure 指向容器且 reason 带叶子真因文本,顶层步骤 2 不执行', () => {
+    const NOFB = `# FC2
+Id: fc2
+## Goal
+g
+## Outputs
+- out: text  # o
+## Steps
+1. [subtask retry=0] 处理
+  + → mid: text  # m
+  1.1. [act] 读
+    + → mid: text  # m
+2. [act] 输出
+  - ← mid
+  + → out: text  # o
+`;
+    const engine = new ExecutionEngine();
+    engine.initExecution(NOFB, MINIMAL_HOST_CONFIG);
+    engine.nextStep(); engine.failStep('1.1', '磁盘坏道');
+    const r = engine.nextStep();
+    expect(r.status).toBe('failed');
+    if (r.status === 'failed') {
+      expect(r.failure_reason).toContain('磁盘坏道');   // 叶子真因进 reason
+      expect(['1', '1.1']).toContain(r.failed_step_id);
+    }
+    expect(states(engine).get('2')).not.toBe('done');
+  });
+
+  it('正例：兜底消化了失败 → 容器 1 done、步骤 2 照常执行、run completed（既有行为不变——消化判据之一是 on fail 走完）', () => {
+    const engine = new ExecutionEngine();
+    engine.initExecution(SPEC, MINIMAL_HOST_CONFIG);
+    engine.nextStep(); engine.failStep('1.1', '文件不存在');
+    engine.nextStep(); engine.completeStep('1.2.1', { mid: '兜底值' });
+    const s2 = engine.nextStep();
+    expect(s2.status).toBe('step_ready');
+    if (s2.status === 'step_ready') expect(s2.step_id).toBe('2');
+    engine.completeStep('2', { out: 'OK' });
+    const r = engine.nextStep();
+    expect(r.status).toBe('completed');
+    expect(states(engine).get('1')).toBe('done');
+  });
+
+  it('正例：外层 retry 还有额度 → 复位重跑不终止（消化判据之二）;额度耗尽后才到顶终止', () => {
+    const RETRY = `# FC3
+Id: fc3
+## Goal
+g
+## Outputs
+- out: text  # o
+## Steps
+1. [subtask retry=1] 外壳
+  + → out: text  # o
+  1.1. [subtask retry=0] 内层
+    + → out: text  # o
+    1.1.1. [act] 干
+      + → out: text  # o
+`;
+    const engine = new ExecutionEngine();
+    engine.initExecution(RETRY, MINIMAL_HOST_CONFIG);
+    engine.nextStep(); engine.failStep('1.1.1', '第一次');
+    const again = engine.nextStep();
+    expect(again.status).toBe('step_ready');   // 外壳 retry=1 接住,内层复位重跑
+    if (again.status === 'step_ready') expect(again.step_id).toBe('1.1.1');
+    engine.failStep('1.1.1', '第二次');
+    const r = engine.nextStep();
+    expect(r.status).toBe('failed');   // 耗尽后到顶终止
+  });
+
+  it('边角：for-each 某一轮里的容器 failed（无兜底、无 retry）→ 整个 loop failed 到顶终止,不跳到下一轮,run failed', () => {
+    const LOOP = `# FC4
+Id: fc4
+## Goal
+g
+## Inputs
+- items: [line]  # 清单
+## Outputs
+- outs: [line]  # o
+## Steps
+1. [loop for-each x in items, collect y into outs] 逐个
+  + → outs: [line]  # 收集
+  1.1. [subtask retry=0] 处理一个
+    + → y: line  # 单项
+    1.1.1. [act] 干
+      - ← x
+      + → y: line  # 单项
+2. [exit]
+`;
+    const engine = new ExecutionEngine();
+    engine.initExecution(LOOP, MINIMAL_HOST_CONFIG, { params: { items: ['a', 'b', 'c'] } });
+    engine.nextStep(); engine.completeStep('1.1.1', { y: 'A' });
+    engine.nextStep(); engine.failStep('1.1.1', '第二项坏');
+    const r = engine.nextStep();
+    expect(r.status).toBe('failed');
+    expect(states(engine).get('1')).toBe('failed');
+    if (r.status === 'failed') expect(r.partial_outputs?.['outs']).toEqual(['A']);   // 已收部分列表保留（概念 ^anc-step-loop 失败中断=已完成部分）
   });
 });

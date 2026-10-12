@@ -93,7 +93,7 @@ Two more practical semantics:
 hopjit validate examples/fact-check-demo.md
 ```
 
-Read step 4 of `examples/fact-check-demo.md` (ships with the npm package; the `/demo-fact-check` installed by `--demo` is exactly this file): `[loop for-each point in confirmed_points, collect check_item into check_result]`, with a loop body of `[subtask retry=3 parallel]` — verify each claim in parallel, with up to 3 retries per claim, results collected into a list. **Exhaustive iteration + per-item retry + overall concurrency** — three things spelled out in one line of structure (the focus① annotation from the translator in [[07-upgrading-your-skill]] refers to exactly this structure).
+Read step 4 of `examples/fact-check-demo.md` (ships with the npm package; the demo HopAnt `demo-fact-check` that setup installs by default is exactly this file): `[loop for-each point in confirmed_points, collect check_item into check_result]`, with a loop body of `[subtask retry=3 parallel]` — verify each claim in parallel, with up to 3 retries per claim, results collected into a list. **Exhaustive iteration + per-item retry + overall concurrency** — three things spelled out in one line of structure (the focus① annotation from the translator in [[07-upgrading-your-skill]] refers to exactly this structure).
 
 ## Next steps
 

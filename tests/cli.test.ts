@@ -1,10 +1,11 @@
 // @module: hop-cli ^anc-struct-hop-cli
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { execSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, mkdirSync, utimesSync, readFileSync, existsSync, readdirSync, symlinkSync, realpathSync, cpSync, rmSync } from 'node:fs';
+import { parse as parseJsonc } from 'jsonc-parser';
+import { mkdtempSync, writeFileSync, mkdirSync, utimesSync, readFileSync, existsSync, readdirSync, symlinkSync, realpathSync, cpSync, rmSync, chmodSync } from 'node:fs';
 import { join, resolve, dirname, win32 as pathWin32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 // schema-sep 拒写回用例的观测口（^anc-cli-schema-sep）：ESM 具名导入是只读绑定,vi.spyOn 换不掉 cli.ts
 // 已绑定的 convertSchemaSeparators——对 parser 模块做透传包装,只把它换成"调真实现的 vi.fn",
 // 其余导出原样透传;拒写回用例里 mockImplementationOnce 单次换成会改坏文件的桩,本文件其它用例不受影响。
@@ -25,14 +26,28 @@ import {
   assertOutputInWorkZone,
   isPathInWorkZone,
   buildHostConfig,
+  resolveWorkspaceArg,
   extractHopEnvIntoHostConfig,
   resolveContextMode,
   errorExit,
   program,
-  setOutputJson, readProjectCommands,
-  detectCarriers, postinstallSkipReason,
+  setOutputJson,
+  detectCarriers, firstRunHint,
+  installDemoAnts, rewriteSpecId, mcpHandshake,
+  runDoctor, learnStandaloneEntry, readMcpRegistration, ccPermissionMissing, readSkillFrontmatter, resolveCarrierHome,
 } from '../src/cli.js';
 import type { HostConfig } from '../src/provider-types.js';
+import { HOPJIT_ALLOWED_TOOLS } from '../src/provider-types.js';
+import { hostname, userInfo } from 'node:os';
+import { antPack, type AdminContext } from '../src/hop-admin.js';
+import { antRoots } from '../src/hopant.js';
+// 搬进 hop-admin.ts 的探测函数不再读进程状态,测试在 withHome 改好 HOME / cwd / env 后用它现组一份 AdminContext（todo/0154）。
+// @v: anc-mcp-admin-tools
+const adminCtx = (env: NodeJS.ProcessEnv = process.env, cwd: string = process.cwd()): AdminContext => {
+  let login = ''; try { login = userInfo().username; } catch { /* 容器里可能取不到 */ }
+  const home = env.HOME ?? homedir();
+  return { home, cwd, env, exec_path: process.execPath, login, hostname: hostname(), roots: antRoots(home, cwd) };   // roots 漏装过（0154+0155 review D11）——AdminContext 七字段要齐,vitest 不做类型检查靠不住
+};
 
 const HOST: HostConfig = {
   workspace_dir: '/tmp/test',
@@ -57,6 +72,12 @@ Test CLI commands
   + → result: text  # thinking
   > Think about it
 `;
+
+// setup 写进 CC 放行设置的工具名单（写死,不取自 HOPJIT_ALLOWED_TOOLS 本身——期望值取自被测常量时,常量漏项测试照样绿）
+const EXPECTED_ALLOW = ['start_run', 'run_status', 'resume_run', 'list_runs', 'stop_run', 'run_approved_command', 'server_status',
+  'run', 'submit_and_fetch_next', 'reap_and_fetch_next', 'status', 'resume', 'abort', 'validate', 'approve_commit', 'approve_dirs',
+  'doctor', 'ant_list', 'ant_install', 'ant_adapt', 'ant_remove', 'ant_bootstrap', 'ant_pack', 'ant_share']   // 管理八件（todo/0154,^anc-mcp-admin-tools）
+  .map(t => `mcp__hopjit__${t}`);
 
 // 子进程恒用一次性家目录：install-skill 缺省即注册 MCP（2026-10-01）后,继承真实 HOME/CODEX_HOME 的用例会把 hopjit
 // 写进开发者真实的 ~/.codex/config.toml 或 ~/.hopjit/config.yaml（review 面三变异 (j) 实抓,本机只因沙箱 EPERM 幸免）。
@@ -88,6 +109,14 @@ function runCliJson(args: string, cwd: string): any {
   const { stdout, exitCode } = runCli(args, cwd);
   if (exitCode !== 0) throw new Error(`CLI exited ${exitCode}: ${stdout}`);
   return JSON.parse(stdout);
+}
+
+/** commit 批准停点的 CLI 闭环（todo/0146 ^anc-cli-approve-commit）：按停点载荷的 step_id 与 fingerprint 批准（scope=once）,再 resume。 */
+function approveAndResume(cwd: string, stateDir: string, instanceId: string, paused: any): any {
+  const ctx = paused.presented_data.context;
+  const ok = runCliJson(`approve_commit ${ctx.step_id} --fingerprint ${ctx.fingerprint} --scope once --state-dir ${stateDir} --instance ${instanceId}`, cwd);
+  expect(ok.status).toBe('ok');
+  return runCliJson(`resume --state-dir ${stateDir} --instance ${instanceId}`, cwd);
 }
 
 function setupWorkDir(): { dir: string; specFile: string } {
@@ -162,7 +191,7 @@ Cross-dir init
     it('init 后嵌套 call 响应带 call_protocol（0076 正例——修前 buildCallProtocol 因两路径缺席返 undefined）', () => {
       const specDir = mkdtempSync(join(tmpdir(), 'cli-e2e-callproto-'));
       const workDir = mkdtempSync(join(tmpdir(), 'cli-e2e-callwork-'));
-      writeFileSync(join(specDir, 'child.md'), `# Child
+      writeFileSync(join(specDir, 'child-spec.md'), `# Child
 Id: child-spec
 ## Goal
 child
@@ -419,6 +448,63 @@ g
     });
   });
 
+  // @v: anc-cli-json-io —— --output/--answer 解析结果须是 JSON 对象（todo/0146 probe 3 实撞:
+  // --answer '"approve"' 进引擎 'decision' in 字符串抛 TypeError）。正例 {"value":"approve"} 见上方 0056 组。
+  describe('submit_and_fetch_next 非对象提交 → INVALID_ARG（调引擎前拒,状态不动）', () => {
+    const CONFIRM_SPEC = `# Spec: obj-guard
+Id: obj-guard
+
+## Goal
+g
+
+## Outputs
+- r: text  # r
+
+## Steps
+1. [confirm] 批一下
+  + → approved: bool  # 批
+2. [act free] 干活
+  - ← approved
+  + → r: text  # r
+`;
+    const setup = () => {
+      const dir = mkdtempSync(join(tmpdir(), 'cli-objguard-'));
+      writeFileSync(join(dir, 'c.md'), CONFIRM_SPEC);
+      runCliJson(`run c.md --state-dir state`, dir);
+      return dir;
+    };
+
+    it('反例：--answer 裸字符串 → INVALID_ARG 指明对象形态,确认点仍停着', () => {
+      const dir = setup();
+      const r = runCli(`submit_and_fetch_next 1 --answer '"approve"' --state-dir state`, dir);
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stderr).toContain('INVALID_ARG');
+      expect(r.stderr).toContain('--answer');
+      expect(r.stderr).toContain('{"value":"approve"}');
+      expect(r.stderr).not.toContain("'in' operator");          // 不再漏出引擎 TypeError 原文
+      const st = runCliJson(`status --state-dir state`, dir);
+      expect(st.current_step).toBe('1');                         // 状态未动
+      const ok = runCliJson(`submit_and_fetch_next 1 --answer '{"value":"approve"}' --state-dir state`, dir);
+      expect(ok.status).toBe('step_ready');                      // 改用对象形态即可续
+      expect(ok.step_id).toBe('2');
+    });
+
+    it('反例：--output 数组 / null → INVALID_ARG,报文点名收到的类型', () => {
+      const dir = setup();
+      runCliJson(`submit_and_fetch_next 1 --answer '{"value":"approve"}' --state-dir state`, dir);
+      const arr = runCli(`submit_and_fetch_next 2 --output '[1]' --state-dir state`, dir);
+      expect(arr.exitCode).not.toBe(0);
+      expect(arr.stderr).toContain('INVALID_ARG');
+      expect(arr.stderr).toContain('数组');
+      const nul = runCli(`submit_and_fetch_next 2 --output 'null' --state-dir state`, dir);
+      expect(nul.exitCode).not.toBe(0);
+      expect(nul.stderr).toContain('INVALID_ARG');
+      expect(nul.stderr).toContain('null');
+      const end = runCliJson(`submit_and_fetch_next 2 --output '{"r":"done"}' --state-dir state`, dir);
+      expect(end.status).toBe('completed');                      // 拒收后账面无污染
+    });
+  });
+
   describe('submit_and_fetch_next --failure', () => {
     it('records failure and advances to terminal failed (single-step spec)', () => {
       const { dir, specFile } = setupWorkDir();
@@ -471,10 +557,9 @@ g
     });
   });
 
-  describe('submit_and_fetch_next --branch', () => {
-    it('selects branch case via CLI', () => {
-      const dir = mkdtempSync(join(tmpdir(), 'cli-e2e-'));
-      const branchSpec = `# Branch
+  // @v: anc-exec-branch-select-internal —— todo/0168：原「submit_and_fetch_next --branch 选 case」改为引擎按值选路 + 选项不存在
+  describe('submit_and_fetch_next 没有 --branch（todo/0168）', () => {
+    const branchSpec = `# Branch
 Id: branch-cli
 ## Goal
 Test branch
@@ -483,22 +568,44 @@ Test branch
 ## Outputs
 - out: text  # output
 ## Steps
-1. [branch] Choose
-  1.1. [case] {mode}==fast
-    1.1.1. [reason] Fast
+1. [reason] 前面
+  + → a: text  # 前置
+  > 前置
+2. [branch] Choose
+  2.1. [case] {mode}==fast
+    2.1.1. [reason] Fast
+      - ← a
       + → out: text  # output
       > Go fast
-  1.2. [case] {mode}==slow
-    1.2.1. [reason] Slow
+  2.2. [case] {mode}==slow
+    2.2.1. [reason] Slow
+      - ← a
       + → out: text  # output
       > Go slow
 `;
+    it('正例（todo/0168）：跨进程 CLI 驱动——run 传 mode=slow 停在步 1,交付步 1 后引擎自己进入 branch 按条件命中 2.2,下一步是 2.2.1,账上 2.1 skipped', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'cli-e2e-'));
       writeFileSync(join(dir, 'spec.md'), branchSpec);
-      runCliJson(`init spec.md --state-dir state --params '{"mode":"slow"}'`, dir);
-      // 选 case 1.2 后引擎推进至该 case 的 reason 步骤 1.2.1（submit 直接返回下一步）
-      const result = runCliJson(`submit_and_fetch_next 1 --branch 1.2 --reason "user chose slow" --state-dir state`, dir);
-      expect(result.status).toBe('step_ready');
-      expect(result.step_id).toBe('1.2.1');
+      const init = runCliJson(`run spec.md --state-dir state --params '{"mode":"slow"}'`, dir);
+      expect(init.step_id).toBe('1');
+      const result = runCliJson(`submit_and_fetch_next 1 --output '{"a":"x"}' --state-dir state`, dir);
+      expect(result.status, JSON.stringify(result)).toBe('step_ready');
+      expect(result.step_id).toBe('2.2.1');
+      const st = JSON.parse(readFileSync(join(dir, 'state', init.instance_id, 'state.json'), 'utf-8')).step_states;
+      expect(st['2.2']).toBe('running');
+      expect(st['2.1']).toBe('skipped');
+    });
+    it('反例（todo/0168）：--branch 选项已不存在——传 --branch 2.1 由 commander 报未知选项退出非零,引擎账一字未动', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'cli-e2e-'));
+      writeFileSync(join(dir, 'spec.md'), branchSpec);
+      const init = runCliJson(`run spec.md --state-dir state --params '{"mode":"slow"}'`, dir);
+      expect(init.step_id).toBe('1');
+      const r = runCli(`submit_and_fetch_next 2 --branch 2.1 --reason "user chose fast" --state-dir state`, dir);
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stderr + r.stdout).toMatch(/unknown option '--branch'/);
+      const st = JSON.parse(readFileSync(join(dir, 'state', init.instance_id, 'state.json'), 'utf-8')).step_states;
+      expect(st['2']).toBe('pending');
+      expect(st['2.1']).toBe('pending');
     });
   });
 
@@ -958,15 +1065,19 @@ describe('CLI function unit tests (coverage)', () => {
   });
 
   describe('buildHostConfig', () => {
-    it('returns host config with current cwd', () => {
+    it('returns host config with current cwd——sandbox 根与 workspace_dir 同值且为绝对路径（原钉 \'.\' 相对写法,2026-10-04 按 ^anc-config-sandbox-workspace-root 改）', () => {   // @v: anc-config-sandbox-workspace-root
       const config = buildHostConfig();
       expect(config.workspace_dir).toBe(process.cwd());
-      expect(config.sandbox.filesystem.workspace_dir).toBe('.');
+      expect(config.sandbox.filesystem.workspace_dir).toBe(process.cwd());
     });
   });
 
   // @v: anc-config-hop-env, anc-exec-doc-ref-hop-env —— 复用模式组合根:params 摘出 hop_env
   describe('extractHopEnvIntoHostConfig（复用模式组合根）', () => {
+    // 打底键 hop_env_language 自 todo/0160 起跟随系统语言——本组断言按英文环境写,进组前把三个区域变量钉成 en_US
+    const savedLang: Record<string, string | undefined> = {};
+    beforeEach(() => { for (const k of ['LC_ALL', 'LC_MESSAGES', 'LANG']) { savedLang[k] = process.env[k]; delete process.env[k]; } process.env.LANG = 'en_US.UTF-8'; });
+    afterEach(() => { for (const k of ['LC_ALL', 'LC_MESSAGES', 'LANG']) { if (savedLang[k] === undefined) delete process.env[k]; else process.env[k] = savedLang[k]; } });
     it('正例：hop_env_* 键摘出入 HostConfig,业务 params 保留', () => {
       const hc = buildHostConfig();
       const params: Record<string, unknown> = { hop_env_kb_root: '/kb', business: 'x' };
@@ -1205,10 +1316,22 @@ describe('CLI function unit tests (coverage)', () => {
     // install-skill 缺省即注册+放行（2026-10-01）后,它会往 process.cwd() 写 .mcp.json 与 .claude/settings.local.json——
     // in-process 用例不隔离 cwd 就会写进仓库根（阅卷实抓：npm test 后仓库根多出 .mcp.json,开发者真实 settings.local.json 被追加一条）。
     // 本块每例 chdir 到独立临时目录;withMcpEnv 自带的 chdir 嵌套其内无冲突（finally 回到本块的临时目录再回 origCwd）。
+    // setup 缺省装演示 HopAnt 进 <HOME>/.hopjit/ants（2026-10-06）后,不隔离 HOME 的用例会写进开发者真实家目录——
+    // 本块每例同时把 HOME 指到临时目录、清掉载体 home 重定向变量;个别用例自设 HOME 的照旧,恢复时回到本块的临时 HOME。
     let blockCwd = '';
     let blockOrigCwd = '';
-    beforeEach(() => { blockOrigCwd = process.cwd(); blockCwd = mkdtempSync(join(tmpdir(), 'hopskill-cwd-')); process.chdir(blockCwd); });
-    afterEach(() => { process.chdir(blockOrigCwd); rmSync(blockCwd, { recursive: true, force: true }); });
+    let blockHome = '';
+    const blockSavedEnv: Record<string, string | undefined> = {};
+    beforeEach(() => {
+      blockOrigCwd = process.cwd(); blockCwd = mkdtempSync(join(tmpdir(), 'hopskill-cwd-')); process.chdir(blockCwd);
+      for (const k of ['HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'OPENCODE_CONFIG_DIR']) { blockSavedEnv[k] = process.env[k]; delete process.env[k]; }
+      blockHome = mkdtempSync(join(tmpdir(), 'hopskill-home-')); process.env.HOME = blockHome;
+    });
+    afterEach(() => {
+      process.chdir(blockOrigCwd); rmSync(blockCwd, { recursive: true, force: true });
+      for (const [k, v] of Object.entries(blockSavedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+      rmSync(blockHome, { recursive: true, force: true });
+    });
     function capture(): { get: () => string; restore: () => void } {
       const orig = process.stdout.write;
       let buf = '';
@@ -1250,7 +1373,7 @@ describe('CLI function unit tests (coverage)', () => {
       delete process.env.CODEX_HOME;
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -1275,7 +1398,7 @@ describe('CLI function unit tests (coverage)', () => {
       delete process.env.CODEX_HOME;
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'cfuse-cc', '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'cfuse-cc', '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -1303,7 +1426,7 @@ describe('CLI function unit tests (coverage)', () => {
       delete process.env.CODEX_HOME;
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'cfuse-codex', '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'cfuse-codex', '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -1330,7 +1453,7 @@ describe('CLI function unit tests (coverage)', () => {
       process.env.CLAUDE_CONFIG_DIR = join(fakeHome, 'custom-cc-home');   // 模拟 cfuse 重定向
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -1354,7 +1477,7 @@ describe('CLI function unit tests (coverage)', () => {
       process.env.CODEX_HOME = join(fakeHome, 'custom-codex-home');
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'codex', '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'codex', '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -1384,7 +1507,7 @@ describe('CLI function unit tests (coverage)', () => {
       delete process.env.XDG_CONFIG_HOME;
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -1426,8 +1549,8 @@ describe('CLI function unit tests (coverage)', () => {
       expect(hfSkill).not.toContain('/hopspec run');
     });
 
-    // @v: anc-cli-stale-skill-scan —— 陈旧副本新鲜度提示（hopissues/0096:旧位置本器产物落后报升级路径,非本器零打扰,不代删）
-    it('install-skill 旧位置陈旧副本 → stale_notes 报提示携升级路径,文件原样不动（正例——0096:8-14 旧 demo 静默活着 29 child 全灭的对治）', async () => {
+    // @v: anc-cli-stale-skill-scan —— 陈旧副本处置（hopissues/0096 起;2026-10-07 自带件改为挪进备份区,非本器零打扰）
+    it('install-skill 旧位置旧 demo skill → 整目录挪进 ~/.hopjit/stale-backup,RESTORE.txt 记回路;非本器文件不动（正例+反例——0096:8-14 旧 demo 静默活着 29 child 全灭的对治）', async () => {
       const fakeHome = mkdtempSync(join(tmpdir(), 'cli-stale-'));
       const origHome = process.env.HOME;
       const origCfg = process.env.CLAUDE_CONFIG_DIR;
@@ -1443,7 +1566,7 @@ describe('CLI function unit tests (coverage)', () => {
       const targetDir = join(fakeHome, 'fresh-target');
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', targetDir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', targetDir, '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -1452,9 +1575,117 @@ describe('CLI function unit tests (coverage)', () => {
       const r = JSON.parse(cap.get().trim().split('\n').pop()!);
       expect(r.status).toBe('ok');
       const notes: string[] = r.stale_notes ?? [];
-      expect(notes.some(n => n.includes('demo-fact-check') && n.includes('0.1.0'))).toBe(true);   // 陈旧点名带旧版本号
+      expect(notes.some(n => n.includes('已挪走') && n.includes(join(oldRoot, 'demo-fact-check')) && n.includes('HopAnt'))).toBe(true);
       expect(notes.some(n => n.includes('user-own-skill'))).toBe(false);                          // 非本器文件零打扰
-      expect(existsSync(join(oldRoot, 'demo-fact-check', 'SKILL.md'))).toBe(true);                // 只读不删
+      expect(existsSync(join(oldRoot, 'user-own-skill', 'SKILL.md'))).toBe(true);                 // 非本器文件原地不动
+      expect(existsSync(join(oldRoot, 'demo-fact-check'))).toBe(false);                           // 原目录已挪走
+      const backupRoot = join(fakeHome, '.hopjit', 'stale-backup');
+      const [stamp] = readdirSync(backupRoot);
+      expect(readFileSync(join(backupRoot, stamp, 'demo-fact-check', 'SKILL.md'), 'utf-8')).toContain('v0.1.0');   // 内容完整进了备份区
+      expect(readFileSync(join(backupRoot, stamp, 'RESTORE.txt'), 'utf-8')).toContain(`→ ${join(oldRoot, 'demo-fact-check')}`);
+    });
+
+    // @v: anc-cli-stale-skill-scan —— 现行目标目录里的旧 demo skill（CC 旧 --demo 与正式件同目录）也挪走,其他件不动
+    it('setup 现行目标目录里的旧 demo-* skill 挪进备份区,同目录的当前版正式件不动（正例+反例）', async () => {
+      const targetDir = join(process.env.HOME!, 'tgt');
+      mkdirSync(join(targetDir, 'demo-rename'), { recursive: true });
+      writeFileSync(join(targetDir, 'demo-rename', 'SKILL.md'), '---\nname: demo-rename\n---\n<!-- driver: @hoplogic/hopjit v9.9.9 (x) installed 2026-10-01 -->\n');
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', targetDir, '--force']);
+      } finally { cap.restore(); }
+      const r = JSON.parse(cap.get().trim().split('\n').pop()!);
+      const notes: string[] = r.stale_notes ?? [];
+      expect(notes.some(n => n.includes(join(targetDir, 'demo-rename')) && n.includes('已挪走'))).toBe(true);   // 版本号不论新旧都挪
+      expect(notes.some(n => n.includes(join(targetDir, 'hopspec')))).toBe(false);                              // 本次刚装的正式件不报
+      expect(existsSync(join(targetDir, 'demo-rename'))).toBe(false);
+      expect(existsSync(join(targetDir, 'hopspec', 'SKILL.md'))).toBe(true);                                     // 正式件不动
+    });
+
+    // @v: anc-cli-stale-skill-scan —— 旧名 hopskill-build 按自带件挪走,不再被当成用户自建件指路 /hopfix（2026-10-07 实撞）
+    it('Codex 旧位置 ~/.agents/skills 的 hopspec 与旧名 hopskill-build 陈旧副本都挪进备份区;带戳的用户自建件原地不动指路 /hopfix（正例+反例）', async () => {
+      const legacyRoot = join(process.env.HOME!, '.agents', 'skills');
+      const stamp = '<!-- driver: @hoplogic/hopjit v0.2.6 (x) installed 2026-08-14T06:51:27.024Z -->';
+      for (const name of ['hopspec', 'hopskill-build', 'my-flow']) {
+        mkdirSync(join(legacyRoot, name), { recursive: true });
+        writeFileSync(join(legacyRoot, name, 'SKILL.md'), `---\nname: ${name}\n---\n${stamp}\n`);
+      }
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'codex', '--dir', join(process.env.HOME!, 'codex-skills'), '--force']);
+      } finally { cap.restore(); }
+      const r = JSON.parse(cap.get().trim().split('\n').pop()!);
+      const notes: string[] = r.stale_notes ?? [];
+      for (const name of ['hopspec', 'hopskill-build']) {
+        expect(existsSync(join(legacyRoot, name))).toBe(false);
+        expect(notes.some(n => n.includes('已挪走') && n.includes(join(legacyRoot, name)))).toBe(true);
+      }
+      expect(notes.some(n => n.includes('hopskill-build') && n.includes('/hopfix'))).toBe(false);   // 旧名不再误指 /hopfix
+      expect(existsSync(join(legacyRoot, 'my-flow', 'SKILL.md'))).toBe(true);                        // 用户自建件原地不动
+      expect(notes.some(n => n.includes(join(legacyRoot, 'my-flow')) && n.includes('/hopfix'))).toBe(true);
+      const backupRoot = join(process.env.HOME!, '.hopjit', 'stale-backup');
+      const stamps = readdirSync(backupRoot);
+      expect(stamps).toHaveLength(1);                                                                  // 同一次 setup 共用一个时间戳目录
+      const restore = readFileSync(join(backupRoot, stamps[0], 'RESTORE.txt'), 'utf-8').trim().split('\n');
+      expect(restore).toHaveLength(2);
+    });
+
+    // @v: anc-cli-stale-skill-scan —— 挪动失败退回只提示,原目录不动
+    it('备份区建不起来（~/.hopjit/stale-backup 被普通文件占位）→ 陈旧副本原地不动,stale_notes 退回提示并写明失败（反例）', async () => {
+      const oldRoot = join(process.env.HOME!, '.agents', 'skills');
+      mkdirSync(join(oldRoot, 'hopfix'), { recursive: true });
+      writeFileSync(join(oldRoot, 'hopfix', 'SKILL.md'), '---\nname: hopfix\n---\n<!-- driver: @hoplogic/hopjit v0.0.1 (x) installed 2026-01-01 -->\n');
+      mkdirSync(join(process.env.HOME!, '.hopjit'), { recursive: true });
+      writeFileSync(join(process.env.HOME!, '.hopjit', 'stale-backup'), '占位');
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'codex', '--dir', join(process.env.HOME!, 'tgt2'), '--force']);
+      } finally { cap.restore(); }
+      const r = JSON.parse(cap.get().trim().split('\n').pop()!);
+      expect(r.status).toBe('ok');                                                                     // 不拦装载
+      const notes: string[] = r.stale_notes ?? [];
+      expect(notes.some(n => n.includes(join(oldRoot, 'hopfix')) && n.includes('挪进备份区失败') && n.includes('原目录未动'))).toBe(true);
+      expect(existsSync(join(oldRoot, 'hopfix', 'SKILL.md'))).toBe(true);
+    });
+
+    // @v: anc-cli-stale-skill-scan —— 别的载体的现行安装目录不是旧位置（2026-10-07 实撞:opencode 轮挪走了 CC 在用的 hopbuild2）
+    it('setup --carrier opencode 不动 ~/.claude/skills 里的自带件,哪怕版本落后、spec.md 无指纹;只挪那里的旧 demo-*（反例+正例）', async () => {
+      const ccRoot = join(process.env.HOME!, '.claude', 'skills');
+      for (const [name, v] of [['hopbuild2', '0.0.1'], ['hopfix', '0.0.1'], ['demo-rename', '0.0.1']] as const) {
+        mkdirSync(join(ccRoot, name), { recursive: true });
+        writeFileSync(join(ccRoot, name, 'SKILL.md'), `---\nname: ${name}\n---\n<!-- driver: @hoplogic/hopjit v${v} (x) installed 2026-10-01 -->\n`);
+      }
+      writeFileSync(join(ccRoot, 'hopbuild2', 'spec.md'), '# Spec: hopbuild2\n');
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--dir', join(process.env.HOME!, 'oc-skills'), '--force']);
+      } finally { cap.restore(); }
+      const r = JSON.parse(cap.get().trim().split('\n').pop()!);
+      const notes: string[] = r.stale_notes ?? [];
+      expect(existsSync(join(ccRoot, 'hopbuild2', 'spec.md'))).toBe(true);
+      expect(existsSync(join(ccRoot, 'hopfix', 'SKILL.md'))).toBe(true);
+      expect(notes.some(n => n.includes(join(ccRoot, 'hopbuild2')) || n.includes(join(ccRoot, 'hopfix')))).toBe(false);
+      expect(existsSync(join(ccRoot, 'demo-rename'))).toBe(false);                                   // 旧 demo 仍挪
+    });
+
+    // @v: anc-cli-stale-skill-scan —— 缺 engine_min_version 指纹只判用户自建件;当前版自带件不因此误判
+    it('Codex 旧位置当前版 hopbuild2（spec.md 无指纹）不挪;同处当前版用户自建件缺指纹仍指路 /hopfix（反例+正例）', async () => {
+      const legacyRoot = join(process.env.HOME!, '.agents', 'skills');
+      const v = JSON.parse(readFileSync(resolve(__dirname, '..', 'package.json'), 'utf-8')).version;
+      for (const name of ['hopbuild2', 'my-flow']) {
+        mkdirSync(join(legacyRoot, name), { recursive: true });
+        writeFileSync(join(legacyRoot, name, 'SKILL.md'), `---\nname: ${name}\n---\n<!-- driver: @hoplogic/hopjit v${v} (x) installed 2026-10-07 -->\n`);
+        writeFileSync(join(legacyRoot, name, 'spec.md'), `# Spec: ${name}\n`);
+      }
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'codex', '--dir', join(process.env.HOME!, 'codex-skills2'), '--force']);
+      } finally { cap.restore(); }
+      const r = JSON.parse(cap.get().trim().split('\n').pop()!);
+      const notes: string[] = r.stale_notes ?? [];
+      expect(existsSync(join(legacyRoot, 'hopbuild2', 'spec.md'))).toBe(true);
+      expect(notes.some(n => n.includes(join(legacyRoot, 'hopbuild2')))).toBe(false);
+      expect(notes.some(n => n.includes(join(legacyRoot, 'my-flow')) && n.includes('/hopfix'))).toBe(true);
     });
 
     // opencode 读 OPENCODE_CONFIG_DIR:在场装到重定向 config 目录
@@ -1472,7 +1703,7 @@ describe('CLI function unit tests (coverage)', () => {
       process.env.OPENCODE_CONFIG_DIR = join(fakeHome, 'custom-oc-home');   // 模拟重定向
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -1498,7 +1729,7 @@ describe('CLI function unit tests (coverage)', () => {
       delete process.env.CODEX_HOME;
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--plus', '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--plus', '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -1532,7 +1763,7 @@ describe('CLI function unit tests (coverage)', () => {
         'tool_servers:\n  - name: bailian_search\n    binding: { kind: mcp, transport: http, url: "https://user-own.example/mcp" }\n    tools: []\n');
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--plus', '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--plus', '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -1573,7 +1804,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'hopskill-mcp-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--mcp', '--dir', dir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--mcp', '--dir', dir, '--force']);
       } finally { cap.restore(); }
       const reuse = readFileSync(join(dir, 'hopspec', 'SKILL.md'), 'utf-8');
       expect(reuse).toContain('driver subagent');               // 复用壳=复用协议
@@ -1594,15 +1825,27 @@ describe('CLI function unit tests (coverage)', () => {
     describe('install-skill 缺省傻瓜化（0132 后续）', () => {
       it('正例：不带 --mcp 也注册 .mcp.json 并写 CC 放行;六件装齐但只有 hop 用户可见;hop-ops.md 随装', () => withMcpEnv(async ({ cwd }) => {
         const dir = mkdtempSync(join(tmpdir(), 'hopskill-def-'));
+        const fakeBin = mkdtempSync(join(tmpdir(), 'hopskill-bin-'));
+        writeFileSync(join(fakeBin, 'hopjit-mcp'), '');   // 握手只查 command 在 PATH 上能否找到,不执行它
+        const oldPath = process.env.PATH;
+        process.env.PATH = `${fakeBin}${process.platform === 'win32' ? ';' : ':'}${oldPath ?? ''}`;
         const cap = capture();
-        try { await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', dir, '--force']); } finally { cap.restore(); }
+        try { await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', dir, '--force']); } finally { cap.restore(); process.env.PATH = oldPath; }
         const out = JSON.parse(cap.get().trim().split('\n').pop()!);
         expect(out.mcp_registered).toContain('.mcp.json');
         expect(JSON.parse(readFileSync(join(cwd, '.mcp.json'), 'utf-8')).mcpServers.hopjit.command).toBe('hopjit-mcp');
         expect(out.permission_written).toContain(join('.claude', 'settings.local.json'));
         const perm = JSON.parse(readFileSync(join(cwd, '.claude', 'settings.local.json'), 'utf-8'));
-        expect(perm.permissions.allow).toEqual(['mcp__hopjit__run_approved_command']);
+        // 放行清单=HOPJIT_ALLOWED_TOOLS 全量,含 approve_commit（todo/0146;人批准在对话里问）// @v: anc-cli-install-skill-permission
+        expect(perm.permissions.allow).toEqual(EXPECTED_ALLOW);
+        expect(HOPJIT_ALLOWED_TOOLS.map(t => `mcp__hopjit__${t}`)).toEqual(EXPECTED_ALLOW);   // 常量与写死名单一致
+        expect(perm.permissions.allow).toContain('mcp__hopjit__approve_commit');
+        expect(perm.permissions.allow.some((x: string) => x.includes('*'))).toBe(false);   // 不加通配（通配会放行以后新增、尚未评估的工具）
         expect(Object.keys(perm)).toEqual(['permissions']);   // 新建时不多写别的键
+        // 项目级注册后做一次握手自检,结果随输出返回（todo/0146）// @v: anc-cli-install-skill-handshake
+        expect(out.mcp_handshake).toBeTruthy();
+        expect(out.mcp_handshake.ok).toBe(true);
+        expect(out.mcp_handshake.tools).toContain('approve_commit');
         for (const name of ['hop', 'hopspec', 'hopspec-mcp', 'hopbuild', 'hopbuild2', 'hopfix']) expect(existsSync(join(dir, name, 'SKILL.md'))).toBe(true);
         // 键名必须是 CC 官方的连字符形 user-invocable（下划线形被 CC 静默忽略——review 实锤,下划线自 8 月起一直是空操作）
         expect(readFileSync(join(dir, 'hop', 'SKILL.md'), 'utf-8')).toMatch(/^user-invocable: true$/m);
@@ -1618,47 +1861,57 @@ describe('CLI function unit tests (coverage)', () => {
         mkdirSync(join(cwd, '.claude'), { recursive: true });
         writeFileSync(join(cwd, '.claude', 'settings.local.json'), JSON.stringify({ permissions: { allow: ['Bash(ls:*)'], deny: ['Bash(rm:*)'] }, other: 1 }, null, 2));
         let cap = capture();
-        try { await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', dir, '--force']); } finally { cap.restore(); }
+        try { await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', dir, '--force']); } finally { cap.restore(); }
         let perm = JSON.parse(readFileSync(join(cwd, '.claude', 'settings.local.json'), 'utf-8'));
-        expect(perm.permissions.allow).toEqual(['Bash(ls:*)', 'mcp__hopjit__run_approved_command']);
+        expect(perm.permissions.allow).toEqual(['Bash(ls:*)', ...EXPECTED_ALLOW]);
         expect(perm.permissions.deny).toEqual(['Bash(rm:*)']);
         expect(perm.other).toBe(1);
         cap = capture();
-        try { await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', dir, '--force']); } finally { cap.restore(); }
+        try { await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', dir, '--force']); } finally { cap.restore(); }
         const out2 = JSON.parse(cap.get().trim().split('\n').pop()!);
         expect(out2.permission_written).toBeNull();
         expect(out2.permission_note).toContain('未改动');
         perm = JSON.parse(readFileSync(join(cwd, '.claude', 'settings.local.json'), 'utf-8'));
         expect(perm.permissions.allow.filter((x: string) => x === 'mcp__hopjit__run_approved_command')).toHaveLength(1);
+        // 旧版只写了 run_approved_command 的项目:重跑只补缺的,已有的不重复
+        writeFileSync(join(cwd, '.claude', 'settings.local.json'), JSON.stringify({ permissions: { allow: ['mcp__hopjit__run_approved_command'] } }));
+        cap = capture();
+        try { await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', dir, '--force']); } finally { cap.restore(); }
+        perm = JSON.parse(readFileSync(join(cwd, '.claude', 'settings.local.json'), 'utf-8'));
+        expect(perm.permissions.allow[0]).toBe('mcp__hopjit__run_approved_command');   // 已有条目原位不动
+        expect([...perm.permissions.allow].sort()).toEqual([...EXPECTED_ALLOW].sort());
         writeFileSync(join(cwd, '.claude', 'settings.local.json'), '{ 坏 json');
         cap = capture();
-        try { await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', dir, '--force']); } finally { cap.restore(); }
+        try { await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', dir, '--force']); } finally { cap.restore(); }
         const out3 = JSON.parse(cap.get().trim().split('\n').pop()!);
         expect(out3.permission_written).toBeNull();
         expect(out3.permission_note).toContain('不是合法 JSON');
         expect(readFileSync(join(cwd, '.claude', 'settings.local.json'), 'utf-8')).toBe('{ 坏 json');   // 未覆盖
       }));
 
-      it('反例：codex 载体不写 CC 放行文件,permission_note 指路 run_approved_command', () => withMcpEnv(async ({ cwd }) => {
+      it('反例：codex 载体不写 CC 放行文件,permission_note 指路放行 hopjit 的 MCP 工具（不再有除外项）', () => withMcpEnv(async ({ cwd }) => {
         const dir = mkdtempSync(join(tmpdir(), 'hopskill-cx-'));
         const cap = capture();
-        try { await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'codex', '--dir', dir, '--force']); } finally { cap.restore(); }
+        try { await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'codex', '--dir', dir, '--force']); } finally { cap.restore(); }
         const out = JSON.parse(cap.get().trim().split('\n').pop()!);
         expect(out.permission_written).toBeNull();
-        expect(out.permission_note).toContain('run_approved_command');
+        expect(out.permission_note).toContain('hopjit 的 MCP 工具');
+        expect(out.permission_note).not.toContain('除外');
         expect(existsSync(join(cwd, '.claude', 'settings.local.json'))).toBe(false);
       }));
 
-      it('反例：opencode 载体不写 CC 放行文件（carrierFamily 把它归 cc 系——判据必须显式枚举）,note 含工具名与 enabled 启用句;hop-ops.md 随装', () => withMcpEnv(async ({ cwd, home }) => {
+      it('反例：opencode 载体不写 CC 放行文件（carrierFamily 把它归 cc 系——判据必须显式枚举）,note 含工具名与 tools 节说明;hop-ops.md 随装', () => withMcpEnv(async ({ cwd, home }) => {
         const dir = mkdtempSync(join(tmpdir(), 'hopskill-oc-'));
         process.env.OPENCODE_CONFIG_DIR = join(home, 'opencode');
         const cap = capture();
-        try { await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--dir', dir, '--force']); }
+        try { await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--dir', dir, '--force']); }
         finally { cap.restore(); delete process.env.OPENCODE_CONFIG_DIR; }
         const out = JSON.parse(cap.get().trim().split('\n').pop()!);
         expect(out.permission_written).toBeNull();
-        expect(out.permission_note).toContain('run_approved_command');
-        expect(out.permission_note).toContain('enabled');
+        expect(out.permission_note).toContain('hopjit 的 MCP 工具');
+        expect(out.permission_note).not.toContain('除外');
+        expect(out.permission_note).toContain('tools 节');   // b 案：server 已启用,note 说的是 tools 节已关独立模式工具（^anc-cli-opencode-tools-gate）
+        expect(out.permission_note).not.toContain('enabled 改为 true');
         expect(existsSync(join(cwd, '.claude', 'settings.local.json'))).toBe(false);
         expect(existsSync(join(dir, 'hop', 'references', 'hop-ops.md'))).toBe(true);
         expect(readFileSync(join(dir, 'hop', 'SKILL.md'), 'utf-8')).toMatch(/^user-invocable: true$/m);
@@ -1667,7 +1920,7 @@ describe('CLI function unit tests (coverage)', () => {
       it('codex 载体 hop-ops.md 随装（三载体拷贝各自有钉）', () => withMcpEnv(async () => {
         const dir = mkdtempSync(join(tmpdir(), 'hopskill-cx2-'));
         const cap = capture();
-        try { await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'codex', '--dir', dir, '--force']); } finally { cap.restore(); }
+        try { await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'codex', '--dir', dir, '--force']); } finally { cap.restore(); }
         expect(existsSync(join(dir, 'hop', 'references', 'hop-ops.md'))).toBe(true);
         expect(readFileSync(join(dir, 'hop', 'SKILL.md'), 'utf-8')).toMatch(/^user-invocable: true$/m);
       }));
@@ -1679,7 +1932,7 @@ describe('CLI function unit tests (coverage)', () => {
         for (const [raw, kw] of [['[1,2]', '顶层不是对象'], ['{"permissions":"abc"}', 'permissions 不是对象'], ['{"permissions":{"allow":"Bash(ls:*)"}}', 'allow 不是数组']] as const) {
           writeFileSync(f, raw);
           const cap = capture();
-          try { await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', dir, '--force']); } finally { cap.restore(); }
+          try { await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', dir, '--force']); } finally { cap.restore(); }
           const out = JSON.parse(cap.get().trim().split('\n').pop()!);
           expect(out.permission_written).toBeNull();
           expect(out.permission_note).toContain(kw);
@@ -1692,7 +1945,7 @@ describe('CLI function unit tests (coverage)', () => {
         const savedEnv: Record<string, string | undefined> = {};
         for (const k of Object.keys(process.env)) if (k.startsWith('ANTHROPIC_')) { savedEnv[k] = process.env[k]; delete process.env[k]; }   // 自举学习源=宿主 ANTHROPIC_*,本例要'学不到'
         const cap = capture();
-        try { await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', dir, '--force']); }
+        try { await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', dir, '--force']); }
         finally { cap.restore(); for (const [k, v] of Object.entries(savedEnv)) process.env[k] = v; }
         const out = JSON.parse(cap.get().trim().split('\n').pop()!);
         expect('mcp_registered' in out).toBe(true);
@@ -1707,7 +1960,7 @@ describe('CLI function unit tests (coverage)', () => {
         writeFileSync(join(home, '.hopjit'), 'not-a-dir');
         process.env.ANTHROPIC_AUTH_TOKEN = 'x';   // 保证走到写盘那一步
         const cap = capture();
-        try { await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', dir, '--force']); }
+        try { await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', dir, '--force']); }
         finally { cap.restore(); delete process.env.ANTHROPIC_AUTH_TOKEN; }
         const out = JSON.parse(cap.get().trim().split('\n').pop()!);
         expect(out.status).toBe('ok');
@@ -1724,7 +1977,7 @@ describe('CLI function unit tests (coverage)', () => {
         chmodSync(join(cwd, '.mcp.json'), 0o444);   // 文件只读：writeFileSync EACCES
         chmodSync(cwd, 0o555);                      // 目录只读：放行的 mkdir .claude EACCES
         const cap = capture();
-        try { await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', dir, '--force']); }
+        try { await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', dir, '--force']); }
         finally { cap.restore(); chmodSync(cwd, 0o755); chmodSync(join(cwd, '.mcp.json'), 0o644); }
         const out = JSON.parse(cap.get().trim().split('\n').pop()!);
         expect(out.status).toBe('ok');
@@ -1739,7 +1992,7 @@ describe('CLI function unit tests (coverage)', () => {
           const dir = mkdtempSync(join(tmpdir(), `hopskill-six-${carrier}-`));
           if (carrier === 'opencode') process.env.OPENCODE_CONFIG_DIR = join(home, 'opencode');
           const cap = capture();
-          try { await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', carrier, '--dir', dir, '--force']); }
+          try { await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', carrier, '--dir', dir, '--force']); }
           finally { cap.restore(); delete process.env.OPENCODE_CONFIG_DIR; }
           for (const name of ['hop', 'hopspec', 'hopspec-mcp', 'hopbuild', 'hopbuild2', 'hopfix']) expect(existsSync(join(dir, name, 'SKILL.md'))).toBe(true);
           expect(readFileSync(join(dir, 'hop', 'SKILL.md'), 'utf-8')).toMatch(/^user-invocable: true$/m);
@@ -1747,16 +2000,17 @@ describe('CLI function unit tests (coverage)', () => {
         }
       }));
 
-      it('陈旧副本扫描：六件之一（hopfix）旧版本副本在旧位置 → stale_notes 按本器产物形态提示（isBundled 清单保护）', () => withMcpEnv(async ({ home }) => {
+      it('陈旧副本扫描：六件之一（hopfix）旧版本副本在旧位置 → 按本器自带件挪进备份区（isBundled 清单保护）', () => withMcpEnv(async ({ home }) => {
         const dir = mkdtempSync(join(tmpdir(), 'hopskill-stale-'));
-        const legacy = join(home, '.claude', 'skills', 'hopfix');   // 用户级旧位置
+        const legacy = join(home, '.agents', 'skills', 'hopfix');   // Codex 用户级旧位置
         mkdirSync(legacy, { recursive: true });
         writeFileSync(join(legacy, 'SKILL.md'), '---\nname: hopfix\n---\n<!-- driver: @hoplogic/hopjit v0.0.1 (x) installed 2026-01-01T00:00:00.000Z -->\n');
         const cap = capture();
-        try { await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', dir, '--force']); } finally { cap.restore(); }
+        try { await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'codex', '--dir', dir, '--force']); } finally { cap.restore(); }
         const out = JSON.parse(cap.get().trim().split('\n').pop()!);
         const notes: string[] = out.stale_notes ?? [];
-        expect(notes.some(n => n.includes('hopfix') && n.includes('该位置已不受本次安装管辖'))).toBe(true);
+        expect(notes.some(n => n.includes(legacy) && n.includes('已挪走'))).toBe(true);
+        expect(existsSync(legacy)).toBe(false);
       }));
     });
 
@@ -1777,26 +2031,26 @@ describe('CLI function unit tests (coverage)', () => {
       }
       const runInstall = async (args: string[]) => {
         const cap = capture();
-        try { await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', ...args]); } finally { cap.restore(); }
+        try { await program.parseAsync(['node', 'hopjit', '--json', 'setup', ...args]); } finally { cap.restore(); }
         return JSON.parse(cap.get().trim().split('\n').pop()!);
       };
 
       it('detectCarriers：按 home 在场探测,顺序固定,零在场空数组（正反例）', () => withHome((home) => {
-        expect(detectCarriers()).toEqual([]);
+        expect(detectCarriers(adminCtx())).toEqual([]);
         mkdirSync(join(home, '.codex'), { recursive: true });
-        expect(detectCarriers()).toEqual(['codex']);
+        expect(detectCarriers(adminCtx())).toEqual(['codex']);
         mkdirSync(join(home, '.claude'), { recursive: true });
         mkdirSync(join(home, '.config', 'opencode'), { recursive: true });
-        expect(detectCarriers()).toEqual(['cc', 'codex', 'opencode']);
+        expect(detectCarriers(adminCtx())).toEqual(['cc', 'codex', 'opencode']);
       }));
 
       it('detectCarriers：CLAUDE_CONFIG_DIR 把 cc 重定向到 cfuse 目录时与 cfuse-cc 去重,只报先探到的 cc', () => withHome((home) => {
         const cfuseCc = join(home, '.codefuse', 'engine', 'cc');
         mkdirSync(cfuseCc, { recursive: true });
         process.env.CLAUDE_CONFIG_DIR = cfuseCc;
-        expect(detectCarriers()).toEqual(['cc']);
+        expect(detectCarriers(adminCtx())).toEqual(['cc']);
         delete process.env.CLAUDE_CONFIG_DIR;
-        expect(detectCarriers()).toEqual(['cfuse-cc']);   // 裸终端无重定向：~/.claude 不在,cfuse-cc 自己在
+        expect(detectCarriers(adminCtx())).toEqual(['cfuse-cc']);   // 裸终端无重定向：~/.claude 不在,cfuse-cc 自己在
       }));
 
       it('零参数两载体在场 → 两个都装,carriers/results 两元素,顶层字段=第一个载体的值', () => withHome(async (home) => {
@@ -1813,6 +2067,17 @@ describe('CLI function unit tests (coverage)', () => {
         expect(existsSync(join(home, '.claude', 'skills', 'hop', 'SKILL.md'))).toBe(true);
         expect(existsSync(join(home, '.codex', 'skills', 'hop', 'SKILL.md'))).toBe(true);
         expect(out.detect_note).toContain('cc, codex');
+        // todo/0139 挂钩①：顶层恒带 next_step,指向包内 AGENT-GUIDE 绝对路径且文件真在场（死路径=指了等于没指） // @v: anc-cli-install-skill
+        expect(out.next_step).toContain('AGENT-GUIDE.md');
+        const guidePath = out.next_step.match(/(\/\S+AGENT-GUIDE\.md)/)?.[1];
+        expect(guidePath, 'next_step 里要有绝对路径').toBeTruthy();
+        expect(existsSync(guidePath!)).toBe(true);
+        expect(out.results[0].next_step, 'next_step 与载体无关,不进 results').toBeUndefined();
+        // 第二句指路可贴进项目 CLAUDE.md/AGENTS.md 的模板（todo/0139 挂钩②改形态）——同样核绝对路径真在场 // @v: anc-cli-install-skill
+        expect(out.next_step).toContain('先问用户');
+        const tplPath = out.next_step.match(/(\/\S+agent-instructions-template\.md)/)?.[1];
+        expect(tplPath, 'next_step 里要有模板绝对路径').toBeTruthy();
+        expect(existsSync(tplPath!)).toBe(true);
       }));
 
       it('零在场 → 回落只装 cc 并 detect_note 说明（旧缺省不退化）;显式 --carrier codex 时 ~/.claude 在场也不碰（反例）', () => withHome(async (home) => {
@@ -1826,6 +2091,7 @@ describe('CLI function unit tests (coverage)', () => {
         expect(out2.carriers).toEqual(['codex']);
         expect(out2.detect_note).toBeUndefined();
         expect(existsSync(join(home, '.claude', 'skills'))).toBe(false);
+        expect(out2.next_step, '显式 --carrier 路径同样恒带').toContain('AGENT-GUIDE.md');   // @v: anc-cli-install-skill
       }));
 
       it('--dir 给了目录不探测,等价 cc（旧行为）', () => withHome(async (home) => {
@@ -1837,47 +2103,224 @@ describe('CLI function unit tests (coverage)', () => {
         expect(existsSync(join(home, '.codex', 'skills'))).toBe(false);
       }));
 
-      // @v: anc-cli-postinstall — 钩子路径不写项目级两件（cwd 不是用户项目）,note 指路首次 /hop 补
-      it('HOPJIT_POSTINSTALL=1：skill 与用户级注册照装,项目级 .mcp.json 与 settings.local.json 不写、note 说明', () => withHome(async (home) => {
+      // @v: anc-cli-postinstall — 钩子已撤（2026-10-09 todo/0143）:package.json 不再登记 postinstall,dist 里没有 postinstall.js,HOPJIT_POSTINSTALL 不再有任何分支
+      it('postinstall 钩子已撤：package.json 无 postinstall 字段;HOPJIT_POSTINSTALL=1 不再改变 setup 行为（项目级两件照写）', () => withHome(async (home) => {
+        const pkg = JSON.parse(readFileSync(resolve(__dirname, '..', 'package.json'), 'utf-8'));
+        expect(pkg.scripts.postinstall).toBeUndefined();
+        expect(existsSync(resolve(__dirname, '..', 'src', 'postinstall.ts'))).toBe(false);
         mkdirSync(join(home, '.claude'), { recursive: true });
         process.env.HOPJIT_POSTINSTALL = '1';
-        const out = await runInstall([]);
-        expect(out.carriers).toEqual(['cc']);
-        expect(existsSync(join(home, '.claude', 'skills', 'hop', 'SKILL.md'))).toBe(true);
-        expect(out.mcp_registered).toBeNull();
-        expect(out.mcp_note).toContain('postinstall');
-        expect(out.permission_written).toBeNull();
-        expect(out.permission_note).toContain('postinstall');
-        expect(existsSync(join(process.cwd(), '.mcp.json'))).toBe(false);
-        expect(existsSync(join(process.cwd(), '.claude'))).toBe(false);
+        const out = await runInstall(['--force']);
+        expect(out.mcp_registered).toBe(resolve(process.cwd(), '.mcp.json'));   // 变异：恢复 projectScope 分支 → null 红
+        expect(out.permission_written).toBe(resolve(process.cwd(), '.claude', 'settings.local.json'));
       }));
 
-      it('postinstallSkipReason：四种跳过各命中;装包形态（node_modules 下且 dist 在）返回 null', () => {
-        const pkg = '/x/lib/node_modules/@hoplogic/hopjit';
-        expect(postinstallSkipReason({ HOPJIT_SKIP_SKILL: '1' }, 501, pkg, true)).toContain('HOPJIT_SKIP_SKILL');
-        expect(postinstallSkipReason({ CI: 'true' }, 501, pkg, true)).toContain('CI');
-        expect(postinstallSkipReason({ SUDO_USER: 'lenx' }, 0, pkg, true)).toContain('sudo');
-        expect(postinstallSkipReason({}, 0, pkg, true)).toBeNull();   // 真 root 不经 sudo（容器）照装
-        expect(postinstallSkipReason({}, 501, '/Users/me/src/hoplogic3', true)).toContain('源码仓');
-        expect(postinstallSkipReason({}, 501, pkg, false)).toContain('dist');
-        expect(postinstallSkipReason({}, 501, pkg, true)).toBeNull();
-      });
-
-      it('dist/postinstall.js 真跑：源码仓路径下跳过,打一行指路,退出码 0,不写任何 skill 目录', () => {
-        const fakeHome = mkdtempSync(join(tmpdir(), 'hoppi-home-'));
-        mkdirSync(join(fakeHome, '.claude'), { recursive: true });
-        const r = spawnSync(process.execPath, [resolve(__dirname, '..', 'dist', 'postinstall.js')], {
-          encoding: 'utf-8', env: { ...process.env, HOME: fakeHome, CLAUDE_CONFIG_DIR: join(fakeHome, '.claude') },
+      // @v: anc-cli-first-run-hint — 撤钩子后漏跑 setup 的唯一兜底：下一条任何 hopjit 命令 stderr 一行指路,零状态,不碰 --json 的 stdout
+      describe('首次运行提示', () => {
+        const stamp = (v: string) => `---\nname: hop\n---\n<!-- driver: @hoplogic/hopjit v${v} (/pkg) installed 2026-10-09T00:00:00.000Z -->\n# hop\n`;
+        const cur = JSON.parse(readFileSync(resolve(__dirname, '..', 'package.json'), 'utf-8')).version as string;
+        it('纯函数七支：豁免命令 / 版本与帮助 / 静音与 CI / 零载体 / 全装同版本 → 空;有未装 → 指路 setup;只有落后 → 指路刷新', () => {
+          const probeMissing = () => null; const probeOk = () => cur; const probeOld = () => '0.0.1';
+          expect(firstRunHint(['setup'], {}, cur, probeMissing)).toBe('');
+          expect(firstRunHint(['install-skill', '--force'], {}, cur, probeMissing)).toBe('');
+          expect(firstRunHint(['--version'], {}, cur, probeMissing)).toBe('');
+          expect(firstRunHint(['list', '--help'], {}, cur, probeMissing)).toBe('');
+          expect(firstRunHint([], {}, cur, probeMissing)).toBe('');
+          return withHome(async (home) => {
+            expect(firstRunHint(['list'], {}, cur, probeMissing)).toBe('');   // 假 HOME 下零载体
+            mkdirSync(join(home, '.claude'), { recursive: true });
+            expect(firstRunHint(['--json', 'list'], {}, cur, probeMissing)).toMatch(/^\[hopjit\] \/hop 还没装进本机 agent（cc）——运行 hopjit setup/);
+            expect(firstRunHint(['list'], { HOPJIT_SKIP_SKILL: '1' }, cur, probeMissing)).toBe('');   // 有载体且未装,静音开关压住（变异：删开关 → 红）
+            expect(firstRunHint(['list'], { CI: 'true' }, cur, probeMissing)).toBe('');
+            expect(firstRunHint(['list'], {}, cur, probeOk)).toBe('');
+            expect(firstRunHint(['list'], {}, cur, probeOld)).toMatch(/版本落后（cc 装于 v0\.0\.1,当前 v/);
+          });
         });
-        expect(r.status).toBe(0);
-        expect(r.stderr).toMatch(/\[hopjit\] 未自动安装 skill（源码仓/);
-        expect(r.stderr).toContain('hopjit install-skill');
-        expect(existsSync(join(fakeHome, '.claude', 'skills'))).toBe(false);
+        it('真读戳：探到 cc 无 hop/SKILL.md → 提示;写入同版本戳 → 零输出;戳改旧版本 → 落后提示', () => withHome(async (home) => {
+          mkdirSync(join(home, '.claude', 'skills', 'hop'), { recursive: true });
+          expect(firstRunHint(['list'], {}, cur)).toContain('还没装进本机 agent（cc）');
+          writeFileSync(join(home, '.claude', 'skills', 'hop', 'SKILL.md'), stamp(cur));
+          expect(firstRunHint(['list'], {}, cur)).toBe('');   // 变异：戳正则改坏 → 这里仍提示红
+          writeFileSync(join(home, '.claude', 'skills', 'hop', 'SKILL.md'), stamp('0.1.0'));
+          expect(firstRunHint(['list'], {}, cur)).toContain('版本落后（cc 装于 v0.1.0');
+        }));
+        it('挂点：`--json list` 在未装机器上 stderr 一行指路,stdout 仍是纯 JSON;setup 自身零提示（跨进程真跑）', () => withHome(async (home) => {
+          mkdirSync(join(home, '.claude'), { recursive: true });
+          const env = { ...process.env, HOME: home, HOPJIT_ANTHROPIC_API_KEY: '' }; delete env.HOPJIT_SKIP_SKILL; delete env.CI; delete env.CLAUDE_CONFIG_DIR;
+          const r = spawnSync(process.execPath, [CLI, '--json', 'list', mkdtempSync(join(tmpdir(), 'frh-ls-'))], { env, encoding: 'utf-8' });
+          expect(r.stderr).toMatch(/^\[hopjit\] \/hop 还没装进本机 agent（cc）——运行 hopjit setup/);   // 变异：preAction 不写 stderr → 红
+          expect(() => JSON.parse(r.stdout.trim())).not.toThrow();   // stdout 纯净
+          const r2 = spawnSync(process.execPath, [CLI, '--json', 'setup', '--dir', mkdtempSync(join(tmpdir(), 'frh-sk-'))], { env, encoding: 'utf-8', cwd: mkdtempSync(join(tmpdir(), 'frh-cwd-')) });
+          expect(r2.stderr).not.toContain('还没装进本机 agent');
+        }));
       });
 
-      it('package.json：postinstall 钩子登记为 node dist/postinstall.js', () => {
-        const pkg = JSON.parse(readFileSync(resolve(__dirname, '..', 'package.json'), 'utf-8'));
-        expect(pkg.scripts.postinstall).toBe('node dist/postinstall.js');
+      // @v: anc-cli-doctor
+      describe('hopjit doctor（^anc-cli-doctor）', () => {
+        const cur = JSON.parse(readFileSync(resolve(__dirname, '..', 'package.json'), 'utf-8')).version as string;
+        const okHandshake = () => ({ ok: true, tools: ['run', 'status'], standalone_available: false });
+        const byId = (items: { id: string; carrier: string; status: string; detail: string; hint?: string }[], id: string, carrier?: string) =>
+          items.filter(i => i.id === id && (carrier === undefined || i.carrier === carrier));
+        const one = (items: { id: string; carrier: string; status: string; detail: string; hint?: string }[], id: string, carrier?: string) => { const l = byId(items, id, carrier); expect(l, id).toHaveLength(1); return l[0]; };
+        // 假 HOME 下只造 cc 一个载体（~/.claude 在场）,setup 在临时 cwd 跑——cwd 的 .mcp.json 与 settings.local.json 就是 doctor 要看的项目级两件
+        const ccReady = async (home: string, extraEnv: Record<string, string> = {}) => {
+          mkdirSync(join(home, '.claude'), { recursive: true });
+          process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || 'x';   // 让自举学到 providers（只写名）
+          await runInstall([]);
+          return { ...process.env, ...extraEnv } as NodeJS.ProcessEnv;
+        };
+
+        it('正：setup 后全好——八问 ok（cc 单载体 8 项）,exit_code 0;握手注入 ok', () => withHome(async (home) => {
+          const env = await ccReady(home, { ANTHROPIC_API_KEY: 'x' });
+          const r = runDoctor(adminCtx(env), { handshake: okHandshake });
+          expect(r.carriers).toEqual(['cc']);
+          expect(r.items.map(i => i.status)).toEqual(Array(8).fill('ok'));   // 变异：任一问判法改坏 → 对应项非 ok 红
+          expect(r.summary).toEqual({ ok: 8, warn: 0, fail: 0, na: 0 });
+          expect(r.exit_code).toBe(0);
+          expect(one(r.items, 'mcp_handshake').detail).toContain('2 个工具');
+          expect(one(r.items, 'permissions').detail).toContain(`${HOPJIT_ALLOWED_TOOLS.length} 项全在`);
+          expect(one(r.items, 'mcp_llm_config').detail).toContain('cc_host');
+        }));
+
+        it('反：没装 skill → skill_installed fail 且 skill_version / skill_visible 级联 n/a,exit_code 1;hint 指 hopjit setup', () => withHome(async (home) => {
+          mkdirSync(join(home, '.claude'), { recursive: true });
+          const r = runDoctor(adminCtx({ ...process.env, ANTHROPIC_API_KEY: 'x' }), { handshake: okHandshake });
+          const inst = one(r.items, 'skill_installed', 'cc');
+          expect(inst.status).toBe('fail'); expect(inst.hint).toContain('hopjit setup');
+          expect(one(r.items, 'skill_version', 'cc').status).toBe('n/a');   // 变异：级联不做 → warn/fail 红
+          expect(one(r.items, 'skill_visible', 'cc').status).toBe('n/a');
+          expect(r.exit_code).toBe(1);   // 变异：exit_code 恒 0 → 红
+        }));
+
+        it('反：戳改旧 → skill_version warn 不 fail,exit_code 0;frontmatter 删 user-invocable → cc skill_visible fail', () => withHome(async (home) => {
+          const env = await ccReady(home, { ANTHROPIC_API_KEY: 'x' });
+          const skill = join(home, '.claude', 'skills', 'hop', 'SKILL.md');
+          const orig = readFileSync(skill, 'utf-8');
+          writeFileSync(skill, orig.replace(/@hoplogic\/hopjit v[\d.]+/, '@hoplogic/hopjit v0.0.1'));
+          let r = runDoctor(adminCtx(env), { handshake: okHandshake });
+          const ver = one(r.items, 'skill_version', 'cc');
+          expect(ver.status).toBe('warn'); expect(ver.detail).toContain('v0.0.1'); expect(ver.hint).toContain('刷新');   // 变异：落后判 fail → 红
+          expect(r.exit_code).toBe(0);
+          writeFileSync(skill, orig.replace(/^user-invocable: true$/m, 'user-invocable: false'));
+          r = runDoctor(adminCtx(env), { handshake: okHandshake });
+          expect(one(r.items, 'skill_visible', 'cc').status).toBe('fail');   // 变异：cc 不核 user-invocable → 红
+          expect(one(r.items, 'skill_visible', 'cc').detail).toContain('user-invocable');
+        }));
+
+        it('反：.mcp.json 删 hopjit → mcp_registered fail 且 mcp_handshake n/a（不拉起）;permissions 文件删 → fail 缺 N 项', () => withHome(async (home) => {
+          const env = await ccReady(home, { ANTHROPIC_API_KEY: 'x' });
+          rmSync(join(process.cwd(), '.mcp.json'));
+          rmSync(join(process.cwd(), '.claude', 'settings.local.json'));
+          const r = runDoctor(adminCtx(env), { handshake: () => { throw new Error('不该拉起'); } });
+          expect(one(r.items, 'mcp_registered', 'cc').status).toBe('fail');
+          expect(one(r.items, 'mcp_registered', 'cc').hint).toContain('项目根');
+          expect(one(r.items, 'mcp_handshake').status).toBe('n/a');   // 变异：没注册也拉起 → throw 红
+          const perm = one(r.items, 'permissions', 'cc');
+          expect(perm.status).toBe('fail'); expect(perm.detail).toContain(`缺 ${HOPJIT_ALLOWED_TOOLS.length} 项`);
+          expect(r.exit_code).toBe(1);
+        }));
+
+        it('反：握手失败 → mcp_handshake fail,detail=reason hint=fix（透传 mcpHandshake 的字段）', () => withHome(async (home) => {
+          const env = await ccReady(home, { ANTHROPIC_API_KEY: 'x' });
+          const r = runDoctor(adminCtx(env), { handshake: () => ({ ok: false, reason: 'R-原因', fix: 'F-修法' }) });
+          const h = one(r.items, 'mcp_handshake');
+          expect(h.status).toBe('fail'); expect(h.detail).toBe('R-原因'); expect(h.hint).toBe('F-修法');   // 变异：detail/hint 不透传 → 红
+        }));
+
+        it('反（作者口径两档）：无 providers → mcp_llm_config fail 且 detail 是"模型没配置"+ 没学到的原因、standalone_credential n/a;providers 在场 env 缺 → credential warn 不 fail exit 0,env 在 → ok', () => withHome(async (home) => {
+          mkdirSync(join(home, '.claude'), { recursive: true });
+          // 不给 ANTHROPIC_* → 自举学不到 → 无 providers
+          delete process.env.ANTHROPIC_API_KEY; delete process.env.ANTHROPIC_AUTH_TOKEN;
+          await runInstall([]);
+          expect(existsSync(join(home, '.hopjit', 'config.yaml'))).toBe(false);
+          let r = runDoctor(adminCtx({ ...process.env }), { handshake: okHandshake });
+          const llm = one(r.items, 'mcp_llm_config');
+          expect(llm.status).toBe('fail');   // 变异：无 providers 判 warn → 红
+          expect(llm.detail).toMatch(/^MCP server 的模型没配置：setup 从 cc 没学到 LLM 配置——.*ANTHROPIC_AUTH_TOKEN\/ANTHROPIC_API_KEY/);   // 变异：detail 不带 learnStandaloneEntry 的 note 半句 → 红
+          expect(llm.hint).toContain('config.yaml');
+          expect(one(r.items, 'standalone_credential').status).toBe('n/a');   // 变异：级联不做 → 红
+          expect(r.exit_code).toBe(1);
+          // 现在写一份 providers（变量名 DOCTOR_TEST_KEY）
+          mkdirSync(join(home, '.hopjit'), { recursive: true });
+          writeFileSync(join(home, '.hopjit', 'config.yaml'), 'providers:\n  - service_id: t\n    protocol: anthropic\n    base_url: https://x\n    model: m\n    api_key_env: DOCTOR_TEST_KEY\n');
+          const envNo = { ...process.env } as NodeJS.ProcessEnv; delete envNo.DOCTOR_TEST_KEY;
+          r = runDoctor(adminCtx(envNo), { handshake: okHandshake });
+          expect(one(r.items, 'mcp_llm_config').status).toBe('ok');
+          const cred = one(r.items, 'standalone_credential');
+          expect(cred.status).toBe('warn'); expect(cred.detail).toContain('DOCTOR_TEST_KEY'); expect(cred.hint).toContain('只影响 MCP 独立模式');   // 变异：凭证缺判 fail → 红（作者口径：这不是 fail）
+          expect(r.items.filter(i => i.status === 'fail').map(i => i.id)).not.toContain('standalone_credential');
+          r = runDoctor(adminCtx({ ...envNo, DOCTOR_TEST_KEY: 'v' }), { handshake: okHandshake });
+          expect(one(r.items, 'standalone_credential').status).toBe('ok');
+        }));
+
+        it('反：零载体 → 问 1-6 各一项 fail（carrier none）,问 7 仍答;exit 1', () => withHome(async () => {
+          const r = runDoctor(adminCtx({ ...process.env }), { handshake: () => { throw new Error('不该拉起'); } });
+          expect(r.carriers).toEqual([]);
+          const fails = r.items.filter(i => i.carrier === 'none');
+          expect(fails.map(i => i.id)).toEqual(['skill_installed', 'skill_version', 'skill_visible', 'mcp_registered', 'mcp_handshake', 'permissions']);   // 变异：零载体不出项 → 红
+          expect(fails.every(i => i.status === 'fail')).toBe(true);
+          expect(one(r.items, 'mcp_llm_config').status).toBe('fail');
+          expect(r.exit_code).toBe(1);
+        }));
+
+        it('反：opencode 载体 enabled:false（hopjit 自己写的旧形态）→ mcp_registered warn,hint 指路重跑 setup 不叫用户手工改文件;Codex 载体 config.toml 有 [mcp_servers.hopjit] → ok（构造验,非真机）', () => withHome(async (home) => {
+          const oc = join(home, '.config', 'opencode'); mkdirSync(join(oc, 'skills', 'hop'), { recursive: true });
+          writeFileSync(join(oc, 'skills', 'hop', 'SKILL.md'), `---\nname: hop\ndescription: d\n---\n<!-- driver: @hoplogic/hopjit v${cur} (/pkg) installed 2026-10-09T00:00:00.000Z -->\n`);
+          writeFileSync(join(oc, 'opencode.json'), JSON.stringify({ mcp: { hopjit: { type: 'local', command: ['hopjit-mcp'], enabled: false } } }));
+          const cx = join(home, '.codex'); mkdirSync(join(cx, 'skills', 'hop'), { recursive: true });
+          writeFileSync(join(cx, 'skills', 'hop', 'SKILL.md'), `---\nname: hop\ndescription: d\n---\n<!-- driver: @hoplogic/hopjit v${cur} (/pkg) installed 2026-10-09T00:00:00.000Z -->\n`);
+          writeFileSync(join(cx, 'config.toml'), 'model = "m"\n\n[mcp_servers.hopjit]\ncommand = "hopjit-mcp"\n');
+          const r = runDoctor(adminCtx({ ...process.env }), { handshake: okHandshake });
+          expect(r.carriers).toEqual(['codex', 'opencode']);
+          const oreg = one(r.items, 'mcp_registered', 'opencode');
+          expect(oreg.status).toBe('warn');   // 变异：enabled:false 判 ok/fail → 红
+          expect(oreg.hint).toContain('重跑 hopjit setup');   // 旧形态指路重跑 setup（setup 会升级）,不是叫用户改文件
+          expect(oreg.hint).not.toContain('改回 true');
+          expect(one(r.items, 'mcp_registered', 'codex').status).toBe('ok');
+          expect(one(r.items, 'skill_visible', 'codex').status).toBe('ok');   // 非 cc 系不核 user-invocable（这里没写）
+          expect(one(r.items, 'permissions', 'codex').status).toBe('n/a');
+          expect(one(r.items, 'permissions', 'opencode').status).toBe('n/a');
+          expect(one(r.items, 'mcp_handshake').carrier).toBe('codex');   // 第一个 registered 的载体
+        }));
+
+        it('直测三只读函数：learnStandaloneEntry 学到/学不到两态;readMcpRegistration cc 项目级 .mcp.json 与坏 JSON;ccPermissionMissing 四形态 invalid 与缺口', () => withHome(async (home) => {
+          mkdirSync(join(home, '.claude'), { recursive: true });
+          delete process.env.ANTHROPIC_API_KEY; delete process.env.ANTHROPIC_AUTH_TOKEN;
+          expect(learnStandaloneEntry(adminCtx(), 'cc').note).toContain('ANTHROPIC_AUTH_TOKEN/ANTHROPIC_API_KEY');
+          process.env.ANTHROPIC_API_KEY = 'x';
+          const l = learnStandaloneEntry(adminCtx(), 'cc'); expect(l.entry?.api_key_env).toBe('ANTHROPIC_API_KEY'); expect(l.entry?.service_id).toBe('cc_host');
+          const cwd = process.cwd();
+          expect(readMcpRegistration(adminCtx(process.env, cwd), 'cc').registered).toBe(false);
+          writeFileSync(join(cwd, '.mcp.json'), JSON.stringify({ mcpServers: { hopjit: { command: '/abs/hopjit-mcp' } } }));
+          const reg = readMcpRegistration(adminCtx(process.env, cwd), 'cc'); expect(reg.registered).toBe(true); expect(reg.command).toBe('/abs/hopjit-mcp'); expect(reg.where).toContain('.mcp.json');
+          writeFileSync(join(cwd, '.mcp.json'), '{bad');
+          const bad = readMcpRegistration(adminCtx(process.env, cwd), 'cc'); expect(bad.registered).toBe(false); expect(bad.note).toContain('不是合法 JSON');
+          mkdirSync(join(cwd, '.claude'), { recursive: true });
+          expect(ccPermissionMissing(cwd).missing).toHaveLength(HOPJIT_ALLOWED_TOOLS.length);
+          writeFileSync(join(cwd, '.claude', 'settings.local.json'), '{bad');
+          expect(ccPermissionMissing(cwd).invalid).toContain('不是合法 JSON');
+          writeFileSync(join(cwd, '.claude', 'settings.local.json'), JSON.stringify({ permissions: { allow: 'x' } }));
+          expect(ccPermissionMissing(cwd).invalid).toContain('不是数组');
+          writeFileSync(join(cwd, '.claude', 'settings.local.json'), JSON.stringify({ permissions: { allow: HOPJIT_ALLOWED_TOOLS.map(t => `mcp__hopjit__${t}`) } }));
+          expect(ccPermissionMissing(cwd).missing).toEqual([]);
+          expect(readSkillFrontmatter(join(home, '.claude'), 'hop')).toBeNull();
+          mkdirSync(join(home, '.claude', 'skills', 'hop'), { recursive: true });
+          writeFileSync(join(home, '.claude', 'skills', 'hop', 'SKILL.md'), '---\nname: hop\ndescription: a: b, c\nuser-invocable: true\n---\n# x\n');
+          expect(readSkillFrontmatter(join(home, '.claude'), 'hop')).toEqual({ name: 'hop', description: 'a: b, c', user_invocable: true });   // 含 ": " 的 description 不炸（真机实抓）
+        }));
+
+        it('子进程：`--json doctor` 在未装假 HOME 下 exit 1 且 stdout 纯 JSON（exit_code 与 summary.fail 同源）;人读形态同 exit;doctor 自身不触发首次运行提示', () => withHome(async (home) => {
+          mkdirSync(join(home, '.claude'), { recursive: true });
+          const env = { ...process.env, HOME: home, HOPJIT_ANTHROPIC_API_KEY: '' }; delete env.HOPJIT_SKIP_SKILL; delete env.CI; delete env.CLAUDE_CONFIG_DIR;
+          const r = spawnSync(process.execPath, [CLI, '--json', 'doctor'], { env, encoding: 'utf-8', cwd: process.cwd() });
+          expect(r.status).toBe(1);   // 变异：exitCode 不设 → 0 红
+          const j = JSON.parse(r.stdout.trim()) as { action: string; exit_code: number; summary: { fail: number } };
+          expect(j.action).toBe('doctor'); expect(j.exit_code).toBe(1); expect(j.summary.fail).toBeGreaterThan(0);
+          expect(r.stderr).not.toContain('还没装进本机 agent');   // 变异：FIRST_RUN_EXEMPT 去 doctor → 红
+          const h = spawnSync(process.execPath, [CLI, 'doctor'], { env, encoding: 'utf-8', cwd: process.cwd() });
+          expect(h.status).toBe(1);
+          expect(h.stdout).toMatch(/^hopjit doctor — v/); expect(h.stdout).toMatch(/\[fail\] {2}skill_installed/); expect(h.stdout).toMatch(/summary: \d+ ok \/ \d+ warn \/ \d+ fail \/ \d+ n\/a\n$/);
+        }));
       });
     });
 
@@ -1900,7 +2343,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'hopskill-both-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', dir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', dir, '--force']);
       } finally { cap.restore(); }
       expect(existsSync(join(dir, 'hopspec', 'SKILL.md'))).toBe(true);
       expect(existsSync(join(dir, 'hopspec-mcp', 'SKILL.md'))).toBe(true);
@@ -1922,7 +2365,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'oc-skill-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -1934,11 +2377,79 @@ describe('CLI function unit tests (coverage)', () => {
       expect(oc.mcp.hopjit.type).toBe('local');
       expect(oc.mcp.hopjit.command).toEqual(['hopjit-mcp']);
       expect(oc.mcp.hopjit.environment).toEqual({});
-      expect(oc.mcp.hopjit.enabled).toBe(false);   // 默认 enabled:false 避免 LLM 自决调 hopjit_start_run 劫持 hopspec 复用模式
+      // b 案（todo/0134,^anc-cli-opencode-tools-gate）：server 启用,独立模式专属五件在 tools 节关掉;复用驱动与批准面不关
+      expect(oc.mcp.hopjit.enabled).toBe(true);
+      expect(oc.tools).toEqual({ hopjit_start_run: false, hopjit_run_status: false, hopjit_resume_run: false, hopjit_list_runs: false, hopjit_stop_run: false });
+      expect(oc.tools.hopjit_run_approved_command).toBeUndefined();
+      expect(oc.tools.hopjit_run).toBeUndefined();
       const out = JSON.parse(cap.get().trim().split('\n').pop()!);
       expect(out.mcp_registered).toContain('opencode.jsonc');   // 写 opencode.jsonc(candidates[0])
       expect(out.mcp_config_note).toContain('opencode.jsonc');   // 无 model 不自举,note 指明 opencode.jsonc 不存在
-      expect(out.mcp_note).toContain('enabled:false');   // note 明示默认禁用 + 走 standalone 手动改 true
+      expect(out.mcp_note).toContain('enabled:true');
+      expect(out.mcp_note).toContain('hopjit_start_run');   // note 点名关掉了哪些、走 standalone 怎么开
+    });
+
+    // @v: anc-cli-opencode-tools-gate —— tools 节幂等：用户已有的键不动,已是 false 的键不重写,重跑不翻 server 条目
+    it('setup --carrier opencode（review 面三 G7,mut-17）：首装时 tools 节里独立模式专属键在场但为 true → 写成 false（判据是"值不为 false"不是"键在场"）', async () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'cli-oc-tools-t-'));
+      const cwd = mkdtempSync(join(tmpdir(), 'cli-oc-cwd3-'));
+      const oldCwd = process.cwd();
+      const origHome = process.env.HOME; const origOcDir = process.env.OPENCODE_CONFIG_DIR; const origXdg = process.env.XDG_CONFIG_HOME;
+      process.env.HOME = fakeHome; delete process.env.OPENCODE_CONFIG_DIR; delete process.env.XDG_CONFIG_HOME;
+      process.chdir(cwd);
+      mkdirSync(join(fakeHome, '.config/opencode'), { recursive: true });
+      // 无 mcp.hopjit（首装）,但用户曾手工写过 hopjit_start_run: true
+      writeFileSync(join(fakeHome, '.config/opencode/opencode.jsonc'), '{\n  "tools": { "hopjit_start_run": true, "my_tool": true }\n}\n');
+      const dir = mkdtempSync(join(tmpdir(), 'oc-skill3-'));
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+        cap.restore();
+        const oc = parseJsonc(readFileSync(join(fakeHome, '.config/opencode/opencode.jsonc'), 'utf-8')) as any;
+        expect(oc.mcp.hopjit.enabled).toBe(true);
+        expect(oc.tools.hopjit_start_run).toBe(false);   // 变异：幂等判改成"键在场即跳过" → 仍是 true 红
+        expect(oc.tools.my_tool).toBe(true);
+      } finally {
+        process.env.HOME = origHome; process.chdir(oldCwd);
+        if (origOcDir === undefined) delete process.env.OPENCODE_CONFIG_DIR; else process.env.OPENCODE_CONFIG_DIR = origOcDir;
+        if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = origXdg;
+      }
+    });
+    it('setup --carrier opencode：tools 节已有用户键 → 只补缺席的五键,用户键原样;重跑幂等（反例:不覆盖）', async () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'cli-oc-tools-'));
+      const cwd = mkdtempSync(join(tmpdir(), 'cli-oc-cwd2-'));
+      const oldCwd = process.cwd();
+      const origHome = process.env.HOME; const origOcDir = process.env.OPENCODE_CONFIG_DIR; const origXdg = process.env.XDG_CONFIG_HOME;
+      process.env.HOME = fakeHome; delete process.env.OPENCODE_CONFIG_DIR; delete process.env.XDG_CONFIG_HOME;
+      process.chdir(cwd);
+      mkdirSync(join(fakeHome, '.config/opencode'), { recursive: true });
+      // 用户已有 tools 节（含注释与一个自己的键,hopjit_stop_run 已是 false）,无 mcp.hopjit
+      writeFileSync(join(fakeHome, '.config/opencode/opencode.jsonc'), '{\n  // 用户注释\n  "tools": { "my_tool": true, "hopjit_stop_run": false }\n}\n');
+      const dir = mkdtempSync(join(tmpdir(), 'oc-skill2-'));
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+        cap.restore();
+        const text1 = readFileSync(join(fakeHome, '.config/opencode/opencode.jsonc'), 'utf-8');
+        expect(text1).toContain('// 用户注释');   // jsoncModify 保留原格式与注释
+        const oc1 = parseJsonc(text1) as any;
+        expect(oc1.tools.my_tool).toBe(true);
+        expect(oc1.tools.hopjit_start_run).toBe(false);
+        expect(oc1.tools.hopjit_stop_run).toBe(false);
+        expect(oc1.mcp.hopjit.enabled).toBe(true);
+        // 用户把 start_run 改 true 走 standalone 后重跑 setup：mcp.hopjit 已存在整条跳过,tools 节也不动
+        writeFileSync(join(fakeHome, '.config/opencode/opencode.jsonc'), text1.replace('"hopjit_start_run": false', '"hopjit_start_run": true'));
+        const cap2 = capture();
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+        cap2.restore();
+        const oc2 = parseJsonc(readFileSync(join(fakeHome, '.config/opencode/opencode.jsonc'), 'utf-8')) as any;
+        expect(oc2.tools.hopjit_start_run).toBe(true);   // 用户的 standalone 开关没被重跑翻回
+        expect(oc2.tools.my_tool).toBe(true);
+      } finally {
+        process.env.HOME = origHome; process.chdir(oldCwd);
+        if (origOcDir === undefined) delete process.env.OPENCODE_CONFIG_DIR; else process.env.OPENCODE_CONFIG_DIR = origOcDir;
+        if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = origXdg;
+      }
     });
 
     // @v: anc-cli-install-skill — opencode 载体 LLM 自举（2026-09-15,见 todo/0089）
@@ -1962,7 +2473,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'oc-skill2-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -2002,7 +2513,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'oc-skill-npm-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -2027,7 +2538,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir2 = mkdtempSync(join(tmpdir(), 'oc-skill-npm2-'));
       const cap2 = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir2, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--mcp', '--dir', dir2, '--force']);
       } finally {
         cap2.restore();
         process.env.HOME = origHome;
@@ -2061,7 +2572,7 @@ describe('CLI function unit tests (coverage)', () => {
         const dir = mkdtempSync(join(tmpdir(), 'oc-skill-npm3-'));
         const cap = capture();
         try {
-          await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+          await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
         } finally {
           cap.restore();
           process.env.HOME = origHome;
@@ -2091,7 +2602,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'oc-bad-skill-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -2125,7 +2636,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'oc-skip-skill-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -2136,6 +2647,54 @@ describe('CLI function unit tests (coverage)', () => {
       const oc = JSON.parse(readFileSync(join(fakeHome, '.config/opencode/opencode.json'), 'utf-8'));
       expect(oc.mcp.hopjit.command).toEqual(['my-custom']);   // 未被覆盖
       const out = JSON.parse(cap.get().trim().split('\n').pop()!);
+      expect(out.mcp_registered).toBeNull();
+      expect(out.mcp_note).toContain('未改动');
+    });
+
+    // @v: anc-cli-opencode-tools-gate —— 已有条目三分（2026-10-11 作者抓"普通用户会手工翻么？这是 hopjit 自己的 mcp service"）：
+    // hopjit 自己写的 enabled:false 旧形态由 setup 升级;command 不是 hopjit-mcp 的用户自配条目即使 enabled:false 也不动。
+    // 变异：ownStale 判定改坏（恒 false,等于回到"已有即跳过"）→ 正例红;判定去掉 command 条件 → 反例红。
+    async function runOpencodeSetupWith(existing: string): Promise<{ text: string; out: any }> {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'cli-oc-stale-'));
+      const cwd = mkdtempSync(join(tmpdir(), 'cli-oc-stale-cwd-'));
+      const oldCwd = process.cwd();
+      const origHome = process.env.HOME; const origOcDir = process.env.OPENCODE_CONFIG_DIR; const origXdg = process.env.XDG_CONFIG_HOME;
+      process.env.HOME = fakeHome; delete process.env.OPENCODE_CONFIG_DIR; delete process.env.XDG_CONFIG_HOME;
+      process.chdir(cwd);
+      mkdirSync(join(fakeHome, '.config/opencode'), { recursive: true });
+      const cfg = join(fakeHome, '.config/opencode/opencode.json');
+      writeFileSync(cfg, existing, 'utf-8');
+      const dir = mkdtempSync(join(tmpdir(), 'oc-stale-skill-'));
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+      } finally {
+        cap.restore();
+        process.env.HOME = origHome; process.chdir(oldCwd);
+        if (origOcDir === undefined) delete process.env.OPENCODE_CONFIG_DIR; else process.env.OPENCODE_CONFIG_DIR = origOcDir;
+        if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = origXdg;
+      }
+      return { text: readFileSync(cfg, 'utf-8'), out: JSON.parse(cap.get().trim().split('\n').pop()!) };
+    }
+    it('正例：opencode 已有 mcp.hopjit 是 hopjit 自己写的旧形态（command hopjit-mcp + enabled:false）→ setup 升级为 enabled:true 并补 tools 节五键,其余键与用户键不动', async () => {
+      const { text, out } = await runOpencodeSetupWith(JSON.stringify({
+        model: 'x/y',
+        mcp: { hopjit: { type: 'local', command: ['hopjit-mcp'], enabled: false, environment: { FOO: 'bar' } } },
+        tools: { my_tool: true },
+      }, null, 2));
+      const oc = parseJsonc(text) as any;
+      expect(oc.mcp.hopjit.enabled).toBe(true);   // 变异：ownStale 恒 false → 仍 false 红
+      expect(oc.mcp.hopjit.command).toEqual(['hopjit-mcp']);
+      expect(oc.mcp.hopjit.environment).toEqual({ FOO: 'bar' });   // 只翻 enabled 一键,用户改过的 environment 不动
+      expect(oc.tools).toEqual({ my_tool: true, hopjit_start_run: false, hopjit_run_status: false, hopjit_resume_run: false, hopjit_list_runs: false, hopjit_stop_run: false });
+      expect(oc.model).toBe('x/y');
+      expect(out.mcp_registered).toContain('opencode.json');
+      expect(out.mcp_note).toContain('旧形态升级');
+    });
+    it('反例：opencode 已有 mcp.hopjit 是用户自配（command 不是 hopjit-mcp）且 enabled:false → setup 不动它,tools 节也不写', async () => {
+      const original = JSON.stringify({ mcp: { hopjit: { type: 'local', command: ['my-wrapper'], enabled: false } } }, null, 2);
+      const { text, out } = await runOpencodeSetupWith(original);
+      expect(text).toBe(original);   // 变异：ownStale 去掉 command 条件 → 文件被改写红
       expect(out.mcp_registered).toBeNull();
       expect(out.mcp_note).toContain('未改动');
     });
@@ -2159,7 +2718,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'oc-nomodel-skill-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -2189,7 +2748,7 @@ describe('CLI function unit tests (coverage)', () => {
       expect(out.status).toBe('ok');
       expect(existsSync(join(cwd, '.opencode', 'skills', 'doc-review', 'SKILL.md'))).toBe(true);
       const skillMd = readFileSync(join(cwd, '.opencode', 'skills', 'doc-review', 'SKILL.md'), 'utf-8');
-      expect(skillMd).toContain('hopjit install-skill --carrier opencode');   // installHint 含 opencode
+      expect(skillMd).toContain('hopjit setup --carrier opencode');   // installHint 含 opencode
     });
 
     // @v: anc-cli-install-skill — opencode .jsonc 保留注释(jsonc-parser modify/applyEdits,opencode 同款)
@@ -2210,7 +2769,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'oc-jsonc-skill-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -2242,7 +2801,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'oc-jsonc-skip-skill-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -2276,7 +2835,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'oc-jsonc-boot-skill-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -2314,7 +2873,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'oc-merge-skill-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -2348,7 +2907,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'oc-cfgjson-skill-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -2382,7 +2941,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'oc-deepopt-skill-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'opencode', '--mcp', '--dir', dir, '--force']);
       } finally {
         cap.restore();
         process.env.HOME = origHome;
@@ -2402,13 +2961,30 @@ describe('CLI function unit tests (coverage)', () => {
       writeFileSync(join(cwd, '.mcp.json'), JSON.stringify({ mcpServers: { hopjit: { command: 'my-custom' } } }), 'utf-8');
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--mcp', '--dir', dir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--mcp', '--dir', dir, '--force']);
       } finally { cap.restore(); }
       const mcp = JSON.parse(readFileSync(join(cwd, '.mcp.json'), 'utf-8'));
       expect(mcp.mcpServers.hopjit.command).toBe('my-custom');   // 未被覆盖
       const out = JSON.parse(cap.get().trim().split('\n').pop()!);
       expect(out.mcp_registered).toBeNull();
       expect(out.mcp_note).toContain('未改动');
+    }));
+
+    // @v: anc-cli-install-skill-handshake
+    it('握手按项目 .mcp.json 里的 command 判:command 指向不存在的绝对路径 → mcp_handshake.ok=false 且 reason 带该路径;setup 不因此失败,skill 照装', () => withMcpEnv(async ({ cwd }) => {
+      const dir = mkdtempSync(join(tmpdir(), 'hopskill-hs-'));
+      const ghost = join(cwd, 'no-such-bin', 'hopjit-mcp-ghost');
+      writeFileSync(join(cwd, '.mcp.json'), JSON.stringify({ mcpServers: { hopjit: { command: ghost } } }), 'utf-8');
+      const cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', dir, '--force']);
+      } finally { cap.restore(); }
+      const out = JSON.parse(cap.get().trim().split('\n').pop()!);
+      expect(out.mcp_handshake.ok).toBe(false);
+      expect(out.mcp_handshake.reason).toContain(ghost);
+      expect(out.mcp_handshake.fix).toBeTruthy();
+      expect(existsSync(join(dir, 'hop', 'SKILL.md'))).toBe(true);
+      expect(out.installed.length).toBeGreaterThan(0);
     }));
 
     // @v: anc-cli-install-skill — CC 跨 scope 已注册感知（2026-08-20 实撞立:local 级在场又写
@@ -2420,7 +2996,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'hopskill-scope-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--mcp', '--dir', dir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--mcp', '--dir', dir, '--force']);
       } finally { cap.restore(); }
       expect(existsSync(join(cwd, '.mcp.json'))).toBe(false);        // 未制造第二 scope
       const out = JSON.parse(cap.get().trim().split('\n').pop()!);
@@ -2435,7 +3011,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'hopskill-scope2-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--mcp', '--dir', dir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--mcp', '--dir', dir, '--force']);
       } finally { cap.restore(); }
       expect(existsSync(join(cwd, '.mcp.json'))).toBe(false);
       const out = JSON.parse(cap.get().trim().split('\n').pop()!);
@@ -2447,7 +3023,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'hopskill-scope3-'));
       let cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--mcp', '--dir', dir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--mcp', '--dir', dir, '--force']);
       } finally { cap.restore(); }
       expect(JSON.parse(readFileSync(join(cwd, '.mcp.json'), 'utf-8')).mcpServers.hopjit.command).toBe('hopjit-mcp');
       // 他项目的 local 注册不误报（scope 感知按本 cwd 精确匹配）
@@ -2457,10 +3033,102 @@ describe('CLI function unit tests (coverage)', () => {
       }), 'utf-8');
       cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--mcp', '--dir', dir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--mcp', '--dir', dir, '--force']);
       } finally { cap.restore(); }
       expect(JSON.parse(readFileSync(join(cwd, '.mcp.json'), 'utf-8')).mcpServers.hopjit.command).toBe('hopjit-mcp');
     }));
+
+    // @v: anc-cli-install-skill — CC 系载体注册按族决策（2026-10-11 todo/0158 第一块:cc 与 cfuse-cc 共用项目级 .mcp.json
+    // 却各查自己的 .claude.json,cc 在 local 级已注册时 cfuse-cc 照写 .mcp.json 即给 cc 制造同名双 scope;doctor 真机报 cfuse-cc 没注册实撞）
+    describe('CC 系载体注册按族决策（cc 与 cfuse-cc 同机）', () => {
+      // 假 HOME 下同时造 cc（~/.claude）与 cfuse-cc（~/.codefuse/engine/cc）两个 home,setup 不带 --carrier 自动探测两者
+      const twoCc = (home: string) => {
+        mkdirSync(join(home, '.claude', 'skills'), { recursive: true });
+        mkdirSync(join(home, '.codefuse', 'engine', 'cc', 'skills'), { recursive: true });
+        return { ccJson: join(home, '.claude.json'), cfJson: join(home, '.codefuse', 'engine', 'cc', '.claude.json') };
+      };
+      const localReg = (cwd: string, extra: Record<string, unknown> = {}) => JSON.stringify({ ...extra, projects: { [cwd]: { mcpServers: { hopjit: { command: 'hopjit-mcp' } } } } }, null, 2) + '\n';
+      const runSetupJson = async (): Promise<any> => {
+        const cap = capture();
+        try { await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--force']); } finally { cap.restore(); }
+        return JSON.parse(cap.get().trim().split('\n').pop()!);
+      };
+      const resultOf = (out: any, carrier: string) => (out.results as any[]).find(r => r.carrier === carrier);
+
+      it('正例 1:cc local 级已注册、cfuse-cc 未注册 → 不写 .mcp.json;cfuse-cc 自己的 .claude.json 多出 local 级条目;cc 的 .claude.json 字节不变;两载体 note / mcp_registered 各指明去向', () => withMcpEnv(async ({ home, cwd }) => {
+        const { ccJson, cfJson } = twoCc(home);
+        writeFileSync(ccJson, localReg(cwd, { numStartups: 3 }), 'utf-8');
+        writeFileSync(cfJson, JSON.stringify({ numStartups: 1, projects: { [cwd]: { allowedTools: [] } } }, null, 2) + '\n', 'utf-8');
+        const ccBefore = readFileSync(ccJson, 'utf-8');
+        const out = await runSetupJson();
+        expect(out.carriers).toEqual(expect.arrayContaining(['cc', 'cfuse-cc']));
+        expect(existsSync(join(cwd, '.mcp.json'))).toBe(false);                  // 决策分支 (b):族内已有注册 → 不制造第二 scope
+        expect(readFileSync(ccJson, 'utf-8')).toBe(ccBefore);                       // 已注册的兄弟一字不动
+        const cf = JSON.parse(readFileSync(cfJson, 'utf-8'));
+        expect(cf.projects[cwd].mcpServers.hopjit).toEqual({ command: 'hopjit-mcp' });   // 写进 cfuse-cc 自己的 local 级
+        expect(cf.projects[cwd].allowedTools).toEqual([]);                           // 只加一键,其余键不动
+        expect(cf.numStartups).toBe(1);
+        expect(resultOf(out, 'cc').mcp_registered).toBeNull();
+        expect(resultOf(out, 'cc').mcp_note).toContain('local 级');
+        expect(resultOf(out, 'cfuse-cc').mcp_registered).toBe(cfJson);
+      }));
+
+      it('正例 2:两个都没注册 → 写一次 .mcp.json 供族内共用;两个 .claude.json 字节不变', () => withMcpEnv(async ({ home, cwd }) => {
+        const { ccJson, cfJson } = twoCc(home);
+        writeFileSync(ccJson, JSON.stringify({ projects: {} }, null, 2) + '\n', 'utf-8');
+        writeFileSync(cfJson, JSON.stringify({ projects: {} }, null, 2) + '\n', 'utf-8');
+        const b1 = readFileSync(ccJson, 'utf-8'), b2 = readFileSync(cfJson, 'utf-8');
+        const out = await runSetupJson();
+        expect(JSON.parse(readFileSync(join(cwd, '.mcp.json'), 'utf-8')).mcpServers.hopjit.command).toBe('hopjit-mcp');   // 决策分支 (a)
+        expect(readFileSync(ccJson, 'utf-8')).toBe(b1);
+        expect(readFileSync(cfJson, 'utf-8')).toBe(b2);
+        const regs = [resultOf(out, 'cc'), resultOf(out, 'cfuse-cc')];
+        expect(regs.filter(r => r.mcp_registered === join(cwd, '.mcp.json'))).toHaveLength(1);   // 只写一次
+        expect(regs.some(r => typeof r.mcp_note === 'string' && r.mcp_note.includes('已有 mcpServers.hopjit 条目'))).toBe(true);   // 第二轮按已有跳过
+      }));
+
+      it('反例 1:cfuse-cc 的 .claude.json 是坏 JSON → INSTALL_SKILL_ERROR 响亮退出,.mcp.json 不写,cc 的文件不动', () => withMcpEnv(async ({ home, cwd }) => {
+        const { ccJson, cfJson } = twoCc(home);
+        writeFileSync(ccJson, localReg(cwd), 'utf-8');
+        writeFileSync(cfJson, '{ 坏 json', 'utf-8');
+        const ccBefore = readFileSync(ccJson, 'utf-8');
+        const origExit = process.exit; const origStderr = process.stderr.write; let stderr = '';
+        process.exit = ((code: number) => { throw new Error(`EXIT:${code}`); }) as any;
+        process.stderr.write = ((chunk: string) => { stderr += chunk; return true; }) as any;
+        const cap = capture();
+        try {
+          await expect(program.parseAsync(['node', 'hopjit', '--json', 'setup', '--force'])).rejects.toThrow('EXIT:1');
+        } finally { cap.restore(); process.exit = origExit; process.stderr.write = origStderr; }
+        expect(stderr + cap.get()).toContain('INSTALL_SKILL_ERROR');   // 决策分支:坏 JSON 响亮失败,不静默覆盖
+        expect(existsSync(join(cwd, '.mcp.json'))).toBe(false);
+        expect(readFileSync(ccJson, 'utf-8')).toBe(ccBefore);
+        expect(readFileSync(cfJson, 'utf-8')).toBe('{ 坏 json');
+      }));
+
+      it('反例 2:两个都已在各自 local 级注册 → 什么都不写,两条 note 分别指明 scope', () => withMcpEnv(async ({ home, cwd }) => {
+        const { ccJson, cfJson } = twoCc(home);
+        writeFileSync(ccJson, localReg(cwd), 'utf-8');
+        writeFileSync(cfJson, localReg(cwd), 'utf-8');
+        const b1 = readFileSync(ccJson, 'utf-8'), b2 = readFileSync(cfJson, 'utf-8');
+        const out = await runSetupJson();
+        expect(existsSync(join(cwd, '.mcp.json'))).toBe(false);
+        expect(readFileSync(ccJson, 'utf-8')).toBe(b1);
+        expect(readFileSync(cfJson, 'utf-8')).toBe(b2);
+        expect(resultOf(out, 'cc').mcp_note).toContain('local 级');
+        expect(resultOf(out, 'cfuse-cc').mcp_note).toContain('local 级');
+      }));
+
+      it('正例 3:正例 1 之后跑 doctor,cc 与 cfuse-cc 的 mcp_registered 都 ok（查法=写法:doctor 认 cfuse-cc 自己 .claude.json 的 local 级条目）', () => withMcpEnv(async ({ home, cwd }) => {
+        const { ccJson, cfJson } = twoCc(home);
+        writeFileSync(ccJson, localReg(cwd), 'utf-8');
+        writeFileSync(cfJson, JSON.stringify({ projects: {} }, null, 2) + '\n', 'utf-8');
+        await runSetupJson();
+        const r = runDoctor(adminCtx(process.env, cwd), { handshake: () => ({ ok: true, tools: ['run'], standalone_available: false }) });
+        const regItems = r.items.filter(i => i.id === 'mcp_registered' && (i.carrier === 'cc' || i.carrier === 'cfuse-cc'));
+        expect(regItems.map(i => [i.carrier, i.status])).toEqual(expect.arrayContaining([['cc', 'ok'], ['cfuse-cc', 'ok']]));
+        expect(regItems.find(i => i.carrier === 'cfuse-cc')!.detail).toContain('local 级');
+      }));
+    });
 
     // @v: anc-cli-install-skill — Codex env_vars 联动 standalone 凭证名（2026-08-20 实撞立:
     // 硬编码 ANTHROPIC 对,配置用其他凭证名时 server 启动即缺凭证）
@@ -2475,7 +3143,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'hopskill-envv-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--mcp', '--carrier', 'codex', '--dir', dir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--mcp', '--carrier', 'codex', '--dir', dir, '--force']);
       } finally { cap.restore(); }
       const toml = readFileSync(join(codexDir, 'config.toml'), 'utf-8');
       expect(toml).toContain('env_vars = ["MYPROV_API_KEY"]');       // 联动自举产物,非硬编码 ANTHROPIC
@@ -2490,7 +3158,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'hopskill-envv2-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--mcp', '--carrier', 'codex', '--dir', dir, '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--mcp', '--carrier', 'codex', '--dir', dir, '--force']);
       } finally { cap.restore(); }
       const toml = readFileSync(join(codexDir, 'config.toml'), 'utf-8');
       expect(toml).toContain('env_vars = ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"]');
@@ -2505,7 +3173,7 @@ describe('CLI function unit tests (coverage)', () => {
       const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((c?: number) => { throw new Error(`EXIT:${c}`); }) as never);
       const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
       try {
-        await expect(program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--mcp', '--dir', dir, '--force']))
+        await expect(program.parseAsync(['node', 'hopjit', '--json', 'setup', '--mcp', '--dir', dir, '--force']))
           .rejects.toThrow(/EXIT/);
       } finally { exitSpy.mockRestore(); errSpy.mockRestore(); process.chdir(oldCwd); }
     });
@@ -2537,7 +3205,7 @@ describe('CLI function unit tests (coverage)', () => {
         const dir = mkdtempSync(join(tmpdir(), 'hopboot-skill-'));
         const cap = capture();
         try {
-          await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--mcp', '--dir', dir, '--force']);
+          await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--mcp', '--dir', dir, '--force']);
         } finally { cap.restore(); }
         const cfgPath = join(process.env.HOME!, '.hopjit', 'config.yaml');
         const cfg = readFileSync(cfgPath, 'utf-8');
@@ -2565,7 +3233,7 @@ describe('CLI function unit tests (coverage)', () => {
         const dir = mkdtempSync(join(tmpdir(), 'hopboot-skill2-'));
         const cap = capture();
         try {
-          await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--mcp', '--carrier', 'codex', '--dir', dir, '--force']);
+          await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--mcp', '--carrier', 'codex', '--dir', dir, '--force']);
         } finally { cap.restore(); }
         const cfg = readFileSync(join(process.env.HOME!, '.hopjit', 'config.yaml'), 'utf-8');
         expect(cfg).toContain('service_id: codex_host');
@@ -2586,7 +3254,7 @@ describe('CLI function unit tests (coverage)', () => {
         const dir = mkdtempSync(join(tmpdir(), 'hopboot-nowire-'));
         const cap = capture();
         try {
-          await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--mcp', '--carrier', 'codex', '--dir', dir, '--force']);
+          await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--mcp', '--carrier', 'codex', '--dir', dir, '--force']);
         } finally { cap.restore(); }
         const cfg = readFileSync(join(process.env.HOME!, '.hopjit', 'config.yaml'), 'utf-8');
         expect(cfg).toContain('protocol: openai-chat');   // 缺省保守 chat,不猜 responses
@@ -2602,7 +3270,7 @@ describe('CLI function unit tests (coverage)', () => {
         const dir = mkdtempSync(join(tmpdir(), 'hopboot-skill5-'));
         const cap = capture();
         try {
-          await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--mcp', '--dir', dir, '--force']);
+          await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--mcp', '--dir', dir, '--force']);
         } finally { cap.restore(); }
         const cfg = readFileSync(join(process.env.HOME!, '.hopjit', 'config.yaml'), 'utf-8');
         expect(cfg).toContain('api_key_env: ANTHROPIC_API_KEY');    // 学到"哪个名字被配了"
@@ -2618,7 +3286,7 @@ describe('CLI function unit tests (coverage)', () => {
         const dir = mkdtempSync(join(tmpdir(), 'hopboot-skill7-'));
         const cap = capture();
         try {
-          await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--mcp', '--dir', dir, '--force']);
+          await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--mcp', '--dir', dir, '--force']);
         } finally { cap.restore(); }
         const { loadStandaloneConfig } = await import('../src/mcp-server.js');
         const cfg = loadStandaloneConfig(undefined, mkdtempSync(join(tmpdir(), 'hopboot-proj-')));
@@ -2634,7 +3302,7 @@ describe('CLI function unit tests (coverage)', () => {
         const dir = mkdtempSync(join(tmpdir(), 'hopboot-skill3-'));
         const cap = capture();
         try {
-          await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--mcp', '--dir', dir, '--force']);
+          await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--mcp', '--dir', dir, '--force']);
         } finally { cap.restore(); }
         expect(readFileSync(cfgPath, 'utf-8')).toContain('service_id: mine');   // 原样
         const out = JSON.parse(cap.get().trim().split('\n').pop()!);
@@ -2648,7 +3316,7 @@ describe('CLI function unit tests (coverage)', () => {
         const dir = mkdtempSync(join(tmpdir(), 'hopboot-skill6-'));
         const cap = capture();
         try {
-          await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--mcp', '--dir', dir, '--force']);
+          await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--mcp', '--dir', dir, '--force']);
         } finally { cap.restore(); }
         expect(existsSync(join(process.env.HOME!, '.hopjit', 'config.yaml'))).toBe(false);   // 系统级未被创建
         const out = JSON.parse(cap.get().trim().split('\n').pop()!);
@@ -2660,7 +3328,7 @@ describe('CLI function unit tests (coverage)', () => {
         const dir = mkdtempSync(join(tmpdir(), 'hopboot-skill4-'));
         const cap = capture();
         try {
-          await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--mcp', '--dir', dir, '--force']);
+          await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--mcp', '--dir', dir, '--force']);
         } finally { cap.restore(); }
         expect(existsSync(join(process.env.HOME!, '.hopjit', 'config.yaml'))).toBe(false);
         const out = JSON.parse(cap.get().trim().split('\n').pop()!);
@@ -2671,7 +3339,7 @@ describe('CLI function unit tests (coverage)', () => {
 
     it('install-skill 缺省 hopspec 壳=纯复用协议（回归:四改后仍无 standalone 块混入）', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'hopskill-reuse-'));
-      await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', dir, '--force']);
+      await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', dir, '--force']);
       const shell = readFileSync(join(dir, 'hopspec', 'SKILL.md'), 'utf-8');
       expect(shell).toContain('driver subagent');                 // 复用协议在场
       expect(shell).not.toContain('STANDALONE 薄协议');            // standalone 块不混入
@@ -2685,7 +3353,7 @@ describe('CLI function unit tests (coverage)', () => {
       process.env.HOME = fakeHome;
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', join(dir, 'sk'), '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', join(dir, 'sk'), '--force']);
       } finally { cap.restore(); process.env.HOME = origHome; }
       const r = JSON.parse(cap.get().trim().split('\n').pop()!);
       expect(r.status).toBe('ok');
@@ -2699,7 +3367,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'cli-is-prune-'));
       const cap1 = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', join(dir, 'sk'), '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', join(dir, 'sk'), '--force']);
       } finally { cap1.restore(); }
       const refsDir = join(dir, 'sk/hopspec/references');
       // 陈旧残留=上版装的（塞进 manifest 模拟）;用户文件=不在任何 manifest
@@ -2713,7 +3381,7 @@ describe('CLI function unit tests (coverage)', () => {
       writeFileSync(mfPath, JSON.stringify(mf));
       const cap2 = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', join(dir, 'sk'), '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', join(dir, 'sk'), '--force']);
       } finally { cap2.restore(); }
       const r = JSON.parse(cap2.get().trim().split('\n').pop()!);
       expect(r.status).toBe('ok');
@@ -2730,7 +3398,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'cli-is-nomf-'));
       const cap1 = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', join(dir, 'sk'), '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', join(dir, 'sk'), '--force']);
       } finally { cap1.restore(); }
       const refsDir = join(dir, 'sk/hopspec/references');
       rmSync(join(refsDir, '.hopjit-manifest.json'));                    // 模拟旧版装机（无 manifest）
@@ -2738,23 +3406,49 @@ describe('CLI function unit tests (coverage)', () => {
       writeFileSync(staleFile, '# 残留\n');
       const cap2 = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', join(dir, 'sk'), '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', join(dir, 'sk'), '--force']);
       } finally { cap2.restore(); }
       expect(existsSync(staleFile)).toBe(true);                          // 空清单=零删除
       expect(existsSync(join(refsDir, '.hopjit-manifest.json'))).toBe(true);   // 新 manifest 已落——下次清理恢复管辖
+    });
+
+    // todo/0146 probe 3 实撞：CC 沙箱禁写 ~/.claude/skills,已装好时 setup 无条件重写 manifest 撞 EPERM
+    it('边界：manifest 内容不变时不写盘（目录只读也不撞 EPERM）;内容变了照常重写', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'cli-is-mfsame-'));
+      const cap1 = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', join(dir, 'sk')]);
+      } finally { cap1.restore(); }
+      const refsDir = join(dir, 'sk/hopspec/references');
+      const mfPath = join(refsDir, '.hopjit-manifest.json');
+      const before = readFileSync(mfPath, 'utf-8');
+      chmodSync(mfPath, 0o444);                                          // 模拟沙箱：manifest 不可写
+      const cap2 = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', join(dir, 'sk')]);
+      } finally { cap2.restore(); chmodSync(mfPath, 0o644); }
+      const r2 = JSON.parse(cap2.get().trim().split('\n').pop()!);
+      expect(r2.status).toBe('ok');                                      // 同内容=跳过写入,不因只读失败
+      expect(readFileSync(mfPath, 'utf-8')).toBe(before);
+      writeFileSync(mfPath, JSON.stringify({ version: '0.0.0', files: [] }));   // 内容过期
+      const cap3 = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', join(dir, 'sk')]);
+      } finally { cap3.restore(); }
+      expect(readFileSync(mfPath, 'utf-8')).toBe(before);                // 内容变了照常重写回现行清单
     });
 
     it('反例：非 force 不清理（与"存在即跳过"对称——不覆盖也不删除）', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'cli-is-noprune-'));
       const cap1 = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', join(dir, 'sk'), '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', join(dir, 'sk'), '--force']);
       } finally { cap1.restore(); }
       const staleFile = join(dir, 'sk/hopspec/references/parallel-worker.md');
       writeFileSync(staleFile, '# 残留\n');
       const cap2 = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', join(dir, 'sk')]);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', join(dir, 'sk')]);
       } finally { cap2.restore(); }
       expect(existsSync(staleFile)).toBe(true);   // 非 force 原样保留
     });
@@ -2763,7 +3457,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'cli-is-scope-'));
       const cap1 = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', join(dir, 'sk'), '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', join(dir, 'sk'), '--force']);
       } finally { cap1.restore(); }
       const userFile = join(dir, 'sk/hopspec/MY-NOTES.md');       // 用户放在 skill 顶层的文件
       const userSkill = join(dir, 'sk/my-own-skill/SKILL.md');    // 用户自己的 skill
@@ -2772,7 +3466,7 @@ describe('CLI function unit tests (coverage)', () => {
       writeFileSync(userSkill, 'y');
       const cap2 = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', join(dir, 'sk'), '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', join(dir, 'sk'), '--force']);
       } finally { cap2.restore(); }
       expect(existsSync(userFile)).toBe(true);
       expect(existsSync(userSkill)).toBe(true);
@@ -2782,7 +3476,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'cli-is-ip-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', join(dir, 'sk'), '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', join(dir, 'sk'), '--force']);
       } finally { cap.restore(); }
       const r = JSON.parse(cap.get().trim().split('\n').pop()!);
       expect(r.status).toBe('ok');
@@ -2895,48 +3589,55 @@ describe('CLI function unit tests (coverage)', () => {
         await program.parseAsync(['node', 'hopjit', '--json', 'pack', join(REPO, 'examples/syntax/confirm-commit.md'), '--dir', join(dir, 'b'), '--force']);
       } finally { cap.restore(); }
       expect(readFileSync(join(dir, 'b/confirm-commit/spec.md'), 'utf-8')).toMatch(/^Id: confirm-commit$/m);
+      // 中文关键词 `标识:` 同样改写,关键词保留（2026-10-06 前只认 `Id:`,fact-check-demo 漏改）
+      cap = capture();
+      try {
+        await program.parseAsync(['node', 'hopjit', '--json', 'pack', join(REPO, 'examples/fact-check-demo.md'), '--name', 'demo-fact-check', '--dir', join(dir, 'c'), '--force']);
+      } finally { cap.restore(); }
+      const zh = readFileSync(join(dir, 'c/demo-fact-check/spec.md'), 'utf-8');
+      expect(zh).toMatch(/^标识: demo-fact-check$/m);
+      expect(zh).not.toMatch(/^标识: fact-check-demo$/m);
     });
 
-    it('install-skill in-process：--demo 附装 demo 集全部成员（demo- 前缀命名空间）', async () => {
+    // @v: anc-cli-install-skill-demo-ants —— setup 缺省装三个演示 HopAnt（与载体无关,不进载体 skill 目录）;--demo 隐藏无作用
+    it('setup in-process：缺省装演示 HopAnt 到 ~/.hopjit/ants,载体 skill 目录与项目 .agents/skills 都没有 demo-*（正例+反例）', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'cli-is-ip-demo-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', join(dir, 'sk'), '--demo', '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'codex', '--dir', join(dir, 'sk'), '--force']);
       } finally { cap.restore(); }
       const r = JSON.parse(cap.get().trim().split('\n').pop()!);
       expect(r.status).toBe('ok');
-      expect(existsSync(join(dir, 'sk/demo-coffee-week/SKILL.md'))).toBe(true);
-      expect(existsSync(join(dir, 'sk/demo-coffee-week/coffee-sales.json'))).toBe(true);
-      expect(existsSync(join(dir, 'sk/demo-fact-check/SKILL.md'))).toBe(true);
-      expect(existsSync(join(dir, 'sk/demo-fact-check/fact-check-sample.md'))).toBe(true);
-      expect(existsSync(join(dir, 'sk/demo-rename/SKILL.md'))).toBe(true);
-      // 反例:旧裸名不再产生（防冲突污染的正名）
-      expect(existsSync(join(dir, 'sk/coffee-week'))).toBe(false);
+      expect(r.demo_ants).toEqual(['demo-coffee-week', 'demo-fact-check', 'demo-rename']);
+      const ants = join(process.env.HOME!, '.hopjit', 'ants');
+      expect(existsSync(join(ants, 'demo-coffee-week', 'demo-coffee-week.md'))).toBe(true);
+      expect(existsSync(join(ants, 'demo-coffee-week', 'coffee-sales.json'))).toBe(true);
+      expect(existsSync(join(ants, 'demo-coffee-week', 'inner_store'))).toBe(true);
+      expect(existsSync(join(ants, 'demo-fact-check', 'fact-check-sample.md'))).toBe(true);
+      expect(readFileSync(join(ants, 'index.md'), 'utf-8')).toMatch(/^- demo-rename — /m);
+      // 反例：不再 pack 成载体 skill（skill 目录与 Codex 旧项目级装载点都没有 demo-*）
+      expect(readdirSync(join(dir, 'sk')).some(n => n.startsWith('demo-'))).toBe(false);
+      expect(existsSync(join(process.cwd(), '.agents', 'skills'))).toBe(false);
     });
 
-    it('install-skill in-process：codex --demo 附装 $demo-* 全集', async () => {
-      const dir = mkdtempSync(join(tmpdir(), 'cli-is-ip-demo-cdx-'));
-      const cwd = process.cwd();
+    it('setup in-process：--demo 仍被接受且结果与不带相同（隐藏的兼容参数）', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'cli-is-ip-demo-alias-'));
       const cap = capture();
       try {
-        process.chdir(dir);
-        // --dir 显式隔离（缺省已是 ~/.codex/skills 用户级——测试不许写真实家目录）;demo 恒项目级落 cwd
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'codex', '--dir', join(dir, 'sk'), '--demo', '--force']);
-      } finally { cap.restore(); process.chdir(cwd); }
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', join(dir, 'sk'), '--demo', '--force']);
+      } finally { cap.restore(); }
       const r = JSON.parse(cap.get().trim().split('\n').pop()!);
       expect(r.status).toBe('ok');
-      const md = readFileSync(join(dir, '.agents/skills/demo-coffee-week/SKILL.md'), 'utf-8');
-      expect(md).toContain('# $demo-coffee-week');
-      expect(existsSync(join(dir, '.agents/skills/demo-fact-check/SKILL.md'))).toBe(true);
-      expect(existsSync(join(dir, '.agents/skills/demo-rename/SKILL.md'))).toBe(true);
+      expect(r.demo_ants).toEqual(['demo-coffee-week', 'demo-fact-check', 'demo-rename']);
+      expect(readdirSync(join(dir, 'sk')).some(n => n.startsWith('demo-'))).toBe(false);
     });
 
     it('install-skill in-process：幂等跳过（note 提示 force）', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'cli-is-ip-idem-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', join(dir, 'sk')]);
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--dir', join(dir, 'sk')]);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', join(dir, 'sk')]);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--dir', join(dir, 'sk')]);
       } finally { cap.restore(); }
       const outs = cap.get().trim().split('\n').map(l => JSON.parse(l));
       expect(outs[1].installed).toEqual([]);
@@ -2947,7 +3648,7 @@ describe('CLI function unit tests (coverage)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'cli-is-ip-cx-'));
       const cap = capture();
       try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'codex', '--dir', join(dir, 'sk'), '--force']);
+        await program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'codex', '--dir', join(dir, 'sk'), '--force']);
       } finally { cap.restore(); }
       // --dir 语义=skills 根（2026-08-27 看齐批——不再拼 .agents/skills 中间层）
       expect(existsSync(join(dir, 'sk/hopspec/agents/segment-driver.md'))).toBe(true);
@@ -2964,7 +3665,7 @@ describe('CLI function unit tests (coverage)', () => {
       process.exit = ((code: number) => { throw new Error(`EXIT:${code}`); }) as any;
       process.stderr.write = ((chunk: string) => { stderr += chunk; return true; }) as any;
       try {
-        await expect(program.parseAsync(['node', 'hopjit', '--json', 'install-skill', '--carrier', 'unknown']))
+        await expect(program.parseAsync(['node', 'hopjit', '--json', 'setup', '--carrier', 'unknown']))
           .rejects.toThrow('EXIT:1');
       } finally {
         process.exit = origExit;
@@ -3195,49 +3896,6 @@ Test params inject
       }
     });
 
-    it('branch command selects case', async () => {
-      const dir = mkdtempSync(join(tmpdir(), 'cli-prog-'));
-      const branchSpec = `# Branch
-Id: branch-cli-cov
-## Goal
-Test branch
-## Inputs
-- mode: text  # input
-## Outputs
-- out: text  # output
-## Steps
-1. [branch] Choose
-  1.1. [case] {mode}==fast
-    1.1.1. [reason] Fast
-      + → out: text  # output
-      > Go fast
-  1.2. [case] {mode}==slow
-    1.2.1. [reason] Slow
-      + → out: text  # output
-      > Go slow
-`;
-      writeFileSync(join(dir, 'spec.md'), branchSpec);
-      const origCwd = process.cwd();
-      process.chdir(dir);
-
-      const origStdout = process.stdout.write;
-      let captured = '';
-      process.stdout.write = ((chunk: string) => { captured += chunk; return true; }) as any;
-
-      try {
-        await program.parseAsync(['node', 'hopjit', '--json', 'init', 'spec.md', '--state-dir', 'state8', '--params', '{"mode":"fast"}']);
-        captured = '';
-        // 选 case 1.1 后引擎推进至该 case 的 reason 步骤 1.1.1（返回 step_ready，不再是 {status:ok}）
-        await program.parseAsync(['node', 'hopjit', '--json', 'submit_and_fetch_next', '1', '--branch', '1.1', '--reason', 'fast', '--state-dir', 'state8']);
-        const result = JSON.parse(captured.trim());
-        expect(result.status).toBe('step_ready');
-        expect(result.step_id).toBe('1.1.1');
-      } finally {
-        process.chdir(origCwd);
-        process.stdout.write = origStdout;
-      }
-    });
-
     it('submit_and_fetch_next --replan parses @file and calls submitReplan', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'cli-prog-'));
       const subtaskSpec = `# Subtask
@@ -3351,46 +4009,6 @@ describe('CLI helpers (unit tests via engine)', () => {
       const vars = engine.getVars();
       expect(vars.status).toBe('ok');
       expect(vars.variables['result']).toBe('hello');
-    });
-  });
-
-  // @v: anc-cli-branch-request
-  describe('branch selection', () => {
-    const BRANCH_SPEC = `# Branch Select
-Id: branch-select
-
-## Goal
-Test manual branch selection
-
-## Inputs
-- mode: text  # input
-
-## Outputs
-- out: text  # output
-
-## Steps
-1. [branch] Choose path
-  1.1. [case] {mode}==fast
-    1.1.1. [reason] Fast path
-      + → out: text  # output
-      > Go fast
-  1.2. [case] {mode}==slow
-    1.2.1. [reason] Slow path
-      + → out: text  # output
-      > Go slow
-`;
-
-    it('selects a branch case', () => {
-      const engine = new ExecutionEngine();
-      engine.initExecution(BRANCH_SPEC, HOST);
-      const result = engine.selectBranch('1', '1.2', 'user chose slow');
-      expect(result.status).toBe('ok');
-
-      const next = engine.nextStep();
-      expect(next.status).toBe('step_ready');
-      if (next.status === 'step_ready') {
-        expect(next.step_id).toBe('1.2.1');
-      }
     });
   });
 
@@ -3569,7 +4187,8 @@ g
   });
 });
 
-// @v: anc-exec-parallel-foreach-join-collect, anc-exec-parallel-foreach-barrier
+// @v: anc-exec-parallel-foreach-join-collect
+// （for-each 屏障锚的 @v 2026-10-11 迁至 engine.test.ts 的 drain_wait 屏障用例——这里只是说明注释,无测试体;语义审计 0156 A1）
 // for-each parallel 的 join 收集端回归——bug:CLI join_parallel 用 getChildren(parallel) 收集，
 // 对 for-each 只拿到模板 child（{P}.1），漏掉合成实例 {P}.2…{P}.N → 它们永远 running、
 // 聚合列表残缺、下游空洞。现行口径=按 listVar 长度算期望合成 ID 集（漏 worker 拒 join）。
@@ -3643,6 +4262,30 @@ Id: branch-desc
       expect(existsSync(join(dir, '.claude/skills/doc-review/spec.md'))).toBe(true);
     });
 
+    // 交付段（四段式第四段,todo/0129 B5——设计 2026-08-15 写定,模板从不读 header.outputs,语义审计抓）
+    // @v: anc-cli-pack-shell
+    it('交付段：两载体壳都含「## 交付」段,逐项列 spec Outputs 名+类型+注释（与 Outputs 严格对齐）;无 Outputs 的 spec 写兜底句', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'cli-pack-deliver-'));
+      runCliJson(`pack "${join(REPO, 'examples/doc-review.md')}"`, dir);
+      const cc = readFileSync(join(dir, '.claude/skills/doc-review/SKILL.md'), 'utf-8');
+      expect(cc).toContain('## 交付');
+      const outNames = ['synthesis', 'decision_output'];   // examples/doc-review.md 的 Outputs 两项（头部用 `Outputs:` 短形态）
+      for (const n of outNames) expect(cc, `交付段漏 ${n}`).toMatch(new RegExp('## 交付[\\s\\S]*`' + n + '`（text）'));
+      expect(cc).toContain('汇聚报告');   // 注释随行
+      expect(cc.indexOf('## 交付')).toBeGreaterThan(cc.indexOf('## 执行'));   // 段序：触发/参数/执行/交付
+      const dir2 = mkdtempSync(join(tmpdir(), 'cli-pack-deliver-cx-'));
+      runCliJson(`pack "${join(REPO, 'examples/doc-review.md')}" --carrier codex`, dir2);
+      const cx = readFileSync(join(dir2, '.agents/skills/doc-review/SKILL.md'), 'utf-8');
+      expect(cx).toContain('## 交付');
+      for (const n of outNames) expect(cx).toContain('`' + n + '`');
+      // 反例：无 Outputs 的 spec → 兜底句而非空段
+      const noOut = join(dir, 'noout.md');
+      writeFileSync(noOut, '# NoOut\nId: noout\n## Goal\ng\n## Steps\n1. [act free] a\n  + → x: text  # x\n');
+      const dir3 = mkdtempSync(join(tmpdir(), 'cli-pack-deliver-no-'));
+      runCliJson(`pack "${noOut}"`, dir3);
+      expect(readFileSync(join(dir3, '.claude/skills/noout/SKILL.md'), 'utf-8')).toContain('本 spec 未声明交付物');
+    });
+
     // @v: anc-cli-pack-version-floor
     it('前置段版本声明——两载体产物带打包时版本与升级指引,版本取 readPackageVersion 单点（hopissues/0051;变异重放:版本行改死字面量→单点一致断言红）', () => {
       // 单点真值:与 CLI 自报版本一致(dist 相对定位包根 package.json——pack 产物写的必须是同一个数)
@@ -3689,6 +4332,10 @@ Id: branch-desc
       const r = runCliJson(`pack "${join(REPO, 'scripts/audit/anchor-audit.md')}"`, dir);
       expect(r.knowledge_docs).toContain('anchor-audit-knowledge.md');
       expect(existsSync(join(dir, '.claude/skills/anchor-audit/anchor-audit-knowledge.md'))).toBe(true);
+      // 壳里不提知识文档（^anc-cli-pack-shell 内务零披露,todo/0151 作者定删——变异：knowledgeNote 恢复本断言红）
+      const shell = readFileSync(join(dir, '.claude/skills/anchor-audit/SKILL.md'), 'utf-8');
+      expect(shell).not.toContain('判据知识文档');
+      expect(shell).not.toContain('anchor-audit-knowledge.md');
     });
 
     // hopissues/0077——pack 原恒不传 doc-ref 上下文,P15 空转:知识缺失 validate 报 error 而
@@ -3840,38 +4487,216 @@ G
     });
   });
 
-  // @v: anc-cli-install-skill —— v0.5.0 --demo：附装 /coffee-week 演示 skill（默认不装）
-  describe('install-skill --demo', () => {
-    it('默认不装 demo；--demo 附装 demo 集全部成员（demo- 前缀）', () => {
-      const dir1 = mkdtempSync(join(tmpdir(), 'cli-isk-nodemo-'));
-      runCliJson('install-skill --dir sk', dir1);
-      expect(existsSync(join(dir1, 'sk/demo-coffee-week'))).toBe(false);
+  // @v: anc-cli-install-skill-demo-ants —— 演示件改 HopAnt（2026-10-06 作者定"demo 可以缺省就装"）：子进程真实入口
+  // @v: anc-cli-ant, anc-hopant-pack, anc-hopant-share
+  describe('ant pack / ant share 子命令（todo/0142 子卡 C/E）', () => {
+    const runAnt = (args: string[], cwd: string, home: string) => spawnSync(process.execPath, [CLI, '--json', 'ant', ...args], {
+      cwd, encoding: 'utf-8', timeout: 10000, env: { ...process.env, HOME: home, HOPJIT_ANTHROPIC_API_KEY: '' },
+    });
+    const last = (out: string) => JSON.parse(out.trim());
+    it('pack：缺省 --out ants、Id 行取 id、--assets 随包;响应 action=pack 带 pack.reconciled 与 next_step;再 install 产物成功', () => {
+      const home = mkdtempSync(join(tmpdir(), 'cli-ap-home-')); const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'cli-ap-cwd-')));
+      writeFileSync(join(cwd, 'spec.md'), `# Spec: s\nId: my-first-ant\nGoal: g\n## Tools\n- web_search(query) -> r % yaml  # x\n  - query % text  # q\n## Outputs\n- out % text  # o\n## Steps\n1. [act free] a\n  - 工具: web_search\n  + → out % text\n`);
+      writeFileSync(join(cwd, 'sample.md'), '# 样例\n');
+      const r = runAnt(['pack', 'spec.md', '--assets', 'sample.md'], cwd, home);
+      expect(r.status, r.stderr).toBe(0);
+      const j = last(r.stdout);
+      expect(j.action).toBe('pack'); expect(j.id).toBe('my-first-ant');
+      expect(j.pack.dir).toBe(join(cwd, 'ants', 'my-first-ant'));
+      expect(j.pack.reconciled).toEqual({ tools_added: [], tools_removed: [], commands_added: [], commands_removed: [], commands_undetermined: [] });
+      expect(j.pack.assets_copied).toEqual(['sample.md']);
+      expect(j.next_step).toContain('hopjit ant install');
+      expect(existsSync(join(cwd, 'ants', 'my-first-ant', 'my-first-ant.md'))).toBe(true);
+      const inst = runAnt(['install', join(cwd, 'ants', 'my-first-ant')], cwd, home);
+      expect(inst.status, inst.stderr).toBe(0);
+      expect(last(inst.stdout).result.installed).toEqual(['my-first-ant']);
+    });
+    it('pack 反例：spec 不存在 → stderr PACK_ERROR 退出 1;doc-ref 缺 → HOPANT_DOC_MISSING 退出 1 且不建目录', () => {
+      const home = mkdtempSync(join(tmpdir(), 'cli-ap-home2-')); const cwd = mkdtempSync(join(tmpdir(), 'cli-ap-cwd2-'));
+      const r = runAnt(['pack', 'nope.md'], cwd, home);
+      expect(r.status).toBe(1); expect(r.stderr).toContain('PACK_ERROR');
+      writeFileSync(join(cwd, 'd.md'), `# Spec: d\nId: d-ant\nGoal: g\n## Constraints\n- 见 [[missing#x]]\n## Outputs\n- out % text  # o\n## Steps\n1. [act free] a\n  + → out % text\n`);
+      const r2 = runAnt(['pack', 'd.md'], cwd, home);
+      expect(r2.status).toBe(1); expect(r2.stderr).toContain('HOPANT_DOC_MISSING');
+      expect(existsSync(join(cwd, 'ants', 'd-ant'))).toBe(false);
+    });
+    // @v: anc-cli-ant, anc-hopant-pack —— 设计 hop-cli.md ^anc-cli-ant pack 条"不存在或不可读 → PACK_ERROR"的不可读半边（0156 语义审计）;root 下 chmod 000 拦不住读,跳过
+    // @v: anc-hopant-index, anc-hopant-pack —— pack 直落某级 HopAnt 根时重建该根 index.md（2026-10-11 天气总结实撞：封进 hop_tasks/ants/ 后索引空表,/hop 分派命中不了）
+    // 变异：hop-admin 的 indexRoot 判定改恒 undefined → 正例红;改恒传 outDir（封到别处也重建）→ 反例红
+    it('正例：pack --out <项目级根 hop_tasks/ants> → 该根 index.md 多出这一行,响应 pack.index_rebuilt 是该根;就地 ant list 能列到 scope=project', () => {
+      const home = mkdtempSync(join(tmpdir(), 'cli-api-home-')); const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'cli-api-cwd-')));
+      writeFileSync(join(cwd, 'spec.md'), `# Spec: 天气穿衣建议\nId: weather-ant\nGoal: 查天气给建议\n## Outputs\n- out % text  # o\n## Steps\n1. [act free] a\n  + → out % text\n`);
+      const r = runAnt(['pack', 'spec.md', '--out', 'hop_tasks/ants'], cwd, home);
+      expect(r.status, r.stderr).toBe(0);
+      const j = last(r.stdout);
+      expect(j.pack.index_rebuilt).toBe(join(cwd, 'hop_tasks', 'ants'));
+      const idx = readFileSync(join(cwd, 'hop_tasks', 'ants', 'index.md'), 'utf-8');
+      expect(idx).toContain('- weather-ant — 天气穿衣建议 — 查天气给建议');   // 变异：indexRoot 恒 undefined → 索引文件不在/无此行,红
+      const l = runAnt(['list'], cwd, home);
+      expect(l.status, l.stderr).toBe(0);
+      expect(last(l.stdout).ants.some((a: { id: string; scope: string }) => a.id === 'weather-ant' && a.scope === 'project')).toBe(true);
+    });
+    it('反例：pack 到别处（缺省 <cwd>/ants,不是任何一级 HopAnt 根）→ 不建 index.md,响应 index_rebuilt 为 null（待装目录,索引归 install）', () => {
+      const home = mkdtempSync(join(tmpdir(), 'cli-api-home2-')); const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'cli-api-cwd2-')));
+      writeFileSync(join(cwd, 'spec.md'), `# Spec: s\nId: elsewhere-ant\nGoal: g\n## Outputs\n- out % text  # o\n## Steps\n1. [act free] a\n  + → out % text\n`);
+      const r = runAnt(['pack', 'spec.md'], cwd, home);
+      expect(r.status, r.stderr).toBe(0);
+      expect(last(r.stdout).pack.index_rebuilt).toBeNull();
+      expect(existsSync(join(cwd, 'ants', 'index.md'))).toBe(false);   // 变异：恒传 outDir → 这里长出 index.md,红
+      expect(existsSync(join(cwd, 'hop_tasks', 'ants'))).toBe(false);   // 项目级根不无故长出
+    });
+    it.skipIf(process.getuid?.() === 0)('正/反（antPack 不可读）：入口 spec chmod 000 → PACK_ERROR 前缀且报文含\'读不出\';可读时照常产出', () => {
+      const home = mkdtempSync(join(tmpdir(), 'cli-ap-home3-')); const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'cli-ap-cwd3-')));
+      const specPath = join(cwd, 'spec.md');
+      writeFileSync(specPath, `# Spec: s\nId: unreadable-ant\nGoal: g\n## Outputs\n- out % text  # o\n## Steps\n1. [act free] a\n  + → out % text\n`);
+      const ctx = adminCtx({ ...process.env, HOME: home }, cwd);
+      chmodSync(specPath, 0o000);
+      try {
+        let caught: unknown;
+        try { antPack(ctx, 'spec.md', {}); } catch (e) { caught = e; }
+        expect(caught).toBeInstanceOf(Error);
+        const msg = (caught as Error).message;
+        expect(msg.startsWith('PACK_ERROR: ')).toBe(true);     // 不是裸 EACCES 系统错误
+        expect(msg).toContain('读不出');
+        expect(msg).toContain('EACCES');                        // 系统错误 message 附在后面
+        expect(existsSync(join(cwd, 'ants', 'unreadable-ant'))).toBe(false);
+      } finally {
+        chmodSync(specPath, 0o644);                              // 让临时目录能清理
+      }
+      const ok = antPack(ctx, 'spec.md', {});                    // 正例：同一文件可读后照常产出
+      expect(ok.action).toBe('pack'); expect(ok.id).toBe('unreadable-ant');
+      expect(existsSync(join(cwd, 'ants', 'unreadable-ant', 'unreadable-ant.md'))).toBe(true);
+    });
+    it('share：owner 四态（决策 8 答过不再问）——首机无旗返回 owner_prompt_required 不写包退出 0;--owner 写包并把 owner_id 写回 config.yaml（只动这一键）;config 已有 owner_id 时不带旗直接用不问;响应带 credential_scan 回执', () => {
+      const home = realpathSync(mkdtempSync(join(tmpdir(), 'cli-as-home-'))); const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'cli-as-cwd-')));
+      mkdirSync(join(home, '.hopjit'), { recursive: true });
+      writeFileSync(join(home, '.hopjit', 'config.yaml'), 'language: zh\ncommands: [git]\n');
+      writeFileSync(join(cwd, 'spec.md'), `# Spec: s\nId: share-me\nGoal: g\n## Outputs\n- out % text  # o\n## Steps\n1. [act free] a\n  + → out % text\n`);
+      expect(runAnt(['pack', 'spec.md'], cwd, home).status).toBe(0);
+      expect(runAnt(['install', join(cwd, 'ants', 'share-me')], cwd, home).status).toBe(0);
+      const ask = runAnt(['share', 'share-me', '--out', 'pk'], cwd, home);
+      expect(ask.status, ask.stderr).toBe(0);
+      const aj = last(ask.stdout);
+      expect(aj.owner_prompt_required).toBe(true); expect(typeof aj.owner_default).toBe('string'); expect(aj.share).toBeUndefined();
+      expect(existsSync(join(cwd, 'pk', 'share-me'))).toBe(false);   // 变异：缺 owner 也写包 → 红
+      const ok = runAnt(['share', 'share-me', '--out', 'pk', '--owner', 'alice-laptop', '--pkg-version', '1.2.3'], cwd, home);
+      expect(ok.status, ok.stderr).toBe(0);
+      const oj = last(ok.stdout);
+      expect(oj.share.name).toBe('share-me'); expect(oj.share.version).toBe('1.2.3'); expect(oj.share.owner).toBe('alice-laptop');
+      expect(oj.owner_written).toBe(join(home, '.hopjit', 'config.yaml'));
+      const cfg = readFileSync(join(home, '.hopjit', 'config.yaml'), 'utf-8');
+      expect(cfg).toContain('owner_id: alice-laptop'); expect(cfg).toContain('language: zh'); expect(cfg).toContain('- git');   // 其余键原样（变异：整文件覆盖 → 红）
+      const pkg = JSON.parse(readFileSync(join(cwd, 'pk', 'share-me', 'package.json'), 'utf-8'));
+      expect(pkg.hopant.owner).toBe('alice-laptop');
+      expect(oj.credential_scan.method).toBe('heuristic'); expect(oj.credential_scan.rejected).toEqual([]); expect(typeof oj.credential_scan.disclaimer).toBe('string');   // 回执提到顶层（变异：不透传 → 红）
+      // config 已有 owner_id：不带任何旗也直接用落盘值,不再问（变异 D4：没旗仍走 prompt 分支 → share 为 undefined 红）
+      const again = runAnt(['share', 'share-me', '--out', 'pk2'], cwd, home);
+      expect(again.status, again.stderr).toBe(0);
+      const gj = last(again.stdout);
+      expect(gj.owner_prompt_required).toBeUndefined();
+      expect(gj.share.owner).toBe('alice-laptop');
+      expect(gj.share.version).toBe('0.1.0');   // --pkg-version 缺省（变异 M33：缺省改 9.9.9 → 红）
+    });
+    it('share：首机（无 config.yaml）--yes 现算 用户-机器 并新建 config 只含 owner_id;config 顶层不是映射 → CONFIG_ERROR 退 1', () => {
+      const home = realpathSync(mkdtempSync(join(tmpdir(), 'cli-as-home3-'))); const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'cli-as-cwd3-')));
+      writeFileSync(join(cwd, 'spec.md'), `# Spec: s\nId: first-box\nGoal: g\n## Outputs\n- out % text  # o\n## Steps\n1. [act free] a\n  + → out % text\n`);
+      expect(runAnt(['pack', 'spec.md'], cwd, home).status).toBe(0);
+      expect(runAnt(['install', join(cwd, 'ants', 'first-box')], cwd, home).status).toBe(0);
+      expect(existsSync(join(home, '.hopjit', 'config.yaml'))).toBe(false);
+      const yes = runAnt(['share', 'first-box', '--out', 'pk', '--yes'], cwd, home);
+      expect(yes.status, yes.stderr).toBe(0);
+      const yj = last(yes.stdout);
+      expect(yj.share.owner).toMatch(/^[^\s]+-[^\s]+$/);   // 用户-机器 现算
+      const cfg = readFileSync(join(home, '.hopjit', 'config.yaml'), 'utf-8');   // 变异 M38：文件不存在不新建 → 读失败红
+      expect(cfg.trim()).toBe(`owner_id: ${yj.share.owner}`);
+      writeFileSync(join(home, '.hopjit', 'config.yaml'), '- not\n- a map\n');
+      const bad = runAnt(['share', 'first-box', '--out', 'pk3', '--owner', 'x-y'], cwd, home);
+      expect(bad.status).toBe(1); expect(bad.stderr).toContain('CONFIG_ERROR');   // 变异 M37：顶层非映射不抛 → 红
+    });
+    it('share 反例：没装的 id → HOPANT_NOT_FOUND 退出 1;多 id 缺 --name → HOPANT_PKG_NAME_REQUIRED', () => {
+      const home = mkdtempSync(join(tmpdir(), 'cli-as-home2-')); const cwd = mkdtempSync(join(tmpdir(), 'cli-as-cwd2-'));
+      const r = runAnt(['share', 'ghost', '--owner', 'o'], cwd, home);
+      expect(r.status).toBe(1); expect(r.stderr).toContain('HOPANT_NOT_FOUND');
+      const r2 = runAnt(['share', 'a', 'b', '--owner', 'o'], cwd, home);
+      expect(r2.status).toBe(1); expect(r2.stderr).toContain('HOPANT_PKG_NAME_REQUIRED');
+    });
+  });
 
-      const dir2 = mkdtempSync(join(tmpdir(), 'cli-isk-demo-'));
-      const r = runCliJson('install-skill --dir sk --demo', dir2);
-      expect(r.status).toBe('ok');
-      expect(existsSync(join(dir2, 'sk/demo-coffee-week/SKILL.md'))).toBe(true);
-      expect(existsSync(join(dir2, 'sk/demo-coffee-week/spec.md'))).toBe(true);
-      expect(existsSync(join(dir2, 'sk/demo-coffee-week/coffee-sales.json'))).toBe(true);
-      expect(existsSync(join(dir2, 'sk/demo-fact-check/SKILL.md'))).toBe(true);
-      expect(existsSync(join(dir2, 'sk/demo-fact-check/fact-check-sample.md'))).toBe(true);
-      expect(existsSync(join(dir2, 'sk/demo-rename/SKILL.md'))).toBe(true);
-      expect((r.installed as string[]).some(p => p.includes('demo-coffee-week'))).toBe(true);
-      expect((r.installed as string[]).some(p => p.includes('demo-fact-check'))).toBe(true);
-      expect((r.installed as string[]).some(p => p.includes('demo-rename'))).toBe(true);
+  describe('setup 缺省装演示 HopAnt', () => {
+    // 每例独立家目录——SUBPROC_HOME 被别的用例共用,演示件装过一次后再跑就是"已装跳过",测不到首装
+    const runFresh = (args: string[], cwd: string, home: string) => spawnSync(process.execPath, [CLI, '--json', ...args], {
+      cwd, encoding: 'utf-8', timeout: 5000,
+      env: { ...process.env, HOME: home, CODEX_HOME: join(home, '.codex'), CLAUDE_CONFIG_DIR: join(home, '.claude'), OPENCODE_CONFIG_DIR: join(home, '.config', 'opencode') },
+    });
+    const last = (out: string) => JSON.parse(out.trim().split('\n').pop()!);
+
+    it('首装三件齐（入口 spec 名=id、Id/标识 行改写、资产同目录、inner_store、索引）;再跑全跳过且 --force 不覆盖', () => {
+      const home = mkdtempSync(join(tmpdir(), 'cli-demo-ant-home-'));
+      const cwd = mkdtempSync(join(tmpdir(), 'cli-demo-ant-cwd-'));
+      const r1 = runFresh(['setup', '--dir', 'sk'], cwd, home);
+      expect(r1.status).toBe(0);
+      const o1 = last(r1.stdout);
+      expect(o1.demo_ants).toEqual(['demo-coffee-week', 'demo-fact-check', 'demo-rename']);
+      expect(o1.demo_note).toBeUndefined();
+      const ants = join(home, '.hopjit', 'ants');
+      expect(readFileSync(join(ants, 'demo-rename', 'demo-rename.md'), 'utf-8')).toMatch(/^Id: demo-rename$/m);
+      expect(readFileSync(join(ants, 'demo-coffee-week', 'demo-coffee-week.md'), 'utf-8')).toMatch(/^Id: demo-coffee-week$/m);
+      expect(readFileSync(join(ants, 'demo-fact-check', 'demo-fact-check.md'), 'utf-8')).toMatch(/^标识: demo-fact-check$/m);
+      expect(existsSync(join(ants, 'demo-coffee-week', 'coffee-sales.json'))).toBe(true);
+      expect(existsSync(join(ants, 'demo-fact-check', 'fact-check-sample.md'))).toBe(true);
+      expect(existsSync(join(ants, 'demo-rename', 'inner_store'))).toBe(true);
+      const idx = readFileSync(join(ants, 'index.md'), 'utf-8');
+      for (const id of ['demo-coffee-week', 'demo-fact-check', 'demo-rename']) expect(idx).toContain(`- ${id} — `);
+      expect(readdirSync(join(cwd, 'sk')).some(n => n.startsWith('demo-'))).toBe(false);   // 不进载体 skill 目录
+      // 用户改过的演示件：再跑（含 --force）不覆盖,demo_note 说明跳过与刷新方法
+      const mine = join(ants, 'demo-rename', 'demo-rename.md');
+      writeFileSync(mine, readFileSync(mine, 'utf-8') + '\n<!-- 用户改过 -->\n');
+      const o2 = last(runFresh(['setup', '--dir', 'sk', '--force'], cwd, home).stdout);
+      expect(o2.demo_ants).toEqual([]);
+      expect(o2.demo_note).toContain('demo-rename 已装，跳过');
+      expect(o2.demo_note).toContain('hopjit ant remove demo-rename');
+      expect(readFileSync(mine, 'utf-8')).toContain('<!-- 用户改过 -->');
     });
 
-    it('codex 载体带 --demo：附装 $demo-* 全集（正式件落 --dir=skills 根,demo 恒项目级落 cwd）', () => {
-      const dir = mkdtempSync(join(tmpdir(), 'cli-isk-demo-codex-'));
-      const r = runCliJson(`install-skill --carrier codex --dir ${join(dir, 'sk')} --demo`, dir);
-      expect(r.status).toBe('ok');
-      expect(existsSync(join(dir, 'sk/hopspec/SKILL.md'))).toBe(true);
-      const demoDir = join(dir, '.agents/skills/demo-coffee-week');
-      expect(existsSync(join(demoDir, 'SKILL.md'))).toBe(true);
-      expect(existsSync(join(demoDir, 'spec.md'))).toBe(true);
-      expect(existsSync(join(demoDir, 'coffee-sales.json'))).toBe(true);
-      expect(readFileSync(join(demoDir, 'SKILL.md'), 'utf-8')).toContain('# $demo-coffee-week');
-      expect(existsSync(join(dir, '.agents/skills/demo-fact-check/SKILL.md'))).toBe(true);
+    it('--demo 被接受（结果同缺省）且 setup --help 不列它', () => {
+      const home = mkdtempSync(join(tmpdir(), 'cli-demo-ant-alias-'));
+      const cwd = mkdtempSync(join(tmpdir(), 'cli-demo-ant-alias-cwd-'));
+      const r = runFresh(['setup', '--dir', 'sk', '--demo'], cwd, home);
+      expect(r.status).toBe(0);
+      expect(last(r.stdout).demo_ants).toEqual(['demo-coffee-week', 'demo-fact-check', 'demo-rename']);
+      const help = spawnSync(process.execPath, [CLI, 'setup', '--help'], { encoding: 'utf-8', timeout: 5000 });
+      expect(help.stdout).toContain('--plus');
+      expect(help.stdout).not.toContain('--demo');
+    });
+  });
+
+  // @v: anc-cli-install-skill-demo-ants —— installDemoAnts / rewriteSpecId 单元面（临时家目录,不经 CLI）
+  describe('installDemoAnts / rewriteSpecId', () => {
+    it('rewriteSpecId：Id 与 标识 两种关键词都改写且关键词保留;只改第一处;都没有原文不变', () => {
+      expect(rewriteSpecId('# Spec: x\nId: old\n', 'new')).toBe('# Spec: x\nId: new\n');
+      expect(rewriteSpecId('# 规约: x\n标识: 旧名\n', 'demo-x')).toBe('# 规约: x\n标识: demo-x\n');
+      expect(rewriteSpecId('Id: a\nId: b\n', 'z')).toBe('Id: z\nId: b\n');
+      expect(rewriteSpecId('# Spec: x\nGoal: y\n', 'z')).toBe('# Spec: x\nGoal: y\n');
+    });
+
+    it('包根缺原件：三件都进 notes 说明失败,不抛异常,ants 目录无半成品', () => {
+      const home = mkdtempSync(join(tmpdir(), 'cli-demo-unit-'));
+      const r = installDemoAnts(join(home, 'no-such-pkg'), home);
+      expect(r.installed).toEqual([]);
+      expect(r.notes).toHaveLength(3);
+      expect(r.notes.every(n => n.includes('安装失败'))).toBe(true);
+      expect(existsSync(join(home, '.hopjit', 'ants', 'demo-coffee-week'))).toBe(false);
+    });
+
+    it('部分已装：只装缺的那几件,已装的原样不动', () => {
+      const home = mkdtempSync(join(tmpdir(), 'cli-demo-unit-part-'));
+      const pre = join(home, '.hopjit', 'ants', 'demo-coffee-week');
+      mkdirSync(pre, { recursive: true });
+      writeFileSync(join(pre, 'demo-coffee-week.md'), '# Spec: 用户自己的\n');
+      const r = installDemoAnts(PROJECT_ROOT, home);
+      expect(r.installed).toEqual(['demo-fact-check', 'demo-rename']);
+      expect(r.notes).toEqual(['demo-coffee-week 已装，跳过（要刷新先 hopjit ant remove demo-coffee-week）']);
+      expect(readFileSync(join(pre, 'demo-coffee-week.md'), 'utf-8')).toBe('# Spec: 用户自己的\n');
     });
   });
 
@@ -3995,7 +4820,7 @@ g
   describe('install-skill', () => {
     it('展开 CC skill 布局（改名 SKILL.md + references；--dir 显式指定——缺省目录另有正例）', () => {
       const dir = mkdtempSync(join(tmpdir(), 'cli-installskill-'));
-      const r = runCliJson(`install-skill --dir ${join(dir, '.claude/skills')}`, dir);
+      const r = runCliJson(`setup --dir ${join(dir, '.claude/skills')}`, dir);
       expect(r.status).toBe('ok');
       expect(r.carrier).toBe('cc');
       // 版本可见性：响应带 driver_version/source；SKILL.md frontmatter 后有版本戳
@@ -4020,8 +4845,8 @@ g
     it('幂等：再跑不覆盖（installed 空 + note）', () => {
       const dir = mkdtempSync(join(tmpdir(), 'cli-installskill-idem-'));
       // 显式 --dir——缺省现指用户级 ~/.claude/skills,测试不得真写用户目录
-      runCliJson(`install-skill --dir ${join(dir, 'sk')}`, dir);
-      const r2 = runCliJson(`install-skill --dir ${join(dir, 'sk')}`, dir);
+      runCliJson(`setup --dir ${join(dir, 'sk')}`, dir);
+      const r2 = runCliJson(`setup --dir ${join(dir, 'sk')}`, dir);
       expect(r2.status).toBe('ok');
       expect(r2.installed).toHaveLength(0);
       expect(r2.note).toBeTruthy();
@@ -4030,7 +4855,7 @@ g
     // @v: anc-driver-codex-install-layout
     it('codex 载体 --dir=skills 根展开 main/segment-driver 布局（2026-08-27 看齐批:缺省用户级 ~/.codex/skills,测试恒显式 --dir 防写真实家目录）', () => {
       const dir = mkdtempSync(join(tmpdir(), 'cli-installskill-codex-'));
-      const r = runCliJson(`install-skill --carrier codex --dir ${join(dir, 'sk')}`, dir);
+      const r = runCliJson(`setup --carrier codex --dir ${join(dir, 'sk')}`, dir);
       expect(r.status).toBe('ok');
       expect(r.carrier).toBe('codex');
       expect(realpathSync(r.target)).toBe(realpathSync(join(dir, 'sk')));
@@ -4069,15 +4894,15 @@ g
     it('codex 安装幂等，--force 可覆盖新布局中的已有文件', () => {
       const dir = mkdtempSync(join(tmpdir(), 'cli-installskill-codex-force-'));
       const skillPath = join(dir, 'out/hopspec/SKILL.md');
-      runCliJson('install-skill --carrier codex --dir out', dir);
+      runCliJson('setup --carrier codex --dir out', dir);
       writeFileSync(skillPath, 'user-customized', 'utf-8');
 
-      const skipped = runCliJson('install-skill --carrier codex --dir out', dir);
+      const skipped = runCliJson('setup --carrier codex --dir out', dir);
       expect(skipped.installed).toHaveLength(0);
       expect(skipped.note).toBeTruthy();
       expect(readFileSync(skillPath, 'utf-8')).toBe('user-customized');
 
-      const forced = runCliJson('install-skill --carrier codex --dir out --force', dir);
+      const forced = runCliJson('setup --carrier codex --dir out --force', dir);
       expect(forced.installed.length).toBeGreaterThan(0);
       expect(readFileSync(skillPath, 'utf-8')).toContain('# hopspec - Codex Main Orchestrator');
     });
@@ -4089,10 +4914,48 @@ g
       const link = join(dir, 'hopjit-link');
       symlinkSync(CLI, link);
       // 通过软链跑 install-skill——修复前 isMain=false → 空跑 exit 0 不建目录
-      const stdout = execSync(`node "${link}" --json install-skill --dir out`, { cwd: dir, encoding: 'utf-8', timeout: 5000 }).trim();
+      const stdout = execSync(`node "${link}" --json setup --dir out`, {
+        cwd: dir, encoding: 'utf-8', timeout: 5000,
+        env: { ...process.env, HOME: SUBPROC_HOME, CODEX_HOME: join(SUBPROC_HOME, '.codex'), CLAUDE_CONFIG_DIR: join(SUBPROC_HOME, '.claude'), OPENCODE_CONFIG_DIR: join(SUBPROC_HOME, '.config', 'opencode') },
+      }).trim();
       const r = JSON.parse(stdout);
       expect(r.status).toBe('ok');
       expect(existsSync(join(dir, 'out/hopspec/SKILL.md'))).toBe(true);
+    });
+  });
+
+  // @v: anc-cli-install-skill
+  // 命令名 setup,旧名 install-skill 退役为隐藏别名（todo/0143,2026-10-06 作者定）：
+  // 旧名行为与 stdout 和 setup 相同,stderr 多一行改名提示;--help 只列 setup。
+  describe('setup 与隐藏别名 install-skill', () => {
+    const runWithStderr = (args: string, cwd: string) => spawnSync(process.execPath, [CLI, '--json', ...args.split(' ')], {
+      cwd, encoding: 'utf-8', timeout: 5000,
+      env: { ...process.env, HOME: SUBPROC_HOME, CODEX_HOME: join(SUBPROC_HOME, '.codex'), CLAUDE_CONFIG_DIR: join(SUBPROC_HOME, '.claude'), OPENCODE_CONFIG_DIR: join(SUBPROC_HOME, '.config', 'opencode') },
+    });
+
+    it('正例：setup 装出 skill,stderr 无改名提示', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'cli-setup-'));
+      const r = runWithStderr('setup --dir out', dir);
+      expect(r.status).toBe(0);
+      expect(JSON.parse(r.stdout.trim().split('\n').pop()!).status).toBe('ok');
+      expect(existsSync(join(dir, 'out/hop/SKILL.md'))).toBe(true);
+      expect(r.stderr).not.toContain('已改名为 setup');
+    });
+
+    it('旧名 install-skill 仍可用：装出同样的 skill,stderr 提示改用 setup', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'cli-setup-alias-'));
+      const r = runWithStderr('install-skill --dir out', dir);
+      expect(r.status).toBe(0);
+      const o = JSON.parse(r.stdout.trim().split('\n').pop()!);
+      expect(o.status).toBe('ok');
+      expect(existsSync(join(dir, 'out/hop/SKILL.md'))).toBe(true);
+      expect(r.stderr).toContain('[hopjit] install-skill 已改名为 setup，请改用 hopjit setup');
+    });
+
+    it('--help 列出 setup,不列 install-skill', () => {
+      const r = spawnSync(process.execPath, [CLI, '--help'], { encoding: 'utf-8', timeout: 5000 });
+      expect(r.stdout).toMatch(/^\s+setup\b/m);
+      expect(r.stdout).not.toContain('install-skill');
     });
   });
 
@@ -4537,12 +5400,12 @@ Id: reuse-pipe
 });
 
 // ===== 复用模式 call parallel 跨进程闭环（形态三——盘点缺口补齐 2026-08-11）=====
-// dispatch_kind:'call' 的 launch_command 带 <CALLEE_SPEC_PATH:id> 占位，driver 解析后执行。
+// dispatch_kind:'call' 的 launch_command 里 callee 位置由引擎填解析出的绝对路径（^anc-exec-callee-resolver）,driver 照抄执行。
 // @v: anc-exec-parallel-reuse-protocol
 describe('复用模式 call parallel（dispatch_kind=call 占位符闭环）', () => {
-  it('正例：call 派发→占位符填 callee 路径→子进程跑完→reap 收齐', () => {
+  it('正例：call 派发→引擎填好 callee 路径→子进程跑完→reap 收齐', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cli-reuse-call-'));
-    writeFileSync(join(dir, 'callee.md'), `# Build
+    writeFileSync(join(dir, 'build.md'), `# Build
 Id: build
 
 ## Goal
@@ -4591,12 +5454,13 @@ Id: call-pipe
     const r1 = runCliJson(`run caller.md --state-dir state --params '{"chapters":[1,2]}'`, dir);
     expect(r1.status).toBe('dispatch_ready');
     expect(r1.dispatch_kind).toBe('call');
-    expect(r1.launch_command).toContain('<CALLEE_SPEC_PATH:build>');
+    expect(r1.launch_command).toContain('build.md"'); // @v: anc-exec-callee-resolver
+    expect(r1.launch_command).not.toContain('<CALLEE_SPEC_PATH:');
     expect(r1.launch_command).toContain('--call-parent');
     const inst = r1.instance_id;
     const { execSync } = require('node:child_process');
-    // driver 姿势：占位符按 spec 发现解析为 callee 路径后执行
-    const fill = (lc: string) => lc.replace(/<CALLEE_SPEC_PATH:build>/, join(dir, 'callee.md'));
+    // driver 姿势：路径已由引擎填好,整串照抄执行
+    const fill = (lc: string) => lc;
     execSync(fill(r1.launch_command), { cwd: dir, stdio: 'pipe' });
     const r2 = runCliJson(`advance --state-dir state --instance ${inst}`, dir);
     expect(r2.status).toBe('dispatch_ready');
@@ -4697,6 +5561,93 @@ Id: rec-pipe
     const r4 = runCliJson(`reap_and_fetch_next 1.1.2 --status completed --state-dir state --instance ${inst}`, dir);
     expect(r4.status).toBe('completed');
     expect(r4.outputs.outs).toEqual([15, 21]);   // 5*3, 7*3——健康慢活不再被误杀
+  });
+
+  // 2026-10-08 作者定"同一个工作的 commit 不能被反复执行,是宪法级原则"：stale_launch 对跑过的子实例（state.json 在场）
+  // 拼 resume 续跑,不再拼 run 重建——此前 worker 入口对已有目录走 re-init 净室整目录重跑,已执行且已批准的 commit 被重放。
+  // design parallel-execution U4b 第 6 条 stale_launch 分叉条 / exec-engine ^anc-exec-call-reinit-clean 触发面。
+  // @v: anc-exec-parallel-hitl-queue, anc-exec-call-reinit-clean
+  it('正例（复用模式端到端）：子实例两句 commit,第一句批准执行后停第二张卡;新进程 advance 的 stale_launch 拼 resume,重起后第一句 commit 不重放（step_done 仍 1 次、committed_steps 不变、hoplog 单 run 目录）,批准第二句后收齐（变异：stale_launch 恒拼 run 本例红）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-stale-resume-'));
+    const TWO = `# P2
+Id: p3b
+## Goal
+g
+## Inputs
+- items: [int]  # 项
+## Outputs
+- outs: [int]  # 收
+## Steps
+1. [loop for-each x in items, collect y into outs] 逐项
+  + → outs: [int]  # 收
+  1.1. [subtask parallel] 单项
+    + → y: int  # 值
+    1.1.1. [act] 备
+      - ← x
+      + → y0: int  # 值
+      > \`\`\`hop_python
+      > y0 = x * 2
+      > \`\`\`
+    1.1.2. [commit] 第一句
+      - ← y0
+      + → y1: int  # 值
+      > \`\`\`hop_python
+      > w1 = write(path: "c1.txt", content: "a", keep: 0)
+      > y1 = y0 + 1
+      > \`\`\`
+    1.1.3. [commit] 第二句
+      - ← y1
+      + → y: int  # 值
+      > \`\`\`hop_python
+      > w2 = write(path: "c2.txt", content: "b", keep: 0)
+      > y = y1
+      > \`\`\`
+`;
+    writeFileSync(join(dir, 'p.md'), TWO);
+    const { execSync } = require('node:child_process');
+    const r1 = runCliJson(`run p.md --state-dir state --params '{"items":[1]}' --workspace ${dir}`, dir);
+    const inst = r1.instance_id;
+    expect(runCliJson(`advance --state-dir state --instance ${inst}`, dir).status).toBe('drain_wait');
+    const w1 = JSON.parse(execSync(r1.launch_command, { cwd: dir, encoding: 'utf-8' }));
+    expect(w1.status).toBe('paused'); expect(w1.pause_reason).toBe('commit'); expect(w1.step_id).toBe('1.1.2');
+    const w2 = approveAndResume(dir, `state/${inst}/parallel`, '1.1.1', w1);
+    expect(w2.status).toBe('paused'); expect(w2.step_id).toBe('1.1.3');
+    const childState = () => JSON.parse(readFileSync(join(dir, 'state', inst, 'parallel', '1.1.1', 'state.json'), 'utf-8'));
+    const doneCount = () => (childState().exec_events as { step_id: string; event: string }[]).filter(e => e.step_id === '1.1.2' && e.event === 'step_done').length;
+    expect(doneCount()).toBe(1);
+    expect(childState().committed_steps.map((c: { step_id: string }) => c.step_id)).toEqual(['1.1.2']);
+    // 新进程对账：子实例 state.json 在场 → stale_launch 拼 resume 不拼 run
+    const r3 = runCliJson(`advance --state-dir state --instance ${inst}`, dir);
+    expect(r3.status).toBe('drain_wait');
+    expect(r3.stale).toEqual(['1.1.1']);
+    expect(r3.stale_launch['1.1.1']).toMatch(/--json resume --state-dir ".*\/parallel" --instance 1\.1\.1$/);
+    expect(r3.stale_launch['1.1.1']).not.toContain('--parallel-parent');
+    const w3 = JSON.parse(execSync(r3.stale_launch['1.1.1'], { cwd: dir, encoding: 'utf-8' }));
+    expect(w3.status).toBe('paused'); expect(w3.step_id).toBe('1.1.3');               // 续跑到第二张卡,不从头
+    expect(doneCount()).toBe(1);                                                        // 修前 2——第一句被重放
+    expect(childState().committed_steps.map((c: { step_id: string }) => c.step_id)).toEqual(['1.1.2']);
+    const w4 = approveAndResume(dir, `state/${inst}/parallel`, '1.1.1', w3);
+    expect(w4.status).toBe('completed');
+    const r4 = runCliJson(`reap_and_fetch_next 1.1.1 --status completed --state-dir state --instance ${inst}`, dir);
+    expect(r4.status).toBe('completed');
+    expect(r4.outputs.outs).toEqual([3]);
+  });
+
+  // @v: anc-exec-parallel-hitl-queue
+  it('正例（分叉的另一半）：从未起过的子实例（只有 params.json 无 state.json）超宽限入 stale → stale_launch 仍拼 run --parallel-parent 重建（既有 dispatch-lost 降级形态不变）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-stale-run-'));
+    writeFileSync(join(dir, 'pipe.md'), PIPE);
+    const r1 = runCliJson(`run pipe.md --state-dir state --params '{"nums":[5]}'`, dir);
+    const inst = r1.instance_id;
+    const statePath = join(dir, 'state', inst, 'state.json');
+    const st = JSON.parse(readFileSync(statePath, 'utf-8'));
+    st.inflight[0].dispatched_at = new Date(Date.now() - 120_000).toISOString();
+    writeFileSync(statePath, JSON.stringify(st));
+    expect(existsSync(join(dir, 'state', inst, 'parallel', '1.1.1', 'state.json'))).toBe(false);
+    const r2 = runCliJson(`advance --state-dir state --instance ${inst}`, dir);
+    expect(r2.stale).toContain('1.1.1');
+    expect(r2.stale_launch['1.1.1']).toContain('--json run ');
+    expect(r2.stale_launch['1.1.1']).toContain('--parallel-child 1.1.1');
   });
 
   it('反例：driver 确认活已死显式报败 → 合成收割列表变短（stale 的显式出口,谎报失败只是放弃产出）', () => {
@@ -4904,7 +5855,9 @@ Id: double
     expect(run.step_type).toBe('call');
     const cp = run.call_protocol;
     expect(cp).toBeDefined();
-    expect(cp.init_command).toContain('<CALLEE_SPEC_PATH:double>');   // 占位符（寻址归 caller）
+    // @v: anc-exec-callee-resolver —— 引擎按同目录规则解析出的绝对路径
+    expect(cp.init_command).toContain('double.md"');
+    expect(cp.init_command).not.toContain('<CALLEE_SPEC_PATH:');
     expect(cp.init_command).toContain('--parent ' + run.instance_id);
     expect(cp.init_command).toContain('--step 2');
     // auto-map 快照（base+1）已折入——参数表走参数文件,命令里只有 "@<路径>"（^anc-exec-cmd-args-file）
@@ -4928,8 +5881,8 @@ Id: double
     const run = runCliJson(`run caller.md --params '{"base": 20}' --state-dir state`, dir);
     const cp = run.call_protocol;
     const { execSync } = require('node:child_process');
-    // driver 唯一动作：填占位符
-    const initCmd = cp.init_command.replace('<CALLEE_SPEC_PATH:double>', join(dir, 'double.md'));
+    // driver 唯一动作：照抄（callee 路径引擎已填）
+    const initCmd = cp.init_command;
     execSync(initCmd, { cwd: dir, stdio: 'pipe' });
     // 子实例已建且落官方目录（照抄 child_state_dir 即正确落点）
     expect(existsSync(join(dir, 'state', run.instance_id, 'calls', '2', 'state.json'))).toBe(true);
@@ -5005,8 +5958,9 @@ g
 1. [commit] 不可逆翻倍
   - ← n
   + → doubled: int  # 翻倍
-  > 纯计算
+  > 不留旧版本地写一份记录,再计算
   > \`\`\`hop_python
+  > w = write(path: "cdouble.txt", content: "x", keep: 0)
   > doubled = n * 2
   > \`\`\`
 `);
@@ -5014,8 +5968,11 @@ g
     expect(run.status).toBe('step_ready');
     const cp = run.call_protocol;
     const { execSync } = require('node:child_process');
-    execSync(cp.init_command.replace('<CALLEE_SPEC_PATH:cdouble>', join(dir, 'cdouble.md')), { cwd: dir, stdio: 'pipe' });
-    execSync(cp.child_advance, { cwd: dir, stdio: 'pipe' });
+    execSync(cp.init_command, { cwd: dir, stdio: 'pipe' });
+    // 子实例的 commit 首次执行前停在批准点（todo/0146 ^anc-exec-commit-approval）——批准后续跑
+    const paused = JSON.parse(execSync(cp.child_advance, { cwd: dir, stdio: 'pipe' }).toString());
+    expect(paused.pause_reason).toBe('commit');
+    approveAndResume(dir, cp.child_state_dir, cp.child_instance, paused);
     // 子实例 state.json 已含 committed_steps（子内 commit body 引擎直执 done）
     const childState = JSON.parse(readFileSync(join(dir, 'state', run.instance_id, 'calls', cp.child_instance, 'state.json'), 'utf-8'));
     // 断言适配判据重构新形态（{step_id,iters} 带祖先 loop 轮次快照——顶层 commit 无祖先 loop 快照空）
@@ -5044,6 +6001,57 @@ g
 });
 
 // @v: anc-exec-call-protocol-payload —— report_failed 照抄真跑（六字段照抄面收口:此前唯它零执行）
+// @v: anc-config-sandbox-workspace-root — 工作区根起跑定一次、持久化恒绝对路径,续推命令从别的 cwd 敲也不漂
+describe('工作区根不随续推命令的进程 cwd 漂移（2026-10-04 英文文档批一实撞）', () => {
+  const WRITE_SPEC = (dst: string) => `# WS
+Id: wsroot
+## Goal
+g
+## Steps
+1. [confirm] go
+  + → go: bool  # 放行
+2. [commit] 写盘
+  + → written: line  # 落点
+  > 写 workspace 内相对路径,不留旧版本（keep=0 落 review 档,无分析模型时停下等人）
+  > \`\`\`hop_python
+  > written = write(path: "${dst}", content: "probe", keep: 0)
+  > \`\`\`
+`;
+  it('正例：run 在仓库根起跑,driver cd 进 work_zone 敲 submit 触发 commit 写 docs/x.md → 落仓库根下,放行', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-wsroot-'));
+    mkdirSync(join(dir, 'docs'));   // write 不建父目录（既有契约）,目标目录与真实仓库同样预先在场
+    writeFileSync(join(dir, 'ws.md'), WRITE_SPEC('docs/out.md'));
+    const run = runCliJson(`run ws.md --state-dir state`, dir);
+    expect(run.status).toBe('paused');
+    // state.json 里两个工作区字段都是绝对路径且同值（修前 sandbox 侧存 '.'）
+    const st = JSON.parse(readFileSync(join(dir, 'state', run.instance_id, 'state.json'), 'utf-8'));
+    expect(st.host_context.sandbox.filesystem.workspace_dir).toBe(st.host_context.workspace_dir);
+    expect(st.host_context.sandbox.filesystem.workspace_dir.startsWith('/')).toBe(true);
+    // 从 work_zone 目录敲续推命令（worker 为写相对 --output @ 常这么做）
+    const wz = join(dir, 'state', run.instance_id, 'work_zone');
+    mkdirSync(wz, { recursive: true });
+    const gate = runCliJson(`submit_and_fetch_next 1 --output '{"go": true}' --state-dir ${join(dir, 'state')} --instance ${run.instance_id}`, wz);
+    expect(gate.pause_reason).toBe('commit');   // commit 首次执行前停在批准点（todo/0146）
+    const done = approveAndResume(wz, join(dir, 'state'), run.instance_id, gate);
+    expect(done.status).toBe('completed');
+    expect(existsSync(join(dir, 'docs', 'out.md'))).toBe(true);            // 落仓库根,不是 work_zone/docs
+    expect(existsSync(join(wz, 'docs', 'out.md'))).toBe(false);
+  });
+  it('反例：同形态下 commit 写工作区外绝对路径仍拒——边界不放松', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-wsroot-out-'));
+    const outside = join(mkdtempSync(join(tmpdir(), 'cli-wsroot-ext-')), 'leak.md');
+    writeFileSync(join(dir, 'ws.md'), WRITE_SPEC(outside));
+    const run = runCliJson(`run ws.md --state-dir state`, dir);
+    const wz = join(dir, 'state', run.instance_id, 'work_zone');
+    mkdirSync(wz, { recursive: true });
+    const gate = runCliJson(`submit_and_fetch_next 1 --output '{"go": true}' --state-dir ${join(dir, 'state')} --instance ${run.instance_id}`, wz);
+    expect(gate.pause_reason).toBe('commit');
+    const r = approveAndResume(wz, join(dir, 'state'), run.instance_id, gate);
+    expect(JSON.stringify(r)).toMatch(/Write outside workspace sandbox|failed/);
+    expect(existsSync(outside)).toBe(false);
+  });
+});
+
 describe('call_protocol report_failed 照抄闭环', () => {
   it('正例：子实例真失败→照抄 report_failed→父收 CalleeFailure 内核', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cli-cprf-'));
@@ -5089,7 +6097,7 @@ Id: failchild
     // 照抄 init 并补 --params 传 x="abc"（字符串减法→body 计算异常,子实例真失败——原形态
     // 靠"x 缺失 undefined-1 炸"触发,2026-09-01 init 必填闸落地后缺参在 init 即被拒〔闸的
     // 设计行为〕,state.json 不落盘 report_failed 无从照抄;改传毒值保留"运行期真失败"意图）:
-    const initCmd = cp.init_command.replace('<CALLEE_SPEC_PATH:failchild>', join(dir, 'failchild.md'))
+    const initCmd = cp.init_command
       + ` --params '{"x": "abc"}'`;
     execSync(initCmd, { cwd: dir, stdio: 'pipe' });
     // 照抄 child_advance——子实例 body 计算异常→failed（advance 命令本身 exit 0 返 failed JSON）
@@ -5156,42 +6164,89 @@ describe('driver_channel 双执行硬闸（CLI 侧）', () => {
   });
 });
 
-// @v: anc-exec-subprocess-run —— 复用模式 commands 配置通路（变异 B 击杀面:readProjectCommands 恒 [] 曾 172 全绿）
-describe('readProjectCommands 复用模式配置通路', () => {
-  it('正例：项目级 hopjit.yaml commands 键读入（修前红:全测试库零引用该函数）', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'rpc-'));
-    writeFileSync(join(dir, 'hopjit.yaml'), 'commands:\n  - git\n  - echo\n');
-    const prev = process.cwd();
-    try {
-      process.chdir(dir);
-      expect(readProjectCommands()).toEqual(['git', 'echo']);
-    } finally { process.chdir(prev); }
+// 复用模式两级配置合并（todo/0131——此前 buildHostConfig 只读项目级三个单键,系统级 ~/.hopjit/config.yaml 一个键都不读;
+// 作者 2026-09-30 定旧口径是 agent 自拟）。卡 probe 1–4 测试化;全部假 HOME + 临时项目目录。
+// @v: anc-config-reuse-consume, anc-exec-subprocess-run
+describe('复用模式两级配置合并', () => {
+  let savedHome: string | undefined; let savedCfg: string | undefined; let prevCwd = '';
+  function fx(): { home: string; proj: string } {
+    const home = mkdtempSync(join(tmpdir(), 'cl-home-')); const proj = realpathSync(mkdtempSync(join(tmpdir(), 'cl-proj-')));
+    mkdirSync(join(home, '.hopjit'), { recursive: true });
+    process.env.HOME = home; delete process.env.HOPJIT_CONFIG;
+    return { home, proj };
+  }
+  const savedLang: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    savedHome = process.env.HOME; savedCfg = process.env.HOPJIT_CONFIG; prevCwd = process.cwd();
+    // language 缺省自 todo/0160 起跟随系统语言——本组"缺省 en"断言按英文环境写,进组前钉成 en_US
+    for (const k of ['LC_ALL', 'LC_MESSAGES', 'LANG']) { savedLang[k] = process.env[k]; delete process.env[k]; } process.env.LANG = 'en_US.UTF-8';
+  });
+  afterEach(() => {
+    process.chdir(prevCwd);
+    if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
+    if (savedCfg === undefined) delete process.env.HOPJIT_CONFIG; else process.env.HOPJIT_CONFIG = savedCfg;
+    for (const k of ['LC_ALL', 'LC_MESSAGES', 'LANG']) { if (savedLang[k] === undefined) delete process.env[k]; else process.env[k] = savedLang[k]; }
   });
 
-  // @v: anc-exec-subprocess-deny-hopjit
-  it('反例：commands 白名单含 hopjit → CONFIG_ERROR 响亮拒（钝感函数的唯一响亮例外——静默剔除会让作者误以为生效）', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'rpc3-'));
-    const prev = process.cwd();
-    try {
-      process.chdir(dir);
-      writeFileSync(join(dir, 'hopjit.yaml'), 'commands:\n  - git\n  - hopjit\n');
-      expect(() => readProjectCommands()).toThrow(/不得含 hopjit/);
-      writeFileSync(join(dir, 'hopjit.yaml'), 'commands:\n  - git\n  - /opt/bin/hopjit\n');
-      expect(() => readProjectCommands()).toThrow(/不得含 hopjit/);   // 路径形态同拒
-    } finally { process.chdir(prev); }
+  it('probe 1 正例：系统级 config.yaml 注册 in-process 工具、项目无 hopjit.yaml → tool-call 成功（修前 UNKNOWN_TOOL）', () => {
+    const { home, proj } = fx();
+    writeFileSync(join(home, '.hopjit', 'echo-tools.mjs'), 'export async function execute(name, args) { return { success: true, result: "echo:" + args.msg, content_type: "text" }; }\n');
+    writeFileSync(join(home, '.hopjit', 'config.yaml'), 'tool_servers:\n  - name: sys_probe\n    binding:\n      kind: in-process\n      module: ./echo-tools.mjs\n    tools:\n      - name: sys_echo\n        description: echo\n        input_schema: {type: object}\n        requires_commit: false\n');
+    const r = execSync(`node "${CLI}" --json tool-call sys_echo --args '{"msg":"hi"}'`, { cwd: proj, encoding: 'utf-8', env: { ...process.env, HOME: home, HOPJIT_ANTHROPIC_API_KEY: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const j = JSON.parse(r.trim());
+    expect(j.status).toBe('ok');
+    expect(String(j.result)).toBe('echo:hi');   // 系统级条目的 module 相对 ~/.hopjit/ 解析
   });
 
-  it('反例：坏 YAML/标量形状/文件缺席 → 回空名单钝感不炸（三形态）', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'rpc2-'));
-    const prev = process.cwd();
+  it('probe 2 正例：系统级 commands: [git] + 项目级 commands: [uv] → sandbox.runtime.available 同时含两者（并集）', () => {
+    const { home, proj } = fx();
+    writeFileSync(join(home, '.hopjit', 'config.yaml'), 'commands: [git]\n');
+    writeFileSync(join(proj, 'hopjit.yaml'), 'commands: [uv]\n');
+    const hc = buildHostConfig(proj);
+    expect(hc.sandbox.runtime.available).toEqual(['git', 'uv']);
+  });
+
+  it('probe 3 正例：系统级 language: zh 项目不写 → zh;项目写 en → en（项目级赢）', () => {
+    const { home, proj } = fx();
+    writeFileSync(join(home, '.hopjit', 'config.yaml'), 'language: zh\n');
+    expect(buildHostConfig(proj).language).toBe('zh');
+    expect(buildHostConfig(proj).hop_env?.hop_env_language).toBe('zh');
+    writeFileSync(join(proj, 'hopjit.yaml'), 'language: en\n');
+    expect(buildHostConfig(proj).language).toBe('en');
+  });
+
+  it('probe 4 正例：系统级 env: {hop_env_x: a} → hop_env 含 hop_env_x=a;params 传 hop_env_x 仍覆盖（覆盖链后到覆盖）', () => {
+    const { home, proj } = fx();
+    writeFileSync(join(home, '.hopjit', 'config.yaml'), 'env: {hop_env_x: a}\nresource_limits: {max_call_depth: 5}\n');
+    const hc = buildHostConfig(proj);
+    expect(hc.hop_env).toEqual({ hop_env_language: 'en', hop_env_x: 'a' });
+    expect(hc.resource_limits?.max_call_depth).toBe(5);   // 复用模式此前拿不到配置的 resource_limits
+    extractHopEnvIntoHostConfig(hc, { hop_env_x: 'from-params' });
+    expect(hc.hop_env?.hop_env_x).toBe('from-params');
+  });
+
+  it('反例：系统级文件坏 YAML → 钝感回缺省（空名单 / en）并 stderr 记一行,不炸;项目级 commands 含 hopjit → CONFIG_ERROR 响亮抛', () => {
+    const { home, proj } = fx();
+    writeFileSync(join(home, '.hopjit', 'config.yaml'), ':::bad yaml{{{\n');
+    const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
-      process.chdir(dir);
-      expect(readProjectCommands()).toEqual([]);   // 缺席
-      writeFileSync(join(dir, 'hopjit.yaml'), 'commands: git\n');
-      expect(readProjectCommands()).toEqual([]);   // 标量形状不符
-      writeFileSync(join(dir, 'hopjit.yaml'), ':::bad yaml{{{\n');
-      expect(readProjectCommands()).toEqual([]);   // 坏 YAML
-    } finally { process.chdir(prev); }
+      const hc = buildHostConfig(proj);
+      expect(hc.sandbox.runtime.available).toEqual([]);
+      expect(hc.language).toBe('en');
+      expect(errSpy.mock.calls.map(c => String(c[0])).join('')).toMatch(/\[config\] .*config\.yaml 读取失败,这份文件按零配置处理/);   // 分文件容错后 warning 点名文件（2026-10-08 review 修复）
+    } finally { errSpy.mockRestore(); }
+    writeFileSync(join(home, '.hopjit', 'config.yaml'), 'commands: [git]\n');
+    writeFileSync(join(proj, 'hopjit.yaml'), 'commands:\n  - /opt/bin/hopjit\n');
+    expect(() => buildHostConfig(proj)).toThrow(/CONFIG_ERROR: .*不得含 hopjit/);   // @v: anc-exec-subprocess-deny-hopjit
+  });
+
+  it('反例：HOPJIT_CONFIG 指向单文件 → 只用它,系统级与项目级都不参与', () => {
+    const { home, proj } = fx();
+    writeFileSync(join(home, '.hopjit', 'config.yaml'), 'commands: [git]\n');
+    writeFileSync(join(proj, 'hopjit.yaml'), 'commands: [uv]\n');
+    const one = join(home, 'one.yaml'); writeFileSync(one, 'commands: [only]\n');
+    process.env.HOPJIT_CONFIG = one;
+    expect(buildHostConfig(proj).sandbox.runtime.available).toEqual(['only']);
   });
 });
 
@@ -5463,8 +6518,8 @@ Id: echo
     expect(run.step_type).toBe('call');
     const cp = run.call_protocol;
     const { execSync } = require('node:child_process');
-    // driver 唯一动作：填占位符,整串交 /bin/sh（execSync 缺省即 shell 形态——0097 事故现场同款）
-    execSync(cp.init_command.replace('<CALLEE_SPEC_PATH:echo>', join(dir, 'echo.md')), { cwd: dir, stdio: 'pipe' });
+    // driver 唯一动作：整串照抄交 /bin/sh（callee 路径引擎已填;execSync 缺省即 shell 形态——0097 事故现场同款）
+    execSync(cp.init_command, { cwd: dir, stdio: 'pipe' });
     execSync(cp.child_advance, { cwd: dir, stdio: 'pipe' });
     const done = runCliJson(cp.report_completed.replace(/^node "[^"]+" --json /, ''), dir);
     expect(done.status).toBe('completed');
@@ -5474,6 +6529,7 @@ Id: echo
   it('反例：命令串里不出现任何参数原文——数据只在 cmd_args 文件里,文件放父实例目录（不进子实例目录,躲 re-init 净室）', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cli-cmdargs-'));
     writeFileSync(join(dir, 'caller.md'), CALLER);
+    writeFileSync(join(dir, 'echo.md'), CALLEE);
     writeFileSync(join(dir, 'params.json'), JSON.stringify({ src: PAYLOAD }));
     const run = runCliJson(`run caller.md --params @params.json --state-dir state`, dir);
     const cmd = run.call_protocol.init_command;
@@ -5555,7 +6611,7 @@ Id: frag
       expect(resp.step_type).toBe('call');
       const cp = resp.call_protocol;
       ids.push(cp.child_instance);
-      execSync(cp.init_command.replace('<CALLEE_SPEC_PATH:frag>', join(dir, 'frag.md')), { cwd: dir, stdio: 'pipe' });
+      execSync(cp.init_command, { cwd: dir, stdio: 'pipe' });
       execSync(cp.child_advance, { cwd: dir, stdio: 'pipe' });
       resp = runCliJson(cp.report_completed.replace(/^node "[^"]+" --json /, ''), dir);
     }
@@ -5974,6 +7030,11 @@ describe('resolveContextMode 三级优先级（env > flag > 缺省 full）', () 
     process.env[KEY] = 'garbage';
     expect(resolveContextMode(undefined)).toBe('full');
   });
+
+  it('正例：env 设成空串视同未设 → flag minimal 生效（与 MCP 驱动工具同一规则,prompt-assembler ^anc-exec-context-mode）', () => {
+    process.env[KEY] = '';
+    expect(resolveContextMode('minimal')).toBe('minimal');
+  });
 });
 
 // for-each worker CLI --params 注入直钉（0088 批⑮——0086 挂账"最实一条":该通道被改回
@@ -6071,7 +7132,7 @@ describe('pack engine_min_version 注入（0093）', () => {
 describe('install-skill 装载 hopfix（0093 件二）', () => {
   it('正例：CC 载体装出 hopfix 壳+流程件,流程件含版本迁移对照节', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cli-inst-hf-'));
-    const r = runCliJson(`install-skill --dir ${dir}/sk`, dir);
+    const r = runCliJson(`setup --dir ${dir}/sk`, dir);
     expect(r.installed.some((i: string) => i.includes('hopfix/'))).toBe(true);
     expect(existsSync(join(dir, 'sk', 'hopfix', 'SKILL.md'))).toBe(true);
     const flow = readFileSync(join(dir, 'sk', 'hopfix', 'hopfix.md'), 'utf-8');
@@ -6081,7 +7142,7 @@ describe('install-skill 装载 hopfix（0093 件二）', () => {
 
   it('正例：Codex 载体同装（两载体清单对等）', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cli-inst-hf2-'));
-    runCliJson(`install-skill --carrier codex --dir ${dir}/sk`, dir);
+    runCliJson(`setup --carrier codex --dir ${dir}/sk`, dir);
     expect(existsSync(join(dir, 'sk', 'hopfix', 'hopfix.md'))).toBe(true);
   });
 });
@@ -6132,5 +7193,563 @@ describe('hopbuild2 主流程步骤 1 入口路径与参数协议', () => {
     expect(stdout).toContain('target_profile');
     const skill = readFileSync(join(PROJECT_ROOT, 'skills', 'hopbuild2', 'SKILL.md'), 'utf-8');
     expect(skill).toMatch(/--params '\{[^}]*"target_profile": ""[^}]*\}'/);
+  });
+});
+
+// ===== 复用模式起跑依赖核（0142 子卡 B）=====
+// 顶层 run / init 起跑前核 Tools 段工具与静态 call 目标;子 worker（--call-parent / --parent / --parallel-*）不再核。
+// HOME 用临时目录（HopAnt 装在 <HOME>/.hopjit/ants 下）,HOPJIT_CONFIG 剥掉,不碰真实用户目录。
+// @v: anc-cli-run-deps-gate
+describe('复用模式起跑依赖核（run / init 顶层闸）', () => {
+  function cli(home: string, cwd: string, args: string[]): { status: number; json: any; stderr: string } {
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, HOPJIT_ANTHROPIC_API_KEY: '' };
+    delete env.HOPJIT_CONFIG;
+    const r = spawnSync('node', [CLI, '--json', ...args], { cwd, env, encoding: 'utf-8', timeout: 10000 });
+    let json: any = null;
+    try { json = JSON.parse(r.stdout); } catch { /* 留 null,断言里看 stdout */ }
+    return { status: r.status ?? 1, json, stderr: r.stderr };
+  }
+  const CALLER = (callee: string) => `# Spec: 调用方
+Id: caller
+
+## Goal
+调子流程
+
+## Outputs
+- out: text  # 结果
+
+## Steps
+1. [call ${callee}(q: "x")] 调
+  + → out: r  # 收取
+`;
+  const CALLEE = (id: string, tools = '') => `# Spec: ${id}
+Id: ${id}
+
+## Goal
+子流程
+${tools}
+## Inputs
+- q: text  # 词
+
+## Outputs
+- r: text  # 结果
+
+## Steps
+1. [act] 回显
+  - ← q
+  + → r: text  # 结果
+  > \`\`\`hop_python
+  > r = q
+  > \`\`\`
+`;
+  const UNREG_TOOLS = '\n## Tools\n- nowhere_tool(q) -> v % text  # 本机没注册\n  - q % text  # 词\n';
+
+  it('反例：run 时 call 目标找不到 → INIT_FAILED 带 missing_calls 与 hint,退出码 0,不建实例目录', () => {
+    const home = mkdtempSync(join(tmpdir(), 'cli-gate-home-')); const dir = mkdtempSync(join(tmpdir(), 'cli-gate-'));
+    writeFileSync(join(dir, 'caller.md'), CALLER('ghost-ant'));
+    const r = cli(home, dir, ['run', 'caller.md', '--state-dir', 'state']);
+    expect(r.status).toBe(0);
+    expect(r.json.status).toBe('error');
+    expect(r.json.error_code).toBe('INIT_FAILED');
+    expect(r.json.errors[0]).toMatchObject({ kind: 'validate', rule: 'INIT_FAILED', severity: 'error' });
+    expect(r.json.missing_calls).toEqual(['caller 步骤 1: ghost-ant']);
+    expect(r.json.hints.some((h: string) => h.includes('/hop 安装'))).toBe(true);
+    expect(existsSync(join(dir, 'state')) ? readdirSync(join(dir, 'state')) : []).toEqual([]);
+  });
+
+  it('反例：init 时 Tools 段工具没注册（含 call 树里的子 spec）→ INIT_FAILED 带 missing_tools', () => {
+    const home = mkdtempSync(join(tmpdir(), 'cli-gate-home-')); const dir = mkdtempSync(join(tmpdir(), 'cli-gate-'));
+    writeFileSync(join(dir, 'caller.md'), CALLER('sub'));
+    writeFileSync(join(dir, 'sub.md'), CALLEE('sub', UNREG_TOOLS));
+    const r = cli(home, dir, ['init', 'caller.md', '--state-dir', 'state']);
+    expect(r.json.status).toBe('error');
+    expect(r.json.missing_tools).toEqual(['sub: nowhere_tool']);
+    expect(r.json.message).toContain('工具没有注册 sub: nowhere_tool');
+  });
+
+  // @v: anc-config-reuse-consume, anc-cli-workspace-arg
+  it('正例（review 面二 A）：`run --workspace WS` 从别的目录起跑,WS/hopjit.yaml 注册的 in-process 工具过依赖核且 act body 能调到（修前依赖核与工具工厂都读进程 cwd → INIT_FAILED）', () => {
+    const home = mkdtempSync(join(tmpdir(), 'cli-ws-home-'));
+    const ws = realpathSync(mkdtempSync(join(tmpdir(), 'cli-ws-')));
+    const elsewhere = mkdtempSync(join(tmpdir(), 'cli-elsewhere-'));
+    writeFileSync(join(ws, 'echo-tools.mjs'), 'export async function execute(name, args) { return { success: true, result: "ws:" + args.q, content_type: "text" }; }\n');
+    writeFileSync(join(ws, 'hopjit.yaml'), 'tool_servers:\n  - name: wsprobe\n    binding: {kind: in-process, module: ./echo-tools.mjs}\n    tools:\n      - name: ws_echo\n        description: 回显\n        input_schema: {type: object, properties: {q: {type: string}}, required: [q]}\n        requires_commit: false\n');
+    writeFileSync(join(ws, 'spec.md'), `# Spec: ws-tool
+Id: ws-tool
+
+## Goal
+调工作区注册的工具
+
+## Tools
+- ws_echo(q) -> v % text  # 回显
+  - q % text  # 词
+
+## Outputs
+- out: text  # 结果
+
+## Steps
+1. [act] 调
+  + → out: text  # 结果
+  > \`\`\`hop_python
+  > out = ws_echo(q: "hi")
+  > \`\`\`
+`);
+    const r = cli(home, elsewhere, ['run', join(ws, 'spec.md'), '--workspace', ws, '--state-dir', join(ws, 'state')]);
+    expect(r.json?.status, JSON.stringify(r.json) + r.stderr).not.toBe('error');   // 变异：runDepsGate 改回 adaptConfigPaths(process.cwd()) → INIT_FAILED missing_tools 红
+    expect(r.json?.status).toBe('completed');
+    expect(r.json?.outputs?.out).toBe('ws:hi');   // 变异：工具工厂改回 process.cwd() → UNKNOWN_TOOL 失败红
+  });
+
+  // @v: anc-exec-callee-resolver, anc-hopant-run-deps —— 项目级 HopAnt 根取自 --workspace（HostConfig.workspace_dir）,不是进程 cwd：
+  // 依赖核与 callee 路径烘焙两处都要用对根（变异 M16：注册闭包改 antRoots(homedir(), process.cwd()) → 依赖核过了但 init_command 留占位,红;
+  // 变异 M21：runDepsGate 改 antRoots(homedir(), '/nonexistent-mut') → INIT_FAILED missing_calls,红）
+  it('正例：`run --workspace WS`（WS ≠ 进程 cwd）调只装在 WS/hop_tasks/ants/ 的 HopAnt → 过依赖核,init_command 填 WS/hop_tasks/ants/foo/foo.md 真实路径', () => {
+    const home = mkdtempSync(join(tmpdir(), 'cli-gate-home-'));   // 空假 HOME：用户级没有 foo
+    const ws = realpathSync(mkdtempSync(join(tmpdir(), 'cli-ws-ant-')));
+    const elsewhere = mkdtempSync(join(tmpdir(), 'cli-elsewhere-'));   // 进程 cwd 在别处,且它下面没有 hop_tasks/
+    const fooDir = join(ws, 'hop_tasks', 'ants', 'foo');
+    mkdirSync(fooDir, { recursive: true });
+    writeFileSync(join(fooDir, 'foo.md'), CALLEE('foo'));
+    writeFileSync(join(ws, 'caller.md'), CALLER('foo'));
+    const r = cli(home, elsewhere, ['run', join(ws, 'caller.md'), '--workspace', ws, '--state-dir', join(ws, 'state')]);
+    expect(r.json?.status, JSON.stringify(r.json) + r.stderr).not.toBe('error');   // 依赖核按 WS 的项目级根找到 foo
+    expect(r.json?.status).toBe('step_ready');
+    const cp = r.json.call_protocol;
+    expect(cp.init_command).toContain(`init "${join(fooDir, 'foo.md')}"`);   // 真实路径,不是 <CALLEE_SPEC_PATH:foo> 占位
+    expect(cp.init_command).not.toContain('<CALLEE_SPEC_PATH:foo>');
+  });
+
+  it('正例：call 已装 HopAnt → 起跑通过,init_command 填的是 <HOME>/.hopjit/ants/<id>/<id>.md,照抄执行子实例跑完', () => {
+    const home = mkdtempSync(join(tmpdir(), 'cli-gate-home-')); const dir = mkdtempSync(join(tmpdir(), 'cli-gate-'));
+    const antDirPath = join(home, '.hopjit', 'ants', 'helper-ant');
+    mkdirSync(antDirPath, { recursive: true });
+    writeFileSync(join(antDirPath, 'helper-ant.md'), CALLEE('helper-ant'));
+    writeFileSync(join(dir, 'caller.md'), CALLER('helper-ant'));
+    const r = cli(home, dir, ['run', 'caller.md', '--state-dir', 'state']);
+    expect(r.json.status, JSON.stringify(r.json)).toBe('step_ready');
+    const cp = r.json.call_protocol;
+    expect(cp.init_command).toContain(`init "${join(antDirPath, 'helper-ant.md')}"`);
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
+    delete env.HOPJIT_CONFIG;
+    execSync(cp.init_command, { cwd: dir, stdio: 'pipe', env });
+    execSync(cp.child_advance, { cwd: dir, stdio: 'pipe', env });
+    const done = cli(home, dir, cp.report_completed.replace(/^node "[^"]+" --json /, '').match(/"[^"]*"|\S+/g)!.map((t: string) => t.replace(/^"|"$/g, '')));
+    expect(done.json.status).toBe('completed');
+    expect(done.json.outputs.out).toBe('x');
+  });
+
+  it('正例：子 worker 不再核——父起跑后子 spec 改成依赖未注册工具,照抄 init_command 子实例照常建立', () => {
+    const home = mkdtempSync(join(tmpdir(), 'cli-gate-home-')); const dir = mkdtempSync(join(tmpdir(), 'cli-gate-'));
+    writeFileSync(join(dir, 'caller.md'), CALLER('sub'));
+    writeFileSync(join(dir, 'sub.md'), CALLEE('sub'));
+    const r = cli(home, dir, ['run', 'caller.md', '--state-dir', 'state']);
+    expect(r.json.status).toBe('step_ready');
+    writeFileSync(join(dir, 'sub.md'), CALLEE('sub', UNREG_TOOLS));
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
+    delete env.HOPJIT_CONFIG;
+    const out = execSync(r.json.call_protocol.init_command, { cwd: dir, encoding: 'utf-8', env });
+    expect(out).not.toContain('依赖核');
+    expect(JSON.parse(out).status).toBe('ok');
+  });
+});
+
+// setup 的 MCP 握手自检（todo/0146）：真起 server 走 initialize → tools/list → server_status。
+// @v: anc-cli-install-skill-handshake
+describe('mcpHandshake', () => {
+  const SERVER = join(PROJECT_ROOT, 'dist', 'mcp-server.js');
+  it('正例：server 起得来且 command 在 PATH 上 → ok,带工具清单与独立模式状态', () => {
+    const bin = mkdtempSync(join(tmpdir(), 'hs-bin-'));
+    writeFileSync(join(bin, 'hopjit-mcp'), '');
+    const h = mcpHandshake(process.execPath, SERVER, 'hopjit-mcp', bin);
+    expect(h.ok).toBe(true);
+    expect(h.tools).toContain('run');
+    expect(h.tools).toContain('server_status');
+    expect(typeof h.standalone_available).toBe('boolean');
+    if (h.standalone_available === false) expect(h.fix).toBeTruthy();   // 不可用必带修法
+  });
+  it('反例：command 不在 PATH 上 → ok=false,修法给出绝对路径注册形态', () => {
+    const h = mcpHandshake(process.execPath, SERVER, 'hopjit-mcp-nope', mkdtempSync(join(tmpdir(), 'hs-empty-')));
+    expect(h.ok).toBe(false);
+    expect(h.reason).toContain('PATH');
+    expect(h.fix).toContain(SERVER);
+  });
+  it('反例：包内 server 文件缺失 → ok=false 报路径', () => {
+    const h = mcpHandshake(process.execPath, join(tmpdir(), 'no-such-mcp-server.js'), 'x', '');
+    expect(h.ok).toBe(false);
+    expect(h.reason).toContain('不存在');
+    expect(h.reason).toContain('no-such-mcp-server.js');
+  });
+  it('反例：server 起来后立即退出 → ok=false,reason 带退出码', () => {
+    const js = join(mkdtempSync(join(tmpdir(), 'hs-exit-')), 'exit3.js');
+    writeFileSync(js, 'process.exit(3);\n');
+    const h = mcpHandshake(process.execPath, js, 'x', '');
+    expect(h.ok).toBe(false);
+    expect(h.reason).toContain('exit 3');
+  });
+});
+
+// CLI 的 commit 批准入口（todo/0146）：CI / 脚本 / MCP 回退时不卡死。
+// @v: anc-cli-approve-commit, anc-cli-commit-approve-response
+describe('approve_commit 子命令', () => {
+  it('正例：run→check final→commit 停点→approve_commit→resume 执行;反例：错哈希与非 commit 步骤被拒', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-approve-'));
+    writeFileSync(join(dir, 'g.md'), `# 批准
+Id: cli-approve
+
+## Goal
+g
+
+## Outputs
+- out: line  # 交付
+
+## Steps
+1. [subtask] 把关
+  + → ok: bool
+  1.1. [check final] 核对
+    + → ok: bool  # 判定
+    + → note: text  # 说明
+    > pass
+2. [commit] 交付
+  + → out: line
+  > 不留旧版本地写一份文件再赋值
+  > \`\`\`hop_python
+  > w = write(path: "o.txt", content: "x", keep: 0)
+  > out = "cli"
+  > \`\`\`
+`);
+    const r = runCliJson('run g.md --state-dir st', dir);
+    const id = r.instance_id;
+    writeFileSync(join(dir, 'o.json'), '{"ok": true, "note": ""}');
+    const p = runCliJson(`submit_and_fetch_next 1.1 --output '{"ok": true, "note": ""}' --state-dir st --instance ${id}`, dir);
+    expect(p.pause_reason).toBe('commit');
+    // 三条拒绝都是业务错误:stdout 出 JSON、退出码 0（hop-cli.md approveCommitCommand 第 4 行,与 resume 等命令同一规则）
+    // 带 body 的 commit 不接受递交产出
+    const sub = runCli(`submit_and_fetch_next 2 --output '{"out": "forged"}' --state-dir st --instance ${id}`, dir);
+    expect(sub.exitCode).toBe(0);
+    expect(JSON.parse(sub.stdout)).toMatchObject({ status: 'error', code: 'COMMIT_BODY_ENGINE_ONLY' });
+    const wrong = runCli(`approve_commit 2 --fingerprint deadbeef --scope once --state-dir st --instance ${id}`, dir);
+    expect(wrong.exitCode).toBe(0);
+    expect(JSON.parse(wrong.stdout)).toMatchObject({ status: 'error', code: 'COMMIT_NOT_APPROVED' });
+    const notCommit = runCli(`approve_commit 1.1 --fingerprint ${p.presented_data.context.fingerprint} --scope once --state-dir st --instance ${id}`, dir);
+    expect(notCommit.exitCode).toBe(0);
+    expect(JSON.parse(notCommit.stdout)).toMatchObject({ status: 'error', code: 'INVALID_STATE' });
+    // 缺 --scope 是参数错误(commander 必填项):退出码非 0,不记账
+    const noScope = runCli(`approve_commit 2 --fingerprint ${p.presented_data.context.fingerprint} --state-dir st --instance ${id}`, dir);
+    expect(noScope.exitCode).not.toBe(0);
+    expect(noScope.stderr).toContain('--scope');
+    // 停下时账里只有一条 referred（防重复分析）;三次拒绝都没写进 approved 记录
+    const approvals = () => JSON.parse(readFileSync(join(dir, 'st', 'commit_approvals.json'), 'utf-8')) as { outcome: string }[];
+    expect(approvals().map(r => r.outcome)).toEqual(['referred']);
+    // 拒绝之后账面不动:仍停在同一个批准点
+    expect(runCliJson(`status --state-dir st --instance ${id}`, dir).execution_status).toBe('paused');
+    const done = approveAndResume(dir, 'st', id, p);
+    expect(done.status).toBe('completed');
+    expect(done.outputs.out).toBe('cli');
+    expect(approvals().map(r => r.outcome)).toEqual(['referred', 'approved']);
+  });
+
+  // @v: anc-cli-approve-commit, anc-cli-workspace-arg
+  it('--workspace：cwd 不是工作区时按 --workspace 定位 state-dir 批准成功;显式工作区不存在 → WORKSPACE_NOT_FOUND,退出码 1', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-approve-ws-'));
+    writeFileSync(join(dir, 'g.md'), `# 批准
+Id: cli-approve-ws
+
+## Goal
+g
+
+## Outputs
+- out: line  # 交付
+
+## Steps
+1. [confirm] 审批
+  + → approval: bool  # 审批
+2. [commit] 交付
+  + → out: line
+  > 不留旧版本地写一份文件再赋值
+  > \`\`\`hop_python
+  > w = write(path: "o.txt", content: "x", keep: 0)
+  > out = "ws"
+  > \`\`\`
+`);
+    const id = runCliJson('run g.md --state-dir st', dir).instance_id;
+    const p = runCliJson(`submit_and_fetch_next 1 --answer '{"value":"approve"}' --state-dir st --instance ${id}`, dir);
+    expect(p.pause_reason).toBe('commit');
+    const elsewhere = mkdtempSync(join(tmpdir(), 'cli-approve-cwd-'));
+    const ok = runCliJson(`approve_commit 2 --fingerprint ${p.presented_data.context.fingerprint} --scope once --workspace ${dir} --state-dir st --instance ${id}`, elsewhere);
+    expect(ok.status).toBe('ok');
+    expect(existsSync(join(dir, 'st', 'commit_approvals.json'))).toBe(true);
+    expect(existsSync(join(elsewhere, 'st'))).toBe(false);
+    const ghost = runCli(`approve_commit 2 --fingerprint x --scope once --workspace ${join(dir, 'nope')} --state-dir st --instance ${id}`, elsewhere);
+    expect(ghost.exitCode).toBe(1);
+    expect(ghost.stderr).toContain('WORKSPACE_NOT_FOUND');
+  });
+});
+
+// @v: anc-cli-workspace-arg —— run/init 的 --workspace 显式工作区根（2026-10-07 作者问"复用模式下的 cwd 是哪儿来的？
+// 在 CC 下用户没有显性的 cwd 感知"）：缺省仍 cwd、显式值进 state.json 与 hoplog 头与响应、不存在即拒、相对路径绝对化、
+// 项目级 hopjit.yaml 随工作区定位、子实例启动命令恒带父值。
+describe('--workspace 显式工作区根（^anc-cli-workspace-arg）', () => {
+  const PARENT_PAR_SPEC = `# WS Par
+Id: ws-par
+
+## Goal
+G
+
+## Inputs
+- nums: [int]  # 列表
+
+## Outputs
+- outs: [int]  # 收集
+
+## Steps
+1. [loop for-each n in nums, collect o into outs] 逐项
+  + → outs: [int]  # 收集列表
+  1.1. [subtask parallel] 处理一项
+    + → o: int  # 单项
+    1.1.1. [act] 算
+      - ← n
+      + → o: int  # 结果
+      > 纯计算
+      > \`\`\`hop_python
+      > o = n * 7
+      > \`\`\`
+2. [exit] 交付
+`;
+  function mkProj(): { cwdDir: string; proj: string; specFile: string } {
+    const cwdDir = mkdtempSync(join(tmpdir(), 'ws-cwd-'));
+    const proj = mkdtempSync(join(tmpdir(), 'ws-proj-'));
+    writeFileSync(join(cwdDir, 'spec.md'), SIMPLE_SPEC);
+    return { cwdDir, proj, specFile: join(cwdDir, 'spec.md') };
+  }
+  const realDir = (d: string) => realpathSync(d);
+
+  it('正例：run --workspace <绝对路径> → 响应回显 workspace_dir、state.json host_context.workspace_dir、hoplog 头 workspace_dir: 三处同值且等于显式值（不是 cwd）', () => {
+    const { cwdDir, proj, specFile } = mkProj();
+    const r = runCliJson(`run "${specFile}" --workspace "${proj}" --state-dir .hopstate`, cwdDir);
+    expect(r.status).toBe('step_ready');
+    expect(r.workspace_dir).toBe(proj);
+    expect(r.workspace_dir).not.toBe(cwdDir);
+    const st = JSON.parse(readFileSync(join(cwdDir, '.hopstate', r.instance_id, 'state.json'), 'utf-8'));
+    expect(st.host_context.workspace_dir).toBe(proj);
+    expect(st.host_context.sandbox.filesystem.workspace_dir).toBe(proj);   // 两处同值（58a3c061 约束）
+    const runDirs = readdirSync(join(cwdDir, '.hoplog'));
+    const head = readFileSync(join(cwdDir, '.hoplog', runDirs[0], 'main.yaml'), 'utf-8');
+    const lines = head.split('\n');
+    const iStarted = lines.findIndex(l => l.startsWith('started_at:'));
+    const iWs = lines.findIndex(l => l.startsWith('workspace_dir:'));
+    expect(iWs).toBe(iStarted + 1);   // 紧随 started_at
+    expect(lines[iWs]).toContain(proj);
+    expect(head.indexOf('workspace_dir:')).toBeLessThan(head.indexOf('execution:'));
+  });
+
+  it('正例：不传 --workspace → 行为与改前一致,workspace_dir 等于进程 cwd（响应与 state 同值）', () => {
+    const { cwdDir, specFile } = mkProj();
+    const r = runCliJson(`run "${specFile}" --state-dir .hopstate`, cwdDir);
+    expect(r.status).toBe('step_ready');
+    expect(realDir(r.workspace_dir)).toBe(realDir(cwdDir));
+    const st = JSON.parse(readFileSync(join(cwdDir, '.hopstate', r.instance_id, 'state.json'), 'utf-8'));
+    expect(st.host_context.workspace_dir).toBe(r.workspace_dir);
+  });
+
+  it('反例：--workspace 指向不存在的目录 → WORKSPACE_NOT_FOUND 非零退出,不建实例、不写状态目录', () => {
+    const { cwdDir, specFile } = mkProj();
+    const r = runCli(`run "${specFile}" --workspace "${join(cwdDir, 'no-such-dir')}" --state-dir .hopstate`, cwdDir);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stdout + r.stderr).toContain('WORKSPACE_NOT_FOUND');
+    expect(r.stdout + r.stderr).toContain('不做搜索');
+    expect(existsSync(join(cwdDir, '.hopstate'))).toBe(false);
+  });
+
+  it('反例：--workspace 指向一个文件（存在但不是目录）→ 同样 WORKSPACE_NOT_FOUND', () => {
+    const { cwdDir, specFile } = mkProj();
+    const r = runCli(`run "${specFile}" --workspace "${specFile}" --state-dir .hopstate`, cwdDir);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stdout + r.stderr).toContain('WORKSPACE_NOT_FOUND');
+  });
+
+  it('正例：--workspace 相对路径按 cwd 解析并绝对化（state.json 里是绝对路径）', () => {
+    const { cwdDir, specFile } = mkProj();
+    mkdirSync(join(cwdDir, 'sub', 'proj'), { recursive: true });
+    const r = runCliJson(`run "${specFile}" --workspace sub/proj --state-dir .hopstate`, cwdDir);
+    expect(r.status).toBe('step_ready');
+    // 相对值按子进程 cwd（已是 realpath——macOS /tmp→/private/tmp）解析,比较两边都取真实路径
+    expect(realDir(r.workspace_dir)).toBe(realDir(join(cwdDir, 'sub', 'proj')));
+    expect(r.workspace_dir.startsWith('/')).toBe(true);
+    const st = JSON.parse(readFileSync(join(cwdDir, '.hopstate', r.instance_id, 'state.json'), 'utf-8'));
+    expect(st.host_context.workspace_dir).toBe(r.workspace_dir);
+  });
+
+  it('正例：init --workspace 同款——state.json 工作区等于显式值', () => {
+    const { cwdDir, proj, specFile } = mkProj();
+    const r = runCliJson(`init "${specFile}" --workspace "${proj}" --state-dir .hopstate`, cwdDir);
+    expect(r.status).toBe('ok');
+    const st = JSON.parse(readFileSync(join(cwdDir, '.hopstate', r.instance_id, 'state.json'), 'utf-8'));
+    expect(st.host_context.workspace_dir).toBe(proj);
+  });
+
+  it('正例：项目级 hopjit.yaml 随工作区定位——cwd 下的 language: zh 不生效,--workspace 目录下的 commands 生效', () => {
+    const { cwdDir, proj, specFile } = mkProj();
+    writeFileSync(join(cwdDir, 'hopjit.yaml'), 'language: zh\n');
+    writeFileSync(join(proj, 'hopjit.yaml'), 'commands:\n  - echo\n');
+    // --workspace 目录下没写 language 键 → 缺省跟随系统语言（todo/0160）;本例要证的是 cwd 下的 zh 没被读到,
+    // 所以把子进程的系统语言钉成英文,断 en 才有分辨力（本机 LANG=zh_CN 时不钉会与 cwd 的 zh 撞值）
+    const saved = { LC_ALL: process.env.LC_ALL, LC_MESSAGES: process.env.LC_MESSAGES, LANG: process.env.LANG };
+    let r: any;
+    try {
+      delete process.env.LC_ALL; delete process.env.LC_MESSAGES; process.env.LANG = 'en_US.UTF-8';
+      r = runCliJson(`run "${specFile}" --workspace "${proj}" --state-dir .hopstate`, cwdDir);
+    } finally {
+      for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    }
+    const st = JSON.parse(readFileSync(join(cwdDir, '.hopstate', r.instance_id, 'state.json'), 'utf-8'));
+    expect(st.host_context.sandbox.runtime.available).toEqual(['echo']);
+    expect(st.host_context.hop_env?.hop_env_language ?? 'en').toBe('en');
+  });
+
+  it('正例：parallel worker 的 launch_command 恒带 --workspace "<父 workspace_dir>"（子进程 cwd 由 driver 的 Bash 决定,不带即父子分叉）', () => {
+    const { cwdDir, proj } = mkProj();
+    writeFileSync(join(cwdDir, 'par.md'), PARENT_PAR_SPEC);
+    const r = runCliJson(`run "${join(cwdDir, 'par.md')}" --workspace "${proj}" --params '{"nums":[3]}' --state-dir .hopstate`, cwdDir);
+    expect(r.status).toBe('dispatch_ready');
+    expect(r.launch_command).toContain(`--workspace "${proj}"`);
+    expect(r.workspace_dir).toBe(proj);   // 派发项并列回显
+  });
+
+  it('单元：resolveWorkspaceArg——缺席返 cwd / 绝对 normalize / 相对按 cwd 解析（纯函数面,子进程用例之外的快判）', () => {
+    const d = mkdtempSync(join(tmpdir(), 'ws-unit-'));
+    expect(resolveWorkspaceArg(undefined, d)).toBe(d);
+    expect(resolveWorkspaceArg(d + '/./', d)).toBe(d + '/');
+    mkdirSync(join(d, 'x'));
+    expect(resolveWorkspaceArg('x', d)).toBe(join(d, 'x'));
+  });
+});
+
+// @v: anc-cli-approve-dirs —— Config.dirs 的 CLI 面：run 停 paused/dirs → approve_dirs → resume;--approve-dirs 跳停点且账在;哈希不符拒;独立于 commit 账文件
+describe('Config.dirs 批准停点的 CLI 入口（^anc-cli-approve-dirs,todo/0148）', () => {
+  const DIRS_SPEC = (rw: string) => `# DirsCli
+Id: dirs-cli
+
+## Goal
+G
+
+## Inputs
+- out % line  # 报告目录
+
+## Outputs
+- r % line  # r
+
+## Config
+dirs:
+  readwrite: ["{out}"]
+
+## Steps
+1. [reason] a
+  + → r % line  # r
+`;
+  function mkProj() {
+    const dir = mkdtempSync(join(tmpdir(), 'dirs-cli-'));
+    const rw = mkdtempSync(join(tmpdir(), 'dirs-cli-rw-'));
+    writeFileSync(join(dir, 'spec.md'), DIRS_SPEC(rw));
+    return { dir, rw };
+  }
+
+  it('正例：run → paused/dirs（context.dirs 列 readwrite 条目、dirs_hash 在场）→ approve_dirs → resume 到 step_ready;账落 .hopstate/dirs_approvals.json,与 commit_approvals.json 分文件', () => {
+    const { dir, rw } = mkProj();
+    const p = runCliJson(`run spec.md --params '{"out":"${rw}"}' --state-dir .hopstate`, dir);
+    expect(p.status).toBe('paused'); expect(p.pause_reason).toBe('dirs');
+    expect(p.presented_data.context.dirs).toEqual([{ path: rw, mode: 'readwrite' }]);
+    const hash = p.presented_data.context.dirs_hash; expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    const bad = runCli(`approve_dirs deadbeef --state-dir .hopstate --instance ${p.instance_id}`, dir);
+    expect(bad.stdout + bad.stderr).toContain('DIRS_NOT_APPROVED');
+    const ok = runCliJson(`approve_dirs ${hash} --state-dir .hopstate --instance ${p.instance_id}`, dir);
+    expect(ok.status).toBe('ok');
+    expect(existsSync(join(dir, '.hopstate', 'dirs_approvals.json'))).toBe(true);
+    expect(existsSync(join(dir, '.hopstate', 'commit_approvals.json'))).toBe(false);
+    const next = runCliJson(`resume --state-dir .hopstate --instance ${p.instance_id}`, dir);
+    expect(next.status).toBe('step_ready');
+  });
+
+  // @v: anc-exec-dirs-grant —— status 源⑥ / worker 继承（dirs 批 review 修复）
+  it('正例：dirs 停点期间 hopjit status 报 paused/dirs 无 paused_step_id（源⑥）;approve_dirs 后不再 paused', () => {
+    const { dir, rw } = mkProj();
+    const p = runCliJson(`run spec.md --params '{"out":"${rw}"}' --state-dir .hopstate`, dir);
+    expect(p.pause_reason).toBe('dirs');
+    const st = runCliJson(`status --state-dir .hopstate --instance ${p.instance_id}`, dir);
+    expect(st.execution_status).toBe('paused'); expect(st.pause_reason).toBe('dirs'); expect('paused_step_id' in st).toBe(false);
+    runCliJson(`approve_dirs ${p.presented_data.context.dirs_hash} --state-dir .hopstate --instance ${p.instance_id}`, dir);
+    expect(runCliJson(`status --state-dir .hopstate --instance ${p.instance_id}`, dir).execution_status).not.toBe('paused');
+  });
+
+  it('正例：复用模式 parallel worker 经 launch_command 起跑不重展开——父批过 dirs 后 worker 直达 step_ready（D1：首版 worker 重展开 {out} 缺值 INIT_FAILED）', () => {
+    const { dir, rw } = mkProj();
+    writeFileSync(join(dir, 'par.md'), `# WS Par Dirs
+Id: ws-par-dirs
+
+## Goal
+G
+
+## Inputs
+- nums % [int]  # 列表
+- out % line  # 目录
+
+## Outputs
+- outs % [int]  # 收集
+
+## Config
+dirs:
+  readwrite: ["{out}"]
+
+## Steps
+1. [loop for-each n in nums, collect o into outs] 逐项
+  + → outs % [int]  # 收集列表
+  1.1. [subtask parallel] 处理一项
+    + → o % int  # 单项
+    1.1.1. [act] 算
+      - ← n
+      + → o % int  # 结果
+      > 纯计算
+      > \`\`\`hop_python
+      > o = n * 7
+      > \`\`\`
+2. [exit] 交付
+`);
+    const r = runCliJson(`run par.md --approve-dirs --params '{"nums":[3],"out":"${rw}"}' --state-dir .hopstate`, dir);
+    expect(r.status).toBe('dispatch_ready');
+    const w = runCliJson(r.launch_command.replace(/^node "[^"]+" --json /, ''), dir);   // 照引擎拼的命令起 worker
+    expect(w.status, JSON.stringify(w).slice(0, 300)).not.toBe('error');
+    expect(w.status).not.toBe('paused');
+    const wst = JSON.parse(readFileSync(join(dir, '.hopstate', r.instance_id, 'parallel', r.child_instance, 'state.json'), 'utf-8'));
+    expect(wst.host_context.sandbox.filesystem.write_access.allowed).toEqual([rw]);   // 继承父的写白名单
+    expect('out' in (wst.inputs ?? wst.vars ?? {})).toBe(false);   // 保留键没泄成 Inputs
+  });
+
+  it('正例：run --approve-dirs 不停,直接 step_ready,账已记（写参数的人就是批准的人）', () => {
+    const { dir, rw } = mkProj();
+    const r = runCliJson(`run spec.md --approve-dirs --params '{"out":"${rw}"}' --state-dir .hopstate`, dir);
+    expect(r.status).toBe('step_ready');
+    const recs = JSON.parse(readFileSync(join(dir, '.hopstate', 'dirs_approvals.json'), 'utf-8'));
+    expect(recs).toHaveLength(1); expect(recs[0].dirs_hash).toMatch(/^[0-9a-f]{64}$/); expect(recs[0].spec_path.endsWith('/spec.md')).toBe(true);
+  });
+
+  it('正例：init --approve-dirs 同款——之后 resume 直达 step_ready', () => {
+    const { dir, rw } = mkProj();
+    const i = runCliJson(`init spec.md --approve-dirs --params '{"out":"${rw}"}' --state-dir .hopstate`, dir);
+    expect(i.status).toBe('ok');
+    expect(runCliJson(`resume --state-dir .hopstate --instance ${i.instance_id}`, dir).status).toBe('step_ready');
+  });
+
+  it('反例：Inputs 传的目录不存在 → run 直接 INIT_FAILED,不建实例', () => {
+    const { dir } = mkProj();
+    const r = runCliJson(`run spec.md --params '{"out":"${join(dir, 'no-such')}"}' --state-dir .hopstate`, dir);
+    expect(r.status).toBe('error');
+    expect(r.errors[0].message).toMatch(/^INIT_FAILED.*目录不存在/);
+    expect(existsSync(join(dir, '.hopstate'))).toBe(false);
+  });
+
+  it('正例：不声明 dirs 的 spec 行为与改前完全一致——run 直达 step_ready,无 dirs 账文件', () => {
+    const { dir, specFile } = setupWorkDir();
+    const r = runCliJson(`run ${specFile} --state-dir .hopstate`, dir);
+    expect(r.status).toBe('step_ready');
+    expect(existsSync(join(dir, '.hopstate', 'dirs_approvals.json'))).toBe(false);
   });
 });

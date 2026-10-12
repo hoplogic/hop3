@@ -1,110 +1,106 @@
 %% @trace
 	id: hoptype-system
-	source: [[HopAnt概念-双态组件模型]]
+	source: [[HopAnt概念]]
 	source_id: cyant-concept
 	type: extract
-	last_sync: 2026-09-27T20:38+0800
-	note: HopType 类型与组合体系——从 HopAnt 概念文档中提取的通用元模型
+	last_sync: 2026-10-06T21:40+0800
+	note: 设计层表达语言（HopType + HopSop）——2026-10-05 作者逐条拍定重写：运行层三件（HopSpec/HopTrait/HopSchema,引擎实装）与设计层两件（HopType/HopSop,伪代码）分层;HopType 走 Python class 式聚合不走 Rust struct/impl 分离;块关键字 struct→HopType;成员函数形态（签名 HopSchema 条目带 # 说明 / Goal 与 Constraints 用 # / self.字段 隐式引用 / 体=HopSop）;"完整 HopSpec=三件套集成体"撤销。原从 HopAnt 概念文档提取,HopAnt 为其第一个使用方。
 %%
 
-# HopType：类型与组合体系
+# HopType：设计层表达语言
 
-> 概念探索阶段
+> 本文定义**设计层**写设计文档用的两件伪代码记法——**HopType**（聚合的类型：字段 + 成员函数）与 **HopSop**（流程骨架）。它们给人和按设计写代码的 agent 读,**不被引擎解析**。引擎真跑的是运行层三件：HopSpec / HopTrait / HopSchema,定义在 [[HopSpec V3核心规范]]。
 
-## 定位
+## HOP类型的两个层次【决策】 ^anc-hoptype-two-layers
 
-**Hop 概念三件套**（2026-08-10 作者定名）——HopSpec 语言的三个基础构件，各答一问：
+| 层次                 | 构件                           | 是什么                                                                                                  | 谁消费                         |
+| ------------------ | ---------------------------- | ---------------------------------------------------------------------------------------------------- | --------------------------- |
+| **运行层**（hopjit 实装） | **HopSpec**                  | 完整函数：原型 + 函数体（Steps）,引擎按步执行                                                                          | parser / engine / validator |
+|                    | **HopTrait**（Hop契约）          | 函数原型：只有 Goal/Constraints/Inputs/Outputs,无 Steps;`call` 它时引擎走有序思考或查 Spec 库                            | 引擎                          |
+|                    | **HopSchema**                | 类型标注文法：`名 % 类型  # 说明`;Inputs/Outputs/Types/Tools/Config 段都用它（[[HopSpec V3核心规范#^anc-type-hopschema]]）。设计文档里的纯数据形状（响应、记录、入参对象）也用它,块关键字 `HopSchema:`（[[#^anc-hoptype-vs-hopschema]]） | parser / validator;设计读者 |
+| **设计层**（伪代码）       | **HopType**                  | 聚合类型：Fields + 成员函数,一个块描述一个 TS/Python 里的 class 或 module                                               | 读设计写代码的人与 agent             |
+|                    | **HopSop**（[[HopSop标准作业流程]]） | 流程骨架：顺序/分支/循环的编号步骤,不带执行语义                                                                            | 同上                          |
 
-| 构件 | 本名 | 是什么 | 核心问题 |
-|------|------|---------|---------|
-| **Hop契约** | **HopTrait** | 无 Steps 的 Spec——只有 Goal/Constraints/Inputs/Outputs 的接口契约 | 承诺什么（WHAT） |
-| **Hop类型** | **HopType** | 组件类型——状态字段（Fields）+ 绑定的 Spec 清单 | 是什么、状态存在哪 |
-| **Hop作业流程** | **HopSop**（[[HopSop标准作业流程]]） | 顺序/循环/分支 + 分层编号的控制流骨架——SOP 是大致流程，需要 HopJIT 双态融合执行时升级为 HopSpec | 按什么次序做 |
+两层的关系一句话：**设计层描述"代码该长什么样",运行层是引擎真跑的格式。** HopSchema 是两层共用的基本类型标注文法：HopType 的 Fields 与函数参数用它标类型。HopType 与 HopSchema 的分界见下节。
 
-**完整的 HopSpec（有 Steps）= 三件套的集成体**：Hop契约给出目标与边界，HopSop 给出控制流骨架，再加数据流（`←`/`+→`）、步骤类型（reason/act/…）与执行语义（retry/HITL）即成可执行规约。生态分工不变：HopSpec 定义行为，HopType 组织组件，HopJIT 执行调度——三者正交、各自独立演进。
+## HopType 与 HopSchema 的分界【契约】 ^anc-hoptype-vs-hopschema
 
-> **称呼约定**：`struct`/`impl`/`trait` 是本体系的语法关键字（借 Rust 词形，语义见下方类比表）；行文称呼用中文本名——**组件类型（struct）、行为实现（impl）、Hop契约（HopTrait）、成员字段（Fields）**——关键字仅在语法语境与首次括注锚定时出现，让非 Rust 背景读者不靠 Rust 预备知识也能读懂。
+两者都在设计文档里出现,都用 `- 名 % 类型  # 说明` 写字段,所以容易混用。分界只看一件事：**有没有行为**。
 
-## 与 Rust 的类比
-
-| Rust          | HopSpec 生态             | 说明                                                         |
-| ------------- | ---------------------- | ---------------------------------------------------------- |
-| `struct`      | **`struct:`**          | 组件类型定义——身份、状态字段、能力边界                                      |
-| （实例）     | **HopAnt**              | 组件类型的运行时实例——活的智蚁                                        |
-| `impl`        | **`impl` Spec**        | 行为实现——组件类型实现某个 Spec                                      |
-| `trait`       | **HopTrait（Hop契约）** | 无 Steps 的 Spec——只有 Goal/Constraints/Inputs/Outputs，由有序思考或 Spec 库匹配实现 |
-| `mod`/`crate` | **Spec 库**             | 组织、命名空间、版本、依赖                                              |
-| async/channel | **协作模式**               | 多 HopAnt 之间的交互模式                                            |
-
-**三层关系**：组件类型（`struct`）定义类型，行为实现（`impl`）绑定行为（Spec），HopAnt 是实例化后的运行时实体。
-
-## 组件类型（struct）定义
+**HopSchema 是数据形状。** 一组字段、每个字段一个类型一句说明,没有成员函数。它描述的是"一个值长什么样"：一个 CLI 命令吐出的 JSON、一条写进文件的记录、一个函数的入参对象或返回对象。它与运行层 spec 的 `Types:` 段是同一个东西——`Types:` 段里一条 `- Name:  # 说明` 加缩进字段行就是一个 HopSchema;设计文档里写成块是为了给它起名、让代码与测试能按名对照。
 
 ```
-struct: <名称>
-  Id: <标识符>
-  Fields:                    # 成员字段，HopAnt 实例各自持有
-    - <field> % <type>  # 说明
-  Specs:                     # 行为定义，绑定在组件上
-    - <Spec Id>              # 有 Steps 或无 Steps 均可
+HopSchema: AdaptReport
+  # 配置适配报告：四项核验各自的 required / missing + 每个缺口一句怎么补
+  - ok % bool               # 四项都没有缺口
+  - tools % yaml            # {missing % [line], errors % [line], warnings % [line]}
+  - hints % [line]          # 每个缺口一句怎么补
 ```
 
-| 区域 | 说明 |
-|------|------|
-| Id | 组件标识，用于实例化和寻址 |
-| Fields | 成员字段，实例持久状态，跨 Spec 执行存活 |
-| Specs | 对外暴露的能力清单，每个指向一个 Spec 定义 |
-
-### 代码侧 vs Agent 侧
-
-**代码侧组件类型** 额外需要：运行时环境（语言、依赖），绑定到具体的 class/module
-
-**Agent 侧组件类型** 额外需要：可用工具集、知识域（知识库、领域文档）、推理能力级别
-
-## 行为实现（impl）：组件类型实现 Spec
-
-组件类型与 Spec 的绑定关系用 `impl` 表示——类比 Rust 的 `impl Trait for Struct`。一个组件类型的 Specs 列表中的每个 Spec Id 都有对应的 `impl`，标记该 Spec 由此组件类型实现。
-
-### Fields 作为 Spec Inputs
-
-当 Spec 被组件类型 impl 时，Spec 的 Inputs 可以引用该组件类型的成员字段（Fields）。这些 Field 输入用 `# Field` 标注，类型已在组件类型的 Fields 中声明，Inputs 中只写变量名：
+**HopType 是带行为的聚合。** 字段加成员函数,一个块对应代码里一个 class 或 module——它描述的是"这个部件能做什么、内部怎么做"。成员函数的参数与返回值用 HopSchema 标类型,函数体用 HopSop 写。
 
 ```
-struct: ExecutionEngine
-  Id: exec-engine
+HopType: AntAdapter
+  # 对一个已装 HopAnt 核本机依赖
+  Specs:
+    adapt(
+      antDir % line,            # 已装 HopAnt 的目录绝对路径
+      env % AdaptEnv            # 机器侧事实（HopSchema）
+    ) -> report % AdaptReport   # 核验结果（HopSchema）
+      1. …
+```
+
+三条判据：
+
+1. **只有字段、没有函数 → HopSchema。** 哪怕字段很多、嵌套很深,只要没有"做什么",它就是数据。响应类型、计划对象、记录条目、配置节的形状都属此类。
+2. **有函数 → HopType,字段写在 `Fields:`。** 函数引用的数据对象另立 HopSchema,不把它的字段摊进 HopType 的 Fields——HopType 的 Fields 是这个部件自己持有的状态,不是它经手的数据。
+3. **拿不准时问"代码里它是什么"**：是一个 interface / dataclass / TypedDict → HopSchema;是一个 class / module 且有方法 → HopType。
+
+旧写法说明：2026-10-05 本文重写时只定了 HopType,没有给纯数据形状单独起名,存量设计文档里有百余处 `HopType:` 块只写 `Fields:`（hop-cli 的 CLI 响应类型章整章、各模块的入参/返回对象）——按本节口径它们都是 HopSchema。新写的不再这样写;存量迁移节奏待作者拍（作者 2026-10-06 点出"AntResponse 其实应该是 HopSchema"后立本节）。
+
+## HopType 的写法【契约】 ^anc-hoptype-block
+
+本节即 HopType 的描述规范（原独立节「HopType 描述规范」2026-10-05 并入,外部引用锚保留）。 ^anc-hoptype-desc-spec
+
+**聚合形态**（作者定 2026-10-05：走 Python class 式,不走 Rust struct/impl 分离）。一个块 = 一个类型,字段与成员函数在一处：
+
+```
+HopType: ExecutionEngine
+  # 执行状态机——管步骤状态、变量作用域、retry/adaptive、失败升级
   Fields:
-    - spec % SpecAST
-    - step_states % yaml
-    - retry_counters % yaml
-    ...
-
-## impl fail_step
-
-# Spec: 处理步骤失败
-Id: fail_step
-
-Inputs:
-- step_id % line          # 调用方传入
-- failure_reason % text   # 调用方传入
-- spec                   # Field
-- step_states            # Field
-- retry_counters         # Field
+    - step_states % yaml        # 各步骤当前状态
+    - retry_counters % yaml     # 各步骤已重试次数
+  Specs:
+    fail_step(
+      step_id % line,           # 要处理的步骤号,必须是已 start 的步骤
+      failure_reason % text     # 失败原因,原样进 retry 反馈
+    ) -> escalation % yaml      # retry 或 escalate,带本步重试计数
+      # 处理步骤失败：按 retry 阶梯决定重试还是升级
+      # 约束：超过 max 后不再重试,直接升级
+      1. 读 self.retry_counters[step_id]
+      2. [条件(计数 < max)] self.retry_counters[step_id] += 1,返回 retry
+      3. [其他] self.step_states[step_id] = failed,返回 escalate
 ```
 
-调用方（外部 `call`）只需传入非 Field 的 Inputs；Fields 由 HopJIT 从当前 HopAnt 实例自动注入。这解决了"Spec 如何访问组件状态"的问题——通过显式的 Inputs 声明而非隐式注入。
+规则逐条：
 
-对比独立 Spec（不被任何组件类型 impl 的）：Inputs 全部由调用方传入，没有 Field 注入。
+1. **块关键字 `HopType:`**（原 `struct:`;锚点类别名 `anc-struct-*` 不随改——追溯链稳定优先）。块首行下一行 `#` 写这个类型是什么。
+2. **Fields 是 HopSchema 条目**：`- 名 % 类型  # 说明`,每条必带说明。
+3. **成员函数是函数形态**：签名 `名(参数, …) -> 返回类型`,**参数与返回值都是 HopSchema 条目,每条必带 `#` 一句话说明**;参数竖排、一行一条,与 Fields 同一套文法。不写 `# Spec:` 标题、不写 `## Inputs` / `## Outputs` / `## Steps` 段头。
+4. **Goal 与 Constraints 都用 `#` 标记**：签名下第一行 `#` 写这个函数干什么;前置条件、失败条件写 `# 约束：…`。不设独立段。
+5. **`self.<字段>` 隐式引用本实例的 Fields**：不进参数列表;`self.x = …` 即改状态,是副作用不是返回值。HopType 块外的独立 spec 不许出现 `self`。
+6. **函数体 = HopSop**：编号步骤 + `[条件(…)]` / `[其他]` / 循环等 HopSop 控制流写法;**不带** `[act]` / `[check]` / `[reason]` 类型标、不带 `←` / `+→` 数据流。重试按 HopSop 定义：缺省 0,要就显式标 `重试=N`;`自适应` 同样显式标了才有（[[HopSop标准作业流程]] 定位节）。
+7. **无关键逻辑的成员只写签名 + `#` 说明**——纯类型模块、薄适配层照此。
+8. **成员超过 5 个按职责分组**,组级共性上提到组标题。
+9. **无成员函数的纯数据形状不写 `HopType:`,写 `HopSchema:`**——分界与判据见上节 [[#^anc-hoptype-vs-hopschema]]。
 
-## Hop契约（HopTrait） ^anc-hoptype-hoptrait
+## 独立 HopTrait 的位置【契约】 ^anc-hoptype-hoptrait
 
-**HopTrait（Hop契约）= 无 Steps 的 Spec**（2026-08-10 作者定名，原称"能力契约（trait）/能力声明"）：只有 Goal/Constraints/Inputs/Outputs 的接口契约。
+**HopTrait（Hop契约）= 无 Steps 的 Spec**：只有 Goal/Constraints/Inputs/Outputs 的接口契约。它是**运行层实装件**——一份真的 spec 文件,可以被 `call`,引擎走有序思考生成实现或从 Spec 库匹配已沉淀的实现。
 
-- **有 Steps 的 Spec** = 具体实现（在 HopTrait 承诺的边界内给出执行路径）
-- **HopTrait（无 Steps）** = 只承诺 WHAT，由 HopJIT 有序思考生成实现，或从 Spec 库匹配已沉淀的实现
+设计层里,**写在 HopType 块里的是函数,写在块外的才是 HopTrait**——这一句是两者的边界。单实现者的契约不单拆,就是 HopType 的一个成员函数;只有**一份契约有多个实现者**时才单独写 HopTrait（Provider 接口这类"核心定义、多个适配层实现"的跨层契约）。HopTrait 用 HopSpec 的 markdown 结构写（它本来就是一份 spec）。
 
-`call` 一个 HopTrait 时，HopJIT 自动走有序思考或查库匹配——调用方不关心对方是硬编排还是动态生成的。`impl` 关系随之读作：**HopType impl HopTrait**（组件类型承诺履行某契约，用有 Steps 的 Spec 兑现）。
-
-Skill 不是独立概念，它就是 Spec。`trait` 作为语法关键字保留（借 Rust 词形），行文一律用本名 HopTrait / Hop契约。
+行文一律用本名 HopTrait / Hop契约,旧称"HopSpec 契约（Spec without Steps）""trait 形式"不再使用。
 
 ## 双态在组件级别的体现
 
@@ -120,29 +116,3 @@ HopSpec 的双态融合不只在步骤级别（act = 代码执行，reason = LLM
 - 有的 Spec 是 HopTrait（无 Steps 的 Hop契约）
 
 实例化时根据部署配置绑定具体的执行后端。调用方只 `call` Spec，不关心对面是代码还是 LLM。**HopSpec 是组件间的通用接口语言。**
-
-## HopType 描述规范（设计文档侧） ^anc-hoptype-desc-spec
-
-（收编自 [[工程实现链规范]] 同名节，2026-08-08 作者指出描述规范应随 HopType 体系单立、不随元规范。原 `^anc-meta-hoptype-spec` 锚点在元规范原位保留；本节为语义权威。）
-
-每个 HopType（组件类型，`struct` 定义）的设计描述必须覆盖**四要素**（行文称呼用中文本名，关键字括注锚定）：
-
-1. **自身定位**：这个组件是什么、解决什么问题（用本体语言，不依赖比喻）
-2. **与其他 HopType 的关系**：被谁使用、使用谁、与相邻组件的职责边界
-3. **主要 Hop契约（HopTrait）与主要成员**：Hop契约 + 关键成员字段（Fields）——**每个成员字段 / 契约方法独立成条完整介绍**（类型、用途、何时设定/调用、与级别/守卫等机制的交互、副作用），不吝啬空间
-4. **核心行为实现（impl）的主要 HopSop 逻辑**：**关键契约与关键流程一起展示**——流程（步骤逻辑）必须与它兑现的契约（HopTrait 的 Goal/Outputs/Constraints）同节在场，**只展示流程、缺漏契约=三件套描述不清**。流程表述用 [[HopSop标准作业流程]]
-
-**成员列表的层次要求**：成员字段或契约方法超过 5 个时必须按职责分组（如"步骤记录组 / 生命周期组 / 访问器组"），组级共性（守卫规则、副作用特征）上提到组标题，不允许平铺一排怼脸上。
-
-**比喻只解释不指代**（宪法级原则，定义见 [[工程实现链规范#^anc-meta-constitution]]）：组件的称呼/引用/术语必须用本名，比喻仅用于首次解释——本条在要素①（自身定位）中尤其要守。
-
-## 待探索
-
-- [x] 组件类型（struct）的定义语法细化 → Fields 类型复用 HopSpec 值类型（HopSchema 使用处之一,[[HopSpec V3核心规范#^anc-type-hopschema]]）+ struct 名互引（设计文档 76 个 struct 实践定形）
-- [x] HopJIT 隐式注入的机制设计 → 见 impl 章节：Fields 作为 Spec Inputs，`# Field` 标注
-- [ ] HopAnt 实例化与寻址机制（如何创建实例、如何在 `call` 中指定目标实例）
-- [ ] HopAnt 之间的协作模式（不只是 parallel，还有协商、竞争、委托）
-- [ ] Spec 库的组织方式（命名空间、版本、可见性）
-- [ ] 传统代码组件类型的绑定机制（如何把 Python class 包装为 struct）
-- [ ] Agent 侧组件类型的能力发现和匹配
-- [ ] HopTrait 机制细化（`impl HopTrait for struct` 的显式声明）——需要时再引入

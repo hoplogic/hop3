@@ -3,24 +3,26 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 // @module: step-dispatcher ^anc-struct-step-dispatcher
 import Anthropic from '@anthropic-ai/sdk';
-import { wrapAnthropicClient, makeOpenAiClient, makeOpenAiResponsesClient, nonstreamingWaitMs, longWaitFetchOptions, type ProtocolClient } from './protocol-openai.js';
+import { wrapAnthropicClient, makeOpenAiClient, makeOpenAiResponsesClient, nonstreamingWaitMs, longWaitFetchOptions, unreachableCode, type ProtocolClient } from './protocol-openai.js';
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml';
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { ExecutionEngine } from './engine.js';
-import { PromptAssembler, injectKnowledgeContext, actRoleKind, roleGuideText, renderPromptParts, SCHEMA_KICK_MARKER, EMPTY_RETRY_NOTE, buildTextToolCallHint, ACT_EVIDENCE_GATE_PREFIX } from './prompt.js';
+import { join, dirname, resolve } from 'node:path';
+import { ExecutionEngine, commitNotApprovedMessage, commitAuthorizedBy, type AnalyzedAction, type CommitAnalysis, type CommitAnalysisRequest, type CommitAnalyzer } from './engine.js';
+import { PromptAssembler, HOPSCHEMA_SEP, injectKnowledgeContext, formatKnowledgeEntry, actRoleKind, roleGuideText, renderPromptParts, SCHEMA_KICK_MARKER, EMPTY_RETRY_NOTE, buildTextToolCallHint, ACT_EVIDENCE_GATE_PREFIX } from './prompt.js';
 import { DefaultToolProvider } from './tools.js';
 import { unionApprovedCommandNames } from './command-exec.js';
+import { resolveCalleeSpecPath, type AntRoots } from './hopant.js';
 import { CompositeToolProvider } from './tools-composite.js';
 import { BodyInterpreter, evalExprSync } from './act-body-interpreter.js';
 import { getWriteScope } from './ast-runtime.js';   // callee 插值解引用取变量 scope（^anc-step-call-dynamic-callee）
 import { repairYamlScalars } from './validator.js';
 import { deleteNodeAt, insertNodeAt, replaceNodeAt, renumberSteps } from './spec-tree-edit.js';
 import { serializeFragment, parseFragment , flattenFragmentNumbering } from './parser.js';
-import type { ExecutableStepType, OutputDecl, StepNode, ActStep, CallStep, CheckStep, CommitStep, ConfirmStep } from './ast-types.js';
+import type { ExecutableStepType, OutputDecl, StepNode, ActStep, CallStep, CheckStep, CommitStep } from './ast-types.js';
 import type { NextResponse, StepReady, AdaptiveNeeded, ExecutionPaused, ExecutionCompleted, ExecutionFailed, DrainWait, DispatchReady } from './cli-types.js';
 import type { HostConfig, ToolProvider, ToolDef, KnowledgeProvider, ModelEngine, ModelRoute, SpecProvider, SpecSource } from './provider-types.js';
-import { ENGINE_DEFAULT_MODEL } from './provider-types.js';
+import type { ToolCallRecord } from './hoplog.js';   // tool 审计行的类型载体在 hoplog（^anc-obs-audit 八字段契约）——内联数组类型此前漏三个审计字段,结构兼容未报错但读类型的人看不到
+import { ENGINE_DEFAULT_MODEL, YAML_DUMP_OPTS } from './provider-types.js';
 import type { AssembledContext } from './runtime-types.js';
 import { ErrorCode } from './errors.js';
 
@@ -37,24 +39,21 @@ export interface DispatcherConfig {
   sharedToolProvider?: import('./provider-types.js').ToolProvider;
 }
 
-/** DirSpecProvider：缺省 SpecProvider——调用方 spec 同目录寻址（<基准目录>/<callee_spec_id>.md）。
+/** DirSpecProvider：缺省 SpecProvider——三级寻址（<基准目录>/<id>.md → <项目>/hop_tasks/ants/<id>/<id>.md → <家目录>/.hopjit/ants/<id>/<id>.md）,
+ * 规则唯一实现在 hopant resolveCalleeSpecPath（同层 import）。
  * 决策与安全约束（id 含路径分隔符/`..` 拒绝）见 [[shared-providers#^anc-provider-spec-default]]。
  * // @a: anc-provider-spec-default */
 export class DirSpecProvider implements SpecProvider {
-  constructor(private baseDir: string) {}
+  constructor(private baseDir: string, private roots?: AntRoots) {}
   /** callee spec 的文件路径推导（doc-ref 两级基准继承用——子实例要 specDir,接口 SpecSource
    * 不带路径,仅目录型 provider 有此概念）。// @a: anc-exec-doc-ref-resolve */
   pathOf(spec_id: string): string | null {
-    if (spec_id.includes('/') || spec_id.includes('\\') || spec_id.includes('..')) return null;
-    const path = join(this.baseDir, `${spec_id}.md`);
-    return existsSync(path) ? path : null;
+    return resolveCalleeSpecPath(this.baseDir, this.roots ?? null, spec_id);
   }
 
   async resolve(spec_id: string): Promise<SpecSource | null> {
-    // 名字就是名字，不是路径——含分隔符或 .. 一律拒（防穿越）
-    if (spec_id.includes('/') || spec_id.includes('\\') || spec_id.includes('..')) return null;
-    const path = join(this.baseDir, `${spec_id}.md`);
-    if (!existsSync(path)) return null;
+    const path = this.pathOf(spec_id);
+    if (path === null) return null;
     return { spec_id, source: readFileSync(path, 'utf-8') };
   }
 }
@@ -99,8 +98,6 @@ export interface RunResult {
   cumulative_tokens?: number;
 }
 
-/** `service/model` / 裸 model 的单一解析入口。引用形态两片必须非空；首个 `/` 后内容完整保留。
- * // @a: anc-exec-model-resolve */
 /** in-band 反刍重复度判据（^anc-exec-thinking-exhausted 二批——零成本纯字符串统计,非 LLM）:
  * 尾窗 4000 字符按 32 字符切片步进 32,统计切片在其之前文本里已出现的比率,>50% 判高重复。
  * 阈值保守（实录形态"让我重新审视"1330 次是数量级越阈）,长排版正文不误触（反例钉）。 */
@@ -130,7 +127,8 @@ export function normalizeFullwidthKeyColons(text: string, outputNames: string[])
   return text.replace(re, '$1: ');
 }
 
-/** `service/model` 与裸 model 引用的单一解析入口（dispatcher 路由与 mcp-server 配置核对共同消费）。 */
+/** `service/model` 与裸 model 引用的单一解析入口（dispatcher 路由与 mcp-server 配置核对共同消费）。
+ * 引用形态两片必须非空；首个 `/` 后内容完整保留。 // @a: anc-exec-model-resolve */
 export function parseModelRef(ref: string): { service_id: string; model: string } {
   if (!ref || ref !== ref.trim()) {
     throw new Error(`INVALID_MODEL_REF: model 引用须为非空且首尾无空白（收到 '${ref}'）`);
@@ -155,6 +153,18 @@ const EMPTY_RETRY_MAX = 2;
 // API 输出 token 上限缺省值（env / resource_limits 都未指定时）。
 const DEFAULT_MAX_OUTPUT_TOKENS = 32768;   // 2026-08-27 从 16384 抬升（^anc-exec-output-budget——推理型模型 thinking+正文共池,旧值两头紧;上限是物理防线非产出配额,产出归 spec 输出声明约束）
 
+// 本进程里成功应答过的端点（v0.41.0,hopissues/0118）——键=ReachedEndpointKey `${service_id}|${base_url ?? ''}`。
+// 模块级而非实例级:parallel worker 各自新建 StepDispatcher 与 client,实例级状态不共享。这些端点再撞
+// ENOTFOUND/ECONNREFUSED 不按死端点判,降为网络类走重试与网络暂停。只活在进程内存,不跨进程、不设上限
+//（键数与 provider 条目同量级）。见 [[step-dispatcher#^anc-exec-network-pause]] "曾经连通过的端点"条
+// @a: anc-exec-network-pause
+const reachedEndpoints = new Set<string>();
+function endpointKey(ep: { service_id: string; base_url?: string }): string {
+  return `${ep.service_id}|${ep.base_url ?? ''}`;
+}
+// 降级只认这两码——EPERM 是系统策略拦截,不随时间自愈,照旧 fail-fast
+const REACHED_DOWNGRADE_CODES = new Set(['ENOTFOUND', 'ECONNREFUSED']);
+
 // 错误对象的可读文案——message 优先取字段（SDK 错误对象可能非 Error 子类,String() 得 [object Object]）。
 function errMessage(err: unknown): string {
   const m = (err as { message?: unknown })?.message;
@@ -166,6 +176,30 @@ function errMessage(err: unknown): string {
  * // @a: anc-exec-parallel-hitl-queue */
 export function childNotInQueueMessage(childInstance: string): string {
   return `子实例 '${childInstance}' 不在待答队列（已答过/已终态/杀活清场;或这是串行 call 停点——其应答走 call_path 路由,去掉 child_instance 参数重答。run_status 的 paused_queue 是现存卡权威）`;
+}
+
+/** 响应 stop_reason 三分（设计 [[step-dispatcher#^anc-exec-output-abort-loud]] HopSop）：正常收尾三值与缺席
+ * → normal;max_tokens → truncated（既有截断闸）;其余（refusal / content_filter / pause_turn / 未知值）→ aborted,
+ * 端点主动停止,产出不完整不收。缺席按正常收——mock 面与旧端点不带该字段,不能因为没字段就判死。
+ * // @a: anc-exec-output-abort-loud */
+export function classifyStopReason(stopReason: string | null | undefined): 'normal' | 'truncated' | 'aborted' {
+  if (!stopReason || stopReason === 'end_turn' || stopReason === 'tool_use' || stopReason === 'stop_sequence') return 'normal';
+  if (stopReason === 'max_tokens') return 'truncated';
+  return 'aborted';
+}
+
+/** aborted 档的报文（三个消费点共用;前缀 OUTPUT_ABORTED: 登在引擎 TRANSIENT_PREFIXES——步级瞬态,首撞免扣预算、下轮带本报文重跑。
+ * 2026-10-08 review 修复从事务级改定:归类判据是根因在本轮输入,审核类停止的根因就是本轮内容,下轮换措辞输入即变）。// @a: anc-exec-output-abort-loud */
+export function outputAbortedMessage(stopReason: string, site: string): string {
+  return `OUTPUT_ABORTED: 端点以 ${stopReason} 原因停止输出,产出不完整（${site}）——多半是内容触发了端点审核;下一轮请换措辞（去掉可能触发审核的内容）再试一次,仍断则换端点`;
+}
+
+/** usage 全零而正文非空的旁证 warn（只记不判,^anc-exec-output-abort-loud 观测条②）。// @a: anc-exec-output-abort-loud */
+export function usageZeroWarning(response: Anthropic.Message): string | null {
+  const u = response.usage;
+  if (!u || u.input_tokens !== 0 || u.output_tokens !== 0) return null;
+  const hasText = response.content.some(b => b.type === 'text' && b.text.trim().length > 0);
+  return hasText ? '[usage-zero] 响应 usage 全零而正文非空——端点可能未按正常路径收尾,是中途掐断的旁证' : null;
 }
 
 /** 截断报文的"两个数 + 建议"一截（三个 OUTPUT_TRUNCATED 抛错点共用,各站点只在前面拼自己的站点半句）。
@@ -181,6 +215,129 @@ export function truncationAdvice(requestedMaxTokens: number | undefined, outputT
     return `${nums}——实际输出远低于请求上限，是端点自己的输出上限掐断的，与本地配置无关，改本地上限配置没有用。核实端点能力（探针 model-gearbox/probes/run-output-cap.mjs）、换不带此上限的端点，或把本步产出拆小`;
   }
   return `${nums}——调大 HOPJIT_MAX_OUTPUT_TOKENS、resource_limits.max_output_tokens 或 provider 的 max_output_tokens`;
+}
+
+/** commit 安全分析用的服务（组合根从独立模式配置取出;api_key 是已解引用的凭证值,只进客户端构造,不进日志与报文）。
+ * HopSchema 见 [[step-dispatcher#^anc-exec-commit-analyzer]]。// @a: anc-exec-commit-analyzer */
+export interface CommitAnalyzerProvider {
+  service_id: string;
+  protocol: 'anthropic' | 'openai-chat' | 'openai-responses';
+  base_url: string | null;
+  api_key: string;
+  auth: 'bearer' | null;
+  model: string;
+}
+
+const ANALYSIS_MAX_TOKENS = 4096;
+/** 分析判据（写给分析模型）。权威 [[step-dispatcher#^anc-exec-commit-analyzer]]「分析判据」。// @a: anc-exec-commit-analyzer */
+export const COMMIT_ANALYSIS_SYSTEM = `你的任务是对一步不可逆提交里的每个动作做安全分析:判断它是可逆或低危（safe）,还是需要人确认（human）,并用不懂代码的人能读懂的话写出后果。引擎已经列出了 body 里每一个有副作用的动作,你逐项给结论。
+
+safe 的范围:
+- 新建文件、追加内容、新建目录;
+- 覆盖或删除前留存了旧版本（keep ≥1）的写入、移动、删除;
+- 只改动任务临时工作区的操作;
+- 备份轮转:改名或删除的对象是同一文件的旧备份,最新内容仍保留。category 写 rotation,cited_lines 列出构成轮转的几行;
+- 其他不丢数据的数据操作,category 写 data_op。
+
+human 的范围:
+- 不留旧版本的覆盖与删除——目标来自本步输入时,按"这个输入可能是任何文件"判断,不按某个具体文件名判断;
+- 影响范围运行前定不下来、又可能丢数据的动作;
+- 引擎判定为 human 的动作（外部命令、外部工具、通知）一律保持 human——这些动作的后果在 body 之外,读 body 判断不了。
+
+consequence 的写法:一两句大白话,说清做了什么、能不能找回、影响到哪里。不写代码、不写函数名;文件写路径——清单里给的是值就写值,给的是来源（"target(本步输入,运行时取值)"、"任务临时工作区里的 out.md"）就照来源写,"运行前无法确定"的照写,不推测具体值。
+
+summary 一句话说这一步整体在做什么;recommendation 一两句给人的建议,例如"确认目标目录里没有你手工改过、要保留的文件再批准"。
+
+输出一个 YAML 对象,字段如下,actions 按引擎清单逐项对应,不增不减:
+summary: 一句话
+actions:
+  - line: 引擎清单里的行号
+    callee: 引擎清单里的调用名
+    category: 分类
+    cited_lines: [构成这个判断的行号]
+    verdict: safe 或 human
+    consequence: 大白话后果
+recommendation: 给人的建议`;
+
+/** commit 安全分析函数工厂:按服务协议构造客户端（与执行路径同一构造,SDK 内部重试关掉）,返回单次调用的分析函数。
+ * 调用失败直接抛,由 engine.commitGate 接住改用模板分析、转人工——分析失败的正确去向是人,不是重试。// @a: anc-exec-commit-analyzer */
+export function makeCommitAnalyzer(provider: CommitAnalyzerProvider): CommitAnalyzer {
+  const waitMs = nonstreamingWaitMs(ANALYSIS_MAX_TOKENS);
+  const baseURL = provider.base_url ?? undefined;
+  let client: ProtocolClient;
+  if (provider.protocol === 'openai-chat') {
+    client = makeOpenAiClient({ apiKey: provider.api_key, ...(baseURL ? { baseURL } : {}), waitMs });
+  } else if (provider.protocol === 'openai-responses') {
+    client = makeOpenAiResponsesClient({ apiKey: provider.api_key, ...(baseURL ? { baseURL } : {}), waitMs });
+  } else {
+    const common = { timeout: waitMs, maxRetries: 0, fetchOptions: longWaitFetchOptions(waitMs) };
+    const opts = provider.auth === 'bearer'
+      ? { apiKey: null, authToken: provider.api_key, ...common }
+      : { apiKey: provider.api_key, authToken: null, ...common };
+    client = wrapAnthropicClient(baseURL ? new Anthropic({ ...opts, baseURL }) : new Anthropic(opts), Anthropic);
+  }
+  client.endpoint = { service_id: provider.service_id, ...(baseURL ? { base_url: baseURL } : {}) };
+  return request => analyzeCommitWith(client, provider, request);
+}
+
+/** 分析一次:渲染 prompt → 调用一次 → 解析 {summary, actions, recommendation}。解析不了抛错（commitGate 改用模板分析）。
+ * 与引擎动作清单的对齐、模型不能降低风险由 engine.mergeAnalysis 负责。导出给测试注入客户端。// @a: anc-exec-commit-analyzer */
+export async function analyzeCommitWith(client: ProtocolClient, provider: Pick<CommitAnalyzerProvider, 'service_id' | 'model'>, request: CommitAnalysisRequest): Promise<CommitAnalysis> {
+  const resp = await client.create({
+    model: provider.model,
+    max_tokens: ANALYSIS_MAX_TOKENS,
+    system: COMMIT_ANALYSIS_SYSTEM,
+    messages: [{ role: 'user', content: renderCommitAnalysisPrompt(request) }],
+  });
+  const text = resp.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map(b => b.text).join('');
+  const unparsable = (): Error => new Error(`安全分析输出无法解析:${text.slice(0, 200)}`);
+  let parsed: unknown;
+  try {
+    const fenced = /```(?:ya?ml)?\s*\n([\s\S]*?)```/.exec(text);
+    // 后果说明常引用 body 原文（`content: notice`）,值里的冒号加空格炸 YAML——走解析点共用修复（第 7 处）
+    const raw = fenced ? fenced[1]! : text;
+    try { parsed = yamlLoad(raw); } catch { parsed = yamlLoad(repairYamlScalars(raw)); }
+  } catch { throw unparsable(); }
+  if (!parsed || typeof parsed !== 'object') throw unparsable();
+  const p = parsed as Record<string, unknown>;
+  if (!Array.isArray(p['actions'])) throw unparsable();
+  const actions: AnalyzedAction[] = (p['actions'] as unknown[]).filter(a => !!a && typeof a === 'object').map(a => {
+    const x = a as Record<string, unknown>;
+    return {
+      line: Number(x['line']),
+      callee: String(x['callee'] ?? ''),
+      category: String(x['category'] ?? ''),
+      cited_lines: Array.isArray(x['cited_lines']) ? (x['cited_lines'] as unknown[]).map(Number) : [],
+      verdict: x['verdict'] === 'safe' ? 'safe' : 'human',
+      consequence: String(x['consequence'] ?? ''),
+    };
+  });
+  return {
+    summary: typeof p['summary'] === 'string' ? p['summary'] : '',
+    actions,
+    recommendation: typeof p['recommendation'] === 'string' ? p['recommendation'] : '',
+    model: `${provider.service_id}/${provider.model}`,
+    source: 'model',
+  };
+}
+
+/** 安全分析 prompt:任务目标、背景章节、待提交步骤、本步之前的把关、带行号的 body、引擎动作清单。// @a: anc-exec-commit-analyzer */
+export function renderCommitAnalysisPrompt(request: CommitAnalysisRequest): string {
+  const fmt = (v: unknown): string => (typeof v === 'string' ? v : JSON.stringify(v));
+  const parts: string[] = [];
+  parts.push(`## 任务目标\n${request.goal || '（spec 没有写 Goal）'}`);
+  parts.push(`## 任务背景\n${request.narratives.length ? request.narratives.map(n => `### ${n.title}\n${n.content}`).join('\n\n') : '（任务卡没有背景章节）'}`);
+  parts.push(`## 待提交步骤\n- step_id % line = ${request.step.step_id}\n- summary % text = ${request.step.summary}\n- irreversible_action % text = ${request.step.irreversible_action || '（未单写,同步骤说明）'}`);
+  parts.push(`## 本步之前的把关\n${request.gate_fact}`);
+  parts.push(`## body 原文（每行开头是 spec 文件里的行号）\n\`\`\`\n${request.body_lines}\n\`\`\``);
+  parts.push(`## 引擎动作清单\n${request.actions.length
+    ? request.actions.map(a => {
+      const sub = Object.entries(a.args).map(([k, v]) => `  - ${k} = ${fmt(v)}`);
+      if (a.keep !== null) sub.push(`  - keep = ${a.keep}`);
+      return [`- 第 ${a.line} 行 ${a.callee}${HOPSCHEMA_SEP}${a.category}  # 引擎判定 ${a.risk}:${a.reason}`, ...sub].join('\n');
+    }).join('\n')
+    : '（引擎没有找到有副作用的调用）'}`);
+  return parts.join('\n\n');
 }
 
 /** 独立模式的驱动适配层：跑调度循环（init→next→execute→done）并直调 Anthropic API 完成单步推理与工具调用。见 [[step-dispatcher#^anc-struct-step-dispatcher]] */
@@ -228,7 +385,7 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
   //（与 callFrames 同哲学:挂起帧不销毁）。child_instance → {暂停载荷,子dispatcher,子引擎,形态}。
   // @a: anc-exec-parallel-hitl-queue-dispatch
   private pausedChildren = new Map<string, { pause: ExecutionPaused; dispatcher: StepDispatcher; engine: ExecutionEngine; kind: 'subtask' | 'call'; calleeId?: string }>();
-  getPausedChildren(): ReadonlyMap<string, { pause: ExecutionPaused }> { return this.pausedChildren; }
+  getPausedChildren(): ReadonlyMap<string, { pause: ExecutionPaused; engine: ExecutionEngine }> { return this.pausedChildren; }
 
   /** 串行 call 链投影（^anc-mcp-run-status-inflight call_chain 条,todo/0011①）：逐层下钻
    * activeCallChildren——每层记 call 步 id+子 spec id+子当前步;纯读账面零写动作。深度由
@@ -257,6 +414,9 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
     for (const c of this.activeCallChildren.values()) c.requestAbortCascade();
     for (const pc of this.pausedChildren.values()) { pc.dispatcher.requestAbortCascade(); pc.engine.removePausedCard(); void this.releaseChildToolView(pc.dispatcher); }
     this.pausedChildren.clear();
+    // 杀活连坐第四件——账记 killed：主线失败路径由 engine.killInflight 记,stop_run 级联此前不经它,
+    // 父 inflight 账上 paused 子残留（0156 B3）。无 scope=整棵树,与级联语义同。// @a: anc-exec-parallel-hitl-queue, anc-mcp-stop-run
+    this.engine.killInflight();
   }
 
   /** 并行子任务的工具面（todo/0112,^anc-exec-standalone-parallel 例外条款）：父工具面的派生视图——
@@ -277,13 +437,6 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
     if (typeof c === 'function') { try { await c.call(view); } catch { /* 尽力而为 */ } }
   }
 
-  // call 边界上游反馈组装（D41）：父层对本 call 步的重试反馈 + 本实例自己收到的上游反馈
-  // 逐层拼接（递归下传通路）。体量纪律（v0.7.1 作者两定:"2000 也太少"+"800 也太少,
-  // input context 很大根本用不完"）：当前打回意见零截断（子层作业的完整依据）;历史行单条
-  // 4000（dr16 实测工单全文最大 3101——切行即丢意见正文,体量靠条数封顶不靠切行）;
-  // 24000 累积保护线尾部截留（护栏防深递归逐层拼接无界增长,非单份工单预算——
-  // ≈6K tokens,对百 K 级窗口九牛一毛）。
-  // @a: anc-exec-l2c-retry-feedback
   // callee specPath 推导（仅 DirSpecProvider 有目录概念;其他 provider 返 null 子实例跳过
   // spec 目录基准——doc-ref 条款"specPath 缺席跳过本级"的合法降级）。// @a: anc-exec-doc-ref-resolve
   private resolveCalleeSpecPath(specId: string): string | null {
@@ -291,6 +444,13 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
     return sp instanceof DirSpecProvider ? sp.pathOf(specId) : null;
   }
 
+  // call 边界上游反馈组装（D41）：父层对本 call 步的重试反馈 + 本实例自己收到的上游反馈
+  // 逐层拼接（递归下传通路）。体量纪律（v0.7.1 作者两定:"2000 也太少"+"800 也太少,
+  // input context 很大根本用不完"）：当前打回意见零截断（子层作业的完整依据）;历史行单条
+  // 4000（dr16 实测工单全文最大 3101——切行即丢意见正文,体量靠条数封顶不靠切行）;
+  // 24000 累积保护线尾部截留（护栏防深递归逐层拼接无界增长,非单份工单预算——
+  // ≈6K tokens,对百 K 级窗口九牛一毛）。
+  // @a: anc-exec-l2c-retry-feedback
   private buildCallUpstreamFeedback(callStepId: string): string | undefined {
     return this.engine.buildUpstreamFeedbackPayload(callStepId);   // 公共体归 engine——复用模式 init_command 同经它,两模式载荷同构
   }
@@ -373,6 +533,16 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
     this.isWorker = config.worker === true;
   }
 
+  /** 子实例的 HostConfig：sandbox 深拷贝——子 initExecution 并入白名单不得改父对象（独立模式 callee 自带 Config.dirs
+   * 曾把目录原地推进父共享沙箱,review 探针实抓）。其余字段共享引用（provider / env 快照 / 路由不变）。
+   * 见 [[exec-engine#^anc-exec-dirs-grant]] 子实例与恢复条 // @a: anc-exec-dirs-grant */
+  private childHostConfig(): HostConfig {
+    const fs = this.hostConfig.sandbox.filesystem;
+    return { ...this.hostConfig, sandbox: { ...this.hostConfig.sandbox, filesystem: { ...fs,
+      read_access: { allowed: [...fs.read_access.allowed], denied: [...fs.read_access.denied], confirm_required: [...fs.read_access.confirm_required] },
+      ...(fs.write_access ? { write_access: { allowed: [...fs.write_access.allowed] } } : {}) } } };
+  }
+
   async runSpec(): Promise<RunResult> {
     // Tools 段装配后对账（^anc-exec-tools-reconcile 第二调用点——生产主通道:MCP standalone
     // 外部工具经 tool_registry 装配进 CompositeToolProvider,init 期 hostConfig.tool_provider
@@ -394,9 +564,10 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
   }
 
   /**
-   * 同实例恢复：注入 caller 对 confirm 暂停步骤的决策，继续执行循环。 // @a: anc-exec-resume-semantics
-   * confirm 是唯一的暂停点（鉴权/决策环节）：answer 作为步骤输出注入 → completeStep（audit hitl_decision）。
-   * commit 不暂停（授权在前序完成），故 resume 不处理 commit。
+   * 同实例恢复：注入 caller 对 confirm 暂停步骤的决策，继续执行循环。 // @a: anc-exec-resume-semantics, anc-exec-paused-resume
+   * confirm/ask：answer 作为步骤输出注入 → completeStep（audit hitl_decision）。
+   * commit 批准暂停（^anc-exec-commit-approval）：answer 忽略,只看批准账——已批准则回置步骤重派执行,
+   * 未批准则结构化拒收（COMMIT_NOT_APPROVED）不动状态。
    */
   async resume(stepId: string, answer: Record<string, unknown>, callPath?: string[], childInstance?: string): Promise<RunResult> {
     // 子实例 HITL 队列应答路由（U4b,0013——携 childInstance=答队列里那张卡）：取句柄二次占
@@ -427,13 +598,29 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
           return { status: 'paused', rejected: { code: 'CHILD_NOT_IN_QUEUE', message: childNotInQueueMessage(childInstance) } } as RunResult;
         }
       }
+      // 续跑即二次占名额：名额满时等空位,不超员（^anc-exec-parallel-hitl-queue-dispatch 应答路由条款,
+      // 与 launchParallelSubtask 同款;先等后摘卡——等待期间别的卡被答时本卡仍在队列里可见）
+      // @a: anc-exec-parallel-hitl-queue-dispatch
+      while (!this.engine.hasFreeSlot() && this.inflightPromises.size > 0) {
+        await Promise.race(this.inflightPromises.values());
+      }
       this.pausedChildren.delete(childInstance);
       this.engine.markInflightResumed(childInstance);
-      const childResult = await pc.dispatcher.resume(stepId, answer, callPath);
+      // 续跑期间把子的 promise 登进 inflightPromises——否则下一张卡的等空位循环看不到它
+      //（账上 inflight 但进程内无句柄,循环条件 size>0 不成立直接放行,照样超员）
+      const resumedRun = pc.dispatcher.resume(stepId, answer, callPath);
+      this.inflightPromises.set(childInstance, resumedRun.then(() => undefined, () => undefined));
+      let childResult: RunResult;
+      try { childResult = await resumedRun; } finally { this.inflightPromises.delete(childInstance); }
       if (childResult.rejected) {
         // 拒收:子未推进仍挂起——回队列回 paused 账,caller 修正重试（0016 同款不毁可恢复态）
         this.pausedChildren.set(childInstance, pc);
         this.engine.markInflightPaused(childInstance);
+        if (childResult.rejected.code === 'COMMIT_NOT_APPROVED') {
+          // 子 dispatcher 的报文只认得子实例 id——换成调用方手里的父实例 id 并带 child_instance,照抄即可批 // @a: anc-exec-commit-approval
+          const fp = pc.engine.checkCommitApproval(stepId)?.fingerprint ?? '';
+          return { ...childResult, rejected: { code: 'COMMIT_NOT_APPROVED', message: commitNotApprovedMessage(stepId, fp, this.engine.getInstanceId(), childInstance) } };
+        }
         return childResult;
       }
       this.cumulativeTokens += pc.dispatcher.getCumulativeTokens();
@@ -508,8 +695,21 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
       }
       return this.executionLoop();
     }
+    // commit 批准暂停的续跑:批准动作在 approve_commit,resume 只核账,不做安全分析。// @a: anc-exec-commit-approval
+    if (node.step_type === 'commit' && this.engine.getStepStates().get(stepId) === 'running') {
+      const approval = this.engine.checkCommitApproval(stepId);
+      if (approval && !approval.approved) {
+        return {
+          status: 'paused',
+          rejected: { code: 'COMMIT_NOT_APPROVED', message: commitNotApprovedMessage(stepId, approval.fingerprint, this.engine.getInstanceId()) },
+          cumulative_tokens: this.cumulativeTokens,
+        };
+      }
+      this.engine.resetCommitStepAfterApproval(stepId);
+      return this.executionLoop();
+    }
     if (node.step_type !== 'confirm' && node.step_type !== 'ask') {
-      throw new Error(`resume: step ${stepId} is ${node.step_type}, not a pausable step (only confirm/ask pause)`);
+      throw new Error(`resume: step ${stepId} is ${node.step_type}, not a pausable step (only confirm/ask/commit-approval pause)`);
     }
 
     // confirm/ask answer 规范化统一在 engine.completeStep（^anc-exec-confirm-answer / ^anc-exec-hitl-presentation，
@@ -565,6 +765,7 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
             maxToolIterations: this.maxToolIterations,
             ...(this.timeoutSeconds !== undefined ? { timeoutSeconds: this.timeoutSeconds } : {}),
           });
+          this.inflightDispatchers.set(childInstance, worker);   // 重建 worker 同入在飞表,父 abort 级联可达（0156 B2）// @a: anc-exec-parallel-abort
           const r = await worker.runSpec();
           this.cumulativeTokens += worker.getCumulativeTokens();
           this.engine.setCumulativeTokens(this.cumulativeTokens);
@@ -587,6 +788,7 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
           reap(childInstance, { failure: { specId: 'child', childInstanceId: childInstance, stepFailReasons: { rebuild: { reason: err instanceof Error ? err.message : String(err), fail_kind: 'error' } }, stepStates: { rebuild: 'failed' } } });
         } finally {
           if (!keepToolView) await this.releaseChildToolView(worker);   // 非暂停收场关（todo/0112）// @a: anc-exec-tool-composite
+          this.inflightDispatchers.delete(childInstance);   // @a: anc-exec-parallel-abort
           this.inflightPromises.delete(childInstance);
         }
       })();
@@ -731,9 +933,9 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
         const query = typeof result.lack_of_info === 'string' ? result.lack_of_info : step.summary;
         const fragments = await this.hostConfig.knowledge_provider.retrieve(query, 5);
         if (fragments.length > 0) {
-          const supplementary = fragments.map(f => f.content).join('\n\n');
-          step.context.knowledge_context = (step.context.knowledge_context ?? '')
-            + `\n\n### 补充检索（由步骤 ${step.step_id} 的 lack_of_info 触发）\n${supplementary}`;
+          // 条目化（与 formatKnowledgeContext 同形态,2026-10-12 语义审计 #12 同批——此前此处仍拼 ### 节头 + 裸正文）
+          const supplementary = fragments.map(f => formatKnowledgeEntry(f, 'supplementary', `（由步骤 ${step.step_id} 触发）`)).join('\n');
+          step.context.knowledge_context = (step.context.knowledge_context ? step.context.knowledge_context + '\n' : '') + supplementary;
           const retryResult = await this.execWithEmptyRetry(step);   // 全口径罩:补检索重发口同享空响应自救 // @a: anc-exec-output-empty-loud
           if (retryResult === 'paused') return;
           if (this.hasLackOfInfo(retryResult)) {
@@ -815,6 +1017,8 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
         this.engine.failStep(step.step_id, reason, 'deterministic');
         return;
       }
+      // 端点非正常停止（OUTPUT_ABORTED:）不在这里特判——普通 failStep,引擎按 TRANSIENT_PREFIXES 步级瞬态处理
+      // （首撞免扣、下轮带"换措辞"反馈重跑;^anc-exec-output-abort-loud,2026-10-08 review 修复从 deterministic 改定）// @a: anc-exec-output-abort-loud
       this.engine.failStep(step.step_id, reason);
     } finally {
       this.lastFinalTurn.delete(step.step_id);   // 成功/失败/暂停都清本步终轮记录 // @a: anc-exec-text-toolcall-hint
@@ -849,7 +1053,9 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
     // 与 spec 同目录的知识文档全找不到,11 个语义批 init 全灭;parallel subtask 跑的就是父的
     // spec,路径同一份）。// @a: anc-exec-doc-ref-resolve
     const parentSpecPathP = this.engine.getSpecPath();
-    const initResp = childEngine.initExecution(specSource, this.hostConfig, {
+    const initResp = childEngine.initExecution(specSource, this.childHostConfig(), {
+      ...(this.engine.getDeclaredDirs() ? { inheritedDirs: this.engine.getDeclaredDirs()! } : {}),   // 子实例继承父 dirs,不重展开不重核 // @a: anc-exec-dirs-grant
+      standaloneChild: true,   // 独立模式子引擎：子 spec 自带 dirs 忽略并 warn // @a: anc-exec-dirs-grant
       params: d.params_for_child,
       subtreeRoot: d.step_id,
       ...(parentSpecPathP ? { specPath: parentSpecPathP } : {}),
@@ -914,7 +1120,8 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
   }
 
   // call parallel 子实例启动（引擎已入账+快照入参——dispatch_ready 载荷；名额判定在引擎
-  // nextStep：满员吐 drain_wait 不入账）。子实例 paused（HITL）→ 判 failed 报 PARALLEL_HITL_TODO。
+  // nextStep：满员吐 drain_wait 不入账）。子实例 paused（HITL）→ 与 subtask 同款入 pausedChildren 队列等应答
+  // （U4b ^anc-exec-parallel-hitl-queue,不判 failed,名额不释放、收齐门照等）。
   // @a: anc-exec-gather, anc-exec-parallel-dispatch-model, anc-exec-parallel-reap-drain, anc-exec-parallel-kill
   private async launchParallelCallChild(d: DispatchReady): Promise<void> {
     if (this.inflightPromises.has(d.child_instance)) return;   // resume 重放已在跑
@@ -949,7 +1156,9 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
     // 子实例状态落盘随父（^anc-exec-call-child-persist）// @a: anc-exec-call-child-persist
     const parentDirPC = this.engine.getInstanceDir();
     const calleeSpecPathP = this.resolveCalleeSpecPath(specSource.spec_id);
-    const initResp = childEngine.initExecution(specSource.source, this.hostConfig, {
+    const initResp = childEngine.initExecution(specSource.source, this.childHostConfig(), {
+      ...(this.engine.getDeclaredDirs() ? { inheritedDirs: this.engine.getDeclaredDirs()! } : {}),   // 子实例继承父 dirs,不重展开不重核 // @a: anc-exec-dirs-grant
+      standaloneChild: true,   // 独立模式子引擎：子 spec 自带 dirs 忽略并 warn // @a: anc-exec-dirs-grant
       params: d.params_for_child,
       parentInstanceId: this.engine.getInstanceId(),
       callStepId: d.child_instance,
@@ -1136,7 +1345,9 @@ export class StepDispatcher { // @a: anc-struct-step-dispatcher
     const calleeSpecPathC = this.resolveCalleeSpecPath(specSource.spec_id);
     // 子实例 ID 与复用模式同一取名法（loop 里带轮次,各轮目录互不删除）;帧表仍按步骤号为键 // @a: anc-exec-call-child-iter-id
     const childInstanceC = this.engine.serialCallChildInstance(step.step_id);
-    const initResp = childEngine.initExecution(specSource.source, this.hostConfig, {
+    const initResp = childEngine.initExecution(specSource.source, this.childHostConfig(), {
+      ...(this.engine.getDeclaredDirs() ? { inheritedDirs: this.engine.getDeclaredDirs()! } : {}),   // 子实例继承父 dirs,不重展开不重核 // @a: anc-exec-dirs-grant
+      standaloneChild: true,   // 独立模式子引擎：子 spec 自带 dirs 忽略并 warn // @a: anc-exec-dirs-grant
       params,
       parentInstanceId: this.engine.getInstanceId(),
       callStepId: childInstanceC,
@@ -1287,7 +1498,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
         const guidanceNote = extendGuidance !== undefined
           ? `\n\n[展开续批指引（人已批继续）]\n${extendGuidance || '(人未给方向,按原契约继续)'}`
           : '';
-        const planMd = await this.pipelineCall(ctx, 'replan', ctx.instruction + ctxNote + guidanceNote);
+        const planMd = await this.pipelineCall(ctx, 'replan', ctx.instruction + ctxNote + guidanceNote, { stepId: subtaskId, stage: 'initial_plan' });
         const result = this.engine.submitReplan(subtaskId, flattenFragmentNumbering(planMd),
           extendGuidance !== undefined ? { extendExpansion: true } : undefined);
         // 授权消费=展开真放行才算（review 抓:原提交后立即清,携授权的计划被其它拒因拒〔生成物
@@ -1330,7 +1541,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
       const analysis = clipGate('失败分析', await this.pipelineCall(ctx, 'replan',
         `失败分析。基于下方失败信息与重试历史,输出结构化归因（不要生成新计划）：\n`
         + `归因: <数据问题|结构问题|工具问题 三选一>\n定位: <步骤号、为什么失败>\n证据: <步骤号/行号级一句话引用>\n`
-        + `产物纪律：禁止复制 spec 正文或失败记录原文进产物——素材在后续环节的输入里本就在场,抄写只会撑爆输出。`));
+        + `产物纪律：禁止复制 spec 正文或失败记录原文进产物——素材在后续环节的输入里本就在场,抄写只会撑爆输出。`, { stepId: subtaskId, stage: 'failure_analysis' }));
       // 策略段产编辑序列 JSON（D44 定型,作者三连裁定——去 keep〔未提及=保留,编辑器缺省语义〕/
       // 补 delete〔编辑代数完备:删换增三原子〕/insert 用 before 锚〔引用原 step_id 定位,与
       // <<EDIT k>> 序号对位各司其职〕。产物是纯改动清单,输出量正比改动量）
@@ -1338,7 +1549,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
         `改动策略。基于失败分析与 subtask 契约,输出编辑序列 JSON（不要生成步骤正文,不要围栏外文字）：\n`
         + `{"edits": [{"op": "replace", "step_id": "<原step_id>", "why": "<一句话>"}, {"op": "delete", "step_id": "<原step_id>", "why": "<一句话>"}, {"op": "insert", "before": "<插在哪个原step_id之前,末尾用END>", "intent": "<新步骤一句话意图>"}]}\n`
         + `只列要改动的步骤——没提到的步骤自动原样保留。删除必须给理由。\n`
-        + `\n[失败分析]\n${analysis}`));
+        + `\n[失败分析]\n${analysis}`, { stepId: subtaskId, stage: 'replan_strategy' }));
 
       // 定向编辑（D43/D44,作者定"对 spec 指定章节的改动应该有工具支持,而不是全量输出"）：
       // 生成段只产 replace/insert 项片段（<<EDIT k>> 按序对位）;replace 项机械附目标步原文
@@ -1361,21 +1572,21 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
               return `<<EDIT ${x.k}>> 新增（插在 ${x.e.before ?? 'END'} 之前）：${x.e.intent ?? ''}`;
             }).join('\n')
           + `\n素材纪律：步骤描述只写"做什么"与 I/O 声明——不内联大段业务素材/模板/清单正文;`
-          + `原步骤里经文件流转的内容保持文件引用形态（路径),不展开成正文。\n[改动策略]\n${strategy}`);
+          + `原步骤里经文件流转的内容保持文件引用形态（路径),不展开成正文。\n[改动策略]\n${strategy}`, { stepId: subtaskId, stage: 'generate' });
         const assembled = this.assembleReplanEdits(edits, patchMd, subtaskId);
         if (assembled !== null) {
           newStepsMd = assembled;
         } else {
           newStepsMd = await this.pipelineCall(ctx, 'replan',
             ctx.instruction + `\n\n严格按下方改动策略生成 children markdown（只输出步骤,无解释文字）。`
-            + `素材纪律：步骤描述只写"做什么"与 I/O 声明——不内联大段业务素材/模板/清单正文。\n[改动策略]\n${strategy}`);
+            + `素材纪律：步骤描述只写"做什么"与 I/O 声明——不内联大段业务素材/模板/清单正文。\n[改动策略]\n${strategy}`, { stepId: subtaskId, stage: 'generate' });
         }
       } else {
         newStepsMd = await this.pipelineCall(ctx, 'replan',
           ctx.instruction + `\n\n严格按下方改动策略生成 children markdown（只输出步骤,无解释文字）。`
           + `素材纪律：步骤描述只写"做什么"与 I/O 声明——不内联大段业务素材/模板/清单正文;`
           + `原步骤里经文件流转的内容保持文件引用形态（路径),不展开成正文;`
-          + `执行说明超过一两句的写"细则见 <文件路径>"。\n[改动策略]\n${strategy}`);
+          + `执行说明超过一两句的写"细则见 <文件路径>"。\n[改动策略]\n${strategy}`, { stepId: subtaskId, stage: 'generate' });
       }
 
       this.engine.getHopLog()?.recordStepMeta(subtaskId, {
@@ -1536,16 +1747,42 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     return serializeFragment(work);
   }
 
-  private async pipelineCall(ctx: AssembledContext, category: ExecutableStepType | 'replan', instruction: string): Promise<string> {
+  private async pipelineCall(ctx: AssembledContext, category: ExecutableStepType | 'replan', instruction: string,
+    obs?: { stepId: string; stage: 'initial_plan' | 'failure_analysis' | 'replan_strategy' | 'generate' }): Promise<string> {
     const { request, client } = this.buildApiRequest({ ...ctx, instruction }, category);
     const response = await this.callLlmWithRetry(request, client);
+    // 流水线段 llm 块（todo/0151,^anc-exec-adaptive-pipeline 观测条——此前三个 LLM 调用点里唯一不记的）：挂在触发 replan 的
+    // 容器步骤下（引擎进入 adaptive 时已 recordStepStart,不撞孤儿守卫）,字段与 parseStepOutput 主路径同款,段标签进 pipeline_stage。
+    // 在截断/中止判定之前记——那两种收尾恰是最需要日志的（记录点在事实边界,^anc-obs-record-at-boundary）。// @a: anc-exec-adaptive-pipeline, anc-obs-llm-response
+    if (obs) {
+      const hopLog = this.engine.getHopLog();
+      const uz = usageZeroWarning(response);   // @a: anc-exec-output-abort-loud
+      if (uz) hopLog?.recordWarn(obs.stepId, uz);
+      hopLog?.recordStepMeta(obs.stepId, {
+        llm: {
+          model: request.model, max_tokens: request.max_tokens,
+          stop_reason: response.stop_reason ?? 'absent',   // @a: anc-exec-output-abort-loud
+          thinking: this.thinkingSummary(request),
+          input_tokens: response.usage?.input_tokens, output_tokens: response.usage?.output_tokens,
+          cache_read_input_tokens: response.usage?.cache_read_input_tokens ?? null,
+          cache_creation_input_tokens: response.usage?.cache_creation_input_tokens ?? null,
+          ctx_input_total: (response.usage?.input_tokens ?? 0) + (response.usage?.cache_read_input_tokens ?? 0) + (response.usage?.cache_creation_input_tokens ?? 0),
+          prompt: this.serializeRequestPrompt(request),
+          response: this.extractTextContent(response),
+          pipeline_stage: obs.stage,
+        },
+        tokens_used: (response.usage?.input_tokens ?? 0) + (response.usage?.output_tokens ?? 0),
+      });
+    }
     // 截断闸同覆盖（二十五审对读抓:本路径绕过 parseStepOutput——截断的部分产出会被静默收进
     // replan 三段,正是"残值=毒值"要拦的形态）。// @a: anc-exec-output-truncation-loud
-    if (response.stop_reason === 'max_tokens') {
+    const stopClsR = classifyStopReason(response.stop_reason);   // @a: anc-exec-output-abort-loud
+    if (stopClsR === 'truncated') {
       const rumR = this.checkThinkingExhausted(response, 'replan-pipeline');   // @a: anc-exec-thinking-exhausted
       if (rumR) throw new Error(rumR);
       throw new Error(`OUTPUT_TRUNCATED: replan 流水线段输出被 max_tokens 掐断${truncationAdvice(request.max_tokens, response.usage?.output_tokens)}`);
     }
+    if (stopClsR === 'aborted') throw new Error(outputAbortedMessage(String(response.stop_reason), 'replan 流水线段'));
     const text = this.extractTextContent(response);
     if (!text.trim()) throw new Error('ADAPTIVE_PIPELINE_EMPTY: 流水线段产物为空');
     return text;
@@ -1588,12 +1825,15 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
         // 对无 body 步骤自回退 executeActWithTools 不适用 check——显式按 body 有无分派。
         // @a: anc-step-check-body
         const node = this.findStepInSpec(step.step_id) as CheckStep | null;
-        return node?.body ? this.executeActBody(step, false) : this.executeReasonOrCheck(step);
+        if (node?.body) return this.executeActBody(step, false);
+        // 无 body 的 check 与 reason 同一套工具面规则（^anc-exec-reason-tools 2026-10-11 todo/0161,
+        // 作者定"check 工具可能要读文件,留个口子"）:有声明走工具循环,零声明单发纯判定。// @a: anc-exec-reason-tools
+        return this.executeReason(step);
       }
       case 'act':
         return this.executeActBody(step, false);
-      case 'confirm':
-        return this.executeConfirm(step);
+      // confirm 不在此分派：引擎 nextStep 对 confirm 步直接产 paused（engine ^anc-exec-hitl-presentation）,
+      // dispatcher 永远收不到 confirm 的 step_ready——原 executeConfirm 是死码,2026-10-11 0156 B6 删（探针:四套件 1826 例零到达）。
       case 'commit':
         return this.executeCommit(step);
       case 'call':
@@ -1611,7 +1851,8 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
    * 退回单发零工具形态,不 fail-fast（reason 不同于 act:它总能纯推理产出,工具只是增强）。 */
   // @a: anc-exec-reason-tools
   private async executeReason(step: StepReady): Promise<Record<string, unknown>> {
-    const resolved = this.resolveModel('reason', step);
+    // reason 与无 body 的 check 共用（todo/0161）——模型类别按步骤类型解析,check 不借 reason 档 // @a: anc-exec-reason-tools
+    const resolved = this.resolveModel(step.step_type === 'check' ? 'check' : 'reason', step);
     const client = this.getClientForService(resolved.service_id);
     // 能力谓词分道（0020 批——不比对协议枚举名）:无工具循环能力的协议退回单发零工具
     if (!client.supportsToolLoop) return this.executeReasonOrCheck(step);
@@ -1665,10 +1906,13 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
 
     const hopLog = this.engine.getHopLog();
     if (hopLog) {
+      const uz = usageZeroWarning(response);   // @a: anc-exec-output-abort-loud
+      if (uz) hopLog.recordWarn(step.step_id, uz);
       // 独立模式执行内幕（LLM/tool）由 Dispatcher 写入 HopLog；复用模式归 caller 生态 // @a: anc-obs-mode-boundary
       hopLog.recordStepMeta(step.step_id, {
         llm: {
           model: request.model, max_tokens: request.max_tokens,   // 发送口抄实际上限（^anc-exec-output-budget 观测条——烧穿排障不再翻代码答"上限是多少"）
+          stop_reason: response.stop_reason ?? 'absent',   // 端点以什么原因收尾,缺席恒显式（todo/0121,^anc-exec-output-abort-loud 观测条①）// @a: anc-exec-output-abort-loud
           // thinking 实发参数摘要（发送口抄请求对象——0100 真机 probe 实撞:五级链装配后 hoplog 无 thinking 字段,probe '核 llm.request' 无从核）// @a: anc-exec-thinking-routing
           thinking: this.thinkingSummary(request),   // 关不掉端点的替换形态记 effort:low // @a: anc-exec-thinking-disable-unsupported
           input_tokens: response.usage?.input_tokens, output_tokens: response.usage?.output_tokens,
@@ -1768,12 +2012,12 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     const grantAll = grants.some(g => g.name === '*');
     const grantedNames = new Set(grants.map(g => g.name));
     const deniedNames = new Set((nodeForGrants?.tool_denies ?? []).map(d => d.name));
-    // reason 步 basic 不再豁免（^anc-exec-reason-tools 2026-09-18 修订——reason 全按声明,
-    // basic 与 special 同一文法;act/commit 的 basic 恒下发照旧）。// @a: anc-exec-reason-tools
-    const isReasonStep = nodeForGrants?.step_type === 'reason';
+    // reason / check 步 basic 不豁免（^anc-exec-reason-tools 2026-09-18 修订 reason 全按声明,
+    // 2026-10-11 todo/0161 check 并入同一套规则;basic 与 special 同一文法;act/commit 的 basic 恒下发照旧）。// @a: anc-exec-reason-tools
+    const isDeclaredOnlyStep = nodeForGrants?.step_type === 'reason' || nodeForGrants?.step_type === 'check';
     const tools = this.toolProvider.list()
       .filter(t => !deniedNames.has(t.name))   // 禁用优先——被禁件（含 basic 族）从清单整体剔除,LLM 根本看不到（^anc-step-tool-deny） // @a: anc-step-tool-deny
-      .filter(t => (!isReasonStep && (t.category ?? 'special') === 'basic') || grantAll || grantedNames.has(t.name))
+      .filter(t => (!isDeclaredOnlyStep && (t.category ?? 'special') === 'basic') || grantAll || grantedNames.has(t.name))
       // requires_commit 件在 list 期过滤（^anc-exec-reason-tools "不能 commit 写"——reason 与
       // act free 同一条不可逆红线:非 commit 步这类工具恒不下发,LLM 根本看不到;运行期
       // COMMIT_REQUIRED 拦截保留作纵深防御——LLM 可能幻觉调用未下发的工具名）。
@@ -1791,6 +2035,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     const node = this.findStepInSpec(step.step_id) as ActStep | null;
     const roleKind = step.step_type === 'commit' ? 'commit'
       : step.step_type === 'reason' ? 'reason'
+      : step.step_type === 'check' ? 'check'   // check 走工具循环时仍是判官档（todo/0161） // @a: anc-exec-reason-tools
       : actRoleKind(node?.free);
     // roleKind 传入渲染源——L4"本步操作指引"子块按档就地渲染（L0 恒定化半边,
     // ^anc-exec-l0-worldview-impl:free act 的 node_decl.step_type 是裸 'act',须传分道后的档名）。
@@ -1806,7 +2051,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     // 让 Config.models.commit/routing_rules[commit] 永不生效静默降配;共档回落在解析函数内。
     // reason 步同理按 'reason' 解析（^anc-exec-reason-tools——models.reason/routing_rules[reason]
     // 在工具循环形态下照常生效,不因换执行通道静默改按 act 档选模型）。
-    const category = step.step_type === 'commit' ? 'commit' : step.step_type === 'reason' ? 'reason' : 'act';
+    const category = step.step_type === 'commit' ? 'commit' : step.step_type === 'reason' ? 'reason' : step.step_type === 'check' ? 'check' : 'act';
     const resolved = this.resolveModel(category, step);
     const actClient = this.getClientForService(resolved.service_id);
     const maxOutputBudget = this.resolveMaxOutputTokens(resolved.service_id);   // 循环外解析一次（^anc-exec-output-budget）
@@ -1816,7 +2061,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     if (!actClient.supportsToolLoop && tools.length > 0) {
       throw new Error(`PROTOCOL_TOOL_LOOP_UNSUPPORTED: ${actClient.protocol} 协议 provider 不支持无 body 的 act 工具循环——给 act 写 hop_python body（工具走引擎白名单通道），或该步 @model 路由到 anthropic 协议 provider，或端点有 /v1/responses 面时 provider 改配 protocol: openai-responses`);
     }
-    const toolCallLog: Array<{ name: string; result: 'success' | 'failure'; at: string; args_preview?: string; result_preview?: string }> = [];
+    const toolCallLog: ToolCallRecord[] = [];   // @a: anc-obs-audit
     let lastSignature = '';   // 同签名断路器状态（^anc-exec-toolloop-repeat-break） // @a: anc-exec-toolloop-repeat-break
     let repeatCount = 0;
 
@@ -1886,9 +2131,11 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
       // reason/check 路径同源（^anc-obs-llm-response 2026-08-31 补:此前 act 路径零 prompt,
       // "L4 工具清单有没有真进请求"hoplog 无从对证;后续轮不重复——首轮已含组装上下文全文,
       // 逐轮全文是 20 倍冗余,增量可由 tool: 块与各轮 response 复原）。
+      { const uzL = usageZeroWarning(response); if (uzL) this.engine.getHopLog()?.recordWarn(step.step_id, uzL); }   // @a: anc-exec-output-abort-loud
       this.engine.getHopLog()?.recordStepMeta(step.step_id, {
         llm: {
           model: resolved.model, max_tokens: maxOutputBudget,   // 同上,工具循环轮 // @a: anc-exec-output-budget
+          stop_reason: response.stop_reason ?? 'absent',   // 同上,工具循环轮 // @a: anc-exec-output-abort-loud
           // thinking 实发摘要（工具循环轮,发送口抄 loopRequest——与单发路径同款观测,F1 修后本路径真有此参数）// @a: anc-exec-thinking-routing
           thinking: this.thinkingSummary(loopRequest),   // 同上 // @a: anc-exec-thinking-disable-unsupported
           input_tokens: response.usage?.input_tokens, output_tokens: response.usage?.output_tokens,
@@ -1906,6 +2153,9 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
       // 中间轮截断闸（二十六审对读抓:掐在工具参数生成中途时,半截参数会被直接拿去执行工具——
       // write 类工具吃残缺参数比收残值更危险;终轮无 tool_use 走 parseStepOutput 已有闸,
       // 本判补上带 tool_use 的轮次）。// @a: anc-exec-output-truncation-loud
+      if (classifyStopReason(response.stop_reason) === 'aborted') {   // 端点非正常停止——先于截断闸与工具执行判（^anc-exec-output-abort-loud）// @a: anc-exec-output-abort-loud
+        throw new Error(outputAbortedMessage(String(response.stop_reason), '工具循环轮,工具参数可能残缺,不执行'));
+      }
       if (hasToolUse && response.stop_reason === 'max_tokens') {
         // 反刍分流不设本站（^anc-exec-thinking-exhausted 二批删——本分支前提 hasToolUse=true,
         // 而分流函数对 tool_use 恒不碰〔产工具参数被掐非反刍〕,调用结构性空转;终轮无 tool_use
@@ -2014,10 +2264,12 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
           // 产 "[object Object]"，LLM 只能报"结果不可解析"（fact-check 实撞:工具全 success
           // 而 8 事实点全 not_found）。// @a: anc-exec-tool-result-render
           const rendered = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
+          // hint 旁注只在这一条 LLM 通道追加,机械通道（body/call 位）不见——^anc-exec-tool-result-render
+          const withHint = result.hint ? `${rendered}\n${result.hint}` : rendered;   // @a: anc-exec-tool-result-render
           toolResults.push({
             type: 'tool_result',
             tool_use_id: block.id,
-            content: result.success ? rendered : `Error: ${rendered}`,
+            content: result.success ? withHint : `Error: ${rendered}`,
             is_error: !result.success,
           });
         }
@@ -2128,33 +2380,10 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     return changed;
   }
 
-  private executeConfirm(step: StepReady): 'paused' { // @a: anc-exec-paused-resume
-    // confirm 暂停：构造 ExecutionPaused 信号，步骤保持 running 等待 caller 决策
-    const node = this.findStepInSpec(step.step_id) as ConfirmStep | null;
-    const options: { value: string; label: string }[] = node?.response_options
-      ?? [
-        { value: 'approve', label: '批准' },
-        { value: 'reject', label: '拒绝' },
-      ];
-    this.pendingPause = {
-      status: 'paused',
-      instance_id: this.engine.getInstanceId(),
-      step_id: step.step_id,
-      pause_reason: node?.require_human ? 'waiting_human' : 'confirm',
-      presented_data: {
-        summary: step.summary,
-        instruction: step.context.instruction,
-        context: step.context.inputs,
-      },
-      response_options: options,
-      work_zone: '',  // 独立模式不暴露 work_zone 给外部 driver, 见 anc-exec-work-zone
-    };
-    return 'paused';
-  }
-
-  // commit 直接执行不可逆操作——授权已在前序完成（环境预授权或前置 confirm），commit 本身不暂停鉴权
-  // 如同 git commit：能执行到此即已授权，直接执行写入。audit 记录执行内幕。 // @a: anc-step-commit
-  private async executeCommit(step: StepReady): Promise<Record<string, unknown>> {
+  // commit 执行不可逆操作——本次执行的核验在前序完成（P8:check final 或 confirm）;另有一道
+  // 批准关卡:账上已有这一步当前 body 的授权直接执行、不扫描;否则扫描,引擎判定全部动作安全记账后执行,再否则这个 commit 步骤第一次到达时做一次安全分析,有需要人确认的动作就暂停等人选（^anc-exec-commit-approval）。
+  // 批准后直接执行写入。audit 记录执行内幕与授权来源。 // @a: anc-step-commit, anc-exec-commit-approval
+  private async executeCommit(step: StepReady): Promise<Record<string, unknown> | 'paused'> {
     // commit 执行入口动态核（^anc-exec-advance-order-invariant 防线二,独立模式入口）：
     // 不可逆操作执行前核"文档序先于本步的全部步骤已终态"——存在 pending/running 即抛,
     // executeStep 的 catch 统一 failStep 带明细走升级链（与复用模式入口同一判定公共件,
@@ -2167,16 +2396,28 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
         throw new Error(`ADVANCE_ORDER_VIOLATION: commit 步 '${step.step_id}' 之前的步骤 '${blocking}' 尚未终态——不可逆操作拒绝越序执行（^anc-exec-advance-order-invariant）`);
       }
     }
+    // 批准关卡（独立模式,在执行序核之后、执行 body 之前）:转人工→落卡暂停,步骤保持 running;
+    // resume_run 见批准后回置 pending 重派到这里。// @a: anc-exec-commit-approval
+    const approval = await this.engine.commitGate(step.step_id);
+    if (approval && !approval.approved) {
+      const pause = this.engine.buildCommitApprovalPause(step.step_id, approval);
+      pause.work_zone = '';   // 独立模式不暴露 work_zone 给外部 driver, 见 anc-exec-work-zone
+      this.engine.writeCommitApprovalCard(pause);
+      this.pendingPause = pause;
+      return 'paused';
+    }
     const node = this.findStepInSpec(step.step_id) as CommitStep | null;
     const target = node?.irreversible_action ?? step.summary;
     const hopLog = this.engine.getHopLog();
     // commit 走 body 执行器（allowCommit=true 放行 requires_commit 工具）；无 body 回退 LLM 循环
     const result = await this.executeActBody(step, true);
     // commit_audit 审计性字段：记录不可逆操作执行 // @a: anc-obs-audit
-    // authorized_by='policy'：授权由前序流程（confirm 或环境策略）建立，非 commit 自身索取
+    // authorized_by 取批准关卡的来源:引擎判安全 engine_safe / 安全分析模型判安全 model_safe / 人批准 human / 这一步以后都通过 task_always;
+    // 关卡关闭（无账可记）记 policy——授权由前序流程（confirm 或环境策略）建立。// @a: anc-exec-commit-approval
+    const authorizedBy = commitAuthorizedBy(approval?.decided_by);   // 映射两模式共用（engine.ts）
     if (hopLog) {
       hopLog.recordStepMeta(step.step_id, {
-        commit_audit: { target, authorized_by: 'policy', result: 'success', at: new Date().toISOString() },
+        commit_audit: { target, authorized_by: authorizedBy, result: 'success', at: new Date().toISOString() },
       });
     }
     return result;
@@ -2190,13 +2431,14 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     if (!node?.body) {
       return this.executeActWithTools(step, allowCommit);   // fallback
     }
-    const toolCallLog: Array<{ name: string; result: 'success' | 'failure'; at: string; args_preview?: string; result_preview?: string }> = [];
+    const toolCallLog: ToolCallRecord[] = [];   // @a: anc-obs-audit
     const warnLog: string[] = [];
     const interp = new BodyInterpreter({
       inputs: step.context.inputs,
       toolProvider: this.toolProvider,
       allowCommit,
       workZone: this.engine.getWorkZone(),
+      specDir: this.engine.getSpecPath() ? dirname(resolve(this.engine.getSpecPath()!)) : undefined,   // @a: anc-exec-spec-dir
       toolCallLog,
       warnLog,
       hopEnv: this.hostConfig.hop_env,   // @a: anc-exec-body-hop-env
@@ -2405,6 +2647,9 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
       const attemptStart = Date.now();   // 本次尝试的发出时刻——客户端等待超时按耗时判（^anc-exec-api-retry）
       try {
         const resp = await c.create(request);
+        // 成功应答即记端点（端点身份缺席不记）——后续撞 ENOTFOUND/ECONNREFUSED 据此降级（hopissues/0118）
+        // @a: anc-exec-network-pause
+        if (c.endpoint) reachedEndpoints.add(endpointKey(c.endpoint));
         this.cumulativeTokens += resp.usage.input_tokens + resp.usage.output_tokens;
         this.engine.setCumulativeTokens(this.cumulativeTokens);  // 引擎随快照落盘,resume 回填 // @a: anc-exec-cost-guardrails
         this.trackCtxWatermark(resp);   // 水位观测在发送口事实边界（成功侧）// @a: anc-exec-ctx-watermark
@@ -2413,7 +2658,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
       } catch (err: unknown) {
         lastError = err;
 
-        const kind = c.classifyError(err);   // 类别分派（双协议归一）// @a: anc-exec-protocol-adapter
+        let kind = c.classifyError(err);   // 类别分派（双协议归一）// @a: anc-exec-protocol-adapter
 
         // temperature 拒收：剥除后立即重试（不计退避次数），并标记该 client 免传
         if (request.temperature !== undefined && kind === 'temperature_rejected') {
@@ -2429,6 +2674,14 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
         // 不退避不进网络暂停门,ENDPOINT_UNREACHABLE 前缀走 failStep 到 run failed;报文三样
         //（service_id/base_url/错误码）让用户一眼定位（hopissues/0106 hop3 真机:dead provider
         // 90s+ 永 running 静默挂死）。// @a: anc-exec-network-pause
+        // 例外（v0.41.0,hopissues/0118）:本进程里成功应答过的端点撞 ENOTFOUND/ECONNREFUSED——几秒前还在
+        // 应答,最可能是 DNS 闪断或服务重启,改归 network 档走下面的 6 次退避,耗尽抛 NETWORK_ERROR 进网络暂停。
+        // 判据是"成功应答过"不是"解析成功过":localhost:9999 这类从没应答过的配置错误照旧 fail-fast。
+        // @a: anc-exec-network-pause
+        if (kind === 'unreachable' && c.endpoint && reachedEndpoints.has(endpointKey(c.endpoint))) {
+          const code = unreachableCode(err);
+          if (code !== null && REACHED_DOWNGRADE_CODES.has(code)) kind = 'network';
+        }
         if (kind === 'unreachable') {
           throw new Error(this.endpointUnreachableMessage(err, c));
         }
@@ -2535,12 +2788,16 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     // 截断响亮失败——max_tokens 掐断的输出是残值（thinking 型可把预算全烧推理,text 空）,
     // 收下=毒值下游+重试反馈错误归因"你没产出"（buildtest 实撞:16384 全 thinking,node_result=""
     // 同因必死）。见 design ^anc-exec-output-truncation-loud。// @a: anc-exec-output-truncation-loud
-    if (response.stop_reason === 'max_tokens') {
+    const stopCls = classifyStopReason(response.stop_reason);   // @a: anc-exec-output-abort-loud
+    if (stopCls === 'truncated') {
       const rum = this.checkThinkingExhausted(response, 'parseStepOutput', stepId);   // @a: anc-exec-thinking-exhausted
       if (rum) throw new Error(rum);
       // 两个数+建议由 truncationAdvice 出（端点自带上限的分辨,todo/0113）;调用点不传实发值时数位写 ?
       throw new Error(`OUTPUT_TRUNCATED: 输出被 max_tokens 上限掐断，产出不完整不可用${truncationAdvice(requestedMaxTokens, response.usage?.output_tokens)}`);
     }
+    // 端点以别的原因停止（refusal / content_filter 等）——半截产出不收不进 SCHEMA 反馈,事务级确定性失败
+    // （todo/0121 实撞:疑似内容审核掐断的半截正文被 SCHEMA 闸误判,重试白烧）。
+    if (stopCls === 'aborted') throw new Error(outputAbortedMessage(String(response.stop_reason), '步骤终轮'));
     let text = this.extractTextContent(response);
     // 空响应响亮失败——正常收尾但全空的响应没有任何闸(doc-review 第十二次实撞:步 20 推定
     // 领域名 response="" output_tokens=9,单输出收空串 completed 零重试,空 domain_name 灌
@@ -2669,7 +2926,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
     return outputs;
   }
 
-  // 修复后的 yamlLoad（六处解析点共用一个串联修复原语——引号前缀 ^anc-exec-output-quoted-prefix-repair
+  // 修复后的 yamlLoad（七处解析点共用一个串联修复原语——引号前缀 ^anc-exec-output-quoted-prefix-repair
   // + 值里裸冒号 ^anc-exec-output-inline-colon-repair:直载失败→修复→重载;修复无命中原样抛,
   // 调用方 catch 走回退）。// @a: anc-exec-output-quoted-prefix-repair
   // @a: anc-exec-output-inline-colon-repair
@@ -2746,7 +3003,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
               const v = (doc4 as Record<string, unknown>)[name];
               // 收窄产物是结构值:序列化回 YAML 文本交下游 coerce(单输出契约恒返回 string,
               // coerce 层按声明类型 yamlLoad 成结构——与第三形态"字符串交 coerce 成结构"同径)
-              if (v !== null && v !== undefined) return yamlDump(v).trimEnd();
+              if (v !== null && v !== undefined) return yamlDump(v, YAML_DUMP_OPTS).trimEnd();   // @a: anc-config-yaml-dump-opts
             }
           } catch { /* 标签行起也非法 → 照旧含糊原样 */ }
         }
@@ -2987,7 +3244,7 @@ ${JSON.stringify(resp.expansion_context, null, 2)}${resp.missing_inputs?.length 
   }
 
   /** 步骤完成时把工具调用日志写入 HopLog（非空才写）。executeActWithTools / executeActBody 共用。 */
-  private flushToolLog(stepId: string, toolCallLog: Array<{ name: string; result: 'success' | 'failure'; at: string; args_preview?: string; result_preview?: string }>): void {
+  private flushToolLog(stepId: string, toolCallLog: ToolCallRecord[]): void {
     const hopLog = this.engine.getHopLog();
     if (hopLog && toolCallLog.length > 0) {
       hopLog.recordStepMeta(stepId, { tool: toolCallLog });

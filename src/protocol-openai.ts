@@ -10,6 +10,28 @@
 import OpenAI from 'openai';
 import type Anthropic from '@anthropic-ai/sdk';
 import { Agent } from 'undici';
+import { lookup as dnsLookup } from 'node:dns';
+import type { LookupAddress } from 'node:dns';
+
+/** chat 协议 finish_reason → IR stop_reason（设计 [[step-dispatcher#^anc-exec-output-abort-loud]] 映射条）：
+ * length→max_tokens、stop→end_turn、tool_calls/function_call→tool_use,其余（content_filter 等）原值透传,
+ * 缺席→end_turn。旧形态把非 length 一律映成 end_turn,content_filter 被吞成正常收尾。// @a: anc-exec-output-abort-loud */
+export function mapChatFinishReason(finishReason: string | null | undefined): Anthropic.Message['stop_reason'] {
+  if (!finishReason || finishReason === 'stop') return 'end_turn';
+  if (finishReason === 'length') return 'max_tokens';
+  if (finishReason === 'tool_calls' || finishReason === 'function_call') return 'tool_use';
+  return finishReason as Anthropic.Message['stop_reason'];
+}
+
+/** responses 协议 status/incomplete_details.reason → IR stop_reason：incomplete 且 max_output_tokens→max_tokens,
+ * 其他 incomplete 原因原值透传（如 content_filter）;completed 按有无工具调用映 tool_use/end_turn。// @a: anc-exec-output-abort-loud */
+export function mapResponsesStop(status: string | null | undefined, incompleteReason: string | null | undefined, hasToolCall: boolean): Anthropic.Message['stop_reason'] {
+  if (status === 'incomplete') {
+    if (!incompleteReason || incompleteReason === 'max_output_tokens') return 'max_tokens';
+    return incompleteReason as Anthropic.Message['stop_reason'];
+  }
+  return hasToolCall ? 'tool_use' : 'end_turn';
+}
 
 /** 非流式请求的等待上限（毫秒）——按输出上限换算:max(10min, ceil(maxTokens/128000×60min)),与 SDK
  * 预检估算同式。全库唯一一处公式:client 级上限（按 service 解析的输出上限）与单次请求上限
@@ -27,8 +49,59 @@ export function nonstreamingWaitMs(maxTokens: number): number { // @a: anc-exec-
  * fetchOptions 传入。extra 只给测试注入假连接（connect）用;同名时限键被 waitMs 盖掉。
  * 见 [[step-dispatcher#^anc-exec-nonstreaming-timeout]] "连接设置"段 */
 export function longWaitFetchOptions(waitMs: number, extra: Agent.Options = {}): { dispatcher: Agent } { // @a: anc-exec-nonstreaming-timeout
-  return { dispatcher: new Agent({ ...extra, headersTimeout: waitMs, bodyTimeout: waitMs }) };
+  // DNS 缓存接线（v0.41.0,hopissues/0118）:connect 缺席或是普通对象时把 sharedCachingLookup 合进去,
+  // 调用方自己在对象里给了 lookup 就用调用方的;connect 是函数（测试注入的连接器）时原样不动。
+  // 见 [[step-dispatcher#^anc-exec-network-pause]] "曾经连通过的端点"条 // @a: anc-exec-network-pause
+  const connect = typeof extra.connect === 'function'
+    ? extra.connect
+    : { lookup: sharedCachingLookup, ...(extra.connect ?? {}) };
+  return { dispatcher: new Agent({ ...extra, connect, headersTimeout: waitMs, bodyTimeout: waitMs }) };
 }
+
+/** 与 dns.lookup 同签名的查询函数类型（net/tls 的 connect 选项 lookup 收这个形态）。 */
+type LookupFn = (
+  hostname: string,
+  options: { all?: boolean; family?: number | string } | number | undefined,
+  callback: (err: NodeJS.ErrnoException | null, address?: string | LookupAddress[], family?: number) => void,
+) => void;
+
+// DNS 查询失败里"查不到/暂时查不到"的两个码——只有这两个才退回缓存,其他错误原样上抛
+const DNS_MISS_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN']);
+
+/** 带上次成功结果兜底的 DNS 查询构造（v0.41.0,hopissues/0118）——查询成功照常回调并按主机名记下全部
+ * 地址（覆盖旧值,恒为最近一次成功的结果）;查询报 ENOTFOUND/EAI_AGAIN 且该主机名成功解析过、且有符合
+ * family 的地址时,用缓存地址回调代替报错;其他错误原样回调。回调形态随调用方 options.all:true 回地址
+ * 数组,否则回第一个地址与 family。baseLookup 可注入（测试用）,缺省 dns.lookup。
+ * 见 [[step-dispatcher#^anc-exec-network-pause]] "曾经连通过的端点"条 HopTrait caching-lookup */
+export function createCachingLookup(baseLookup: LookupFn = dnsLookup as unknown as LookupFn): LookupFn { // @a: anc-exec-network-pause
+  const cache = new Map<string, LookupAddress[]>();
+  return (hostname, options, callback) => {
+    const opts = typeof options === 'object' && options !== null ? options : { family: options };
+    const famRaw = opts.family;
+    const family = famRaw === 'IPv4' ? 4 : famRaw === 'IPv6' ? 6 : Number(famRaw ?? 0) || 0;
+    // 写缓存恒以 all:true 形态取全部地址,与调用方本次要不要 all 无关
+    baseLookup(hostname, { ...opts, all: true }, (err, addresses) => {
+      let list: LookupAddress[] | undefined;
+      if (!err && Array.isArray(addresses)) {
+        cache.set(hostname, addresses);
+        list = addresses;
+      } else if (err && typeof err.code === 'string' && DNS_MISS_CODES.has(err.code)) {
+        const cached = cache.get(hostname);
+        const fitting = cached?.filter(a => family === 0 || a.family === family);
+        if (fitting && fitting.length > 0) list = fitting;
+      }
+      if (!list || list.length === 0) {
+        callback(err ?? Object.assign(new Error(`getaddrinfo ENOTFOUND ${hostname}`), { code: 'ENOTFOUND' }));
+        return;
+      }
+      if (opts.all === true) callback(null, list);
+      else callback(null, list[0].address, list[0].family);
+    });
+  };
+}
+
+/** 进程级单例——同一进程内所有 client（含 parallel worker 各自新建的 StepDispatcher 里的 client）共用一张缓存。 */
+const sharedCachingLookup = createCachingLookup(); // @a: anc-exec-network-pause
 
 // undici 等待超时错误码——等响应头超时 / 等数据超时。数据中途停满 bodyTimeout 时 SDK 抛的是裸
 // TypeError('terminated'),cause 才是 BodyTimeoutError;按 D61 文案兜底会被当网络断流。所以先顺着
@@ -43,16 +116,26 @@ const UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EPERM']);
 /** 判一个 LLM 调用错误是否"端点不可达"（连接被拒/主机名解析不到/系统策略拒绝连接）——两 classifyError 先于 network
  * 兜底调用;dispatcher 据此首次即抛 ENDPOINT_UNREACHABLE 不进网络暂停门。导出供测试直钉判据。 */
 export function isEndpointUnreachable(err: unknown): boolean { // @a: anc-exec-network-pause
+  return unreachableCode(err) !== null;
+}
+
+/** 取"端点不可达"错误码——沿 cause 链（6 层）与 undici 聚合错 errors[] 找到的第一个 UNREACHABLE_CODES
+ * 成员,找不到返回 null。isEndpointUnreachable 与 dispatcher 的"曾经连通过的端点"降级判定共用这一遍历
+ *（hopissues/0118,^anc-exec-network-pause "曾经连通过的端点"条 HopSop）。 */
+export function unreachableCode(err: unknown): string | null { // @a: anc-exec-network-pause
   let cur: unknown = err;
   for (let depth = 0; depth < 6 && cur != null && typeof cur === 'object'; depth++) {
     const code = (cur as { code?: unknown }).code;
-    if (typeof code === 'string' && UNREACHABLE_CODES.has(code)) return true;
+    if (typeof code === 'string' && UNREACHABLE_CODES.has(code)) return code;
     // undici 聚合错（AggregateError.errors[]——双栈地址各拒一次）
     const errs = (cur as { errors?: unknown }).errors;
-    if (Array.isArray(errs) && errs.some(e => typeof (e as { code?: unknown })?.code === 'string' && UNREACHABLE_CODES.has((e as { code: string }).code))) return true;
+    if (Array.isArray(errs)) {
+      const hit = errs.find(e => typeof (e as { code?: unknown })?.code === 'string' && UNREACHABLE_CODES.has((e as { code: string }).code));
+      if (hit) return (hit as { code: string }).code;
+    }
     cur = (cur as { cause?: unknown }).cause;
   }
-  return false;
+  return null;
 }
 
 function isUndiciWaitTimeout(err: unknown): boolean {
@@ -203,7 +286,7 @@ export function makeOpenAiClient(opts: OpenAiClientOpts): ProtocolClient { // @a
         role: 'assistant',
         model: resp.model,
         content: [{ type: 'text', text, citations: null }],
-        stop_reason: resp.choices[0]?.finish_reason === 'length' ? 'max_tokens' : 'end_turn',
+        stop_reason: mapChatFinishReason(resp.choices[0]?.finish_reason),   // 原值透传,content_filter 不再被吞成 end_turn（todo/0121）// @a: anc-exec-output-abort-loud
         stop_sequence: null,
         usage: {
           input_tokens: resp.usage?.prompt_tokens ?? 0,
@@ -380,9 +463,7 @@ export function makeOpenAiResponsesClient(opts: OpenAiClientOpts): ProtocolClien
         role: 'assistant',
         model: resp.model,
         content,
-        stop_reason: resp.status === 'incomplete' && resp.incomplete_details?.reason === 'max_output_tokens'
-          ? 'max_tokens'
-          : hasToolCall ? 'tool_use' : 'end_turn',
+        stop_reason: mapResponsesStop(resp.status, resp.incomplete_details?.reason, hasToolCall),   // 原值透传（todo/0121）// @a: anc-exec-output-abort-loud
         stop_sequence: null,
         usage: {
           // Responses usage 顶层同名直取（input_tokens/output_tokens 与 IR 零转名）;

@@ -32,9 +32,10 @@ const DOC_FACES: ReadonlyArray<{ label: string; relPath: string }> = [
   { label: '语法参考', relPath: 'docs/concepts/HopSpec V3语法参考.md' },
   { label: 'D10教程', relPath: 'docs/tutorials/D10-hop_python计算体.md' },
   { label: 'split-patterns', relPath: 'skills/hopbuild2/split-patterns.md' },
+  { label: 'hopbuild-primer', relPath: 'skills/hopbuild/hopbuild-primer.md' },   // 第五位（2026-10-07 spec_dir 批 review：primer 自称白名单全集随 npm 分发,漏 spec_dir）
 ];
 
-/** 单员在场判据（从宽,防形态误伤）：
+/** 单员在场判据（从宽,防形态误伤;2026-10-07 加斜杠并列形态——第五消费位 hopbuild v1 primer 用 `a/b/c` 一串反引号列名单）：
  *  - 一般员：全文存在反引号包裹、以函数名起头且名字边界干净的片段——
  *    `count`、`count(xs)`、`work_zone_path(rel?)` 都算在场；`strip` 不会被 `strip_fence`
  *    误判在场（名字后必须是非标识符字符）。
@@ -43,7 +44,10 @@ function memberPresent(docText: string, name: string): boolean {
   if (name === 'subprocess.run') return docText.includes('subprocess.run');
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp('`' + escaped + '(?![A-Za-z0-9_])[^`]*`');
-  return re.test(docText);
+  if (re.test(docText)) return true;
+  // 斜杠并列形态 `len/count/min/…`（hopbuild v1 primer 的写法）：名字夹在反引号串内、两侧是 / 或反引号
+  const slashRe = new RegExp('`[^`]*(?:^|/)' + escaped + '(?=/|`)[^`]*`');
+  return slashRe.test(docText);
 }
 
 // @v: anc-exec-builtins-doc-sync —— 内置函数名单与文档四消费位同源（名单唯一事实源=
@@ -53,7 +57,7 @@ describe('ACT_BUILTINS 与文档四消费位同源（^anc-exec-builtins-doc-sync
 
   it('前提自检：名单提取非空且含已知成员（正则失配时响亮,不静默空跑装绿）', () => {
     expect(names.length).toBeGreaterThanOrEqual(30);
-    for (const known of ['len', 'any', 'strip_fence', 'parse_json', 'work_zone_path', 'subprocess.run']) {
+    for (const known of ['len', 'any', 'strip_fence', 'parse_json', 'work_zone_path', 'spec_dir', 'subprocess.run']) {
       expect(names, `名单提取应含 ${known}`).toContain(known);
     }
   });

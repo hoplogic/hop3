@@ -716,22 +716,15 @@ exists 返回 JSON 文本,parse_json 取 .exists 才能当条件（4.1 同款,�
 - ← spec_text, skill_path, ref_assets
 + → generated_spec_path % line  # 最终写盘路径（body 纯计算产出）
 
-交付写盘,body 引擎直执零 LLM（把关在前:终审真人已审+意见闸放行+合理关指针闭合核已过）。**同名旧文件先备份再覆盖**：spec.md/source.md 目标位已有旧版时,先 move 成带时间戳的 .bak 留原目录再写新版——旧版可能被用户改过或正被引用,直接覆盖=替用户销毁其资产;交付说明点名备份文件名。**随包清单落盘**:参考性附属清单写 assets-manifest.txt 随 spec 同目录——pack 分发按它逐件带走。**对齐口径落盘**:对齐门历轮修订意见由 4.5 累积在 work_zone 口径日志（alignment-feedback-log.txt——放行时对齐门意见变量恒空,变量通道拿不到历轮意见,故走文件通道）,交付时该文件在场即把内容 append 到 skill 目录 alignment-notes.md——人拍过的板落成语料包资产,下轮构建步骤 2 恒判流程性读入,复犯即在对齐门自曝;日志缺席（一次过审零意见）不落盘不造空文件。**交付自包含**：source.md=构建基准纯副本（本体+流程性与混合附属同序拼接——终审与日后对读的物理基准,行号与构建期全局号同一套）;参考性附属（ref_assets 清单）产物落原 skill 目录时天然在场,pack 分发时按清单逐件带走——spec 步骤正文引用的每个包内路径交付目录里必须真有那个文件。落位规则:产物恒落输入文件同目录的 spec.md 与 source.md（目录级成套,**不依赖输入文件名**——原形态 replace(skill_path,"SKILL.md",...) 写死输入名假设,输入不叫 SKILL.md 时 replace 不命中,spec 与 source 落同一路径且 source 后写,成品 spec 被覆盖丢失;场景卡 0033 实测输入 topic-research-skill.md 实撞,产物全程只在 work_zone 抢救回）：
+交付写盘,body 引擎直执零 LLM（把关在前:终审真人已审+意见闸放行+合理关指针闭合核已过）。**同名旧文件覆盖前留存旧版本**：spec.md/source.md 目标位已有旧版时,write 覆盖前自动把旧版本复制进状态目录下的回收站（`.hopstate/recycle/<相对工作区的路径>.<时间戳>`,缺省每个文件保留最近 3 份,同一次运行里同一文件只留存一次）——旧版可能被用户改过或正被引用,直接覆盖等于替用户销毁其资产。body 不手写存在探测与改名备份,这一步的写盘动作全部落在 commit 安全分析的安全档,自动放行。**随包清单落盘**:参考性附属清单写 assets-manifest.txt 随 spec 同目录——pack 分发按它逐件带走。**对齐口径落盘**:对齐门历轮修订意见由 4.5 累积在 work_zone 口径日志（alignment-feedback-log.txt——放行时对齐门意见变量恒空,变量通道拿不到历轮意见,故走文件通道）,交付时该文件在场即把内容 append 到 skill 目录 alignment-notes.md——人拍过的板落成语料包资产,下轮构建步骤 2 恒判流程性读入,复犯即在对齐门自曝;日志缺席（一次过审零意见）不落盘不造空文件。**交付自包含**：source.md=构建基准纯副本（本体+流程性与混合附属同序拼接——终审与日后对读的物理基准,行号与构建期全局号同一套）;参考性附属（ref_assets 清单）产物落原 skill 目录时天然在场,pack 分发时按清单逐件带走——spec 步骤正文引用的每个包内路径交付目录里必须真有那个文件。落位规则:产物恒落输入文件同目录的 spec.md 与 source.md（目录级成套,**不依赖输入文件名**——原形态 replace(skill_path,"SKILL.md",...) 写死输入名假设,输入不叫 SKILL.md 时 replace 不命中,spec 与 source 落同一路径且 source 后写,成品 spec 被覆盖丢失;场景卡 0033 实测输入 topic-research-skill.md 实撞,产物全程只在 work_zone 抢救回）：
 > ```hop_python
 > parts = split(skill_path, "/")
 > n = len(parts) - 1
 > skill_dir = join([parts[i] for i in range(n)], "/")
 > prefix = skill_dir + "/" if skill_dir else ""
 > generated_spec_path = prefix + "spec.md"
-> stamp = replace(replace(str(now()), ":", ""), " ", "-")
-> spec_probe = parse_json(exists(path: generated_spec_path))
-> spec_bak = generated_spec_path + ".bak." + stamp if spec_probe.exists else ""
-> moved1 = move(from: generated_spec_path, to: spec_bak) if spec_probe.exists else ""
 > write(path: generated_spec_path, content: spec_text)
 > src_dest = prefix + "source.md"
-> src_probe = parse_json(exists(path: src_dest))
-> src_bak = src_dest + ".bak." + stamp if src_probe.exists else ""
-> moved2 = move(from: src_dest, to: src_bak) if src_probe.exists else ""
 > source_copy = read(path: work_zone_path("source.md"))
 > write(path: src_dest, content: source_copy)
 > manifest = join(ref_assets, "\n") if ref_assets else "（零参考性附属）"

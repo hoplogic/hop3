@@ -92,6 +92,13 @@ process.env['HOPJIT_MAX_OUTPUT_TOKENS'] ??= '65536';   // flash 实撞 32768 顶
 const base = process.env['ZENMUX_API_KEY'] && !process.env['DEEPSEEK_API_KEY']
   ? { base_url: 'https://zenmux.ai/api/anthropic' }
   : { base_url: 'https://api.deepseek.com/anthropic' };
+// commit 研判函数与 serve 同样注册,研判模型跟 commit 路由走（快档）——hopbuild2 第 7 步写盘 commit 真实经过一次研判
+// （design carrier-live-e2e ^anc-driver-live-e2e-primer commit 停点条,todo/0146）
+const { ExecutionEngine } = await import(join(ROOT, 'dist/engine.js'));
+const { makeCommitReviewer } = await import(join(ROOT, 'dist/dispatcher.js'));
+ExecutionEngine.setCommitReviewer(makeCommitReviewer({
+  service_id: 'ds', protocol: 'anthropic', base_url: base.base_url, api_key: process.env[KEY_ENV] ?? '', auth: null, model: FAST_MODEL,
+}));
 const core = new HopjitMcpCore({
   providers: [{ service_id: 'ds', protocol: 'anthropic', base_url: base.base_url, model: MODEL, api_key_env: KEY_ENV }],
   routing_rules: [
@@ -132,6 +139,17 @@ for (;;) {
   if (st.status === 'failed') { console.error('run failed:', JSON.stringify(st.failure).slice(0, 400)); process.exit(1); }
   if (st.status === 'paused') {
     const p = st.paused;
+    // commit 转人工:研判拿不准交人是设计行为,不判失败——批准本次(once)后续跑,研判理由打进日志供人读
+    if (p?.pause_reason === 'commit') {
+      const ctx = p.presented_data?.context ?? {};
+      console.log(`── paused@${p.step_id}（commit 转人工）研判: ${ctx.review?.verdict ?? '无'}（${ctx.review?.model ?? '-'}）理由: ${String(ctx.review?.reason ?? '').slice(0, 400)}`);
+      const ap = core.approveCommit({ instance_id: runId, step_id: p.step_id, fingerprint: ctx.fingerprint, scope: 'once', state_dir: stateDir });
+      if (ap.error) { console.error('approveCommit 拒:', JSON.stringify(ap.error)); process.exit(1); }
+      const rr = core.resumeRun(runId, p.step_id, {}, stateDir);
+      if (rr.error) { console.error('commit 批准后 resume 拒:', JSON.stringify(rr.error)); process.exit(1); }
+      await new Promise(res => setTimeout(res, 3000));
+      continue;
+    }
     const mk = ANSWER_BY_STEP[String(p?.step_id)];
     if (!mk) { console.error(`paused 在预答表外的步骤（step=${p?.step_id},reason=${p?.pause_reason}）——spec 暂停面变了,预答表须同步`); process.exit(1); }
     if (answered >= MAX_ANSWERS) { console.error(`注入超 ${MAX_ANSWERS} 次仍未终态（最后 step=${p?.step_id}）——疑呈审/终审死循环`); process.exit(1); }

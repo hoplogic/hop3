@@ -3,7 +3,7 @@
 	source: [[../design/hop-cli]]
 	source_id: hopjit-hop-cli
 	type: compact
-	last_sync: 2026-10-01T16:04+0800
+	last_sync: 2026-10-10T00:25+0800
 	note: 教程 1 cfuse 版——第三载体入口,与 CC/Codex 版平列（作者定 2026-09-19"cfuse 应该单独列出来,不能作为 codex 附庸"）。载体解析机制源=hop-cli ^anc-cli-carrier-home-resolution（cfuse-cc/cfuse-codex carrier 与环境变量自动适配）
 %%
 
@@ -34,11 +34,11 @@ cfuse 有三种会话形态：
 
 ```bash
 cd <你的项目>
-hopjit install-skill --demo            # 内置 cc 窗口
-hopjit install-skill --carrier codex --demo   # 内置 codex 窗口
+hopjit setup                   # 内置 cc 窗口
+hopjit setup --carrier codex   # 内置 codex 窗口
 ```
 
-为什么不用指定 cfuse：cfuse 启动内置引擎时会设好环境变量（内置 cc 设 `CLAUDE_CONFIG_DIR`、内置 codex 设 `CODEX_HOME`，都指向 `~/.codefuse/engine/` 下对应目录），install-skill 读这两个官方变量自动装到正确的家。
+为什么不用指定 cfuse：cfuse 启动内置引擎时会设好环境变量（内置 cc 设 `CLAUDE_CONFIG_DIR`、内置 codex 设 `CODEX_HOME`，都指向 `~/.codefuse/engine/` 下对应目录），setup 读这两个官方变量自动装到正确的家。
 
 ### 场景二：你在普通终端里预装（cfuse 还没启动）
 
@@ -46,8 +46,8 @@ hopjit install-skill --carrier codex --demo   # 内置 codex 窗口
 
 ```bash
 cd <你的项目>
-hopjit install-skill --carrier cfuse-cc --demo      # 装给 cfuse 内置 cc
-hopjit install-skill --carrier cfuse-codex --demo   # 装给 cfuse 内置 codex
+hopjit setup --carrier cfuse-cc      # 装给 cfuse 内置 cc
+hopjit setup --carrier cfuse-codex   # 装给 cfuse 内置 codex
 ```
 
 **不加 carrier 的后果**：会装到原生的 `~/.claude/`，cfuse 内置 cc 读不到——命令显示成功、cfuse 里却找不到 skill，这是最容易白忙一场的错法。
@@ -56,15 +56,15 @@ hopjit install-skill --carrier cfuse-codex --demo   # 装给 cfuse 内置 codex
 
 ```
 ~/.codefuse/engine/cc/skills/hopspec/     ← 驱动 skill（cfuse 内置 cc 读取）
-<项目根>/.claude/skills/demo-coffee-week/  ← demo 恒项目级（演示材料跟项目走）
+~/.hopjit/ants/demo-coffee-week/          ← 演示 HopAnt（与载体无关,两个窗口共用）
 ```
 
 ## 第 2 步：触发（与原生完全一致）
 
 打开 cfuse 的引擎窗口，触发方式跟原生一模一样：
 
-- 内置 cc 窗口：`/demo-coffee-week` 或 `/hop 跑 examples/data-quality.md`
-- 内置 codex 窗口：`$demo-coffee-week` 或 `$hop 跑 examples/data-quality.md`
+- 内置 cc 窗口：`/hop 跑 ~/.hopjit/ants/demo-coffee-week/demo-coffee-week.md` 或 `/hop 跑 examples/data-quality.md`
+- 内置 codex 窗口：`$hop 跑 ~/.hopjit/ants/demo-coffee-week/demo-coffee-week.md` 或 `$hop 跑 examples/data-quality.md`
 
 你看到的执行节奏也一样：参数确认 → 执行 → 介入点问人 → 终态报告。spec 文件三个载体通用，不用改一个字。
 
@@ -73,9 +73,9 @@ hopjit install-skill --carrier cfuse-codex --demo   # 装给 cfuse 内置 codex
 任务跑得久、想换轻量 API 模型省成本时，可以配独立模式（执行搬进 server 进程）。注册命令：
 
 ```bash
-hopjit install-skill                              # 内置窗口里跑,自动落对位置
-hopjit install-skill --carrier cfuse-cc           # 普通终端预配,显式声明
-hopjit install-skill --carrier cfuse-codex
+hopjit setup                              # 内置窗口里跑,自动落对位置
+hopjit setup --carrier cfuse-cc           # 普通终端预配,显式声明
+hopjit setup --carrier cfuse-codex
 ```
 
 落点规则与第 1 步同理：
@@ -83,7 +83,7 @@ hopjit install-skill --carrier cfuse-codex
 - **cfuse 内置 cc**：写项目根 `.mcp.json`（与原生 CC 完全一致——cfuse-cc 是 CC 套壳，项目级注册两边通用）；
 - **cfuse 内置 codex**：写 `~/.codefuse/engine/codex/config.toml`（**不是** `~/.codex/config.toml`——普通终端预配时尤其注意，写错文件 cfuse 读不到）。
 
-配置详情（providers/凭证/模型分档）见 `USAGE.md` §6——cfuse 两段专门说明就在 Claude Code 与 Codex 注册格式之后。
+配置详情（providers/凭证/模型分档）见 `USAGE.md` §4（含三载体 MCP server 注册文件的落点）。
 
 ## 常见问题
 

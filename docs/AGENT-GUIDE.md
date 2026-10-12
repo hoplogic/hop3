@@ -3,7 +3,7 @@
 	source: [[../README]]
 	source_id: hoplogic-readme
 	type: extend
-	last_sync: 2026-10-02T02:40+0800
+	last_sync: 2026-10-10T00:25+0800
 	note: 给 AI coding agent（Claude Code / Codex / opencode 等）读的使用说明——读者是替用户干活的 agent 而不是人。只讲 agent 要做的事与要守的边界,原理与教学归 README 与教程;正文零内部代号。
 %%
 
@@ -13,21 +13,26 @@
 
 ## 一、这是什么（一段话）
 
-HOP 是给 LLM agent 用的任务规约语言加执行引擎。用户或你把一件多步骤的活写成一份 markdown 格式的规约（HopSpec），引擎（HopJIT，npm 包 `@hoplogic/hopjit`）按步执行并强制三件事：**步骤顺序不乱、核验步不能跳、进度有账可查，对话断了活不死**。它采用"探索-核验-提交"范式：可逆的探索步放手让你做，每段结果过一道带完整上下文的核验，不可逆的提交动作只有核验通过才许执行。对你的直接好处是：用户不必再逐条审批你的每个命令，审批由规约里的核验策略承担；对用户的好处是：注意力只花在少数标了"需要确认"的关键点上。
+HOP 是给 LLM agent 用的任务规约语言加执行引擎。用户或你把一件多步骤的活写成一份 markdown 格式的规约（HopSpec），引擎（HopJIT，npm 包 `@hoplogic/hopjit`）按步执行并强制四件事：**步骤顺序不乱、核验步不能跳、进度有账可查，对话断了活不死**。它采用"探索-核验-提交"范式：可逆的探索步放手让你做，每段结果过一道带完整上下文的核验，不可逆的提交动作只有核验通过才许执行。对你的直接好处是：用户不必再逐条审批你的每个命令，审批由规约里的核验策略承担；对用户的好处是：注意力只花在少数标了"需要确认"的关键点上。
 
 缺省模式叫复用模式——**你就是推理引擎**，HopJIT 只管流控，不需要任何 API key。另有独立模式（引擎自己调模型 API 跑完整份规约），用户明说"走 MCP"时才用。
 
-## 二、安装（一条命令，幂等）
+## 二、安装（两条命令，可重复运行）
 
 用户说"装一下 hop"时，你照下面做，不用问额外问题：
 
 ```bash
 npm install -g @hoplogic/hopjit
+hopjit setup
 ```
 
-装包时的 postinstall 钩子会自动探测本机装了哪些载体（Claude Code / Codex / opencode，判据是各自的配置目录在不在），对探到的每一个跑一遍 `hopjit install-skill`。npm 缺省不显示钩子输出；想看它做了什么，装完跑 `hopjit install-skill` 一次（幂等，已装的不动，输出里 `carriers` 字段是探到的载体清单）。钩子在四种情况下不动手只打一行提示：`HOPJIT_SKIP_SKILL=1`、`CI` 环境、`sudo` 全局装、源码仓自身装依赖——这时你手动跑 `hopjit install-skill` 即可；要指定载体加 `--carrier codex|opencode`。
+`hopjit setup` 自动探测本机装了哪些载体（Claude Code / Codex / opencode，判据是各自的配置目录在不在），给探到的每一个装上 skill 并注册 hopjit MCP server。它是幂等的：已装的不动，重复跑无害；输出里 `carriers` 字段是探到的载体清单。要指定载体加 `--carrier codex|opencode`。
 
-`install-skill` 做了三件事，装完请把这三件事用一两句话告诉用户：
+第二条命令不能省。包里**没有** postinstall 钩子（2026-10-09 起撤掉：npm 12 默认拦截安装脚本，钩子多数时候不执行，留着只多一段 npm 警告；且 npm 官方立场是安装脚本只该做目标机编译，不该改用户的 agent 目录）。装 skill 只有 `hopjit setup` 一个入口。
+
+漏跑了也有兜底：用户下一次敲任何 `hopjit` 子命令，hopjit 会探测本机载体，发现 /hop 没装或版本落后就在 stderr 打一行"运行 hopjit setup"（只提示不动手；`HOPJIT_SKIP_SKILL=1` 静音；`--json` 的 stdout 不受影响）。看到这行就替用户跑 `hopjit setup`。
+
+`setup` 做了三件事，装完请把这三件事用一两句话告诉用户：
 
 1. 把驱动 skill 装进载体的 skill 目录（Claude Code 是用户级 `~/.claude/skills/`，装一次所有项目可用）。**用户菜单里只会出现 `/hop` 一个入口**，其余几件（执行协议、翻译器、修订器、MCP 薄壳）装在盘上由 /hop 按需分派，用户不直接敲。
 2. 把 hopjit 的 MCP server 注册进载体，并生成 `~/.hopjit/config.yaml` 配置骨架。复用模式不需要动它；用户要走独立模式时再填模型凭证。
@@ -35,7 +40,9 @@ npm install -g @hoplogic/hopjit
 
 装完让用户**重启载体或新开一个会话**，`/hop` 才会出现在 skill 列表里。命令输出里的 `mcp_note` / `permission_note` 两个字段如果有内容，原样转告用户——那是注册或放行没做成时的手工补救指引。
 
-需要演示时加 `--demo`：装一个 `/coffee-week` 具名 skill，带演示数据，用户在对话里说 `/coffee-week` 就能收到一份咖啡店周报，30 秒看懂这套东西在干什么。
+setup 同时缺省装三个演示 HopAnt 到 `~/.hopjit/ants/`（`demo-coffee-week` / `demo-fact-check` / `demo-rename`，入口 spec 与演示数据同目录，不进 skill 菜单）。用户想看演示时，对 /hop 说"跑 ~/.hopjit/ants/demo-coffee-week/demo-coffee-week.md"就能收到一份咖啡店周报，30 秒看懂这套东西在干什么。命令输出里的 `demo_note` 字段有内容时（某件已装过被跳过、或安装失败），原样转告用户。
+
+**装完顺手问一句**：包里有一份 `docs/agent-instructions-template.md`，是一段可以贴进项目常驻指令文件（Claude Code 的 `CLAUDE.md`、Codex / opencode 的 `AGENTS.md`）的 HOP 使用指令——贴了之后项目里的 agent 每次开会话都知道"这个项目用 hop、什么活走 /hop、三条边界"，不再靠 skill 描述碰运气匹配。问用户要不要贴；**用户同意才把围栏里那段追加到文件末尾**，不同意就不动，文件里已经有同样一段就不重复贴。这是用户的常驻指令面，不是你该自动改的东西。
 
 ## 三、装完以后你怎么用
 
@@ -69,13 +76,15 @@ Codex 里对应的入口是 `$hop`，opencode 里是隐式触发（直接说"用
 
 | 路径 | 是什么 | 什么时候读 |
 |---|---|---|
-| `README.md` `USAGE.md` | 项目入口与一页速查 | 装完先看一眼 |
+| `README.md` | 项目入口与 /hop 用法 | 装完先看一眼 |
+| `USAGE.md` | `hopjit` 命令行手册：/hop 话语→命令→MCP 工具对应表、命令分组速查 | hopjit MCP 工具不可用时按它命令行回退 |
 | `docs/AGENT-GUIDE.md` | 本页 | — |
-| `driver/` | 各载体的 skill 源（`install-skill` 就是把它展开到载体目录） | 一般不用直接读，装好的 skill 副本就是它 |
+| `docs/agent-instructions-template.md` | 贴进项目 CLAUDE.md / AGENTS.md 的 HOP 指令模板（≤10 行） | 装完问用户要不要贴（第二节末尾） |
+| `driver/` | 各载体的 skill 源（`setup` 就是把它展开到载体目录） | 一般不用直接读，装好的 skill 副本就是它 |
 | `docs/concepts/HopSpec V3语法参考.md` | 语言面唯一权威：步骤类型、数据流、loop/case/for-each、类型系统、中英文关键词对照 | `/hop` 写复杂结构拿不准时、`hopjit validate` 报了规则代号时按节查 |
 | `docs/concepts/HopSpec V3核心规范.md` | 执行语义权威（为什么这么设计） | 想弄懂机制时读，日常写 spec 不需要 |
 | `docs/concepts/HopSop标准作业流程.md` | 给人读的流程写法（容器、编号、流控、最小形式），HopSpec 的前身——教程 02 的地基 | 用户先要一份人读流程、之后再升格成 spec 时 |
-| `docs/concepts/HopType体系.md` `HopAnt概念-双态组件模型.md` | 类型与组合体系（struct / impl / HopTrait）及其上位的组件模型 | 翻译 skill 要声明工具契约、或 spec 之间要组合调用时 |
+| `docs/concepts/HopType体系.md` `HopAnt概念.md` | 类型与组合体系（struct / impl / HopTrait）及其上位的组件模型 | 翻译 skill 要声明工具契约、或 spec 之间要组合调用时 |
 | `docs/concepts/` 其余 10 份 | 配套HopJIT运行时能力、错误模型、五份扩展（事务与补偿 / 可观测性与YAMLL日志 / 有序思考与渐进固化 / Python语法沙箱 / 模型变速箱适配）、Prompt组装参考、prompt-author、核心创新 | 按篇名对号：失败怎么处理看错误模型，hop_python 能写什么看 Python语法沙箱，弱模型适配看变速箱 |
 | `docs/tutorials/` | 用户系列 00-10（跑通第一个 spec、读懂 spec、探索与提交、日常活交给 hop、并行、实战、翻译 skill、接 MCP、subtask free、钉钉通知）加 D10（hop_python 计算体——写 act body 必读） | 用户问"怎么做某事"时按篇名找；`00-新人导读.md` 是分流页 |
 | `docs/reference/配置参考.md` | 独立模式 `~/.hopjit/config.yaml` 全字段 | 用户要走独立模式、配模型分档或注册工具时 |

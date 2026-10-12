@@ -89,7 +89,7 @@ for (const f of files) {
   ];
   for (const t of targets) {
     if (t.startsWith('http')) continue;
-    const full = resolve(dirname(f), t);
+    const full = resolve(dirname(f), decodeURIComponent(t));   // 链接可用 %20 写空格（中文 README 原文即如此,GitHub 同样解析）——判在场前先解码,否则假死链
     if (!existsSync(full)) problems.push(`${rel}: 死链 ${t}`);
   }
 }

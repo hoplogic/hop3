@@ -14,7 +14,7 @@ user-invocable: false
 %% @trace
 	id: hopbuild2-skill
 	type: intent
-	last_sync: 2026-10-01T15:45+0800
+	last_sync: 2026-10-06T20:29+0800
 	note: hopbuild2 薄包装壳（design ^anc-build-layout2,2026-08-25 作者定"构建成完整 skill"）——本 skill 是 hopspec skill:流程权威在同目录 spec.md,经 /hopspec 驱动引擎强制执行;判定与结构知识在 split-node/split-structure/split-patterns 三件（call 递归 callee 与 doc-ref 注入源,分发时同目录随行）。壳自身零流程知识,只做参数收集与移交。
 %%
 
@@ -66,4 +66,4 @@ MCP 注册时（工具面可见 `mcp__hopjit__*`）走 standalone 薄协议：`s
 
 执行失败/中止时如实报告，不写盘不留半成品。
 
-**前置**：hopspec skill 已安装（缺席时提示用户先 `hopjit install-skill`）。本目录五文件（SKILL.md/spec.md/split-node.md/split-structure.md/split-patterns.md）必须同目录随行——spec 经 call 按同目录寻址两个分拆器，经 doc-ref 按同目录读知识库。
+**前置**：hopspec skill 已安装（缺席时提示用户先 `hopjit setup`）。本目录五文件（SKILL.md/spec.md/split-node.md/split-structure.md/split-patterns.md）必须同目录随行——spec 经 call 按同目录寻址两个分拆器，经 doc-ref 按同目录读知识库。

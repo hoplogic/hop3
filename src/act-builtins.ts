@@ -8,6 +8,7 @@
 // @a: anc-rule-b2
 
 import { dump as yamlDump } from 'js-yaml';
+import { YAML_DUMP_OPTS } from './provider-types.js';   // @a: anc-config-yaml-dump-opts
 
 /** 内置函数条目：名字 + arity 上下界 + 实现体（parser B2 校验与 interpreter 执行共用）。 */
 export interface BuiltinFn {
@@ -25,7 +26,7 @@ function str(v: unknown): string {
   if (typeof v === 'string') return v;
   // 结构值（yaml 型变量等）序列化为 YAML 文本——概念 ^anc-type-yaml-structured 文本化条款
   //（String(obj) 产 "[object Object]" 是丢数据,三十六审探针实抓）。// @a: anc-type-yaml-structured
-  if (v !== null && typeof v === 'object') return yamlDump(v).trimEnd();
+  if (v !== null && typeof v === 'object') return yamlDump(v, YAML_DUMP_OPTS).trimEnd();   // @a: anc-config-yaml-dump-opts
   return String(v);
 }
 function elemTruthy(x: unknown): boolean {
@@ -163,15 +164,19 @@ const BUILTINS: BuiltinFn[] = [
   // 成员测试无 contains 函数：用 in / not in 运算符（Python 惯用形，2026-08-10 文法升格）
   // 实例上下文函数（白名单占位——真实现由 BodyInterpreter 按实例注入，见 act-body-interpreter）
   { name: 'work_zone_path', arity: { min: 0, max: 1 }, fn: () => {
-      throw new Error('work_zone_path 需要实例上下文——仅 act/commit body 内可用（case 条件不涉路径）');
+      throw new Error('work_zone_path 需要实例上下文——仅 act/check/commit body 内可用（case 条件不涉路径）');
+    } },
+  // spec_dir(rel?)：spec 文件所在目录下的路径——spec 自带脚本与数据的寻址（design/act-body.md ^anc-exec-spec-dir）// @a: anc-exec-spec-dir
+  { name: 'spec_dir', arity: { min: 0, max: 1 }, fn: () => {
+      throw new Error('spec_dir 需要实例上下文——仅 act/check/commit body 内可用（case 条件不涉路径）');
     } },
   // time 实例上下文内置（now/today）：白名单占位——真实现需 journal 记值保重放，
   // 在 BodyInterpreter 专路（design/act-body.md）。条件路径拒调。// @a: anc-exec-time-builtins
   { name: 'now', arity: { min: 0, max: 0 }, fn: () => {
-      throw new Error('now 需要实例上下文——仅 act/commit body 内可用（条件反复求值,时间不稳定）');
+      throw new Error('now 需要实例上下文——仅 act/check/commit body 内可用（条件反复求值,时间不稳定）');
     } },
   { name: 'today', arity: { min: 0, max: 0 }, fn: () => {
-      throw new Error('today 需要实例上下文——仅 act/commit body 内可用（条件反复求值,时间不稳定）');
+      throw new Error('today 需要实例上下文——仅 act/check/commit body 内可用（条件反复求值,时间不稳定）');
     } },
   // subprocess.run 命令行白名单调用（^anc-exec-subprocess-run,2026-08-29）：白名单占位——
   // 真实现在 BodyInterpreter 专路（spawnSync+cmdJournal 重放+sandbox.runtime.available 白名单）。

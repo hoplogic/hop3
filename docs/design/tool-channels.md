@@ -34,7 +34,7 @@
 
 | # | 通道 | 谁执行 | 接口形状 | 协议面 | 权威 |
 |---|---|---|---|---|---|
-| ① | **body 白名单内置** | 引擎（BodyInterpreter）纯计算 | hop_python 直接调用：`len(x)`/`split(s, ",")` 等 28 个 + `work_zone_path()` 实例上下文内置 | 无——不出进程 | [[act-body#^anc-exec-act-body-interp]]（白名单清单在 act-builtins.ts） |
+| ① | **body 白名单内置** | 引擎（BodyInterpreter）纯计算 | hop_python 直接调用：`len(x)`/`split(s, ",")` 等白名单纯函数 + `work_zone_path()`/`spec_dir()`/`now()`/`today()` 实例上下文内置（清单权威 src/act-builtins.ts,不在此数数） | 无——不出进程 | [[act-body#^anc-exec-act-body-interp]]（白名单清单在 act-builtins.ts） |
 | ② | **body 非内置工具·独立模式** | 引擎直调宿主注入的 ToolProvider | `ToolProvider.execute(tool_name, tool_args) → ToolResult`——body 撞到非内置调用名即经 provider 执行（独立模式 dispatcher 自持全量 provider 全部直执;provider 外的调用名=TOOL_EXEC_ERROR 未知工具,封闭名单不外发——2026-09-06 review 抓本行曾被误刷进③的复用模式分派判据文字后改回） | 无 LLM 参与 | [[shared-providers#^anc-provider-tool]] |
 | ③ | **body 非内置工具·复用模式** | caller（CC/Codex） | 引擎吐 `tool_request` 介入点响应（`{tool, args, tool_call_seq, output_path, work_zone}`，args 已求值、超阈值 $file 卸载〔2026-09-04〕），caller 执行后 `--tool-result` 回注；结果入 tool_journal，**跨进程确定性重放**（重放撞第 N 个调用查 journal[N-1]，有则代入,无则按分派判据处置(引擎 provider 命中直执入账,不命中再吐——2026-09-05 执行主体原则;直执面=内置∪hopjit.yaml 注册件,0076 补齐注入 2026-09-06)） | CLI JSON 往返 | [[exec-engine#^anc-exec-tool-request]] |
 | ④ | **无 body act 的 LLM 工具循环** | LLM 自选工具（executeActWithTools） | Anthropic tool_use/tool_result 消息往返（IR）,ToolProvider.list() 注入 tools 数组，maxToolIterations 封顶 | **anthropic 与 openai-responses 两协议承载**（responses 的 function_call/function_call_output typed items 与 IR 一一映射,0020 批实装）;openai-chat 协议 provider 入口 fail-fast（PROTOCOL_TOOL_LOOP_UNSUPPORTED 指路,含"改配 openai-responses"选项） | [[step-dispatcher#^anc-exec-protocol-adapter]]（工具循环协议边界）+ dispatcher.ts executeActWithTools |

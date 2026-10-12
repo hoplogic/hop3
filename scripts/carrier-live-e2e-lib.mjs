@@ -28,8 +28,42 @@ export const SCENARIO_TIMEOUT_MS = {
   'cc:anchor-audit': 40 * 60 * 1000,   // 2026-08-13 20→40min：审计对象是固定 fixture(28K)+固定 spec(34步),业务量不随库涨——昨日 pass 全程 56 块/13.3min 已贴 20min 线(余量仅 33%),今日同业务 53 块/18.6min 被掐(每块慢 40%,API 时延波动——'speed:standard';输出量正常 1.8MB/最大单行 17KB,$file 卸载在位)。预算须罩住时延波动,非业务变重
 };
 const MAX_CAPTURE_BYTES = 32 * 1024 * 1024;
-const HOP_WRITE_RE = /\bhopjit\b.*\b(run|submit_and_fetch_next|join_parallel|resume)\b|dist\/cli\.js.*\b(run|submit_and_fetch_next|join_parallel|resume)\b/;
+const HOP_WRITE_RE = /\bhopjit\b.*\b(run|submit_and_fetch_next|reap_and_fetch_next|resume)\b|dist\/cli\.js.*\b(run|submit_and_fetch_next|reap_and_fetch_next|resume)\b/;
 const HOP_RUN_RE = /\bhopjit\b.*\brun\b|dist\/cli\.js.*\brun\b/;
+// 复用模式驱动工具里会推进 run 的四个（与 HOP_WRITE_RE 的四个子命令一一对应）
+const HOP_WRITE_TOOLS = new Set(['run', 'submit_and_fetch_next', 'reap_and_fetch_next', 'resume']);
+
+// HopJIT 写动作两种形态归一（design ^anc-driver-live-e2e-events「写动作两种形态」）：
+// 命令形态与 MCP 驱动工具形态是同一套引擎调用,断言只认命令形态会把走工具的正常委派判红
+// （2026-10-08 live:core cc:delegated 实撞）。isAnswer 标介入点注入,isHelp 标只读探测。
+function hopWriteActions(normalized) {
+  const actions = [];
+  for (const event of normalized) {
+    if (event.type === 'command' && HOP_WRITE_RE.test(event.command)) {
+      actions.push({
+        actor: event.actor,
+        isRun: HOP_RUN_RE.test(event.command),
+        isAnswer: /--answer\b/.test(event.command),
+        isHelp: /--help\b/.test(event.command),
+        label: event.command,
+      });
+    } else if (event.type === 'mcp_tool' && event.server.includes('hopjit') && HOP_WRITE_TOOLS.has(event.tool)) {
+      actions.push({
+        actor: event.actor,
+        isRun: event.tool === 'run',
+        isAnswer: event.args?.answer !== undefined,
+        isHelp: false,
+        label: `mcp__${event.server}__${event.tool}`,
+      });
+    }
+  }
+  return actions;
+}
+
+// 任一 hopjit 工具调用带 answer 字段（复用 submit 与独立 resume_run 同判）——paused 场景的替答判据
+function hasMcpAnswer(normalized) {
+  return normalized.some(event => event.type === 'mcp_tool' && event.server.includes('hopjit') && event.args?.answer !== undefined);
+}
 const SECRET_ENV_CANDIDATES = {
   'cc:delegated': ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY'],
   'cc:repair': ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY'],
@@ -150,6 +184,7 @@ export function normalizeClaudeEvents(events) {
           actor: actorFromClaudeNode(node, root),
           server: String(parts[1] ?? ''),
           tool: parts.slice(2).join('__'),
+          args: node.input && typeof node.input === 'object' ? node.input : {},
         });
       }
 
@@ -228,6 +263,7 @@ export function normalizeCodexEvents(events) {
         actor: codexActor(item, rootThreadId),
         server: String(item.server ?? ''),
         tool: String(item.tool ?? ''),
+        args: item.arguments && typeof item.arguments === 'object' ? item.arguments : {},
       });
     }
 
@@ -439,14 +475,18 @@ export function createIsolatedWorkspace(carrier) {
   cpSync(join(PROJECT_ROOT, 'examples', 'e2e-failure'), join(workspace, 'examples', 'e2e-failure'), { recursive: true });
   // cc:call 正向场景:教学样例对(父调子,同目录寻址)
   cpSync(join(PROJECT_ROOT, 'examples', 'syntax', 'call-parent-summarize.md'), join(workspace, 'examples', 'syntax', 'call-parent-summarize.md'));
-  cpSync(join(PROJECT_ROOT, 'examples', 'syntax', 'call-child-normalize.md'), join(workspace, 'examples', 'syntax', 'call-child-normalize.md'));
+  cpSync(join(PROJECT_ROOT, 'examples', 'syntax', 'text-normalize.md'), join(workspace, 'examples', 'syntax', 'text-normalize.md'));
   // cc:anchor-audit 场景素材直接取 scripts/audit/ 活工具（2026-08-09 作者纠正：语法演进时
   // 工具和样例必须跟着变，"冻结拷贝"是错误解读——测试判据靠断言锁不变量（产物位置/批文件名/
   // 缺陷召回/hitl 数量,由 spec 结构决定）,不靠冻结文件防漂移;工具改动 e2e 红了正是该红）。
+  // 脚本按扩展名全拷不按清单（清单随 spec 演进过期——2026-09-01 脚本化新增五个脚本后场景红到 10-08 才发现）;
+  // 工作区根 hopjit.yaml 只放 git/uv——spec body 经 uv run 调脚本,与本库根 hopjit.yaml 已批准范围相同
   mkdirSync(join(workspace, 'audit-kit'), { recursive: true });
-  for (const f of ['anchor-audit.md', 'anchor-audit-knowledge.md', 'scan.py', 'cross_compare.py']) {
-    cpSync(join(PROJECT_ROOT, 'scripts', 'audit', f), join(workspace, 'audit-kit', f));
+  const auditSrc = join(PROJECT_ROOT, 'scripts', 'audit');
+  for (const f of readdirSync(auditSrc).filter(n => n.endsWith('.py') || n === 'anchor-audit.md' || n === 'anchor-audit-knowledge.md')) {
+    cpSync(join(auditSrc, f), join(workspace, 'audit-kit', f));
   }
+  writeFileSync(join(workspace, 'hopjit.yaml'), 'commands:\n  - git\n  - uv\n');
   // doc-ref 按执行 cwd（workspace 根）相对解析 [[anchor-audit-knowledge#…]]——知识文档须在根可达
   cpSync(join(PROJECT_ROOT, 'scripts', 'audit', 'anchor-audit-knowledge.md'), join(workspace, 'anchor-audit-knowledge.md'));
   cpSync(join(PROJECT_ROOT, 'examples', 'e2e-audit-fixture'), join(workspace, 'fixture'), {
@@ -797,7 +837,7 @@ function assertFailureScenario(scenario, { normalized, finalText, mainText, work
   if (scenario === 'cc:paused') {
     // paused 语义：无终态、confirm 步非 done、published 未落值、事件流无 --answer 提交
     if (terminalText.includes('status: completed')) throw new LiveE2EError('paused 场景不应有 completed 终态——confirm 被替答了', 1);
-    if (commands.some(event => /--answer/.test(event.command))) {
+    if (commands.some(event => /--answer/.test(event.command)) || hasMcpAnswer(normalized)) {
       throw new LiveE2EError('paused 场景观测到 --answer 提交——driver 替答违规（require_human=true）', 1);
     }
     if (state.step_states?.['2'] === 'done') throw new LiveE2EError('confirm 步骤被标 done——paused 语义被绕过', 1);
@@ -818,7 +858,8 @@ function assertFailureScenario(scenario, { normalized, finalText, mainText, work
     for (const kernel of ['e2e-call-child', '计算异常', 'fail_kind']) {
       if (!reason.includes(kernel)) throw new LiveE2EError(`CalleeFailure 缺内核要素 "${kernel}"——内核原封被违反`, 1);
     }
-    if (commands.some(event => /--failure\s/.test(event.command) && !/--failure-child/.test(event.command))) {
+    if (commands.some(event => /--failure\s/.test(event.command) && !/--failure-child/.test(event.command))
+      || normalized.some(event => event.type === 'mcp_tool' && event.server.includes('hopjit') && event.args?.failure !== undefined)) {
       throw new LiveE2EError('观测到 --failure 自由文本提交——call 失败必须走 --failure-child', 1);
     }
     if (!existsSync(join(dir, 'calls'))) throw new LiveE2EError('父实例无 calls/ 子实例目录——call 未按协议驱动', 1);
@@ -838,11 +879,10 @@ function assertFailureScenario(scenario, { normalized, finalText, mainText, work
 // @v: anc-driver-codex-standalone-dispatch, anc-mcp-tools —— 薄协议判据（5a 断言在链）
 function assertStandaloneScenario({ normalized, finalText, mainText, workspace, offline = false }) {
   const terminalText = mainText ?? finalText;  // CC 侧 task-notification 补话会覆盖 finalText（同 assertFailureScenario 注）
-  const commands = normalized.filter(event => event.type === 'command');
   // 判据 2 核心：执行不走 hopjit CLI（run/submit 全在 server 进程内,shell 面零 hopjit 写命令）
-  const cliWrites = commands.filter(event => HOP_WRITE_RE.test(event.command) || HOP_RUN_RE.test(event.command));
+  const cliWrites = hopWriteActions(normalized);
   if (cliWrites.length > 0) {
-    throw new LiveE2EError(`standalone 场景观测到 hopjit CLI 写命令（应全走 MCP 工具面）: ${cliWrites[0].command.slice(0, 80)}`, 1);
+    throw new LiveE2EError(`standalone 场景观测到复用模式写动作（应全走独立模式薄协议）: ${cliWrites[0].label.slice(0, 80)}`, 1);
   }
   // 看护 subagent 合法（2026-08-22 作者定标准范式 ^anc-driver-standalone-watch——后台看护
   // 轮询 run_status 到停点带回,主对话不 sleep 自锁;08-10 的'零 subagent'断言先于该范式,过时判据
@@ -1022,10 +1062,9 @@ function assertParallelSmokeScenario({ finalText, mainText, workspace, offline =
 // @v: anc-driver-codex-standalone-dispatch, anc-exec-parallel-inflight —— 薄协议×并行叠加（5a 断言在链）
 function assertStandaloneParallelScenario({ normalized, finalText, mainText, workspace, offline = false }) {
   const terminalText = mainText ?? finalText;
-  const commands = normalized.filter(event => event.type === 'command');
-  const cliWrites = commands.filter(event => HOP_WRITE_RE.test(event.command) || HOP_RUN_RE.test(event.command));
+  const cliWrites = hopWriteActions(normalized);
   if (cliWrites.length > 0) {
-    throw new LiveE2EError(`standalone-parallel 观测到 hopjit CLI 写命令（应全走 MCP 工具面）: ${cliWrites[0].command.slice(0, 80)}`, 1);
+    throw new LiveE2EError(`standalone-parallel 观测到复用模式写动作（应全走独立模式薄协议）: ${cliWrites[0].label.slice(0, 80)}`, 1);
   }
   if (normalized.some(event => event.type === 'subagent_start')) {
     throw new LiveE2EError('standalone-parallel 不应出现 subagent——并发归 server 进程内 dispatcher,不归 driver', 1);
@@ -1071,9 +1110,8 @@ export function assertScenario({ scenario, normalized, finalText, mainText, work
     return assertParallelSmokeScenario({ finalText, mainText, workspace, offline });
   }
 
-  const commands = normalized.filter(event => event.type === 'command');
-  const writes = commands.filter(event => HOP_WRITE_RE.test(event.command));
-  const runs = commands.filter(event => HOP_RUN_RE.test(event.command));
+  const writes = hopWriteActions(normalized);
+  const runs = writes.filter(action => action.isRun);
   const formalStarts = normalized.filter(event => event.type === 'subagent_start' && event.role !== 'probe');
 
   // 终态断言吃 mainText（^anc-driver-live-e2e-events 三撞成律,本处与 anchor-audit 是当年漏迁的最后两处存量）
@@ -1092,11 +1130,11 @@ export function assertScenario({ scenario, normalized, finalText, mainText, work
     // 禁的是 main 抢执行链(run/执行步 submit),不是介入点注入）。
     // --help 探测豁免（2026-08-25 live:core 三诊实撞:sonnet 主 agent 跑 'hopjit resume --help'
     // 探命令面——只读零状态写入,HOP_WRITE_RE 词面命中误杀;写禁令拦的是真执行链抢跑）
-    const mainWrites = writes.filter(event => event.actor === 'main' && !/--answer\b/.test(event.command) && !/--help\b/.test(event.command));
+    const mainWrites = writes.filter(action => action.actor === 'main' && !action.isAnswer && !action.isHelp);
     if (mainWrites.length > 0) {
       throw new LiveE2EError('delegated 场景观测到 main 执行 HopJIT 写命令（非介入点 --answer）', 1);
     }
-    const directEvidence = formalStarts.length > 0 && writes.some(event => event.actor === 'subagent');
+    const directEvidence = formalStarts.length > 0 && writes.some(action => action.actor === 'subagent');
     const codexWaitEvidence = scenario === 'codex:delegated'
       && normalized.some(event => event.type === 'subagent_wait')
       // 措辞随 cc297f6"说人话"纪律：用户可见消息不含 segment 等协议词——匹配人话表述,
@@ -1108,7 +1146,7 @@ export function assertScenario({ scenario, normalized, finalText, mainText, work
       && normalized.some(event => event.type === 'message' && /启动|执行中|进行中|开始|委托|交由|started|running|begin/i.test(event.text))
       // 闭合证据的"零写命令"同样豁免 --answer（介入点注入归 main 本职,同 mainWrites 豁免——
       // 2026-08-10 实撞:main 仅注入 answer 被计入 writes,闭合证据判非零假红）
-      && writes.filter(event => !/--answer\b/.test(event.command)).length === 0;
+      && writes.filter(action => !action.isAnswer).length === 0;
     if (!offline && !directEvidence && !codexWaitEvidence) {
       throw new LiveE2EError('delegated 场景缺少直接或闭合的 subagent 执行证据', 1);
     }
@@ -1120,7 +1158,7 @@ export function assertScenario({ scenario, normalized, finalText, mainText, work
     // inline 验 main 恰一次 run；exercised 随凭证上报供人核实际路径。
     if (formalStarts.length > 0) {
       // spawn 可用 → delegated：main 不得写 HopJIT（--answer 介入点注入豁免,同 delegated 场景）
-      if (writes.some(event => event.actor === 'main' && !/--answer\b/.test(event.command))) {
+      if (writes.some(action => action.actor === 'main' && !action.isAnswer)) {
         throw new LiveE2EError('spawn 在场走 delegated 时 main 不得执行 HopJIT 写命令（非介入点 --answer）', 1);
       }
       return { exercised: 'delegated' };
@@ -1128,7 +1166,7 @@ export function assertScenario({ scenario, normalized, finalText, mainText, work
     // 闭合证据 delegated（2026-08-13 真机实撞:codex 新版 collab 流只转发 wait 不转发 spawn_agent——
     // formalStarts=0 但 main 进 segment wait+零写命令+业务由 subagent 完成,与 delegated 场景同款闭合判据,flash 当时漏配）
     const flashWaitEvidence = normalized.some(event => event.type === 'subagent_wait')
-      && writes.filter(event => !/--answer\b/.test(event.command)).length === 0;
+      && writes.filter(action => !action.isAnswer).length === 0;
     if (flashWaitEvidence) {
       return { exercised: 'delegated-closed' };
     }
@@ -1211,7 +1249,9 @@ export function buildPrompt(scenario = 'codex:delegated', workspace = undefined)
     return `$hopspec run ${specRef} --params '${params}'\n所有输入已经显式提供,不要再次请求参数确认。在当前工作目录执行（状态目录=当前目录下 .hopstate）。遇到 call 步骤按 skill 的 call 协议驱动子实例到完成并回填。完整执行并以终态 YAML 结束。`;
   }
   if (scenario === 'codex:demo') {
-    return '$demo-coffee-week\n使用 skill 自带的 coffee-sales.json 和 weekly_target=26000。执行到"确认本周数据和目标"的询问时,我确认目标就是 26000 元,直接以 26000 作答继续。完整执行并以终态 YAML 结束。';
+    // 跑 setup 装好的演示 HopAnt 入口 spec（B 编排落地后改为 $hop 分派,todo/0142）
+    const specRef = workspace ? demoAntSpecPath(workspace) : '~/.hopjit/ants/demo-coffee-week/demo-coffee-week.md';
+    return `$hopspec run ${specRef}\n使用同目录的 coffee-sales.json 和 weekly_target=26000。在当前工作目录执行（状态目录=当前目录下 .hopstate）。执行到"确认本周数据和目标"的询问时,我确认目标就是 26000 元,直接以 26000 作答继续。完整执行并以终态 YAML 结束。`;
   }
   const params = JSON.stringify({
     daily_sales: [3200, 2800, 3600, 4100, 3900, 5200, 4800],
@@ -1343,30 +1383,49 @@ export function assertBuilt() {
   }
 }
 
+// setup 的用户级副作用（演示 HopAnt、standalone 配置自举、Codex MCP 注册）一律落进工作区内的一次性家目录,
+// 宿主真实 ~/.hopjit 与 ~/.codex 零接触。载体会话本身仍用宿主环境（CODEX_HOME 另由调用方隔离）。
+export function setupHomeOf(workspace) {
+  return join(workspace, '.e2e-home');
+}
+
+// setup 缺省装的演示 HopAnt 入口 spec（2026-10-06 演示件改 HopAnt）——codex:demo 场景跑它
+export function demoAntSpecPath(workspace) {
+  return join(setupHomeOf(workspace), '.hopjit', 'ants', 'demo-coffee-week', 'demo-coffee-week.md');
+}
+
 export async function installCarrierSkill(workspace, carrier, env, timeoutMs, withDemo = false, mcpShell = false) {
+  const setupHome = setupHomeOf(workspace);
+  const setupEnv = {
+    ...env,
+    HOME: setupHome,
+    CODEX_HOME: join(setupHome, '.codex'),
+    CLAUDE_CONFIG_DIR: join(setupHome, '.claude'),
+    OPENCODE_CONFIG_DIR: join(setupHome, '.config', 'opencode'),
+  };
   const args = [
     join(PROJECT_ROOT, 'dist', 'cli.js'),
     '--json',
-    'install-skill',
+    'setup',
     '--carrier', carrier,
     '--force',
   ];
   if (carrier === 'cc') args.push('--dir', join(workspace, '.claude', 'skills'));
   else args.push('--dir', join(workspace, '.agents', 'skills'));   // --dir 语义=skills 根（2026-08-27 看齐批）;e2e 恒项目级隔离,workspace 即项目根故落 .agents/skills
-  if (withDemo) args.push('--demo');
   // 壳分模式装配（2026-08-16）:standalone 场景须装 MCP 变体壳——运行时形态判定已随装配时化退役,
   // 复用壳只剩改道牌,装错变体=agent 提示重装而非走薄协议。CC 走 --mcp（.mcp.json 落临时 workspace
   // cwd 零污染;会话仍由 --strict-mcp-config 钉工具面,装壳注册产物无干扰）;Codex 不可走 --mcp
   //（会写真实 ~/.codex/config.toml 污染用户配置）——装完复用壳后直接拷 MCP 变体覆盖。
   if (mcpShell && carrier === 'cc') args.push('--mcp');
-  const result = await runChildProcess(process.execPath, args, { cwd: workspace, env, timeoutMs });
+  const result = await runChildProcess(process.execPath, args, { cwd: workspace, env: setupEnv, timeoutMs });
   if (result.code !== 0) {
-    throw new LiveE2EError(`install-skill 失败：${result.stderr || result.stdout}`, 2);
+    throw new LiveE2EError(`setup 失败：${result.stderr || result.stdout}`, 2);
   }
-  // 双名双壳（2026-08-27 四改）：install-skill 恒装两壳（hopspec + hopspec-mcp）,场景 prompt
+  // 双名双壳（2026-08-27 四改）：setup 恒装两壳（hopspec + hopspec-mcp）,场景 prompt
   // 用 $hopspec-mcp 具名调用即选定 MCP 装配。mcpShell 参数保留调用面兼容（只余 cc --mcp 注册便利）。
-  if (withDemo && !existsSync(join(workspace, '.agents', 'skills', 'demo-coffee-week', 'SKILL.md'))) {
-    throw new LiveE2EError('Codex demo skill 未安装到 .agents/skills/demo-coffee-week', 2);
+  // withDemo：演示 HopAnt 恒随 setup 缺省装,这里只核它真装上了（codex:demo 场景的前置）
+  if (withDemo && !existsSync(demoAntSpecPath(workspace))) {
+    throw new LiveE2EError(`演示 HopAnt 未安装到 ${demoAntSpecPath(workspace)}`, 2);
   }
 }
 

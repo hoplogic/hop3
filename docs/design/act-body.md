@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extract
-	last_sync: 2026-09-27T20:38+0800
+	last_sync: 2026-10-09T15:54+0800
 	note: act-body 模块设计——hop_python 微语言实现链(解析/AST/解释/内置函数)。2026-07-02 从 exec-engine.md 抽出独立成文(被 parser/engine/prompt/validator 多方调,应独立模块独立文档)。
 %%
 
@@ -13,7 +13,9 @@ act/commit 步骤 `> ```hop_python` 围栏内「无推理编排语言」的实�
 
 ## act-body 模块定位【契约】 ^anc-struct-act-body
 
-> **模块版本**：act-body `v0.26.1`（2026-10-01 工程链 review 修复：并集条加第三消费口 requires_commands 预检闸;出口表 unionApprovedCommandNames 行补签名与三消费口——行为面归 exec-engine v0.50.1,本模块条款与出口说明同步）。上版 v0.26.0（2026-09-30）。本版 body 口 subprocess.run 白名单改为 hopjit.yaml commands: ∪ 本 spec《已批准命令》段命令名（todo/0132——同一张卡不写两遍）;命令原语消费口两个→三个（mcp-server run_approved_command 加入）。上版 v0.25.0（2026-09-26）本版=字符串单下标（`s[0]`/`s[-1]`,两个求值器同扩,见 `^anc-step-act-body-str-index`）+ 括号在本行未闭合的定向报错（替换原五条连环报错,见 `^anc-step-act-body-one-line`）——todo/0102 批次。
+> **模块版本**：act-body `v0.27.4`（2026-10-09 parseActBody 加可选第四参数 line_numbers——逐行真实行号,语句 line 按它取;不给时照旧 base_line + 行下标,契约 [[spec-parser#^anc-rule-act-body-line]]）。上版 v0.27.3（2026-10-08 commit 安全分析批次：出口表 evalExprSync 消费面补 engine commit 动作清单提取,签名与语义不变）。上版 v0.27.2（2026-10-08 todo/0131：subprocess.run 配置通路条复用模式半边改引 config-load 两级合并,类型名随更 HopConfig）。上版 v0.27.1（2026-10-07 spec_dir 批 review 修复：Constraints 4 补文件工具读类认 allowed 的出处;work_zone_path 步型口径对齐 act/check/commit;HopSop 3.3 用词与同族同形;类型约定补 resume/子实例 specPath 来源与 `run <spec>` 位置参数;四消费位升五位〔hopbuild v1 primer〕）;
+> - 上版 v0.27.0=2026-10-06 新增 `spec_dir(rel?)` 实例上下文内置 ^anc-exec-spec-dir——spec 自带脚本与数据的寻址,与 work_zone_path 同族;todo/0145）;
+> - 上版 v0.26.1=2026-10-01 工程链 review 修复：并集条加第三消费口 requires_commands 预检闸;出口表 unionApprovedCommandNames 行补签名与三消费口——行为面归 exec-engine v0.50.1,本模块条款与出口说明同步）。上版 v0.26.0（2026-09-30）。本版 body 口 subprocess.run 白名单改为 hopjit.yaml commands: ∪ 本 spec《已批准命令》段命令名（todo/0132——同一张卡不写两遍）;命令原语消费口两个→三个（mcp-server run_approved_command 加入）。上版 v0.25.0（2026-09-26）本版=字符串单下标（`s[0]`/`s[-1]`,两个求值器同扩,见 `^anc-step-act-body-str-index`）+ 括号在本行未闭合的定向报错（替换原五条连环报错,见 `^anc-step-act-body-one-line`）——todo/0102 批次。
 > - 上版 v0.24.0 命令执行原语加可选项 `wrapperArgv`（系统沙箱前缀,spawn 时拼在 argv 最前;白名单与 hopjit 恒拒仍只核 argv[0]——py-sandbox 模块执行产物脚本时套 seatbelt 用,见 `^anc-exec-command-primitive`、[[py-sandbox#^anc-pysb-exec]]）。
 > - 上版 v0.23.0 命令执行原语抽出独立文件 `command-exec.ts`（subprocess.run 与 tools 模块的 run_script 共用一份实现——todo/0110 候选 B 批次）。
 > - 上版 v0.22.2 subprocess.run ENOENT 两因分辨报文(cwd 不存在与命令不存在各自指路——0020 批 review 实撞误诊后立)。
@@ -46,7 +48,7 @@ act/commit 步骤 `> ```hop_python` 围栏内「无推理编排语言」的实�
 
 | 符号 | 种类 | 出口文件 | 用途（谁依赖） | 稳定性 |
 |---|---|---|---|---|
-| `parseActBody` | 函数 | act-body-parser.ts | hop_python 源 → ActBody AST（parser 调） | stable |
+| `parseActBody` | 函数 | act-body-parser.ts | hop_python 源 → ActBody AST（parser 调;可选 line_numbers 逐行给真实行号,签名与语义见 [[spec-parser#^anc-rule-act-body-line]]） | stable |
 | `serializeActBody` | 函数 | act-body-parser.ts | ActBody → 渲染文本（prompt 组装时给 LLM 看的 body 展示；非旧"整 body 交 caller 执行"语义） | stable |
 | `extractHopPythonFence` | 函数 | act-body-parser.ts | 从 `> ```hop_python` 围栏抽 body 源（parser 调） | stable |
 | `bodyHasToolCall` | 函数 | act-body-parser.ts | 判 body 是否含工具调用（engine 消化判定） | stable |
@@ -54,7 +56,7 @@ act/commit 步骤 `> ```hop_python` 围栏内「无推理编排语言」的实�
 | `ACT_BUILTINS` | 常量 | act-builtins.ts | 内置函数白名单 + arity（validator 校验 B2） | stable |
 | `ACT_BUILTIN_NAMES` | 常量 | act-builtins.ts | 内置函数名集合（validator/parser 查白名单；mcp-server 工具面预检） | stable |
 | `parseExpression` | 函数 | act-body-parser.ts | 单表达式解析（validator 条件表达式 B 组校验/engine-traverse case 条件求值前端） | stable |
-| `evalExprSync` | 函数 | act-body-interpreter.ts | 表达式同步求值（engine-traverse case 条件判定——无工具无 IO 的纯求值面） | stable |
+| `evalExprSync` | 函数 | act-body-interpreter.ts | 表达式同步求值（engine-traverse case 条件判定;engine commit 动作清单提取求实参,[[exec-engine#^anc-exec-commit-action-facts]]——无工具无 IO 的纯求值面） | stable |
 | `findNonPureCallWith` | 函数 | act-body-parser.ts | 表达式内非纯调用探测（validator 条件纯度校验——条件里禁工具/time） | stable |
 | `exprChildren` | 函数 | act-body-parser.ts | 子表达式清单唯一权威（扫描类消费面公共遍历;validator C8/B4 调） | stable |
 | `exprMapChildren` | 函数 | act-body-parser.ts | 子表达式同构重建（变换类消费面;engine-traverse 裸字消歧调） | stable |
@@ -451,15 +453,15 @@ Constraints:
   - ENOBUFS→"输出过大,用命令自带过滤收窄";
   - ETIMEDOUT→"超时可调大或收窄工作量";
   - ENOENT 分两因指路——spawn 失败且 code=ENOENT 时先 existsSync 分辨:cwd 不存在→"工作目录不存在:<路径>（常见因:body 里 cwd 参数的占位符没替换/相对路径基准错;命令本身可能好好在系统里）",cwd 在场→"白名单里有名字但系统找不到可执行文件"。分辨判的 cwd=cwd参数??workZone（与 spawnSync 实际使用同源）;两者皆缺省时恒走命令不存在半边;
-    - 分辨理由:Node 对两种失败报同一 ENOENT,不分辨即误导排障——0020 批次 review 实撞:建卡漏替换 <仓库根绝对路径> 占位符,报文指向命令,误诊"本机无 uv"并连带错修提纯件,作者两连问勘正;
+    - 分辨理由:Node 对两种失败报同一 ENOENT,不分辨即误导排障——0020 批次 review 实撞:建卡漏替换 <仓库根绝对路径> 占位符,报文指向命令,误诊"本机无 uv"并连带错修总结出的 spec,作者两连问勘正;
 - **位置参数恰一个**(argv 列表)——第二个位置参数=B2 静态 error+运行期同拒(双闸同构;review 抓此行为原只存在于代码);B2 专项在 validator 的 checkActExpr call 分支内,合法具名集={input,timeout,cwd}与解释器认参集同构;
 - **双模式行为（核心契约面,一轮 review 抓缺席后补）**：
   - 复用模式=引擎消化路径直执 spawnSync（subprocess.run 是内置不是工具,bodyHasToolCall 不计入——命令在引擎进程执行,不经 caller tool_request;cmdJournal 保跨进程重放,这正是它存在的理由）;
   - 独立模式=dispatcher 构造 BodyExecContext 时同注入 commandWhitelist/cmdJournal（journal 持久化经引擎同一账——dispatcher 从 engine 取步骤级持久数组）;
   - 两模式白名单同源 hostConfig.sandbox.runtime.available;
 - **配置通路（一轮 review 抓"三组合根全写死 [] 能力实际不可开启"后补）**：
-  - StandaloneConfig 顶层键 `commands?: string[]`（人话名——操作者视角是"允许哪些命令",不是"配置 sandbox.runtime"),加载后装入 hostConfig.sandbox.runtime.available;
-  - 复用模式 CLI 同读项目级 hopjit.yaml 的 commands 键（复用模式配置加载面为三个单键分别读取之一——commands/language/tool_servers 各随批次加入,不引入完整配置合并;容错两分:commands/language 钝感回缺省,tool_servers 坏配置响亮拒（权威 [[hop-cli]] 配置通路条））;
+  - HopConfig（原名 StandaloneConfig）顶层键 `commands?: string[]`（人话名——操作者视角是"允许哪些命令",不是"配置 sandbox.runtime"),加载后装入 hostConfig.sandbox.runtime.available;
+  - 复用模式 CLI 同读本键——经 [[config-load#^anc-config-reuse-consume]] 取系统级与项目级合并结果（2026-10-08 todo/0131 起两级,原项目级单键读退役;容错两分:commands/language 钝感回缺省,tool_servers 坏配置响亮拒,权威同锚）;
   - 两级合并=并集（系统级+项目级,与 tool_servers 同律）;
 - **hopjit 恒拒名单（2026-08-30 作者定"hopjit 本身就不应该被 act 调用"）**：`hopjit` 进恒拒名单,**优先级高于白名单**——argv[0] 是 `hopjit`（或路径尾段为 hopjit）一律拒,`commands:` 白名单写了 hopjit 也不放行且配置加载即 fail-fast 报配置错（白名单管"哪些外部命令可用",hopjit 不是外部命令是执行语境本身）。
   - 层次约束论证:被执行的步骤内容不得反过来驱动执行引擎,自嵌套执行必坏状态账;跑别的 spec 有 [call],通知等不可逆动作走注册工具的 commit 步骤,查执行状态本就不该查——步骤不感知引擎;
@@ -580,7 +582,7 @@ Inputs:
 Outputs:
 - abs_path % line  # work_zone 下的绝对路径
 Constraints:
-- 仅 act/commit body 可用——case 条件里调用报"需实例上下文"折计算异常（路径不属条件业务面）
+- 仅 act/check/commit body 可用（check 带 body 是引擎强制的机械判定,同 :439 subprocess.run 条款——2026-10-07 本句随 spec_dir 批对齐,原"仅 act/commit"是 F5 裁定前的滞后措辞）——case 条件里调用报"需实例上下文"折计算异常（路径不属条件业务面）
 - rel_path 禁 .. 穿越,违者 TOOL_EXEC_ERROR → 本步 fail
 - 执行环境未提供 work_zone（如无实例上下文的裸求值）→ TOOL_EXEC_ERROR,不静默回退
 - 返回路径读写工具放行——.hopstate 禁令的唯一豁免,也是"workspace 外绝对路径拒"的唯一豁免（work_zone 可以在 workspace 外;见 [[tools/file-tools#^anc-exec-builtin-file-tools]]）
@@ -604,15 +606,53 @@ evalCall 遇 work_zone_path:
    3.3 [条件(其他)] 返回 ctx.workZone + "/" + rel_path
 ```
 
+## spec_dir 实例上下文内置【契约】 ^anc-exec-spec-dir
+
+概念权威 [[../concepts/HopSpec V3核心规范#^anc-step-act-body-lang]] 实例上下文内置条款（2026-10-06 作者随 HopAnt 立——HopAnt 自带的脚本与数据随 spec 走,body 要能拿到 spec 所在目录;源头 todo/0145）。与 [[#^anc-exec-work-zone-path]] 同一族：同样是实例上下文、同样只算路径。
+
+**能力契约（HopTrait）**：
+
+```
+# Spec: spec_dir 内置函数
+Id: spec_dir(rel_path) -> abs_path
+Goal: 在 body 内给出本 spec 文件所在目录下的确定路径,供 spec 自带的脚本与数据寻址
+Inputs:
+- rel_path % line  # 可选,spec 目录内相对路径;省略返回 spec 目录本身
+Outputs:
+- abs_path % line  # spec 目录下的绝对路径
+Constraints:
+- 仅 act/check/commit body 可用——case 条件里调用报"需实例上下文"折计算异常（与 work_zone_path 同款）
+- rel_path 禁 .. 穿越,违者 TOOL_EXEC_ERROR → 本步 fail
+- 执行环境没有 spec 文件（内存态、无 specPath 的裸求值）→ TOOL_EXEC_ERROR,不静默回退到 workspace
+- **只算路径,不开任何权限**：返回值交给文件工具或 subprocess.run 时仍走各自既有的权限链——spec 目录在读权限内（^anc-exec-doc-ref-resolve 起跑授权;文件工具读类按 [[tools/file-tools#^anc-exec-tool-path-resolve]] 第④形态认 `read_access.allowed` 内的绝对路径,所以 `read(path: spec_dir("data/a.csv"))` 通——2026-10-07 补,此前 resolvePath 在咨询 allowed 前就拒,review 探针抓出）、不在写权限内,所以能读能跑不能写;跑脚本须经《已批准命令》（任务级授权）。这正是它与 run_script 的分工：run_script 守的是执行模型现写的脚本,spec_dir 服务的是随 spec 分发、装前可审的脚本,两条寻址链不混（作者 2026-10-06 否掉"run_script 也走 spec 目录"的提法：放开到用户项目是开放执行,安全面没审过）
+```
+
+**类型约定**：真实现不在 `ACT_BUILTINS`（白名单里是占位项,保 B2 静态校验认名）——实例上下文经 `BodyExecContext.specDir: string`（可选字段）注入,`BodyInterpreter.evalCall` 对 `spec_dir` 走专路。两执行路径的注入源同为 `dirname(resolve(engine.getSpecPath()))`（与起跑读授权 engine.ts initExecution 同一算法）：复用模式 CLI `run <spec>` 位置参数;独立模式 dispatcher 起跑带 specPath;崩溃恢复 `load` 从快照 `spec_path` 回填,续跑不丢;parallel 子实例继承父 specPath（同一份 spec）,call 子实例取 callee 自己的路径——非 `DirSpecProvider` 供源时 `resolveCalleeSpecPath` 返 null,子实例 spec_dir 报不可用（与 [[doc-ref#^anc-exec-doc-ref-resolve]] "specPath 缺席跳过本级"同一降级）;内存态（测试直塞 spec 文本）`getSpecPath()` 为 null 时不注入。
+
+**关键逻辑（HopSop）**：
+
+```
+evalCall 遇 spec_dir:
+1. [分支] 上下文检查
+   1.1 [条件(ctx.specDir 为空)] 抛 TOOL_EXEC_ERROR"spec_dir 不可用——本执行环境没有 spec 文件"
+   1.2 [条件(其他)] 继续
+2. 求值 rel_path 实参（无参 → 空串）
+3. [分支] 穿越检查
+   3.1 [条件(rel_path 含 ..)] 抛 TOOL_EXEC_ERROR"禁 .. 穿越"
+   3.2 [条件(rel_path 为空)] 返回 ctx.specDir
+   3.3 [条件(其他)] 返回 ctx.specDir + "/" + rel_path
+```
+
 ## 内置函数表四消费位同源【契约】 ^anc-exec-builtins-doc-sync
 
-`ACT_BUILTINS` 名单（`src/act-builtins.ts`）是内置函数的唯一事实源。文档侧有**四个固定消费位**各自誊抄这份名单教读者，历史上反复漏抄（0067 实撞：any/all 入引擎后概念层与教程恒漏，三个函数三次同形漂移——design 层与 skills 消费位从不漏，concepts 快照与 tutorials 恒漏）。本条款把"新增内置函数必须四位同改"定为契约：
+`ACT_BUILTINS` 名单（`src/act-builtins.ts`）是内置函数的唯一事实源。文档侧有**四个固定消费位**各自誊抄这份名单教读者，历史上反复漏抄（0067 实撞：any/all 入引擎后概念层与教程恒漏，三个函数三次同形漂移——design 层与 skills 消费位从不漏，concepts 快照与 tutorials 恒漏）。本条款把"新增内置函数必须五位同改"定为契约：
 
 1. `docs/concepts/HopSpec V3核心规范.md`（^anc-step-act-body-lang 节的 pure 函数全表与实例上下文条款）；
 2. `docs/concepts/HopSpec V3语法参考.md`（§5 白名单调用条与 subprocess.run 专节）；
 3. `docs/tutorials/D10-hop_python计算体.md`（第 2 步白名单函数表与实例上下文小节）；
-4. `skills/hopbuild2/split-patterns.md`（hop_python 文法速查的内置纯函数分组表）。
+4. `skills/hopbuild2/split-patterns.md`（hop_python 文法速查的内置纯函数分组表）;
+5. `skills/hopbuild/hopbuild-primer.md`（hopbuild v1 primer 的"内置纯函数白名单全集"句——它随 npm 分发、setup 装进用户机、SKILL.md 要求"拿不准先查它",自称全集就要守全;2026-10-07 spec_dir 批 review 抓它漏 spec_dir 后升第五位）。
 
-- **守卫钉**（先例=ENGINE_BUILTIN_SPECIAL_TOOL_NAMES 与注册面同源钉，tools.test.ts）：测试从 `src/act-builtins.ts` 源文本正则提取名单（黑盒读文本，不 import 构建产物——名单在 .ts 源里），对四个文件逐员断言"全文含反引号包裹的 `` `函数名` ``"。判据故意从宽到全文级——各文件对同一函数的行文形态不同（有的在表里、有的是专节标题、有的带调用示例），按"表内某行"精确匹配会被正当的行文调整误伤；从宽判据守的是"这个函数在该文档里有记载"，记载质量归语义审计。
+- **守卫钉**（先例=ENGINE_BUILTIN_SPECIAL_TOOL_NAMES 与注册面同源钉，tools.test.ts）：测试从 `src/act-builtins.ts` 源文本正则提取名单（黑盒读文本，不 import 构建产物——名单在 .ts 源里），对四个文件逐员断言"全文含反引号包裹的 `` `函数名` ``"。判据故意从宽到全文级——各文件对同一函数的行文形态不同（反引号单包 `` `name` ``/`` `name(args)` `` 与斜杠并列串 `` `a/b/c` `` 两种都认,后者 2026-10-07 随第五位加——primer 用一串反引号列名单;有的在表里、有的是专节标题、有的带调用示例），按"表内某行"精确匹配会被正当的行文调整误伤；从宽判据守的是"这个函数在该文档里有记载"，记载质量归语义审计。
 - **subprocess.run 特例**：它是 hop_python 唯一的 `x.y(...)` 形态名，文档里常以裸名 `subprocess.run` 出现在围栏代码块内（反引号包裹不稳定），判据放宽为"全文含 subprocess.run 字样"。
 - **缺员即红且点名**：断言失败信息带文件名与函数名，接活的人不用再对账。

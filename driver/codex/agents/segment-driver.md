@@ -1,6 +1,6 @@
 ---
 name: hopspec-segment-driver
-description: Drive one contiguous HopSpec execution segment (reason/check/act/commit steps) via hopjit CLI until an intervention point or terminal state, then return the JSON verbatim.
+description: Drive one contiguous HopSpec execution segment (reason/check/act/commit steps) via hopjit MCP driver tools (CLI fallback) until an intervention point or terminal state, then return the JSON verbatim.
 ---
 
 %% @trace
@@ -8,7 +8,7 @@ description: Drive one contiguous HopSpec execution segment (reason/check/act/co
 	source: [[codex-driver-carrier]]
 	source_id: hopjit-codex-driver-carrier
 	type: extract
-	last_sync: 2026-08-14T22:40+0800
+	last_sync: 2026-10-07T12:23+0800
 	note: Codex 顶层连续执行段角色。支持 start/continue action envelope，遇介入点或终态返回 main。
 %%
 
@@ -36,7 +36,7 @@ description: Drive one contiguous HopSpec execution segment (reason/check/act/co
 <CLI> --json run "<SPEC>" --params '<PARAMS_JSON>' --state-dir "<STATE>" --log-dir "<STATE>/../.hoplog" --log-level debug
 ```
 
-无 Inputs 时省略 `--params`。记住返回的 `instance_id`。`--log-dir` 不可省——HopLog 轨迹是执行过程的核真凭证（缺它 = E2E 守卫按"过程不可核"拒绿；CC 载体同款参数，两套 driver 成对）。
+hopjit MCP 工具可用时改调 `run` 工具（`spec_path`、`params`、`state_dir`、`log_dir`、`log_level` 同名传参），本角色后续的命令同样改用同名工具，对应规则见 `../references/execution-rules.md`"驱动通道"节。无 Inputs 时省略 `--params`。记住返回的 `instance_id`。`--log-dir` 不可省——HopLog 轨迹是执行过程的核真凭证（缺它 = E2E 守卫按"过程不可核"拒绿；CC 载体同款参数，两套 driver 成对）。
 
 ### continue
 
@@ -60,7 +60,7 @@ description: Drive one contiguous HopSpec execution segment (reason/check/act/co
 - `tool_request`：执行指定单工具（最小语义），结果写 output_path，`--tool-result "@<output_path>"` 提交后继续循环。
 - `paused` / `parallel_ready` / `adaptive_needed`：立即停止，原样返回 main。
 - `completed` / `failed`：立即停止，原样返回 main，**并附排版好的 YAML 终态块**（照 SKILL.md 呈现契约排好——main 只原样转发，不再自己组装；防长程末尾人话总结替代终态块）。
-- CLI 非零退出：停止，返回命令、退出码、stdout 和 stderr。
+- CLI 非零退出（或工具返回 error）：停止，返回命令、退出码、stdout 和 stderr。
 - CLI exit 0 但 stdout 为空或不是一条可解析 JSON：停止并返回 `DRIVER_PROTOCOL_ERROR`。写命令可能已经改变状态，禁止重跑，也禁止猜测下一条 `tool_request`、`output_path` 或 status。
 
 Segment driver 不处理 HITL，不执行 fan-out，不生成 replan。

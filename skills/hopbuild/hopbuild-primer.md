@@ -639,7 +639,7 @@ hop_python 是 HopSpec 内嵌的确定性小语言——**Python 语法的一个
 
 ### 可调用的三类函数
 
-**① 内置纯函数**（恒可用零声明——白名单全集,权威=引擎 act-builtins）：`len/count/min/max/sum/abs/round/int/float/str/bool`、`lower/upper/strip/split/join/replace/startswith/endswith`、`keys/values/get`、`sorted/reversed/range/any/all`、`strip_fence`（剥代码围栏）、`parse_json`、`now/today`（取时的唯一正门,重放安全）、`work_zone_path`（取涂鸦区绝对路径）。
+**① 内置纯函数**（恒可用零声明——白名单全集,权威=引擎 act-builtins）：`len/count/min/max/sum/abs/round/int/float/str/bool`、`lower/upper/strip/split/join/replace/startswith/endswith`、`keys/values/get`、`sorted/reversed/range/any/all`、`strip_fence`（剥代码围栏）、`parse_json`、`now/today`（取时的唯一正门,重放安全）、`work_zone_path`（取涂鸦区绝对路径）、`spec_dir`（取 spec 文件所在目录下的绝对路径——spec 自带脚本与数据的寻址）。
 
 **② 内置文件十一件**（恒可用零声明,有副作用故只在 body 不在 case 条件）：`read(path:, start_line?:, end_line?:)/write(path:, content:)/append(path:, content:)/edit_file(path:, old_text:, new_text:)/search_file(path:, pattern:)/exists(path:)/listdir(path:)/create/makedirs(path:)/move/remove`。read 带行号参数只取那一段（1 起,end 越界截尾）;search_file 单文件子串搜索返回命中行清单 JSON 文本（行号 1 起,零命中空列表——同 exists 须 parse_json 再用）。**exists/listdir 返回 JSON 文本不是结构值**——`parse_json(exists(path: p)).exists` 包裹后取字段,裸取下标是在字符串上取下标运行期炸（工具速查表逐件标注了哪些返回 JSON 文本）。**解开后的字段名**:listdir 条目是 `{name, type}`（type 取值 file/dir——判文件用 `e.type == "file"`）;exists 返回 `{exists, type}`。字段名不要凭感觉猜——实撞:凭直觉写了不存在的字段名,缺键取 None 恒假,过滤结果恒空,真机产出必坏而 validate 全绿;路径按 workspace 相对解析,绝对路径被沙箱拒（唯一豁免:work_zone_path() 取的涂鸦区路径）。**要读 workspace 外的绝对路径时**（如用户给的输出目录/系统位置文件）：内置 read 没有这个能力,正门是 `subprocess.run(["cat", 绝对路径])`（cat 进 commands 白名单,列入部署前提清单）——这不是绕行是设计边界:内置文件件的沙箱语义就是"workspace 内+涂鸦区",越界读写显性走命令通道让白名单管控;写侧同理（workspace 外写盘走命令通道且必须在 commit 步）。
 

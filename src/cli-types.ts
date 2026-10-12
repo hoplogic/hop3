@@ -64,6 +64,7 @@ export interface DispatchReady { // @a: anc-exec-parallel-dispatch-model, anc-ex
   // ^anc-exec-parallel-launch-path 哲学）；独立模式缺省（dispatcher 进程内直起）。
   launch_command?: string;
   work_zone?: string;
+  workspace_dir?: string;  // 本 run 工作区根绝对路径（=HostConfig.workspace_dir;与 work_zone 同族同位,driver 起跑后向用户转告一句）// @a: anc-cli-workspace-arg
   stale?: string[];   // 对账后待 driver 自查的在飞项（没起过就起/起过就等/确认死了显式报败——2026-08-13 dispatch-lost 降级,与 DrainWait.stale 同语义）
   stale_launch?: Record<string, string>;   // childInstance→launch_command（引擎按账面重拼——driver 对"没起过"的 stale 项原样执行零手拼）
 }
@@ -74,12 +75,12 @@ export interface DispatchReady { // @a: anc-exec-parallel-dispatch-model, anc-ex
 export interface DrainWait { // @a: anc-exec-parallel-reap-drain, anc-exec-parallel-inflight-reconcile
   status: 'drain_wait';
   instance_id: string;
-  loop_step_id: string;   // 收齐点=宿主 loop 容器
+  loop_step_id: string;   // 收齐点=宿主任务容器（subtask/case/loop,即 ParallelLaunch.host_container——字段名沿用 loop_step_id 是接口兼容,语义已泛化）
   inflight: string[];     // 在飞子实例 id（<step-id>.<iter>）
-  // crash-resume 对账后仍未终态的在飞（P1 §U2）：复用模式 driver 应对这些项重起 worker
-  //（子实例目录已有状态——run 子实例入口撞已有目录是重新 init 从头跑、非断点续跑,act 可安全
-  // 重做语义下结果等价;设计如实注见 parallel-execution ^anc-exec-parallel-inflight-reconcile,
-  // 2026-09-12 0088 批本注释随设计归一——原"即续跑"措辞与设计如实注相反）。缺省缺席=无需重建。
+  // crash-resume 对账后仍未终态的在飞（P1 §U2）：复用模式 driver 应对这些项按 stale_launch 里
+  // 拼好的命令重起 worker——子实例目录下有 state.json 的拼 `resume`（load+复位悬空续跑,已执行且
+  // 已批准的 commit 不重放）,从未跑过的才拼 `run` 从头跑;设计见 parallel-execution
+  // ^anc-exec-parallel-inflight-reconcile（2026-10-08 起续跑成真）。缺省缺席=无需重建。
   stale?: string[];
   stale_launch?: Record<string, string>;   // 同 DispatchReady.stale_launch
 }
@@ -97,6 +98,7 @@ export interface ToolRequest { // @a: anc-exec-tool-request
   tool_call_seq: number;               // 本步内第几个工具调用（1 起）——重放定位
   output_path?: string;                // 工具结果建议落盘路径（work_zone 内）
   work_zone?: string;
+  workspace_dir?: string;  // 本 run 工作区根绝对路径（=HostConfig.workspace_dir;与 work_zone 同族同位,driver 起跑后向用户转告一句）// @a: anc-cli-workspace-arg
 }
 
 /** agent 主循环的正常推进信号：返回待执行步骤及其装配上下文。见 [[hop-cli#^anc-cli-step-ready]] */
@@ -109,6 +111,7 @@ export interface StepReady { // @a: anc-cli-step-ready, anc-exec-work-zone
   context: AssembledContext;
   work_zone: string;  // 实例 work_zone 工作区绝对路径(driver 写 @file 临时文件用), 见 anc-exec-work-zone
   output_path: string;  // 本步 output 文件确切路径(<work_zone>/out_<step_id>.json)——worker 照此写、--output "@<output_path>" 提交,零拼名自由度, 见 anc-exec-work-zone
+  workspace_dir?: string;  // 本 run 工作区根绝对路径（=HostConfig.workspace_dir;与 work_zone 同族同位,driver 起跑后向用户转告一句）// @a: anc-cli-workspace-arg
   call_protocol?: CallProtocol;  // 仅 step_type=call 且复用模式 CLI 通道——命令拼装权归引擎,driver 照抄零手拼 // @a: anc-exec-call-protocol-payload
 }
 
@@ -116,7 +119,7 @@ export interface StepReady { // @a: anc-cli-step-ready, anc-exec-work-zone
  * 消除手拼 init 参数的误用面（cc:call-fail 实撞根治,与 DispatchReady.launch_command 同纪律）。
  * 见 [[exec-engine#^anc-exec-call-protocol-payload]] */
 export interface CallProtocol { // @a: anc-exec-call-protocol-payload
-  init_command: string;      // callee 路径 <CALLEE_SPEC_PATH:id> 占位(寻址归 caller);params/trace/log 已折入
+  init_command: string;      // callee 位置=引擎解析出的绝对路径,解析不到留 <CALLEE_SPEC_PATH:id> 占位;params/trace/log 已折入
   child_state_dir: string;   // 子实例驱动循环的 --state-dir 值
   child_instance: string;    // 子实例 ID(=call step id)
   child_advance: string;     // 循环起步命令(init 后子实例未推进,advance 领首步——cc:call 实撞:未给则 driver 翻源码反推)
@@ -173,6 +176,7 @@ export interface ExecutionCompleted {
   instance_id: string;
   outputs: Record<string, unknown>;    // 大值可能是 $file 指针(>4KB), 见 anc-exec-deflate
   work_zone: string;
+  workspace_dir?: string;  // 本 run 工作区根绝对路径（=HostConfig.workspace_dir;与 work_zone 同族同位,driver 起跑后向用户转告一句）// @a: anc-cli-workspace-arg
 }
 
 /** 执行失败终态：给出失败步骤、原因与含 null 的部分产物。见 [[hop-cli#^anc-cli-next-response]] */
@@ -183,6 +187,7 @@ export interface ExecutionFailed {
   failure_reason: string;
   partial_outputs: Record<string, unknown>;  // 含 null 值; 大值可能是 $file 指针
   work_zone: string;
+  workspace_dir?: string;  // 本 run 工作区根绝对路径（=HostConfig.workspace_dir;与 work_zone 同族同位,driver 起跑后向用户转告一句）// @a: anc-cli-workspace-arg
   // 主线失败杀活清单（统一模型 §U4/§U8）：在飞被记 killed 的子实例 id——复用模式 driver
   // 尽力终止对应外部会话（停不掉不损语义,账面 killed 已保证 reap 短路）。
   kill_list?: string[];
@@ -193,7 +198,8 @@ export interface ExecutionPaused { // @a: anc-cli-execution-paused, anc-exec-hit
   status: 'paused';
   instance_id: string;
   step_id: string;
-  pause_reason: 'confirm' | 'commit' | 'waiting_human' | 'ask' | 'network' | 'escalate';  // confirm/commit/waiting_human=审批型；ask=数据收集型；network=网络中断暂停（^anc-exec-network-pause）;escalate=升层问路（^anc-exec-check-escalate——循环在要方向,接收端人/上层caller由拓扑定,应答guidance回注重试反馈不扣预算）
+  pause_reason: 'confirm' | 'commit' | 'waiting_human' | 'ask' | 'network' | 'escalate' | 'dirs';  // confirm/commit/waiting_human=审批型；dirs=Config.dirs 清单批准闸（^anc-exec-dirs-grant）；// @a: anc-exec-dirs-grant
+  //ask=数据收集型；network=网络中断暂停（^anc-exec-network-pause）;escalate=升层问路（^anc-exec-check-escalate——循环在要方向,接收端人/上层caller由拓扑定,应答guidance回注重试反馈不扣预算）
   // 自包含介入请求（见 ^anc-exec-hitl-presentation）——caller 拿到即知"看什么/给什么/怎么给"
   presented_data: {
     summary: string;
@@ -202,11 +208,13 @@ export interface ExecutionPaused { // @a: anc-cli-execution-paused, anc-exec-hit
     engine_impact?: string;
     context?: Record<string, unknown>;   // 待审批数据（confirm）/ 候选推断来源（ask）
     output_schema?: OutputDecl[];        // 要 caller 填的变量名+类型（ask）
-    default_value?: unknown;             // 前序推断默认值（ask）
+    default_value?: unknown;             // 前序推断默认值（ask,只给第一个声明——向后兼容）
+    default_values?: Record<string, unknown>;   // 按声明名分键的建议值（ask,每个声明前序同名产出;结构化类型的 ask 靠它让人改而不是凭空写——^anc-exec-hitl-presentation 建议值供给条）// @a: anc-exec-hitl-presentation
     present_inputs?: string[];           // 必须完整展示给 user 的 context 字段名子集（仅 ask）。driver 据此完整 dump 不缩略,见 ^anc-exec-hitl-presentation
   };
   response_options: ResponseOption[];
   work_zone: string;  // 实例 work_zone 工作区(driver 写 @file 临时文件用), 见 anc-exec-work-zone
+  workspace_dir?: string;  // 本 run 工作区根绝对路径（=HostConfig.workspace_dir;与 work_zone 同族同位,driver 起跑后向用户转告一句）// @a: anc-cli-workspace-arg
   // 独立模式 call 递归：暂停帧的调用链（顶层 call step_id → … → 暂停 spec 的直接父 call）。
   // caller resume 时原样带回，runtime 剥头逐帧直达挂起帧（概念"完整调用链 key 直达有权决策者"落点）。
   // 顶层暂停缺省。见 design/step-dispatcher.md ^anc-exec-call-recursion。// @a: anc-exec-call-recursion
@@ -254,7 +262,7 @@ export interface StatusResponse { // @a: anc-cli-status-response
   call_path?: string[];   // 嵌套串行调用停点的逐层调用步号（todo/0105）// @a: anc-cli-status-nested-pause
 }
 
-import { homedir } from 'node:os';/** hopjit abort 响应：实例主动中止（用户"不要了"的暗管——[[exec-engine#^anc-exec-abort]]）。
+/** hopjit abort 响应：实例主动中止（用户"不要了"的暗管——[[exec-engine#^anc-exec-abort]]）。
  * 幂等重放同形态;completed/failed 实例 abort 走 error 面 ABORT_TERMINAL_CONFLICT。
  * 见 [[hop-cli#^anc-cli-abort-response]] */
 export interface AbortResponse { // @a: anc-cli-abort-response, anc-exec-abort
@@ -278,11 +286,4 @@ export interface ReplanError {
   status: 'error';
   code: ErrorCode;
   errors: SpecError[];
-}
-
-/** hopjit branch 请求体：手动覆盖引擎自动条件评估，用于调试或外部 HITL 介入。见 [[hop-cli#^anc-cli-branch-request]] */
-export interface BranchRequest { // @a: anc-cli-branch-request
-  step_id: string;
-  selected_case_id: string;
-  reason?: string;
 }

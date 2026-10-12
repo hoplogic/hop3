@@ -88,11 +88,11 @@ So what **humans must focus on** are the latter two classes: run a full semantic
 
 ## Stop 8 · Installation
 
-[[01-first-run-claude-code]] steps 1-2: `npm i -g @hoplogic/hopjit` + `hopjit install-skill`. Quick version in `USAGE.md` §1-2. **Reuse mode needs no API key at all** — this is not a convenience trick but an architectural decision (reasoning is carried by the outer LLM; the engine is pure flow control).
+[[01-first-run-claude-code]] steps 1-2: `npm i -g @hoplogic/hopjit` + `hopjit setup`. Quick version in `USAGE.md` §1-2. **Reuse mode needs no API key at all** — this is not a convenience trick but an architectural decision (reasoning is carried by the outer LLM; the engine is pure flow control).
 
 ## Stop 9 · Usage
 
-[[01-first-run-claude-code]] steps 3-6: `/demo-coffee-week` as the shortest first run (the named-skill product form) → the validate gate → the `/hopspec run` generic driver → experience the ask/confirm intervention points ("stopping to ask you is a structure declared by the spec author, not the LLM's politeness"). Codex carrier entry and differences: [[01-first-run-codex]]. **The trade-off between the two modes** (reuse mode: zero-config onboarding; for long tasks switch to standalone mode — independent sandbox, swappable lightweight model to save cost, at the price of one-time configuration) is in `USAGE.md` §6. For daily quick reference use the command table in `USAGE.md` §5.
+[[01-first-run-claude-code]] steps 3-6: the demo HopAnt `demo-coffee-week` as the shortest first run (the HopAnt product form) → the validate gate → the `/hopspec run` generic driver → experience the ask/confirm intervention points ("stopping to ask you is a structure declared by the spec author, not the LLM's politeness"). Codex carrier entry and differences: [[01-first-run-codex]]. **The trade-off between the two modes** (reuse mode: zero-config onboarding; for long tasks switch to standalone mode — independent sandbox, swappable lightweight model to save cost, at the price of one-time configuration) is in `USAGE.md` §6. For daily quick reference use the command table in `USAGE.md` §5.
 
 ## Stop 10 · Building and optimizing a hopskill
 

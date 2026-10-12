@@ -1,7 +1,7 @@
 // @module: act-body ^anc-struct-act-body
 import { describe, it, expect } from 'vitest';
 import { parseSpec } from '../src/parser.js';
-import { parseActBody, parseExpression, serializeActBody, exprChildren, exprMapChildren, exprHasCall } from '../src/act-body-parser.js';
+import { parseActBody, parseExpression, serializeActBody, exprChildren, exprMapChildren, exprHasCall, bodyHasToolCall } from '../src/act-body-parser.js';
 import type { ParseError } from '../src/errors.js';
 import type { ActStep, CommitStep, AssignStmt, IfStmt, CallStmt, BinaryExpr, CallExpr } from '../src/ast-types.js';
 
@@ -530,3 +530,56 @@ describe('括号跨行定向报错', () => {
     expect(errs[0].message).toContain('( 在本行没有闭合');
   });
 });
+
+// 逐分支侧钉住 act body 行号的回落（commit 安全分析批次 review 第五次阅卷后,机器枚举分支侧的 run20 存活项）:
+// lineNumbers 缺席或为空时,语句行号与 source_location 按 baseLine 顺延;lineNumbers 在场时逐行取真实行号,末行 +1 做 line_end
+// @v: anc-rule-act-body-line
+describe('act body 行号回落（lineNumbers 缺席 / 空 / 在场）', () => {
+  const src = ['a = 1', 'if a == 1:', '    b = 2', 'c = 3'];
+  it('不传 lineNumbers:行号从 baseLine 顺延,line_start=baseLine,line_end=baseLine+行数', () => {
+    const errs: ParseError[] = [];
+    const b = parseActBody(src, 10, errs)!;
+    expect(errs).toEqual([]);
+    expect(b.statements.map(s => s.line)).toEqual([10, 11, 13]);
+    expect(b.source_location).toEqual({ line_start: 10, line_end: 14 });
+  });
+  it('传空数组:与不传相同（空数组不算"有真实行号"）', () => {
+    const errs: ParseError[] = [];
+    const b = parseActBody(src, 10, errs, [])!;
+    expect(b.statements.map(s => s.line)).toEqual([10, 11, 13]);
+    expect(b.source_location).toEqual({ line_start: 10, line_end: 14 });
+  });
+  it('传真实行号（中间夹空行的 spec 行号不连续）:语句行号逐行取,line_end 取末行 +1 而不是 line_start+行数;解析错误的行号也取真实行号', () => {
+    const errs: ParseError[] = [];
+    const nums = [20, 22, 23, 27];
+    const b = parseActBody(src, 999, errs, nums)!;
+    expect(b.statements.map(s => s.line)).toEqual([20, 22, 27]);
+    expect(b.source_location).toEqual({ line_start: 20, line_end: 28 });
+    const bad: ParseError[] = [];
+    expect(parseActBody(['a = 1', 'b = $'], 999, bad, [40, 45])).toBeNull();
+    expect(bad[0]!.line).toBe(45);
+  });
+});
+
+// bodyHasToolCall——引擎 advance 消化路径的分流判据（无工具 body 引擎直接解释,含工具 body 走 tool_request 交 caller）。
+// 2026-10-12 语义审计 #1：原 @a 挂已废止的 anc-cli-next-drives-body,改挂 anc-exec-tool-request;此前零直接用例,只经 engine.test 间接覆盖
+// @v: anc-exec-tool-request
+describe('bodyHasToolCall：body 里有没有要交 caller 的工具调用', () => {
+  const parse = (src: string) => {
+    const errs: ParseError[] = [];
+    const r = parseActBody(src.split('\n'), 1, errs);
+    expect(errs).toHaveLength(0);
+    expect(r).not.toBeNull();
+    return r!;
+  };
+  it('正例（语义审计 #1）：callee 不在内置白名单（pdf_extract）→ true;嵌在 if 条件 / 赋值右侧 / 列表元素里同样为 true', () => {
+    expect(bodyHasToolCall(parse('x = pdf_extract(path: "a.pdf")'))).toBe(true);
+    expect(bodyHasToolCall(parse('if pdf_extract(path: "a.pdf"):\n  x = 1'))).toBe(true);
+    expect(bodyHasToolCall(parse('xs = [1, pdf_extract(path: "a.pdf")]'))).toBe(true);
+  });
+  it('反例（语义审计 #1）：只有内置函数（len / str / parse_json / join）与纯算术的 body → false', () => {
+    expect(bodyHasToolCall(parse('n = len(items)\ns = str(n) + "x"'))).toBe(false);
+    expect(bodyHasToolCall(parse('d = parse_json(raw)\nt = join(parts, ",")'))).toBe(false);
+  });
+});
+

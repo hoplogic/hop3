@@ -215,7 +215,40 @@ describe('L2 Knowledge Retrieval', () => {
     });
   });
 
+  // 2026-10-12 语义审计 #12：@knowledge 渲染改 yaml 条目化（与 doc-ref 条目同形态——`- 来源:` / `作用:` 按来源类型 / `内容: |`）,
+  // 作者 2026-08-24 定、设计 ^anc-exec-doc-ref-injection 写了、代码一直是 `### 节头 + source_id: content` 旧混编。本组旧断言随之改向。
+  // @v: anc-exec-knowledge-retrieval
   describe('formatKnowledgeContext', () => {
+    it('正例（语义审计 #12）：四来源各一条 → 每条是 `- 来源: <source_id>` / `作用: <按来源类型的缺省句>` / `内容: |` 条目,作用句四源各异', () => {
+      const result: KnowledgeRetrievalResult = {
+        specKnowledge: [{ source_id: 'kb-spec', content: '规约级判据', relevance: 'high' }],
+        stepKnowledge: [{ source_id: 'kb-step', content: '本步材料', relevance: 'high' }],
+        supplementary: [{ source_id: 'kb-supp', content: '补的', relevance: 'high' }],
+        dynamic: [{ source_id: 'kb-dyn', content: '动态来的', relevance: 'high' }],
+        failures: [],
+      };
+      const out = formatKnowledgeContext(result, '2.1');
+      expect(out).toContain('- 来源: kb-spec\n  作用: 全程判据基准');
+      expect(out).toContain('- 来源: kb-step\n  作用: 本步专用');
+      expect(out).toContain('- 来源: kb-dyn\n  作用: 自动补充背景');
+      expect(out).toContain('- 来源: kb-supp\n  作用: lack_of_info 后补——前序产出基于不完整信息,本条是补充检索结果（由步骤 2.1 触发）');
+      expect(out).toContain('  内容: |\n    规约级判据');
+      expect(out.match(/^- 来源: /gm)).toHaveLength(4);
+    });
+
+    it('反例（语义审计 #12）：旧形态零命中——没有 ### 节头、没有 [知识上下文] 区块头、没有 `source_id: content` 裸行', () => {
+      const result: KnowledgeRetrievalResult = {
+        specKnowledge: [{ source_id: 'kb-spec', content: 'x', relevance: 'high' }],
+        stepKnowledge: [{ source_id: 'kb-step', content: 'y', relevance: 'high' }],
+        supplementary: [], dynamic: [], failures: [],
+      };
+      const out = formatKnowledgeContext(result);
+      expect(out).not.toMatch(/^### /m);
+      expect(out).not.toContain('[知识上下文]');
+      expect(out).not.toMatch(/^kb-spec: x$/m);
+      expect(out).not.toMatch(/^kb-step: y$/m);
+    });
+
     it('formats spec knowledge section', () => {
       const result = {
         specKnowledge: [
@@ -226,9 +259,9 @@ describe('L2 Knowledge Retrieval', () => {
       };
 
       const formatted = formatKnowledgeContext(result);
-      expect(formatted).toContain('[知识上下文]');
-      expect(formatted).toContain('### Spec @knowledge（全程可用）');
-      expect(formatted).toContain('doc1: FHE概念');
+      expect(formatted).toContain('- 来源: doc1');
+      expect(formatted).toContain('作用: 全程判据基准');
+      expect(formatted).toContain('  内容: |\n    FHE概念');
     });
 
     it('formats step knowledge section', () => {
@@ -241,8 +274,9 @@ describe('L2 Knowledge Retrieval', () => {
       };
 
       const formatted = formatKnowledgeContext(result);
-      expect(formatted).toContain('### 步骤 @knowledge');
-      expect(formatted).toContain('doc2: 步骤知识');
+      expect(formatted).toContain('- 来源: doc2');
+      expect(formatted).toContain('作用: 本步专用');
+      expect(formatted).toContain('  内容: |\n    步骤知识');
     });
 
     it('formats supplementary knowledge with trigger step info', () => {
@@ -255,10 +289,10 @@ describe('L2 Knowledge Retrieval', () => {
       };
 
       const formatted = formatKnowledgeContext(result, '2.1');
-      expect(formatted).toContain('### 补充检索');
-      expect(formatted).toContain('步骤 2.1');
-      expect(formatted).toContain('lack_of_info');
-      expect(formatted).toContain('doc3: 补充内容');
+      expect(formatted).toContain('- 来源: doc3');
+      expect(formatted).toContain('作用: lack_of_info 后补');
+      expect(formatted).toContain('（由步骤 2.1 触发）');
+      expect(formatted).toContain('  内容: |\n    补充内容');
     });
 
     it('deduplicates fragments by source_id', () => {
@@ -274,7 +308,7 @@ describe('L2 Knowledge Retrieval', () => {
 
       const formatted = formatKnowledgeContext(result);
       // doc1 should appear only once (in spec section, since it's processed first)
-      const matches = formatted.match(/doc1:/g);
+      const matches = formatted.match(/- 来源: doc1\n/g);
       expect(matches).toHaveLength(1);
     });
 
@@ -301,9 +335,9 @@ describe('L2 Knowledge Retrieval', () => {
       };
 
       const formatted = formatKnowledgeContext(result);
-      const highIdx = formatted.indexOf('high:');
-      const medIdx = formatted.indexOf('med:');
-      const lowIdx = formatted.indexOf('low:');
+      const highIdx = formatted.indexOf('- 来源: high\n');
+      const medIdx = formatted.indexOf('- 来源: med\n');
+      const lowIdx = formatted.indexOf('- 来源: low\n');
       expect(highIdx).toBeLessThan(medIdx);
       expect(medIdx).toBeLessThan(lowIdx);
     });
@@ -341,7 +375,7 @@ describe('L2 Knowledge Retrieval', () => {
       const step: StepNode = { step_id: '1', step_type: 'reason', summary: 's', instruction: 'i' } as StepNode;
       const ctx: AssembledContext = {
         task_context: '', progress_summary: '', inputs: {}, instruction: '', output_schema: [],
-        spec_knowledge_context: '[Spec 级知识（全程恒定）]\n本文件《背景》:\n口径甲',
+        spec_knowledge_context: '- 来源: 本文件《背景》\n  作用: spec 文件自带的内容章节\n  内容: |\n    口径甲',
       };
       await injectKnowledgeContext(ctx, provider, spec, step);
       expect(ctx.spec_knowledge_context).toContain('口径甲');       // narrative 不被覆盖
@@ -380,7 +414,8 @@ describe('L2 Knowledge Retrieval', () => {
 
       const { sources } = await injectKnowledgeContext(ctx, provider, spec, step);
       expect(ctx.knowledge_context).toBeDefined();
-      expect(ctx.knowledge_context).toContain('kb1: 知识片段');
+      expect(ctx.knowledge_context).toContain('- 来源: kb1\n  作用: ');   // 条目形态（本例只有 spec 级提示,kb1 经 spec 去重后由动态检索带入 → 作用句为"自动补充背景"）
+      expect(ctx.knowledge_context).toContain('  内容: |\n    知识片段');
       expect(provider.retrieve).toHaveBeenCalledWith('密算 进行计算', 3);
       // 返回检索到的 source_id 列表（供 HopLog knowledge 流控字段记录）
       expect(sources).toContain('kb1');
@@ -420,7 +455,7 @@ describe('L2 Knowledge Retrieval', () => {
     });
 
     // @v: anc-exec-knowledge-retrieval
-    // 动态检索命中：summary+instruction 检索到知识 → 出现在"### 动态检索"区
+    // 动态检索命中：summary+instruction 检索到知识 → 以"作用: 自动补充背景"条目出现
     it('dynamic retrieval populates 动态检索 section when provider returns fragments', async () => {
       const provider: KnowledgeProvider = {
         retrieve: vi.fn().mockResolvedValue([
@@ -435,8 +470,7 @@ describe('L2 Knowledge Retrieval', () => {
         task_context: 'Goal: t', progress_summary: '', inputs: {}, instruction: '评估等级', output_schema: [],
       };
       const { sources } = await injectKnowledgeContext(ctx, provider, spec, step);
-      expect(ctx.knowledge_context).toContain('### 动态检索');
-      expect(ctx.knowledge_context).toContain('kb-dyn');
+      expect(ctx.knowledge_context).toContain('- 来源: kb-dyn\n  作用: 自动补充背景');
       expect(sources).toContain('kb-dyn');
     });
 
@@ -536,9 +570,9 @@ describe('L2 Knowledge Retrieval', () => {
       );
 
       expect(ctx.knowledge_context).toBeDefined();
-      expect(ctx.knowledge_context).toContain('补充检索');
-      expect(ctx.knowledge_context).toContain('步骤 1');
-      expect(ctx.knowledge_context).toContain('supp1: 补充知识');
+      expect(ctx.knowledge_context).toContain('- 来源: supp1\n  作用: lack_of_info 后补');
+      expect(ctx.knowledge_context).toContain('（由步骤 1 触发）');
+      expect(ctx.knowledge_context).toContain('  内容: |\n    补充知识');
       expect(sources).toContain('supp1');
     });
   });

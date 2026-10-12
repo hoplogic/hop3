@@ -4,6 +4,7 @@ import { parseSpec, parseFragment, serializeSpec, convertSpecKeywords, convertSc
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { validateSpec } from '../src/validator.js';
+import { parseActBody } from '../src/act-body-parser.js';
 import { isContainerStep, hasChildren, getChildren } from '../src/ast-helpers.js';
 import type { CallStep, SubtaskStep, ReasonStep, LoopStep } from '../src/ast-types.js';
 
@@ -4169,6 +4170,101 @@ Goal: g
     expect(errors.length).toBeGreaterThan(0);
     expect(errors.some(e => e.message.includes('围栏未闭合'))).toBe(true);
   });
+
+  // @v: anc-rule-act-body-line —— 语句 line 是 spec 文件真实行号（旧算法"步骤行号 + instruction 下标"漏数 ←/→/空行）
+  describe('act body 语句行号等于 spec 文件真实行号', () => {
+    const lineOf = (md: string, text: string): number => {
+      const hits = md.split('\n').map((l, i) => (l.includes(text) ? i + 1 : 0)).filter(n => n > 0);
+      expect(hits).toHaveLength(1);
+      return hits[0];
+    };
+    type Stmt = { line?: number; then_body?: Stmt[]; else_body?: Stmt[] };
+    const flatLines = (stmts: Stmt[]): number[] =>
+      stmts.flatMap(s => [s.line ?? -1, ...flatLines(s.then_body ?? []), ...flatLines(s.else_body ?? [])]);
+
+    it('正例：步骤行与 body 之间夹 ← / → 行、body 中间夹空行、if / else 嵌套 → 每条语句的 line 都等于原文行号', () => {
+      const md = ['# Spec: T', 'Id: t', 'Goal: g', '', '## Inputs', '- p % text  # 输入', '', '## Steps',
+        '1. [act] 算', '  - ← p', '  + → out % text  # 结果', '  + → n % int  # 计数',
+        '  > 说明一行', '  > ```hop_python', '  > a = strip(p)', '',
+        '  > if a == "x":', '  >     out = "yes"', '  > else:', '  >     out = "no"', '  > n = len(a)', '  > ```', ''].join('\n');
+      const { ast, errors } = parseSpec(md);
+      expect(errors).toHaveLength(0);
+      const act = ast.steps![0] as import('../src/ast-types.js').ActStep;
+      const want = ['a = strip(p)', 'if a == "x":', 'out = "yes"', 'out = "no"', 'n = len(a)'].map(t => lineOf(md, t));
+      expect(flatLines(act.body!.statements as Stmt[])).toEqual(want);
+      expect(act.body!.source_location?.line_start).toBe(lineOf(md, 'a = strip(p)'));
+      expect(act.body!.source_location?.line_end).toBe(lineOf(md, 'n = len(a)') + 1);   // 末行的下一行（body 中间夹空行时不能用 起始行 + 行数 算）
+      const ifs = act.body!.statements[1] as import('../src/ast-types.js').IfStmt;
+      expect(ifs.else_line).toBe(lineOf(md, '> else:'));
+    });
+
+    it('正例：elif 展开成 else_body 里的嵌套 if → 外层 else_line 是 elif 行,内层 else_line 是 else 行;没有 else 的 if 不带 else_line', () => {
+      const md = ['# Spec: T', 'Id: t', 'Goal: g', '', '## Inputs', '- p % text  # 输入', '', '## Steps',
+        '1. [act] 算', '  - ← p', '  + → out % text  # 结果',
+        '  > ```hop_python', '  > out = "z"', '  > if p == "a":', '  >     out = "1"', '  > elif p == "b":', '  >     out = "2"',
+        '  > else:', '  >     out = "3"', '  > if p == "c":', '  >     out = "4"', '  > ```', ''].join('\n');
+      const { ast, errors } = parseSpec(md);
+      expect(errors).toHaveLength(0);
+      const act = ast.steps![0] as import('../src/ast-types.js').ActStep;
+      type If = import('../src/ast-types.js').IfStmt;
+      const outer = act.body!.statements[1] as If;
+      expect(outer.else_line).toBe(lineOf(md, 'elif p == "b":'));
+      const inner = outer.else_body![0] as If;
+      expect(inner.line).toBe(lineOf(md, 'elif p == "b":'));
+      expect(inner.else_line).toBe(lineOf(md, '> else:'));
+      const plain = act.body!.statements[2] as If;
+      expect('else_line' in plain).toBe(false);
+    });
+
+    it('正例：标题风（段落 + ← / → + 缩进裸围栏）→ 每条语句的 line 都等于原文行号', () => {
+      const md = ['# HF', '', '## Steps', '', '### 1. [act] 切分', '', '无推理编排。', '',
+        '- ← text', '+ → word_count % int  # 词数', '',
+        '    ```hop_python', '    cleaned = strip(text)', '    words = split(cleaned, ",")', '    word_count = len(words)', '    ```', ''].join('\n');
+      const { ast, errors } = parseSpec(md);
+      expect(errors).toHaveLength(0);
+      const act = ast.steps![0] as import('../src/ast-types.js').ActStep;
+      const want = ['cleaned = strip(text)', 'words = split(', 'word_count = len(words)'].map(t => lineOf(md, t));
+      expect(flatLines(act.body!.statements as Stmt[])).toEqual(want);
+    });
+
+    it('反例：body 内解析错误与指令围栏未闭合的报错行号都是原文真实行', () => {
+      const bad = ['# Spec: T', 'Id: t', 'Goal: g', '', '## Steps', '1. [act] 算', '  + → out % text', '  + → m % text',
+        '  > ```hop_python', '  > out = "x"', '  > m = "未闭合', '  > ```', ''].join('\n');
+      const r1 = parseSpec(bad);
+      const strErr = r1.errors.find(e => e.message.includes('未闭合字符串'));
+      expect(strErr?.line).toBe(lineOf(bad, 'm = "未闭合'));
+
+      const open = ['# Spec: T', 'Id: t', 'Goal: g', '', '## Steps', '1. [act] 算', '  - ← x', '  + → out % text',
+        '  > ```hop_python', '  > out = "x"', ''].join('\n');
+      const r2 = parseSpec(open);
+      const fenceErr = r2.errors.find(e => e.message.includes('围栏未闭合'));
+      expect(fenceErr?.line).toBe(lineOf(open, '```hop_python'));
+
+      // body 末句是 if 头、下面没有缩进块:报错落在文件尾记号上,行号是末行的下一行（即闭栏行）
+      const tail = ['# Spec: T', 'Id: t', 'Goal: g', '', '## Steps', '1. [act] 算', '  + → out % text',
+        '  > ```hop_python', '  > out = "x"', '', '  > if out == "x":', '  > ```', ''].join('\n');
+      const r3 = parseSpec(tail);
+      const blockErr = r3.errors.find(e => e.message.includes('期望缩进块'));
+      expect(blockErr?.line).toBe(lineOf(tail, 'if out == "x":') + 1);
+    });
+
+    it('正例：标题风步骤在 body 之前先有一个示例围栏 → 示例围栏的开栏、内容、闭栏行都计入,body 语句行号不偏', () => {
+      const md = ['# HF', '', '## Steps', '', '### 1. [act] 切分', '', '示例:', '', '    ```text', '    样例输入', '    ```', '',
+        '- ← text', '+ → n % int  # 数', '', '    ```hop_python', '    n = len(text)', '    ```', ''].join('\n');
+      const { ast, errors } = parseSpec(md);
+      expect(errors).toHaveLength(0);
+      const act = ast.steps![0] as import('../src/ast-types.js').ActStep;
+      expect(flatLines(act.body!.statements as Stmt[])).toEqual([lineOf(md, 'n = len(text)')]);
+    });
+
+    it('正例：parseActBody 给了 line_numbers 就按它取,不用 base_line 推算（语句行号与 source_location 两处）', () => {
+      const errs: import('../src/errors.js').ParseError[] = [];
+      const body = parseActBody(['a = 1', '', 'b = 2'], 100, errs, [5, 6, 7]);
+      expect(errs).toHaveLength(0);
+      expect(body!.statements.map(s => s.line)).toEqual([5, 7]);
+      expect(body!.source_location).toEqual({ line_start: 5, line_end: 8 });
+    });
+  });
 });
 
 // @v: anc-step-tool-grant —— 节点工具授权条目（0054,作者 B 案:每工具一行+意图注释;变异实证:
@@ -4209,6 +4305,25 @@ ${lines}
     expect(errors.some(e => /每行恰一个工具名/.test(e.message))).toBe(true);
   });
 
+  // 设计注记② 文法第二钉 `*` 与具名互斥——2026-10-12 语义审计 #19 补实装（修前 * 与具名同收,* 当通配标志把具名静默吞掉）
+  it('反例（语义审计 #19）：`- 工具: *` 与具名授权同在一步（任一顺序）→ parse error "与具名授权互斥,二选一"', () => {
+    const a = parseSpec(mk(`  - 工具: *
+  - 工具: pdf_extract`));
+    expect(a.errors.some(e => /与具名授权互斥/.test(e.message))).toBe(true);
+    const b = parseSpec(mk(`  - 工具: pdf_extract
+  - 工具: *`));
+    expect(b.errors.some(e => /与具名授权互斥/.test(e.message))).toBe(true);
+  });
+
+  it('正例（语义审计 #19）：单独一行 * 过;多行具名过;两者都不触发互斥报文', () => {
+    const star = parseSpec(mk('  - 工具: *'));
+    expect(star.errors.some(e => /互斥/.test(e.message))).toBe(false);
+    const named = parseSpec(mk(`  - 工具: pdf_extract
+  - 工具: ocr_image`));
+    expect(named.errors.some(e => /互斥/.test(e.message))).toBe(false);
+    expect((named.ast.steps![0] as any).tool_grants).toHaveLength(2);
+  });
+
   // reason 扩员（^anc-exec-reason-tools 2026-09-01 作者拍"等同于 act 的能力,不能 commit 写"——
   // 旧反例"reason 无工具面"随概念层改定翻正）。 // @v: anc-exec-reason-tools
   it('正例：reason 步带授权行合法收进 tool_grants（2026-09-01 扩员,旧形态报 parse error）', () => {
@@ -4227,20 +4342,34 @@ g
     expect((ast.steps![0] as any).tool_grants).toEqual([{ name: 'pdf_extract', note: '读合同页再推理' }]);
   });
 
-  it('反例：check 步带授权行 → parse error 指路（判官纯判定无工具面,reason 扩员不及 check）', () => {
-    const src = `# T
+  // @v: anc-exec-reason-tools —— 2026-10-11 todo/0161 作者定"check 工具可能要读文件,留个口子"：
+  // check 步收授权行（与 reason 同一套声明制）;拒收面挪到 confirm（审批闸门,工具面无意义）。原反例"check 带授权行 → 拒"随修订撤。
+  it('正/反（0161）：check 步带授权行 → 收进 CheckStep.tool_grants 零 error;confirm 步带授权行 → parse error 指路仅 act/reason/check', () => {
+    const okSrc = `# T
 Id: t
 ## Goal
 g
 ## Steps
 1. [check] 判
-  - 工具: pdf_extract
+  - 工具: pdf_extract  # 读合同页核对产出
   - ← r
   + → ok: bool  # 判
   + → note: text  # 说明
 `;
-    const { errors } = parseSpec(src);
-    expect(errors.some(e => /仅 act\/reason 步骤可用/.test(e.message))).toBe(true);
+    const ok = parseSpec(okSrc);
+    expect(ok.errors).toHaveLength(0);   // 变异：checkAttrGate 的宿主集合去掉 'check' → 红
+    expect((ok.ast.steps![0] as any).tool_grants).toEqual([{ name: 'pdf_extract', note: '读合同页核对产出' }]);
+    const badSrc = `# T
+Id: t
+## Goal
+g
+## Steps
+1. [confirm] 批
+  - 工具: pdf_extract
+  + → approved: bool  # 批
+`;
+    const { errors } = parseSpec(badSrc);
+    expect(errors.some(e => /\[confirm\] 带工具授权行.*仅 act\/reason\/check 步骤可用/.test(e.message))).toBe(true);
   });
 });
 
@@ -4284,8 +4413,8 @@ ${lines}
     expect(errors.some(e => /不接受 \*/.test(e.message))).toBe(true);
   });
 
-  it('反例：check 步带禁用行 → parse error（消费面与授权行同族:仅 act/reason）', () => {
-    const src = `# T
+  it('正/反（0161）：check 步带禁用行 → 收进 CheckStep.tool_denies 零 error;confirm 步带禁用行 → parse error（消费面与授权行同族:仅 act/reason/check）', () => {
+    const okSrc = `# T
 Id: t
 ## Goal
 g
@@ -4296,8 +4425,20 @@ g
   + → ok: bool  # 判
   + → note: text  # 说明
 `;
-    const { errors } = parseSpec(src);
-    expect(errors.some(e => /带工具禁用行（- 禁工具:）——该条目仅 act\/reason 步骤可用/.test(e.message))).toBe(true);
+    const ok = parseSpec(okSrc);
+    expect(ok.errors).toHaveLength(0);
+    expect((ok.ast.steps![0] as any).tool_denies).toEqual([{ name: 'write' }]);
+    const badSrc = `# T
+Id: t
+## Goal
+g
+## Steps
+1. [confirm] 批
+  - 禁工具: write
+  + → approved: bool  # 批
+`;
+    const { errors } = parseSpec(badSrc);
+    expect(errors.some(e => /带工具禁用行（- 禁工具:）——该条目仅 act\/reason\/check 步骤可用/.test(e.message))).toBe(true);
   });
 
   it('反例：同名既授又禁 → parse error 点名工具名（冲突即笔误当场打回）', () => {

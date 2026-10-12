@@ -59,6 +59,8 @@ CATEGORIES = frozenset([
     "release",
     # pysb：Python 语法沙箱（产物代码的白名单静态审查与受控执行,2026-09-23）
     "pysb",
+    # hopant：HopAnt 实体的引擎侧机制（安装/配置适配/适配戳/本机索引,2026-10-06 随 hopant 模块立）
+    "hopant",
 ])
 
 GROUP_TITLE_WHITELIST = frozenset([
@@ -91,14 +93,18 @@ def validate_name(anchor_id):
     return None
 
 
-def parse_anchor_ids(raw):
+def parse_anchor_ids(raw, bad=None):
     # 每个逗号段取空白前首词再校验——允许 `@v: anc-x — 说明文字` 的尾注写法
     # （concept-anchor-rules「各层嵌入语法」L2/L3：标注行可带破折号说明，扫描器只认首词）。
+    # bad：可选列表——首词以 anc- 开头却不是合法锚 id 的段（尾粘全角括号等）追加进去,由调用方记 invalid_refs;
+    # 不传则行为同旧（todo/0133 挂账③——此前静默丢弃,卡片行归属回退为卡 id,审计照绿）。// @a: anc-meta-card-ref-owner
     ids = []
     for t in raw.split(","):
         head = t.strip().split()[0] if t.strip() else ""
         if head and ANCHOR_ID_RE.match(head):
             ids.append(head)
+        elif head.startswith("anc-") and bad is not None:
+            bad.append(head)
     return ids
 
 
@@ -333,7 +339,7 @@ def scan_traceability(project, src_dir, test_dir):
     in_gaps = False
     gaps = []
 
-    for line in content.split("\n"):
+    for card_lineno, line in enumerate(content.split("\n"), 1):
         m = re.match(r'^### (anc-[a-z][a-z0-9-]*)\s*(.*)', line)
         if m:
             if current:
@@ -371,8 +377,12 @@ def scan_traceability(project, src_dir, test_dir):
             # 发现 58 处报缺里 25 处是此类误报）。
             # 见 design/concept-anchor-rules.md ^anc-meta-card-ref-owner
             # @a: anc-meta-card-ref-owner
+            bad_decl = []
             declared = parse_anchor_ids(line.split("@a:")[-1] if "@a:" in line
-                                       else line.split("@v:")[-1]) if ("@a:" in line or "@v:" in line) else []
+                                       else line.split("@v:")[-1], bad_decl) if ("@a:" in line or "@v:" in line) else []
+            # 归属声明解析失败不回退为卡 id（todo/0133 挂账③）：记进卡的 bad_owner_decls,scan 末尾转 invalid_refs 点名
+            for bd in bad_decl:
+                current.setdefault("bad_owner_decls", []).append({"line": card_lineno, "decl": bd})
             owner = current["id"] if (not declared or current["id"] in declared) else declared[0]
 
             # 可校验引用的判据 = 行内带 @a:/@v: 声明（concept-anchor-rules「追溯文件」节，2026-08-03）。
@@ -455,6 +465,11 @@ def scan_traceability(project, src_dir, test_dir):
                            else f"文件内无任何 {marker} 标注"),
             })
 
+    # 卡片行归属声明解析失败（todo/0133 挂账③）→ invalid_refs 一条点名,让 check:audit 的 invalid_refs 计数红
+    for card in cards:
+        for bd in card.get("bad_owner_decls", []):
+            invalid_refs.append({"id": card["id"], "owner": bd["decl"], "ref": f"TRACEABILITY.md:{bd['line']}",
+                                 "reason": f"归属声明解析失败：'{bd['decl']}' 不是合法锚 id（尾粘字符？）——不回退为卡 id"})
     for card in cards:
         for ref in card["code_refs"]:
             check_ref(card["id"], ref, "@a:")

@@ -34,9 +34,9 @@ HopJIT 有两种用法（概念上游 [[../docs/concepts/HopSpec V3配套HopJIT�
 - **复用模式**：CC/Codex 这类 agent 自己当执行者，逐步调 `hopjit` CLI 驱动 spec——LLM 能力"复用"宿主 agent 的，HopJIT 不直接调模型，也就不需要自己的配置文件（参数和凭证都来自 caller 进程环境）；
 - **standalone（独立模式）**：HopJIT **自己调 LLM 执行整个 spec**。宿主（CC/Codex/任何支持 MCP 的工具）只负责发起和接收结果，执行过程中的模型调用、凭证、路由全由 HopJIT 自己解决。
 
-对用户来说 standalone 就是三步：装 `hopjit-mcp`、写一份 `~/.hopjit/config.yaml`（声明用哪家模型服务、key 在哪个环境变量）、在宿主里注册这个 MCP server。之后宿主里的 agent 通过六个 MCP 工具（start_run / run_status / resume_run / list_runs / stop_run / run_approved_command）发起、跟进、中止,以及在某个 run 的上下文里执行任务卡已批准的命令执行。
+对用户来说 standalone 就是三步：装 `hopjit-mcp`、写一份 `~/.hopjit/config.yaml`（声明用哪家模型服务、key 在哪个环境变量）、在宿主里注册这个 MCP server。之后宿主里的 agent 通过五个 MCP 工具（start_run / run_status / resume_run / list_runs / stop_run）发起、跟进、应答、列举、中止。这五件是独立模式真正依赖的工具——操作对象都是 start_run 建出来的独立模式 run（其中 start_run 与 resume_run 经 server 的独立模式能力闸，配置文件或凭证缺失时返回 STANDALONE_UNAVAILABLE;run_status / list_runs / stop_run 只查注册表与快照，不依赖配置），它们也正是 opencode setup 禁用的独立模式专属清单 OPENCODE_DISABLED_TOOLS（[[hop-cli#^anc-cli-opencode-tools-gate]]）。`run_approved_command` 不在其中：它是复用模式驱动面的工具，只读快照与任务卡、不构造 Dispatcher、不依赖独立模式配置（2026-10-11 语义审计 0156 C6 定口径，权威 [[mcp-server#^anc-mcp-run-command]]「模式归属」条;此前本文把它算进"六个工具"是账面错误）。hopjit-mcp 注册面上的其余工具（复用驱动七件、批准三件、server_status、管理八件）同样不属于独立模式，清单见 mcp-server 设计的「②b 对外接口清单」节。
 
-**这一整套——一份配置文件、一次注册动作、四个工具、一条凭证链——用户视角是一个东西**。所以它需要一份统一的设计：任何一块单独改动都可能破坏整体的约束（比如凭证只要在某一个环节泄漏一次，整体的"key 不落盘"就破了）。这正是本文存在的原因。
+**这一整套——一份配置文件、一次注册动作、五个工具、一条凭证链——用户视角是一个东西**。所以它需要一份统一的设计：任何一块单独改动都可能破坏整体的约束（比如凭证只要在某一个环节泄漏一次，整体的"key 不落盘"就破了）。这正是本文存在的原因。
 
 **归属判据**：一个配置项如果需要"用户在会话外预先写好、跨会话生效"，它就属于 standalone 的配置文件（schema 在 [[shared-providers#^anc-config-standalone-schema]]）——不允许出现第二个配置文件。反之，随每次调用传的参数属于复用模式的 CLI 面。
 
@@ -49,7 +49,7 @@ standalone 的具体条款分写在四份文档里（各自的锚点是权威，
 | 配置文件            | `config.yaml` 的字段定义、"key 只许写环境变量名"、默认模型怎么解析                           | [[shared-providers#^anc-config-standalone-schema]]                                  | mcp-server.ts `loadStandaloneConfig` |
 | 运行期凭证           | 配置里选了后端就用配对的 key（不再看环境变量）、Anthropic SDK 会自己捡环境 token 的通道必须掐断、resume 时 key 从当前环境重取 | [[step-dispatcher#^anc-exec-model-resolve]]                                         | dispatcher.ts `resolveCredential`    |
 | 怎么进入 standalone | 注册 MCP server 这个动作本身就是选定（没有额外的配置开关）；确认 server 在场靠发一次真调用（list_runs），不靠看工具列表        | [[codex-driver-carrier#^anc-driver-codex-standalone-dispatch]]                      | driver/codex SKILL.md STANDALONE 段   |
-| MCP 工具          | 四个工具的行为、异步启动（start_run 立即返回）、启动时的配置校验、一个 server 管多个 run、重启后恢复                     | [[mcp-server#^anc-struct-mcp-server]] 及其工具锚点                                        | mcp-server.ts `HopjitMcpCore`        |
+| MCP 工具          | 五个工具（start_run / run_status / resume_run / list_runs / stop_run）的行为、异步启动（start_run 立即返回）、启动时的配置校验、一个 server 管多个 run、重启后恢复 | [[mcp-server#^anc-struct-mcp-server]] 及其工具锚点                                        | mcp-server.ts `HopjitMcpCore`        |
 | 执行参数组装          | 配置文件怎么变成引擎吃的 HostConfig/ModelEngine（含默认禁读 .env/*.key 的沙箱基线）、按步骤类型路由模型             | [[shared-providers#^anc-config-host]] + [[step-dispatcher#^anc-exec-model-resolve]] | mcp-server.ts `providerToHostConfig` |
 
 ## 整体必须守住的五件事【契约】 ^anc-exec-standalone-invariants

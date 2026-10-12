@@ -1,6 +1,6 @@
 %% @trace
 	id: hopjit-design
-	source: [[HopAnt概念-双态组件模型]], [[HopSpec V3核心规范]], [[HopType体系]], [[HopSpec V3配套HopJIT运行时能力]]
+	source: [[HopAnt概念]], [[HopSpec V3核心规范]], [[HopType体系]], [[HopSpec V3配套HopJIT运行时能力]]
 	source_id: cyant-concept, hopspec-v3-core, hoptype-system, hopjit-runtime
 	type: intent
 	last_sync: 2026-07-31T18:03+0800
@@ -8,11 +8,11 @@
 
 # HopJIT 架构设计
 
-> 用 struct/impl/Spec 体系描述 HopJIT 自身的架构
+> 用设计层表达语言（HopType / HopSop）描述 HopJIT 自身的架构
 
 ## 定位
 
-> **本文在主线中的位置（第 4 站·架构）**：前置=第 3 站 [[docs/concepts/HopType体系]]——本文通篇用 HopType 语言（struct/trait/impl、双态分布）描述架构，未读它先补；后继=第 5 站 [[docs/design/module-principles]]（模块规范）与 [[Doctree]]「模块索引」（第 6 站，模块清单的家）。
+> **本文在主线中的位置（第 4 站·架构）**：前置=第 3 站 [[docs/concepts/HopType体系]]——本文通篇用设计层表达语言（`HopType:` 块、独立 HopTrait、双态分布）描述架构，未读它先补；后继=第 5 站 [[docs/design/module-principles]]（模块规范）与 [[Doctree]]「模块索引」（第 6 站，模块清单的家）。
 
 HopJIT 是 hoplogic 项目里的 HopSpec 执行引擎（TypeScript 实现）。TS 引擎核心（确定性流控）+ 两种驱动模式（概念定义见 [[../HopSpec V3配套HopJIT运行时能力#^anc-exec-dual-mode]]）：
 
@@ -53,7 +53,11 @@ HopJIT 分为引擎核心 + 两个驱动适配层，通过 Provider 接口解耦
 | 组件 | 职责 | 环境依赖 |
 |------|------|---------|
 | HopCLI | CLI 命令路由（薄壳，不含业务逻辑） | 进程/stdout |
+| HopAnt（hopant 模块） | HopAnt 实体落盘：安装/配置适配/本机索引——纯函数,home 与机器侧事实由组合根注入（见 [[docs/design/hopant]]） | 文件系统 |
+| 两级配置加载（config-load 模块） | 系统级 `~/.hopjit/config.yaml` 与项目级 `hopjit.yaml` 读取、文法核、逐键合并、引用核——两种执行模式共用一份;家目录/项目根由组合根传入（见 [[docs/design/config-load]]） | 文件系统 |
 | FilePersistence | EngineSnapshot ↔ .hopstate/ 文件 | 文件系统 |
+| ReuseDriver（mcp-server 模块的 reuse-driver.ts） | 复用模式驱动工具的引擎调用序：run/submit/reap/status/resume/abort/validate 七件,取工作区根作参数、出错抛 Error,由 MCP server 组合根挂成工具（见 [[docs/design/mcp-server#^anc-mcp-reuse-driver-tools]]） | 文件系统 |
+| HopAdmin（hop-cli 模块的 hop-admin.ts） | hop 自身管理面的业务体：doctor 八问 + ant 七动作 + 载体探测助手;机器侧事实经 AdminContext 由组合根传入,不读进程状态;cli.ts 与 mcp-server.ts 各套薄壳——后者挂成 doctor / ant_* 八个管理工具（见 [[docs/design/mcp-server#^anc-mcp-admin-tools]]） | 文件系统 / 子进程（握手、bootstrap 脚本） |
 
 **驱动载体多态（driver/）** ^anc-driver-carrier-polymorphism：复用模式下外层 LLM（CC/Codex/OpenCode…）当推理引擎，通过一套**驱动指令**编排介入点/执行段/并发。**引擎与 CLI 载体中立**（纯 JSON in/out，不假设工具执行能力——概念层 `^anc-exec-mode-invariants`），故每个载体只需一套等价 driver：
 - `driver/hopspec-skill.md`（+ `skills/hopbuild/`）——**CC 载体**（SKILL.md 格式，Agent 工具起 subagent，AskUserQuestion 问人）。
@@ -66,7 +70,7 @@ HopJIT 分为引擎核心 + 两个驱动适配层，通过 Provider 接口解耦
 | 组件 | 职责 | 环境依赖 |
 |------|------|---------|
 | StepDispatcher | LLM 调用循环、模型路由、凭证解析 | Anthropic SDK / 网络 |
-| MCP server（hopjit-mcp） | standalone 对外协议壳——六工具（start/status/resume/list/stop/run_approved_command）包 StepDispatcher，run 注册表 + job 式异步 + HITL 同进程 resume（见 [[docs/design/mcp-server]]；standalone 整体约束与审查见 [[docs/design/standalone-mode]]） | MCP SDK / stdio |
+| MCP server（hopjit-mcp） | standalone 对外协议壳——独立模式六工具（start/status/resume/list/stop/run_approved_command）包 StepDispatcher；另挂复用驱动七件（实现在 reuse-driver.ts）、commit 批准入口 approve_commit、管理八件 doctor / ant_*（实现在 hop-cli 的 hop-admin.ts）、能力状态查询 server_status；配置缺失只停用独立模式入口,server 照常启动，run 注册表 + job 式异步 + HITL 同进程 resume（见 [[docs/design/mcp-server]]；standalone 整体约束与审查见 [[docs/design/standalone-mode]]） | MCP SDK / stdio |
 | DefaultToolProvider | Read/Write 工具实现、沙箱拦截 | 文件系统 |
 | SandboxConfig | 四维度安全边界（filesystem/network/runtime/database） | OS 级资源 |
 | ModelEngine | 多模型配置、客户端池 | LLM 服务商 API |
@@ -192,6 +196,7 @@ CC（推理 + 工具执行，全程在场）
 | ExecutionEngine | 引擎核心 | TypeScript | 状态机，持久化经 PersistenceProvider |
 | PromptAssembler | 引擎核心 | TypeScript | 模板化组装，确定性 |
 | HopCLI | 复用模式适配 | TypeScript | 命令路由，JSON I/O |
+| HopAnt | 复用模式适配 | TypeScript | HopAnt 安装/适配/索引,纯函数,CLI `ant` 命令族承接 |
 | StepDispatcher | 独立模式适配 | TypeScript | 调度循环 + 直调 LLM API（tool_use loop） |
 | HopjitMcpCore | 独立模式适配 | TypeScript | MCP 工具面路由 + run 注册表（薄壳，零执行逻辑） |
 
@@ -227,15 +232,15 @@ CC（推理 + 工具执行，全程在场）
 
 | 相互影响通道 | 违反形态 | 堵法 | 落点 |
 |---|---|---|---|
-| 异常传播 | 火后不管的池 promise reject 无人接 → 进程崩全船沉 | **结构防线（两形态共用）**=池 promise 尾接终极 catch——它在 run 上下文内、知道自己是谁，run 标 failed 在此完成（收割自身失败只记 warn+run failed，吞不再抛）；**进程兜底（仅 server）**=装 `unhandledRejection`/`uncaughtException`——职责如实：记 stderr+计数留痕+**不 exit**，**不承诺关联 run**（回调只有 reason 无 runId，进程内无上下文链——承诺关联即 launch_command 式空头支票；漏网 run 的驱动链断了停在 running，由超时/对账/run_status 观测或重启 restore 兜住）。作者拍板 2026-08-14"活"：真状态全在盘上 durable resume 兜底；死则一个意外杀 N-1 个健康 run。**CLI 进程不装兜底**（unifiedDispatch 下主+子实例同进程但同属一个 run——崩即该 run 崩，语义本来就对；结构防线照有：子实例炸应是 failed 终态非进程炸）。兜底是止血非豁免——每次触发=结构防线漏网，留痕必修 | dispatcher.ts 池尾 ×2（两形态共用）；mcp-server.ts serve（兜底） |
+| 异常传播 | 火后不管的池 promise reject 无人接 → 进程崩全船沉 | **结构防线（两形态共用）**=池 promise 尾接终极 catch——它在 run 上下文内、知道自己是谁；池尾 catch 只记 warn，不把 run 标 failed，由超时与对账兜底（收割自身炸就标 run failed，会把一个子实例的收割异常放大成整 run 终态，现行兜底更稳；吞不再抛）；**进程兜底（仅 server）**=装 `unhandledRejection`/`uncaughtException`——职责如实：记 stderr+计数留痕+**不 exit**，**不承诺关联 run**（回调只有 reason 无 runId，进程内无上下文链——承诺关联即 launch_command 式空头支票；漏网 run 的驱动链断了停在 running，由超时/对账/run_status 观测或重启 restore 兜住）。作者拍板 2026-08-14"活"：真状态全在盘上 durable resume 兜底；死则一个意外杀 N-1 个健康 run。**CLI 进程不装兜底**（unifiedDispatch 下主+子实例同进程但同属一个 run——崩即该 run 崩，语义本来就对；结构防线照有：子实例炸应是 failed 终态非进程炸）。兜底是止血非豁免——每次触发=结构防线漏网，留痕必修 | dispatcher.ts 池尾 ×2（两形态共用）；mcp-server.ts serve（兜底） |
 | cwd | run 级解析锚被进程 cwd 硬编码；任何 chdir 全体串台 | 组合根（startRun/CLI 命令入口）一次读取折进该 run 的 HostConfig；内核禁 `process.cwd`/`process.chdir` | mcp-server.ts startRun/restoreRun |
-| env | 凭证/模型/行为开关运行期直读 `process.env`——外部或它 run 改动即影响在飞 run | HostConfig 构造期一次性 **env 快照**（`env_snapshot`，见 [[docs/design/shared-providers#^anc-config-host]]）；内核运行期只查快照。**两类例外（登记不收编）**：①`env_passthrough`/`auth_env` 是给 stdio 工具子进程的透传——装配期（惰性连接时）解引用属组合根延伸语义（连接是 run 内一次性动作;快照它反而改变"起子进程时的当下环境"这个用户可感语义）；②`HOPJIT_CONFIG`/`HOME`/`HOPJIT_OUTPUT` 是进程身份级配置（server/CLI 启动期消费）,天然组合根不属快照面 | dispatcher 8 处/engine 1 处收编；tools-mcp-binding 3 处=例外① |
+| env | 凭证/模型/行为开关运行期直读 `process.env`——外部或它 run 改动即影响在飞 run | HostConfig 构造期一次性 **env 快照**（`env_snapshot`，见 [[docs/design/shared-providers#^anc-config-host]]）；内核运行期只查快照。**两类例外（登记不收编）**：①`env_passthrough`/`auth_env` 是给 stdio 工具子进程的透传——装配期（惰性连接时）解引用属组合根延伸语义（连接是 run 内一次性动作;快照它反而改变"起子进程时的当下环境"这个用户可感语义）；②`HOPJIT_CONFIG`/`HOME`/`HOPJIT_OUTPUT` 是进程身份级配置（server/CLI 启动期消费）,天然组合根不属快照面;系统语言 `LC_ALL`/`LC_MESSAGES`/`LANG` 同属此类——`config-load.ts` 的 `detectSystemLanguage` 在 HostConfig 构造期读一次定 `language`（键缺席时的缺省,[[docs/design/i18n#^anc-i18n-language-config]],2026-10-11 todo/0160）,结果进 `HostConfig.language` 与 `hop_env_language` 快照面,运行期不再查 | dispatcher 8 处/engine 1 处收编；tools-mcp-binding 3 处=例外①;config-load 1 处=例外② |
 | 共享可变对象 | server 的 `config`（tool_servers `_base_dir` 变异）被多 run 触碰 | startRun 按 run 深拷贝分发（现状幂等靠巧合，改为结构保证） | mcp-server.ts startRun |
-| 模块级可变全局 | `_stepMapCache`（ast-runtime 顶层 `let`）——run 级缓存住进程级槽，跨 run 互踢；照此模式再写一个按内容键控的缓存即正确性 bug | 缓存搬引擎实例（`buildStepMap` 回纯函数）；**src 内核零可变模块顶层状态**成为可机检断言。**豁免=组合根文件+登记制**：`cli.ts` 的 `FORCE_JSON`（进程输出模式,真进程级语义）是现存豁免首例——豁免只许出现在组合根白名单文件且逐个登记于守卫脚本,内核文件零豁免 | ast-runtime.ts/engine 实例 |
+| 模块级可变全局 | `_stepMapCache`（ast-runtime 顶层 `let`）——run 级缓存住进程级槽，跨 run 互踢；照此模式再写一个按内容键控的缓存即正确性 bug | 缓存搬引擎实例（`buildStepMap` 回纯函数）；**src 内核零可变模块顶层状态**成为可机检断言。**豁免=组合根文件+登记制**：`cli.ts` 的 `FORCE_JSON`（进程输出模式,真进程级语义）是现存豁免首例——豁免只许出现在组合根白名单文件且逐个登记于守卫脚本,内核文件零豁免。**登记在案的内核例外一条**：`dispatcher.ts` 的 `reachedEndpoints`（`const` 持有的 `Set`,本进程里成功应答过的端点键集,[[docs/design/step-dispatcher#^anc-exec-network-pause]]）——只增不删、只用于把"曾连通过的端点"再撞 ENOTFOUND/ECONNREFUSED 时从死端点判定降为网络重试,不装任何 run 级数据,刻意模块级（parallel worker 各自新建 StepDispatcher,实例级状态不共享）;守卫的顶层 `let` 规则扫不到 `const` 持有的可变集合,故按登记制在 `check-process-state.mjs` 豁免表里补账 | ast-runtime.ts/engine 实例 |
 
 **显式共享登记（有意共享，不算违反，动它须过本表）**：`MAX_CONCURRENT_RUNS` 并发闸（server 级费用防线）；provider 限速/费用（进程共享 API key——全局费用闸挂观察账）；`runs` 注册表（server 的本职状态）；`.hopstate` 盘面（run 各有子目录，天然隔离）。
 
-**守卫**：`check-process-state.mjs`（内核禁 `process.env/cwd/chdir`+模块顶层可变状态，组合根白名单豁免——组合根三个：`cli.ts`/`mcp-server.ts`/`postinstall.ts`（npm 钩子进程入口），见 [[docs/design/chain-enforcement]]）+ 崩溃回归（故障 run 并发健康 run：健康 run 走完、server 存活、故障 run 记 failed）+ 串台回归（两 run 各自 HostConfig，解析根/凭证互不可见）。
+**守卫**：`check-process-state.mjs`（内核禁 `process.env/cwd/chdir` 与机器身份级读取 `homedir()/hostname()/userInfo()/process.execPath`（2026-10-10 扩面——hop-admin.ts 是第一个真需要这条的非组合根文件,设计承诺了四项而守卫只拦三项被 review 变异抓出）+模块顶层可变状态，组合根白名单豁免——组合根两个：`cli.ts`/`mcp-server.ts`（postinstall.ts 曾是第三个,2026-10-09 随 npm 钩子一起撤,todo/0143），见 [[docs/design/chain-enforcement]]）+ 崩溃回归（故障 run 并发健康 run：健康 run 走完、server 存活、故障 run 记 failed）+ 串台回归（两 run 各自 HostConfig，解析根/凭证互不可见）。
 
 > 各模块落点细节：server 侧=[[docs/design/mcp-server#^anc-mcp-run-lifecycle]]；env 快照字段=[[docs/design/shared-providers#^anc-config-standalone-schema]]；缓存归属=[[docs/design/spec-ast]]。本节是唯一权威，各处引用不复制。
 

@@ -102,6 +102,8 @@ Constraints:
 
 **输出限额为什么从 10MB 收到 64KB**：`subprocess.run` 的消费者是 body 变量（落 work_zone 文件也行，10MB 无妨）；`run_script` 的消费者是**模型的上下文窗口**——工具结果原样注回对话，10MB 当场烧穿。64KB 已经远超任何合理的校验脚本输出量，撞顶时报文指路"用脚本自带过滤或只打印摘要"。两个限额同一份原语、各自传入自己的策略值。
 
+**与 HopAnt 自带脚本的分工**（2026-10-06,todo/0145）：HopAnt 目录里随 HopAnt 分发的 `scripts/` 不经本工具——它们是装前可审的代码,走任务级授权：入口 spec《已批准命令》列出 + body `subprocess.run` + `spec_dir()` 寻址（[[../hopant#^anc-struct-hopant-runtime-dirs]]、[[../act-body#^anc-exec-spec-dir]]）。本工具的寻址面 = 文件工具 strict 档全部合法形态（workspace / work_zone / spec `Config.dirs.readwrite` 声明并经人批准的目录,[[file-tools#^anc-exec-tool-path-resolve]] 第⑤形态）,**不含只读资源目录**（spec 目录、dirs.read、hop_env 根）——作者 2026-10-06 定"放开就是开放执行,安全面没审过"管的是只读资源目录;readwrite 目录用户批过读写,脚本从那里跑与 act 跑自己刚写进 work_zone 的脚本在可控性上无本质差别。**执行的授权不按脚本所在目录而按步骤类型**——act 受沙箱"可安全重做"约束,commit 受核验与批准约束（作者 2026-10-07 定"鉴权是 hop 探索-核验-提交体系来构建的,核心还是 act or commit";agent 曾提按 spec 来源区分、即兴卡走已批准命令预登记,作者否"/hop 需要动态生成脚本,这样反而被你卡死了";决策档 todo/decision/20261007-run_script寻址面与dirs-鉴权按步骤类型不按目录.md）。
+
 ## 与 subprocess.run 的分工，以及原语单一实现
 
 [[../act-body#^anc-exec-subprocess-run]] 的"与相邻契约分工"里原有一句：**"Tools 注册面（服务型工具，有 schema 有会话）与本件（本地进程一次性调用）不合流——各自注册各自管控"**。`run_script` 是一件注册面工具，内部做的是本地进程一次性调用，表面上就是踩在这条分界上，所以要把话说清楚：

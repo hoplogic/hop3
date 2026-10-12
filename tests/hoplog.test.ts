@@ -974,14 +974,14 @@ g
       });
       log.recordStepStart('2', 'confirm', 'Confirm plan');
       log.recordStepMeta('2', {
-        hitl: { response: 'yes', responder: 'human', options: ['yes', 'no'], at: '2026-06-12 10:00:00+08:00' },
+        hitl: { response: 'yes', responder: 'caller', options: ['yes', 'no'], at: '2026-06-12 10:00:00+08:00' },
       });
       log.close('completed');
 
       const block = stepBlock(readFileSync(log.getFilePath(), 'utf-8'), '2');
       expect(block).toContain('    hitl:\n');
       expect(block).toContain('response: yes');
-      expect(block).toContain('responder: human');
+      expect(block).toContain('responder: caller');
       expect(block).toContain('options:');
       expect(block).toContain('- yes');
       expect(block).toContain('- no');
@@ -1463,9 +1463,12 @@ describe('P1 parallel reap/settle 块', () => {
     log.recordParallelDispatch('1', '1.1.2', '/log/b');
     log.recordParallelReap('1', '1.1.1', 'completed');
     log.recordParallelReap('1', '1.1.2', 'failed');
-    log.recordParallelSettle('1');
+    log.recordParallelSettle('1', ['1.1.1', '1.1.2']);   // 第二参=已收清单（todo/0129 B7——设计定两参,代码此前只一参）
     log.close('completed');
     const text = readFileSync(join(log.getRunDir(), 'main.yaml'), 'utf-8');
+    expect(text).toMatch(/settle:\n\s+settled_at: .*\n\s+reaped:/);   // settle 块含已收清单
+    expect(text).toContain('- 1.1.1');
+    expect(text).toContain('- 1.1.2');
     expect((text.match(/dispatch:/g) ?? []).length).toBe(2);
     expect((text.match(/reap:/g) ?? []).length).toBe(2);
     expect(text).toContain('status: failed');       // 失败收割如实入轨
@@ -1801,6 +1804,38 @@ describe('日志保留不删活 run + 写失败不杀 run + resume 目录缺失�
     } finally { chmodSync(root, 0o755); }
   });
 
+  // resume 侧的重建失败路径（todo/0136 ③——append 侧上例已钉,resume 侧同构零覆盖;hopissues/0116 修复批 M9-resume-warn 绿挂此）
+  // @v: anc-obs-hoplog-resume
+  it('③ 反例：resume 到父目录只读下不存在的 runDir → 重建失败不抛、appendDead 生效（后续 record 不写不再 warn）、warn 含"重建失败"（resume 侧）', () => {
+    if (process.getuid && process.getuid() === 0) return;
+    const root = mkdtempSync(join(tmpdir(), 'hl-resume-rebuildfail-'));
+    const runDir = join(root, 'log-test-20260101T000000-abcd');
+    chmodSync(root, 0o555);
+    try {
+      let resumed: HopLog | undefined;
+      expect(() => { resumed = HopLog.resume(runDir); }).not.toThrow();
+      expect(existsSync(runDir), '重建应失败').toBe(false);
+      const rebuildWarns = errSpy.mock.calls.filter(c => String(c[0]).includes('resume 时日志目录不在且重建失败'));
+      expect(rebuildWarns, 'resume 侧重建失败当场 warn 一次').toHaveLength(1);
+      expect(String(rebuildWarns[0][0])).toContain('重建失败');
+      // appendDead 生效：后续 record 静默 no-op,不抛、不再 warn、不建文件
+      const before = errSpy.mock.calls.length;
+      expect(() => { resumed!.recordStepStart('1', 'act', 'a'); resumed!.recordStepDone('1', {}); }).not.toThrow();
+      expect(errSpy.mock.calls.length).toBe(before);
+      expect(existsSync(join(runDir, 'main.yaml'))).toBe(false);
+    } finally { chmodSync(root, 0o755); }
+  });
+  it('③ 正例：resume 到父目录可写下不存在的 runDir → 重建成功、最小 header 带断档标记、后续 record 正常写（对照上例）', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-resume-rebuild-'));
+    const runDir = join(root, 'log-test-20260101T000000-abcd');
+    const resumed = HopLog.resume(runDir);
+    expect(existsSync(join(runDir, 'main.yaml'))).toBe(true);
+    expect(errSpy.mock.calls.some(c => String(c[0]).includes('已重建'))).toBe(true);
+    expect(errSpy.mock.calls.some(c => String(c[0]).includes('重建失败'))).toBe(false);
+    resumed.recordStepStart('1', 'act', 'a');
+    expect(readFileSync(join(runDir, 'main.yaml'), 'utf-8')).toContain('dir_missing_on_resume');
+  });
+
   it('端到端（卡 probe ①）：引擎 A 起跑未终态,同 stateDir 再起 B、C、D 三个顶层 run（缺省 max_runs=3）→ A 的日志目录仍在,A 继续写不报错', () => {
     const base = mkdtempSync(join(tmpdir(), 'hl-e2e-'));
     const logDir = join(base, '.hoplog'); const stateDir = join(base, '.hopstate');
@@ -1909,5 +1944,47 @@ describe('recordCommand 顶层 command: 块', () => {   // @v: anc-obs-command-b
     const doc = yamlLoad(tail) as Record<string, unknown>;
     expect((doc.command as Record<string, unknown>).returncode).toBe(0);
     expect(extractHopLogStepKeys(text)).toContain('1');
+  });
+});
+
+// @v: anc-cli-workspace-arg —— header workspace_dir: 行（2026-10-07 作者问"运行时是否显示一下 cwd 是啥？或者写在 hoplog 里？"）
+describe('header workspace_dir 行', () => {
+  const opts = (logDir: string, extra: Record<string, unknown> = {}) => ({ specId: 'r', logDir, title: 'T', goal: 'G', ...extra });
+
+  it('正例：传 workspaceDir → header 有 workspace_dir: 行,紧随 started_at 之后、在 execution: 之前;路径含空格经 toYaml 加引号', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-ws-'));
+    const log = new HopLog(opts(root, { workspaceDir: '/Users/some one/proj: x' }));
+    const txt = readFileSync(log.getFilePath(), 'utf-8');
+    const lines = txt.split('\n');
+    const iStarted = lines.findIndex(l => l.startsWith('started_at:'));
+    expect(lines[iStarted + 1]).toBe('workspace_dir: "/Users/some one/proj: x"');
+    expect(txt.indexOf('workspace_dir:')).toBeLessThan(txt.indexOf('execution:'));
+    expectYamllValid(txt);
+  });
+
+  it('反例：不传 workspaceDir（直接构造 HopLog 的工具/测试场景）→ 不写该行,其余 header 不变', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-ws-none-'));
+    const log = new HopLog(opts(root));
+    const txt = readFileSync(log.getFilePath(), 'utf-8');
+    expect(txt).not.toContain('workspace_dir:');
+    expect(txt).toMatch(/^started_at: .+\nspec:\n/m);   // started_at 直接接 spec:,中间没有 workspace_dir 行
+  });
+
+  it('正例：日志目录被外部删后自愈重建的最小 header 也带 workspace_dir（与 spec_id/run_id/trace_id/started_at 同列）', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-ws-rm-'));
+    const log = new HopLog(opts(root, { workspaceDir: '/ws/root' }));
+    rmSync(log.getRunDir(), { recursive: true, force: true });
+    log.recordStepStart('1', 'act', '干活');
+    const txt = readFileSync(log.getFilePath(), 'utf-8');
+    expect(txt).toMatch(/^workspace_dir: \/ws\/root$/m);
+    expect(txt.indexOf('workspace_dir:')).toBeLessThan(txt.indexOf('log_gap:'));
+  });
+
+  it('正例：resume 从既有文件头读回 workspace_dir,目录丢失重建时仍能重发', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hl-ws-resume-'));
+    const log = new HopLog(opts(root, { workspaceDir: '/ws/r2' }));
+    const runDir = log.getRunDir();
+    const resumed = HopLog.resume(runDir);
+    expect((resumed as any).headerWorkspaceDir).toBe('/ws/r2');
   });
 });

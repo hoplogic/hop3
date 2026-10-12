@@ -47,7 +47,7 @@ node <CLI> --json submit_and_fetch_next <step_id> --output '<结果 JSON>' --sta
 
 step_ready 的 `step_type` 为 `call` 时，整步归你驱动（引擎不解释）。响应里带 **`call_protocol` 载荷——四条命令引擎已拼好，你只照抄**（🔴 禁改参数、禁 `run --call-parent`、禁查 `--help` 自选路线——那是引擎派发 launch_command 的 worker 入口，混用会双重嵌套跑死野目录，引擎设了 CALL_PROTOCOL_MISUSE 闸但不要靠闸兜底）：
 
-1. **建子实例**：照抄 `call_protocol.init_command`，唯一要做的是把 `<CALLEE_SPEC_PATH:id>` 占位符替换为 callee spec 真实路径（按 spec 发现流程：callee_spec_id + 与父 spec 同目录约定）。params/trace/log 参数引擎已折入，不看不改。
+1. **建子实例**：照抄 `call_protocol.init_command`。callee spec 的绝对路径引擎已填好（先找父 spec 同目录的 `<id>.md`,再找已装 HopAnt 的 `~/.hopjit/ants/<id>/<id>.md`）;两处都找不到时命令里留 `<CALLEE_SPEC_PATH:id>` 占位,这时唯一要做的是按 spec 发现流程把它替换为 callee spec 真实路径。params/trace/log 参数引擎已折入，不看不改。
 2. **驱动子实例**：先照抄 `call_protocol.child_advance` 领取子实例首个介入点（init 建的子实例是未推进态），然后标准循环（`--state-dir` 照抄 `child_state_dir`、`--instance` 照抄 `child_instance`）直到终态。
 3. **子实例 completed** → 照抄 `call_protocol.report_completed`（引擎按 output_mapping 从子实例取值，你不搬运数据）。
 4. **子实例 failed** → 照抄 `call_protocol.report_failed`（🔴 引擎读子实例失败记录原封组装 CalleeFailure——绝不用 `--failure` 自由文本转述，那等于 catch 到异常丢了 stack trace）。
@@ -67,8 +67,12 @@ step_ready 的 `step_type` 为 `call` 时，整步归你驱动（引擎不解释
 - **重发已完成的步骤（幂等回执）**：submit 返回 `status:"ok"` 且 `code:"ALREADY_DONE"`，报文含"引擎当前在等步骤 Y"——这不是错误也不是新的推进：你交的步早已完成，本次什么都没变。正确动作=按报文点名的步号交付欠的那步，**不要**把自己记的步号当权威重交。带**不同内容**重交已完成步会被拒（`STALE_RESUBMIT` error）——那说明你的步号记错了，核对报文点名后改交正确的步。
 - **`WAITING_WRITEBACK`**（status:"failed" 携此前缀的 failure_reason）：出现在 resume/推进类命令——不是 run 失败，是引擎在告诉你"有步骤已派出还没交结果"。正确动作=按报文列的步号用 submit_and_fetch_next 交付它们；不得按失败终态处理（不上报失败、不废弃任务）。
 
-## Bash 命令纪律（硬约束）
+## 驱动通道：MCP 工具优先（todo/0146）
+
+会话里能调 `mcp__hopjit__` 工具时，本文件与模板里的 `node <CLI> --json <子命令> ...` 一律改用同名工具：`mcp__hopjit__run` / `submit_and_fetch_next` / `reap_and_fetch_next` / `status` / `resume` / `abort`。参数名是 CLI 参数去掉 `--`、连字符换下划线（`--instance` → `instance_id`、`--tool-result` → `tool_result`），`--output "@<output_path>"` 对应 `output = "@<output_path>"`；`state_dir` 传 `<STATE>` 绝对路径，`workspace_dir` 传 `<VAULT>`（工具没有 cwd，doc-ref 与相对路径都按它解析，不需要 `cd`）。响应与命令行完全相同。工具不可见时才用下面的命令行纪律。
+
+## Bash 命令纪律（硬约束，命令行回退时）
 
 - 每条 Bash 调用只做一件事：一条 `node ...`，不管道（`|`）、不变量赋值。**唯一允许的链式**是前置 `cd <VAULT> &&` 锁定 cwd（spec 含 doc-ref 时必带——doc-ref 按 CLI 进程 cwd 解析引用路径，且 subagent Bash 在命令间会重置 cwd）；除此之外不 `&&`。
 - 直接写完整命令 `[cd <VAULT> && ] node <CLI> <子命令> <参数>`，不缩写、不用 shell 变量。
-- 自己读 stdout 的 JSON 按 `status` 分派，不 `| python3 -c` / `| node -e` 提取字段（管道触发 pipe_guard 弹框打断）。
+- 自己读 stdout 的 JSON 按 `status` 分派，原样读完，不 `| python3 -c` / `| node -e` 提取字段、不 `| head` 截断（管道触发载体的管道检查而多弹窗，截断还会丢掉响应后半截的字段）。

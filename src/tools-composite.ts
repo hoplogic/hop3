@@ -28,16 +28,17 @@ const FORK_OF = Symbol('forkOf');
  * [[tool-interface#^anc-exec-tool-shape-check]]。 // @a: anc-exec-tool-composite */
 /** 引擎直执面工厂构造体——单一权威（0076 阅卷抓三份同构副本〔cli/mcp-server/测试各抄一份
  * 读 yaml+构造闭包〕是漂移温床后归一:组合根与测试同 import 本函数,测试真锁生产件）。
- * 语义:构造 CompositeToolProvider 前经 loadRegistry 现读注册表（缺省=进程 cwd 的 hopjit.yaml
+ * 语义:构造 CompositeToolProvider 前经 loadRegistry(hostConfig) 现读注册表（两级：~/.hopjit/config.yaml + hostConfig.workspace_dir 的 hopjit.yaml
  * tool_servers 节,经 parseToolServers 同链解析;无文件/无节 undefined 即纯内置面）——每进程
  * 装配期现读,与模型路由每 run 重读同款;解析/撞名错误任其抛出,由消化路径 catch 折步骤 fail
  * （^anc-exec-tool-request 注册件装配条款③）。 */
 // @a: anc-exec-tool-request
 export function makeEngineToolProviderFactory(
-  loadRegistry: () => ToolServerEntry[] | undefined,
+  loadRegistry: (hostConfig: HostConfig) => ToolServerEntry[] | undefined,
 ): (hostConfig: HostConfig) => ToolProvider {
   return (hc: HostConfig) => {
-    const reg = loadRegistry();
+    // 读注册表的回调拿到本 run 的 HostConfig——项目根按 workspace_dir 取,不读进程 cwd（config-load 工具面条款）// @a: anc-config-reuse-consume
+    const reg = loadRegistry(hc);
     return new CompositeToolProvider(reg ? ({ ...hc, tool_registry: reg } as HostConfig) : hc);
   };
 }

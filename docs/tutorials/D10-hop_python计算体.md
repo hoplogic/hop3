@@ -88,11 +88,12 @@ $hop 跑 examples/syntax/act-body.md --params '{"expenses": [120, 88, 1500, 260]
 
 要把结构变回文本时才显式转：`str(x)` 或 f-string 插值得到序列化文本，`write(path: p, content: x)` 落盘自动写文本。反过来记住一条：**LLM 步骤给 `yaml` 变量交纯散文是过不了关的**——引擎要求能解析出结构（对象/列表），解析不出会带着反馈打回重做，不会把一段说明文字静默存进来（否则下一步 `contract.inputs` 就是 undefined，错误漂到离病灶很远的地方才炸）。
 
-### 实例上下文函数：work_zone_path / now / today
+### 实例上下文函数：work_zone_path / spec_dir / now / today
 
-白名单里还有三个**实例上下文函数**——不是 pure（结果依赖这次执行的环境），但也零副作用，只能在 act/commit body 里调（case 条件里调用是静态错误）：
+白名单里还有三个**实例上下文函数**——不是 pure（结果依赖这次执行的环境），但也零副作用，只能在 act/check/commit body 里调（case 条件里调用是静态错误）：
 
 - `work_zone_path("文件名")`：返回本实例独占涂鸦区下的路径，无参返回涂鸦区根。act 步的中间产物、草稿、台账都写这里——act 的写域就是涂鸦区，写别处会被引擎拒（见第 3 步的静态闸）；
+- `spec_dir("scripts/x.py")`：返回 spec 文件所在目录下的路径，无参返回该目录。spec 自带的脚本、样例数据随 spec 走，用它寻址——例如 `subprocess.run(["python3", spec_dir("scripts/x.py"), "--data", spec_dir("data/a.csv")])`（命令须在已批准命令里）或 `read(path: spec_dir("data/a.csv"))`。它只算路径，不给任何读写权限：spec 目录在读权限内、不在写权限内；
 - `now()`：当前时刻，ISO 8601 字符串（含时区），产物落款用它；
 - `today()`：当前日期，YYYY-MM-DD。
 

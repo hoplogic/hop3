@@ -113,7 +113,7 @@ tools 模块的 spec 内容工具组（装配层本体见 [[../tools]]——本�
 **手术底账（HopType）**——parse 后立的行级手术工作台账,四字段是契约四条的落地骨架：
 
 ```
-struct: TreeEditSurgeryLedger        # 实现载体 src/tools.ts TreeEditParsed(在 AST 定位三元组之外扩的四个手术字段)
+HopType: TreeEditSurgeryLedger        # 实现载体 src/tools.ts TreeEditParsed(在 AST 定位三元组之外扩的四个手术字段)
   Id: tree-edit-surgery-ledger
   Fields:
     - lines % [line]           # spec_text 原文行数组——手术的字节权威,一切产出行从这里切
@@ -145,14 +145,14 @@ struct: TreeEditSurgeryLedger        # 实现载体 src/tools.ts TreeEditParsed(
 **入参/返回（HopType）**：
 
 ```
-struct: TreeEditCommonArgs        # 四工具共有参数
+HopType: TreeEditCommonArgs        # 四工具共有参数
   Id: tree-edit-common-args
   Fields:
     - spec_text % text         # 待编辑 spec 全文（或 spec_is_fragment=true 时为裸步骤片段——内容直传,工具不读文件）
     - spec_is_fragment % bool  # 可选,缺省 false——true 时进出同为裸片段（parseFragment 解析,serializeFragment 直出;hopbuild2 拼装步的骨架片段形态）
     - work_items % [line]      # 可选,待同步的队列（三段式首段是节点路径的行,随重编号改写后返回;非字符串数组的畸形值静默忽略不拒;命中改写的行分隔符统一重排为 ' | ',未命中的行原样保留）
 
-struct: TreeEditResult            # 四工具统一返回
+HopType: TreeEditResult            # 四工具统一返回
   Id: tree-edit-result
   Fields:
     - status % line            # ok | error
@@ -185,7 +185,7 @@ struct: TreeEditResult            # 四工具统一返回
 **入参/返回（HopType）**：
 
 ```
-struct: ReadSpecTreeArgs
+HopType: ReadSpecTreeArgs
   Id: read-spec-tree-args
   Fields:
     - spec_text % text          # 全文或裸片段
@@ -193,7 +193,7 @@ struct: ReadSpecTreeArgs
     - node_path % line          # mode=node 必填——目标步骤号（如 "2.1"）
     - spec_is_fragment % bool   # 缺省 false;true 时 spec_text 经 parseFragment 解析
 
-struct: ReadSpecTreeResult
+HopType: ReadSpecTreeResult
   Id: read-spec-tree-result
   Fields:
     - status % line   # ok | error
@@ -222,7 +222,7 @@ trait: BuiltinValidateSpec
 **入参/返回（HopType）**：
 
 ```
-struct: ValidateSpecArgs
+HopType: ValidateSpecArgs
   Id: validate-spec-args
   Fields:
     - text % text              # 待验 spec 或片段全文（内容直传——不是路径,工具不读文件）

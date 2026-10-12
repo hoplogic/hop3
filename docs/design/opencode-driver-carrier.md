@@ -3,13 +3,13 @@
 	source: [[../concepts/HopSpec V3配套HopJIT运行时能力]]
 	source_id: hopjit-runtime
 	type: extend
-	last_sync: 2026-09-19T15:20+0800
+	last_sync: 2026-10-08T23:26+0800
 	note: opencode 载体驱动设计（2026-09-19 作者抓"完全不考虑 agent 适配的架构设计?"+"opencode 完全复用 cc 的?"后立——0089 批只做了安装路径与配置面适配,driver 内容层逐字节搭 CC 车零验证;本批立 driver/opencode/ 目录+原语适配+真机 E2E）。结构参照 [[codex-driver-carrier]] 但大幅精简：opencode 与 CC 的同构度远高于 Codex（skill 发现机制同构+question 工具+subagent 机制原生在场）,适配是原语映射级不是角色重拆级。
 %%
 
 # OpenCode Driver Carrier 设计
 
-> **模块版本**：opencode-driver-carrier `v0.1.1`（2026-10-01 安装布局登 hop/references/hop-ops.md;键名 user-invocable 勘正）。上版 v0.1.0（2026-09-19）首版：三层复用判据+原语映射表七行+安装布局+载体准入两档。0.x 未承诺稳定。**逐版演进史归 git log**（本行只记现行版本,升版只改号）。
+> **模块版本**：opencode-driver-carrier `v0.1.6`（2026-10-11 语义审计 0156 C 类：映射表 hopjit 驱动命令行的 opencode 注册缺省改为 enabled:true + tools 节关独立模式工具,与 cli.ts 一致,去掉 0134 待定）。上版 v0.1.4（2026-10-08 映射表 commit 停点改为转人工三选项,研判放行时不停）。上版 v0.1.3（2026-10-07 映射表加 hopjit 驱动命令行:优先 MCP 复用驱动工具、不可见时回退 Bash,todo/0146）。上版 v0.1.2（2026-10-07 映射表 call 路径行改为引擎填真实路径、占位只作解析失败兜底,todo/0142 子卡 B）。上版 v0.1.0（2026-09-19）首版：三层复用判据+原语映射表七行+安装布局+载体准入两档。0.x 未承诺稳定。**逐版演进史归 git log**（本行只记现行版本,升版只改号）。
 
 ## 文档结构与内容分级
 
@@ -46,7 +46,8 @@ CC 原语 → opencode 等价物（适配正文的替换依据,2026-09-19 对 op
 | `run_in_background` | 无（同上,v1 不依赖） | parallel fan-out 的后台 worker 场景,opencode 版首版按串行退化口径（引擎顺序等价保证在场） |
 | `/skill` 斜杠触发 | 隐式触发或直接说 skill 名 | opencode 按 description 触发 skill 工具装载;正文中"用户说 /hopspec run"改"用户要求执行 spec" |
 | `--notify dingtalk` 意图翻译 | 原样保留（载体中立） | 通知是引擎挂点,driver 只翻译意图——非 CC 原语,不删（阅卷抓首版误删,补回） |
-| dispatch_ready 的 call 占位符 | 原样保留（协议件） | `<CALLEE_SPEC_PATH:id>` 解析是引擎协议不是 CC 原语——串行退化只改执行形态不改协议（阅卷抓首版丢失,补回） |
+| hopjit 驱动命令（Bash 跑 `hopjit --json …`） | **优先 hopjit MCP 复用驱动工具,不可见时回退 Bash**（todo/0146） | 工具集与通道语义见 [[mcp-server#^anc-mcp-reuse-driver-tools]]。opencode 注册缺省 `mcp.hopjit.enabled:true`,并在 tools 节关闭独立模式专属工具（防复用模式下模型误调 start_run,todo/0134 作者拍 b 案）——server 未启用或工具被关时工具不存在,driver 按 CLI 回退走,回退时每条命令不加管道与截断;commit 转人工停点（`pause_reason: commit`,安全分析认定有需要人看的动作时才出现）用普通人读得懂的话把分析里的后果与建议讲给用户（不先贴代码,用户要看才给 body 原文）、给三个选项,用户选批准后调 approve_commit（scope 取所选项）再 resume,工具不可用时按停点载荷的说明用 CLI 等价命令 |
+| dispatch_ready 的 call 路径 | 原样保留（协议件） | 引擎已填 callee 真实路径,解析不到才留 `<CALLEE_SPEC_PATH:id>` 占位交 driver 按 discovery 找（[[exec-engine#^anc-exec-callee-resolver]]）——这是引擎协议不是 CC 原语,串行退化只改执行形态不改协议（阅卷抓首版丢失,补回） |
 
 **Glob 失败纪律【契约】**（hopissues/0102,本条为权威源;`driver/opencode/references/discovery.md` 头部条款是其落地件）：opencode 的 Glob 工具依赖 ripgrep（未装则自动下载,无公网环境下载失败即报 `ripgrep execution failed`）。Glob 失败时**不降级 `find /`、`find ~` 之类全库搜**——全库搜会超时且违反 spec 定位的禁全库搜纪律；照 spec 两级定位走（现成路径 / `<PKG>/examples/`），两级都不中即停下问用户,不自行扩大搜索面。
 
@@ -62,7 +63,7 @@ driver/opencode/
                       #  driver-subagent.md 的 CC 派发模板改 subagent 派发说明）
 ```
 
-install-skill `--carrier opencode` 装载面：
+`hopjit setup --carrier opencode` 装载面：
 
 - `driver/opencode/SKILL.md` → `<home>/skills/hopspec/SKILL.md`（home=XDG 解析,^anc-cli-carrier-home-resolution）
 - `driver/opencode/SKILL-mcp.md` → `<home>/skills/hopspec-mcp/SKILL.md`（+discovery.md）

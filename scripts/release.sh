@@ -287,7 +287,7 @@ if [ -z "$RELEASE_DRY_RUN" ]; then
 
   STEP="步骤10-装skill"
   echo "⑩ 装 skill（全局包源=刚发内容）..."
-  hopjit install-skill --dir "$HOME/.claude/skills" --force
+  hopjit setup --dir "$HOME/.claude/skills" --force
   head -1 "$HOME/.claude/skills/hopspec/SKILL.md"
 else
   echo "⑧⑨⑩ [dry-run] 跳过全局装置与 skill（演练不动全局环境）"

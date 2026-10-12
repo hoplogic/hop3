@@ -279,7 +279,7 @@ describe('check-version-lock 判据回归', () => {
 // ── check-driver-carriers：续接交接契约 token（^anc-exec-reuse-subagent-driver,2026-08-13 实撞销账） ──
 // @v: anc-exec-reuse-subagent-driver, anc-driver-codex-static-lint
 describe('check-driver-carriers 续接交接判据回归', () => {
-  function driverFixture(mutate?: (path: string, content: string) => string): string {
+  function driverFixture(mutate?: (path: string, content: string) => string, mutateHop?: (path: string, content: string) => string): string {
     const root = mkdtempSync(join(tmpdir(), 'gdc-'));
     // 从真仓库整份复制 driver/（守卫扫描面），可选按文件变异
     const { cpSync, readFileSync: rf, writeFileSync: wf } = require('node:fs') as typeof import('node:fs');
@@ -288,6 +288,12 @@ describe('check-driver-carriers 续接交接判据回归', () => {
       for (const p of ['driver/hopspec-skill.md', 'driver/references/driver-subagent.md', 'driver/codex/SKILL.md']) {
         const abs = join(root, p);
         wf(abs, mutate(p, rf(abs, 'utf-8')));
+      }
+    }
+    if (mutateHop) {
+      for (const p of ['driver/hop-skill.md', 'driver/codex/hop-skill.md', 'driver/opencode/hop-skill.md']) {
+        const abs = join(root, p);
+        wf(abs, mutateHop(p, rf(abs, 'utf-8')));
       }
     }
     return root;
@@ -306,12 +312,197 @@ describe('check-driver-carriers 续接交接判据回归', () => {
     expect(r.out).toContain('continuation-handoff token: <PENDING>');
   });
 
+  // @v: anc-hopant-pack, anc-hopant-share
+  it('反例（todo/0142 子卡 C/E review 修复批补）：opencode 载体丢封装/分享动作 token（ant pack / ant share / owner_prompt_required）→ exit 1 点名——三载体同核,不再只核两载体', () => {
+    for (const token of ['ant pack', 'ant share', 'owner_prompt_required']) {
+      const r = runGuard('check-driver-carriers.mjs', driverFixture(undefined, (p, c) => p === 'driver/opencode/hop-skill.md' ? c.replaceAll(token, 'X') : c));
+      expect(r.code, token).toBe(1);
+      expect(r.out).toContain(`driver/opencode/hop-skill.md missing /hop distill token: ${token}`);
+    }
+  });
+
+  // @v: anc-cli-hop-dispatch —— 读原料用只读文件工具不走 shell（2026-10-11 作者抓"这些为什么要用 bash？"）：三载体任一缺条 → exit 1 点名;三份都在 → 不报
+  it('正/反：三载体 hop-skill.md 任一丢"不走 shell"读原料条 → exit 1 点名该载体;三份都在不报（变异：守卫 token 列表删掉 \'不走 shell\' → 反例三支全绿,红）', () => {
+    for (const path of ['driver/hop-skill.md', 'driver/codex/hop-skill.md', 'driver/opencode/hop-skill.md']) {
+      const r = runGuard('check-driver-carriers.mjs', driverFixture(undefined, (p, c) => p === path ? c.replaceAll('不走 shell', 'X') : c));
+      expect(r.code, path).toBe(1);
+      expect(r.out).toContain(`${path} missing /hop distill token: 不走 shell`);
+    }
+    const ok = runGuard('check-driver-carriers.mjs', driverFixture());
+    expect(ok.out).not.toContain('missing /hop distill token: 不走 shell');
+  });
+
+  // @v: anc-exec-reuse-distill —— 总结确认问句固定文案"按此封装成 Hop 流程元件？"三载体 parity（2026-10-12 作者抓"封吗？——这是啥鬼话"）
+  it('正/反：三载体 hop-skill.md 任一丢固定确认问句"按此封装成 Hop 流程元件？" → exit 1 点名;三份都在不报（变异：守卫 token 列表删掉该句 → 反例三支全绿,红）', () => {
+    for (const path of ['driver/hop-skill.md', 'driver/codex/hop-skill.md', 'driver/opencode/hop-skill.md']) {
+      const r = runGuard('check-driver-carriers.mjs', driverFixture(undefined, (p, c) => p === path ? c.replaceAll('按此封装成 Hop 流程元件？', '封吗？') : c));
+      expect(r.code, path).toBe(1);
+      expect(r.out).toContain(`${path} missing /hop distill token: 按此封装成 Hop 流程元件？`);
+    }
+    const ok = runGuard('check-driver-carriers.mjs', driverFixture());
+    expect(ok.out).not.toContain('missing /hop distill token: 按此封装成 Hop 流程元件？');
+  });
+
+  // @v: anc-cli-hop-dispatch —— 走现成 HopSpec 文件那一路对用户的固定开场白三载体 parity（2026-10-12 作者抓"这个描述也很土"）
+  it('正/反：三载体 hop-skill.md 任一丢固定开场白"现在有现成的 HopSpec 流程，下面按 HopSpec 运行。" → exit 1 点名;三份都在不报（变异：守卫 token 列表删掉该句 → 反例三支全绿,红）', () => {
+    const SENT = '现在有现成的 HopSpec 流程，下面按 HopSpec 运行。';
+    for (const path of ['driver/hop-skill.md', 'driver/codex/hop-skill.md', 'driver/opencode/hop-skill.md']) {
+      const r = runGuard('check-driver-carriers.mjs', driverFixture(undefined, (p, c) => p === path ? c.replaceAll(SENT, '按 hopspec 协议跑') : c));
+      expect(r.code, path).toBe(1);
+      expect(r.out).toContain(`${path} missing /hop distill token: ${SENT}`);
+    }
+    const ok = runGuard('check-driver-carriers.mjs', driverFixture());
+    expect(ok.out).not.toContain(`missing /hop distill token: ${SENT}`);
+  });
+
+  // @v: anc-cli-hop-dispatch
+  it('正例（todo/0139 定位改写批）：三载体 hop-skill.md description 单行、≤1024 字符、无 XML、含总入口字样 → exit 0,且三份长度实测各 ≤1024', () => {
+    const { readFileSync: rf } = require('node:fs') as typeof import('node:fs');
+    for (const p of ['driver/hop-skill.md', 'driver/codex/hop-skill.md', 'driver/opencode/hop-skill.md']) {
+      const m = /^description:[ \t]*(.*)$/m.exec(rf(join(REPO, p), 'utf-8'));
+      expect(m?.[1].trim().length ?? 0, p).toBeGreaterThan(0);
+      expect(m![1].trim().length, p).toBeLessThanOrEqual(1024);
+      expect(/总入口|single entry point/.test(m![1]), p).toBe(true);
+    }
+    expect(runGuard('check-driver-carriers.mjs', driverFixture()).code).toBe(0);
+  });
+
+  // @v: anc-cli-hop-dispatch
+  it('反例（todo/0139 定位改写批）：一份 description 塞到 1100 字符 → exit 1 报超限与字符数', () => {
+    const r = runGuard('check-driver-carriers.mjs', driverFixture(undefined, (p, c) => p === 'driver/codex/hop-skill.md'
+      ? c.replace(/^description: .*$/m, (line) => line + ' x'.repeat(Math.ceil((1100 - line.length + 'description: '.length) / 2)))
+      : c));
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/driver\/codex\/hop-skill\.md frontmatter description \d+ 字符,超过 Agent Skills 标准的 1024 上限/);
+  });
+
+  // @v: anc-cli-hop-dispatch
+  it('反例（todo/0139 定位改写批）：一份 description 改成 YAML 块标量多行（description: |）→ exit 1 报行级解析读不到', () => {
+    const r = runGuard('check-driver-carriers.mjs', driverFixture(undefined, (p, c) => p === 'driver/hop-skill.md'
+      ? c.replace(/^description: (.*)$/m, (_l, d: string) => `description: |\n  ${d.slice(0, 60)}\n  ${d.slice(60)}`)
+      : c));
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('driver/hop-skill.md frontmatter description 为空或不是单物理行');
+  });
+
+  // @v: anc-cli-hop-dispatch
+  it('反例（todo/0139 定位改写批）：一份 description 丢"总入口"字样（定位没同步）→ exit 1 点名载体', () => {
+    const r = runGuard('check-driver-carriers.mjs', driverFixture(undefined, (p, c) => p === 'driver/opencode/hop-skill.md'
+      ? c.replace(/^description: (.*)$/m, (_l, d: string) => `description: ${d.replace('single entry point', 'entry')}`)
+      : c));
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('driver/opencode/hop-skill.md frontmatter description 缺"总入口"/"single entry point"字样');
+  });
+
   it('反例：subagent 模板丢缺件兜底 DRIVER_PROTOCOL_ERROR → exit 1', () => {
     const r = runGuard('check-driver-carriers.mjs', driverFixture(
       (p, c) => p === 'driver/references/driver-subagent.md' ? c.replaceAll('DRIVER_PROTOCOL_ERROR', 'X') : c,
     ));
     expect(r.code).toBe(1);
     expect(r.out).toContain('driver-subagent.md missing continuation-handoff token: DRIVER_PROTOCOL_ERROR');
+  });
+});
+
+// ── check-driver-carriers：三载体 hop-ops.md 同文（^anc-cli-hop-ops-parity,todo/0133 挂账②;常驻用例 2026-10-08 review 补——此前只有一次性负向实录） ──
+// @v: anc-cli-hop-ops-parity
+describe('check-driver-carriers 三载体 hop-ops.md 同文判据回归', () => {
+  function opsFixture(mutate?: (p: string, c: string) => string): string {
+    const root = mkdtempSync(join(tmpdir(), 'gdc-ops-'));
+    cpSync(join(REPO, 'driver'), join(root, 'driver'), { recursive: true });
+    if (mutate) {
+      for (const p of ['driver/codex/hop-references/hop-ops.md', 'driver/opencode/hop-references/hop-ops.md']) {
+        const abs = join(root, p);
+        writeFileSync(abs, mutate(p, readFileSync(abs, 'utf-8')));
+      }
+    }
+    return root;
+  }
+  it('正例：三份字节相等 → exit 0', () => {
+    expect(runGuard('check-driver-carriers.mjs', opsFixture()).code).toBe(0);
+  });
+  it('反例：只改 opencode 一份（末尾多一个空格）→ exit 1 点名该文件与 ^anc-cli-hop-ops-parity', () => {
+    const r = runGuard('check-driver-carriers.mjs', opsFixture((p, c) => p.includes('opencode') ? c + ' ' : c));
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('driver/opencode/hop-references/hop-ops.md 与 driver/hop-references/hop-ops.md 不同文');
+    expect(r.out).toContain('anc-cli-hop-ops-parity');
+  });
+});
+
+// ── check-anchor-baseline：明细基线增量比对（^anc-meta-ci-detail-baseline,todo/0133;常驻用例 2026-10-08 review 补——面三 mut-14 实证一次性负向实录拦不住局部放宽） ──
+// @v: anc-meta-ci-detail-baseline
+describe('check-anchor-baseline 明细基线判据回归', () => {
+  const NUM = { design_to_code_covered_min: 1, code_to_test_covered_min: 1, code_to_traceability_covered_min: 1, naming_violations: 0, invalid_refs: 0, status_issues: 0, module_deps_mismatch: 0, module_boundary_violations: 0, export_comment_violations: 0, card_missing_code_refs: 0, card_missing_test_refs: 0 };
+  function baselineFixture(opts: { orphans: Array<{ id: string; location: string }>; baseOrphans: Array<{ id: string; file: string }> }): string {
+    const root = mkdtempSync(join(tmpdir(), 'gab-'));
+    mkdirSync(join(root, 'audits', 'baselines'), { recursive: true });
+    mkdirSync(join(root, '.anchor-audit'), { recursive: true });
+    writeFileSync(join(root, 'audits', 'baselines', 'anchor-baseline.json'), JSON.stringify({ _note: 'fixture', ...NUM }));
+    writeFileSync(join(root, 'audits', 'baselines', 'anchor-detail-baseline.json'), JSON.stringify({ code_to_design_orphans: opts.baseOrphans, code_to_traceability_missing: [], design_to_traceability_missing: [] }));
+    const results = [
+      'design_to_code: {total: 1, covered: 1, missing: []}',
+      'code_to_test: {total: 1, covered: 1, missing: []}',
+      'code_to_traceability: {total: 1, covered: 1, missing: []}',
+      'design_to_traceability: {missing: []}',
+      'code_to_design:',
+      '  orphans:',
+      ...opts.orphans.map(o => `    - {id: ${o.id}, location: "${o.location}"}`),
+      ...(opts.orphans.length ? [] : ['    []']),
+      'naming_violations: []', 'invalid_refs: []', 'status_check: []', 'module_deps_mismatch: []',
+      'module_boundary_violations: {violations: []}', 'export_comment_violations: {violations: []}',
+      'card_missing_code_refs: []', 'card_missing_test_refs: []',
+    ].join('\n').replace("  orphans:\n    []", '  orphans: []');
+    writeFileSync(join(root, '.anchor-audit', 'cross_compare_results.yaml'), results + '\n');
+    return root;
+  }
+  it('正例：当前孤儿与基线相同（含行号变化——比对去行号）→ exit 0', () => {
+    const r = runGuard('check-anchor-baseline.mjs', baselineFixture({ orphans: [{ id: 'anc-x-old', location: 'src/a.ts:99' }], baseOrphans: [{ id: 'anc-x-old', file: 'src/a.ts' }] }));
+    expect(r.code).toBe(0);
+  });
+  it('反例：当前多一条基线没有的孤儿 → exit 1 并点名锚 id 与文件（变异：明细比对整段删或放宽为只比计数本例红）', () => {
+    const r = runGuard('check-anchor-baseline.mjs', baselineFixture({ orphans: [{ id: 'anc-x-old', location: 'src/a.ts:1' }, { id: 'anc-probe-new', location: 'src/b.ts:7' }], baseOrphans: [{ id: 'anc-x-old', file: 'src/a.ts' }] }));
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('code_to_design_orphans: 新增 1 条基线没有的条目');
+    expect(r.out).toContain('anc-probe-new（src/b.ts）');
+  });
+  it('反例：明细基线文件缺席 → exit 2 显式失败,不静默按空（守卫可信度条款;变异：缺文件改成按空表继续本例红）', () => {
+    const root = baselineFixture({ orphans: [], baseOrphans: [] });
+    rmSync(join(root, 'audits', 'baselines', 'anchor-detail-baseline.json'));
+    const r = runGuard('check-anchor-baseline.mjs', root);
+    expect(r.code).toBe(2);
+    expect(r.out).toContain('缺 audits/baselines/anchor-detail-baseline.json');
+  });
+});
+
+// ── check-anchor-format：TRACEABILITY 卡片行归属声明尾粘检（^anc-meta-anchor-head 卡片行条,todo/0133 挂账③;常驻用例 2026-10-08 review 补,含多锚第二个尾粘 G13） ──
+// @v: anc-meta-anchor-head
+describe('check-anchor-format TRACEABILITY 归属声明尾粘判据回归', () => {
+  function fmtFixture(cardLine: string, tsLine = '// @a: anc-fmt-a\n'): string {
+    const root = mkdtempSync(join(tmpdir(), 'gaf-'));
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(join(root, 'src', 'a.ts'), tsLine);
+    writeFileSync(join(root, 'TRACEABILITY.md'), `### anc-fmt-a ✅\n\n- src/a.ts 落点 ${cardLine}\n`);
+    return root;
+  }
+  function run(root: string): { code: number; out: string } {
+    const r = spawnSync('node', [join(REPO, 'scripts', 'check-anchor-format.mjs'), root], { encoding: 'utf-8' });
+    return { code: r.status ?? 1, out: `${r.stdout}${r.stderr}` };
+  }
+  it('正例：归属声明锚后是行尾 / 半角逗号 → exit 0', () => {
+    expect(run(fmtFixture('— @a: anc-fmt-a, anc-fmt-b')).code).toBe(0);
+  });
+  it('反例：归属声明锚尾粘全角括号 → exit 1 点名（变异：放宽判据允许全角右括号本例红）', () => {
+    const r = run(fmtFixture('— @a: anc-fmt-a（行注指向本锚）'));
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("卡片行归属声明锚 anc-fmt-a 尾粘字符 '（'");
+  });
+  it('反例（G13）：多锚声明里第二个锚尾粘 → 同样抓出（此前正则只检首锚）;.ts 注释多锚同款', () => {
+    const r = run(fmtFixture('— @a: anc-fmt-a, anc-fmt-b（注）'));
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("锚 anc-fmt-b 尾粘字符 '（'");
+    const slashes = '/'.repeat(2);   // 拼接防本文件自身被尾粘检咬（守卫同样扫 tests/*.ts）
+    const r2 = run(fmtFixture('— @a: anc-fmt-a', `${slashes} @a: anc-fmt-a, anc-fmt-c（注）\n`));
+    expect(r2.code).toBe(1);
+    expect(r2.out).toContain("锚 anc-fmt-c 尾粘字符 '（'");
   });
 });
 
@@ -353,12 +544,12 @@ describe('check-driver-carriers /hop distill 六动作 parity', () => {
     expect(r.out).toContain('missing /hop distill token: 改动阶段进 worktree');
   });
 
-  it('反例：Codex 件丢 hop_tasks/specs/（落盘约定漂移——两载体产物落不同目录即互不可见）→ exit 1', () => {
+  it('反例：Codex 件丢 hop_tasks/ants（总结产物落点漂移——两载体产物落不同目录即互不可见;2026-10-10 todo/0155 由 hop_tasks/specs/ 改 hop_tasks/ants）→ exit 1', () => {
     const r = runGuard('check-driver-carriers.mjs', driverFixture(
-      (p, c) => p === 'driver/codex/hop-skill.md' ? c.replaceAll('hop_tasks/specs/', 'hop_tasks/sp/') : c,
+      (p, c) => p === 'driver/codex/hop-skill.md' ? c.replaceAll('hop_tasks/ants', 'hop_tasks/an') : c,
     ));
     expect(r.code).toBe(1);
-    expect(r.out).toContain('driver/codex/hop-skill.md missing /hop distill token: hop_tasks/specs/');
+    expect(r.out).toContain('driver/codex/hop-skill.md missing /hop distill token: hop_tasks/ants');
   });
 });
 
@@ -505,6 +696,27 @@ describe('check-process-state 判据回归', () => {
       'cli.ts': "const m = process.env['HOPJIT_OUTPUT'];\nlet FORCE = m === 'json';\n",
     }));
     expect(r.code).toBe(0);
+  });
+
+  // @v: anc-run-isolation —— 2026-10-10 扩面：机器身份级读取 homedir()/hostname()/userInfo()/process.execPath 在内核文件里同属违规
+  // （0154+0155 review 变异 M19a 实证：hop-admin.ts 加 homedir 导入守卫仍绿;变异 M19a-guard：RE_PROC 改回旧三项 → 本反例红）
+  it('反/正：内核文件调 homedir() → exit 1 且报文含文件名与 homedir;同文件换成纯常量 → exit 0', () => {
+    const bad = runGuard('check-process-state.mjs', psFixture({
+      'hop-admin.ts': "import { homedir } from 'node:os';\nexport const x = homedir();\n",
+    }));
+    expect(bad.code).toBe(1);
+    expect(bad.out).toContain('src/hop-admin.ts');
+    expect(bad.out).toContain('homedir');
+    expect(bad.out).toContain('内核读进程状态');
+    const good = runGuard('check-process-state.mjs', psFixture({
+      'hop-admin.ts': 'export const x = 1;\n',
+    }));
+    expect(good.code).toBe(0);
+    // 组合根调 homedir() 照旧放行（进程边界翻译层）
+    const root = runGuard('check-process-state.mjs', psFixture({
+      'mcp-server.ts': "import { homedir } from 'node:os';\nconst home = homedir();\n",
+    }));
+    expect(root.code).toBe(0);
   });
 });
 
@@ -1075,7 +1287,7 @@ describe('npm 包文档自足：用户面文档经打包期清洗后随包分发
   it('① 清单每一项在仓库存在;files 中清单项与 manifest 等长（不是 ≥ 下限）;driver 三载体 hop-skill 指路的包内路径在清单内', () => {
     for (const f of manifest.files) expect(existsSync(join(REPO, f)), `清单项不存在: ${f}`).toBe(true);
     expect(files.filter(f => manifest.files.includes(f)).length).toBe(manifest.files.length);
-    expect(manifest.files.length).toBe(35);
+    expect(manifest.files.length).toBe(36);   // 2026-10-03 +docs/agent-instructions-template.md（todo/0139 挂钩②改形态）
     for (const sk of HOP_SKILLS) {
       const t = readFileSync(join(REPO, sk), 'utf-8');
       const refs = [...t.matchAll(/@hoplogic\/hopjit\/((?:docs|examples)\/[^`）)\n]+?\.md)/g)].map(m => m[1]);   // 路径含空格（HopSpec V3语法参考.md）,不能用 \s 断
@@ -1132,10 +1344,18 @@ describe('npm 包文档自足：用户面文档经打包期清洗后随包分发
       '围栏写法示例是 ` ```hop_python `（行内三反引号,不是开栏）;这句之后的 todo/0070 必须仍被清掉。',
       '工具调用写 `execute_tool()` 与 `get_credential()`,括号是代码的一部分。',
       '模块名 `[[step-dispatcher]]` 与 `[[hopfix]]` 不在清单内。',
+      // 围栏代码块注释里的真锚名也要删（泄露防线,todo/0136 ②——HopAnt:327 实撞 `# LLM 绑定配置 ^anc-config-model-engine`;
+      // ③ 与 purityViolations 都先剥围栏再查锚名,这条规则坏了 ③④ 原形态也全绿,须用围栏内形态直接断言输出）
+      '```yaml',
+      '# LLM 绑定配置 ^anc-config-model-engine',
+      'model: default   # 占位 ^anc-x 不是真锚',
+      '```',
     ].join('\n');
     const out: string = mod.cleanDoc(src, 'docs/tutorials/x.md', manifest);
     expect(await violations(out), out).toEqual([]);
-    for (const gone of ['todo/0108', 'hopissues/0050', 'todo/0070', '^anc-step-call', '^anc-top', 'codex-driver-carrier', '[[step-dispatcher]]', '[[hopfix]]']) expect(out, `残留 ${gone}`).not.toContain(gone);
+    for (const gone of ['todo/0108', 'hopissues/0050', 'todo/0070', '^anc-step-call', '^anc-top', 'codex-driver-carrier', '[[step-dispatcher]]', '[[hopfix]]', '^anc-config-model-engine']) expect(out, `残留 ${gone}`).not.toContain(gone);
+    // 围栏块本身与占位 `^anc-x` 保留（删的是真锚名不是围栏,占位单段是讲语法的示例）
+    expect(out).toContain('```yaml\n# LLM 绑定配置\nmodel: default   # 占位 ^anc-x 不是真锚\n```');
     expect(out).toContain('[02-读懂一份spec](./02-读懂一份spec.md)');
     expect(out).toContain('[核心规范](../concepts/HopSpec%20V3核心规范.md)');
     expect(out).toContain('Doctree');

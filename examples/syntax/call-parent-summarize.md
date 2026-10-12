@@ -20,5 +20,5 @@ Goal: 对输入文档先调用「文本规整」子 spec 清洗，再生成摘�
   + → summary % text  # 摘要
   > 阅读 clean_doc，提炼核心要点生成简洁摘要
 
-# 配套子 spec（独立文件）：examples/call-child-normalize.md
+# 配套子 spec（独立文件）：examples/syntax/text-normalize.md（文件名即 callee id——同目录 <id>.md 寻址）
 # 父子通过 callee_spec_id 'text-normalize' 关联，由 SpecProvider/CLI 解析定位

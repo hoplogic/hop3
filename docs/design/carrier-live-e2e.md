@@ -3,7 +3,7 @@
 	source: [[codex-driver-carrier]], [[reuse-mode-prompt-flow]], [[chain-enforcement]]
 	source_id: hopjit-codex-driver-carrier, hopjit-reuse-mode-prompt-flow, hopjit-chain-enforcement
 	type: extend
-	last_sync: 2026-09-17T15:34+0800
+	last_sync: 2026-10-08T23:26+0800
 	note: CC/Codex 真实载体 E2E 契约——隔离工作区、事件归一、执行体归属断言、凭证不落盘、显式失败与 opt-in CI 边界。2026-08-09 扩失败路径场景组（作者定 12345）：repair/uncaught/parallel-partial/paused/call-fail 五场景,确定性失败触发,单列入口不进硬闸。同日作者指正补 G11 过程核验：失败场景必须读 main.yaml 轨迹（轮次键/warn+failed 块/join 清单/confirm 无 hitl/CalleeFailure 入轨）,只看 state 终态=假绿。
 %%
 
@@ -31,7 +31,7 @@
 Live E2E 固定验证四层事实：
 
 1. **宿主事实**：真实 `claude` / `codex exec` 进程能加载已安装 skill，并形成可解析事件流。
-2. **执行体事实**：delegated 场景确有正式 subagent，且 HopJIT 写命令归 subagent；inline 场景能力握手失败后不派生正式 segment，HopJIT 写命令只在 main 执行一次。
+2. **执行体事实**：delegated 场景确有正式 subagent，且 HopJIT 写动作（命令或 MCP 驱动工具，§3）归 subagent；inline 场景能力握手失败后不派生正式 segment，HopJIT 写动作只在 main 执行一次。
 3. **业务终态事实**：`examples/coffee-week.md` 完成，终态 YAML 为 `status: completed`，`weekly_report` 含 `周营业额：27600 元`。
 4. **执行过程事实**：读取真实 `.hoplog/*/main.yaml`，经 HopLog 的 `extractHopLogStepKeys` 单一格式解析器核验 `state.step_states` 中每个 done 步骤都有精确 YAMLL 块键记录。
    - 日志真实格式是 `execution:` 下的 `"1":`/`"1.1":` 块键，不存在 `step: '1'` 字段；fixture 必须由 `HopLog` 真写，禁止手捏另一套格式。步骤匹配须精确，`1` 不得命中 `10`。
@@ -59,6 +59,12 @@ Live E2E 不替代：
 - **失败（exit 1，carrier 已启动）**：删除前**必须先归档失败现场**到 `.e2e-evidence/failures/<scenario>-<UTC时间戳>/`——内容为 `.hopstate/`（全部实例 state/vars/params）、`.hoplog/`（全部 run 轨迹）、完整 stdout/stderr（不截断——诊断尾部 8000 字符窗口常滚掉早期根因）、归一事件 JSON。
   - **归档前逐文件做 key 脱敏**（§凭证规则 4 同款判据：secret 原文替换为 `[REDACTED]`），脱敏失败的文件宁可不归档也不落原文。归档路径打到 stderr 供人直达；
 - **前置缺失（exit 2）**：工作区尚未产生执行内容，直接删除，不归档。
+
+**setup 的用户级副作用落工作区内一次性家目录（2026-10-06 补,todo/0142 演示件改 HopAnt）**：harness 跑 setup 时 env 的 `HOME` / `CODEX_HOME` / `CLAUDE_CONFIG_DIR` / `OPENCODE_CONFIG_DIR` 全部指向 `<workspace>/.e2e-home/` 下。
+
+- 原因：setup 缺省装演示 HopAnt 到 `~/.hopjit/ants/`、自举 `~/.hopjit/config.yaml`、注册 MCP。不改 HOME 就写进宿主真实家目录;且演示件已装则跳过,e2e 拿到的是宿主上的旧件,结论被宿主状态污染;
+- 范围：只管 setup 这一次子进程。载体会话本身的 env 不受影响,照旧由下条隔离 CODEX_HOME;
+- 清理：一次性家目录在工作区内,随工作区按上条生命周期一起删。
 
 **codex 载体环境自包含（todo/0061,2026-09-02 补）**：起 codex（全场景）前构造临时 CODEX_HOME,spawn env 带 `CODEX_HOME` 指过去,宿主 `~/.codex` 真身全程零接触。
 
@@ -92,22 +98,34 @@ carrier_start
 subagent_start(role, id)
 subagent_stop(role, id)
 command(actor, command)
+mcp_tool(actor, server, tool, args)
 message(actor, text)
 carrier_stop
 ```
 
 `actor` 只取 `main | subagent | unknown`。原始事件保留在内存用于诊断，断言只依赖归一事件，避免把 carrier 私有 JSON 字段扩散到测试主体。
 
+`mcp_tool` 是载体的 MCP 工具调用：CC 的 `tool_use` 名 `mcp__<server>__<tool>` 拆出 server 与 tool，Codex 的 `mcp_tool_call` 直接取同名字段；`args` 是调用参数对象（CC 取 `input`，Codex 取 `arguments`，缺席为空对象），断言只读其中的提交形态字段（如 `answer`、`failure`），不依赖其余参数。
+
 **终态文本断言统一吃 `mainText`（全部主消息聚合），不吃 `finalText`（最后一条）**：载体的 task-notification 补话会后到覆盖最后一条消息——主 agent 先报 completed YAML、补话垫底，看 finalText 即误红。语义断言（该说过什么）与顺序断言（最后说什么）分开。新增场景断言一律 `mainText ?? finalText`。
 
 - 三撞成律：2026-08-10 failure 场景组、2026-08-12 parallel 冒烟（前次修复时该函数漏配）、2026-08-17 cc:delegated（0.4.0 发版档实撞——主 agent 先贴完整 YAML 块、又补发一条『终态 YAML 如上』的收尾消息把块挤出终位；红的两处 delegated 通用路径+anchor-audit 正是本律定形时漏迁移的存量直吃 finalText,本次销清,全部 8 场景归一）。
 
-执行体证明采用**正反两组证据**。**main 写禁令统一豁免 `--answer`**（介入点注入按 skill 协议归 main 本职——paused 的 ask/confirm 应答，subagent 无权问真人；禁的是 main 抢执行链：run 与执行步 submit。豁免同时作用于直接判据与闭合证据两个消费点——只改一处的豁免会外溢/漏放）：
+**HopJIT 写动作有两种形态，断言一视同仁**。复用模式 driver 推进 run 优先用 hopjit 的 MCP 驱动工具（todo/0146），命令行是工具不可用时的回退，两者是同一套引擎调用。所以"HopJIT 写动作"指以下两类事件之一：
 
-- delegated：优先使用正式 segment start/stop + actor=subagent 的 HopJIT 写命令作直接证据。若 Codex `--json` 不转发 worker 内部事件，则允许等价的闭合证据：main 明确进入 segment wait、actor=main 的**非 `--answer`** HopJIT 写命令数量为 0、隔离工作区却产生且完成唯一 HopJIT instance。
-- Codex flash：断言模式自适应三分支——出现正式 segment 时按 delegated 判据验 main 零写命令（同一豁免）；无 segment 但有 wait+main 零非 answer 写命令=闭合证据 delegated；两者皆无时验 inline 判据（actor=main 的 `hopjit run` 恰为 1）。实际演练模式随凭证 `exercised_mode` 上报（delegated/delegated-closed/inline）。
+- 命令形态：`command` 事件的命令文本是 `hopjit`（或 `dist/cli.js`）的 `run` / `submit_and_fetch_next` / `reap_and_fetch_next` / `resume` 子命令；
+- 工具形态：`mcp_tool` 事件的 server 含 `hopjit`、tool 是 `run` / `submit_and_fetch_next` / `reap_and_fetch_next` / `resume` 之一。
+
+两种形态的介入点注入同样识别：命令形态看 `--answer` 参数，工具形态看 `args.answer` 字段；`--failure` 自由文本提交对应 `args.failure`。独立模式的薄协议工具（`start_run` / `resume_run` 等）不属于写动作——那是委托 server 执行，判据另见 standalone 场景。
+
+- 出处：只认命令形态的断言在 driver 改走工具后会把正常委派判成"缺少 subagent 执行证据"（2026-10-08 live:core cc:delegated 实撞：subagent 经 `mcp__hopjit__run` 与 `mcp__hopjit__submit_and_fetch_next` 跑完全程、业务结果正确，断言因没看到命令形态写动作判红）。
+
+执行体证明采用**正反两组证据**。**main 写禁令统一豁免介入点注入**（命令形态 `--answer`、工具形态 `args.answer`；介入点注入按 skill 协议归 main 本职——paused 的 ask/confirm 应答，subagent 无权问真人；禁的是 main 抢执行链：run 与执行步 submit。豁免同时作用于直接判据与闭合证据两个消费点——只改一处的豁免会外溢/漏放）：
+
+- delegated：优先使用正式 segment start/stop + actor=subagent 的 HopJIT 写动作作直接证据。若 Codex `--json` 不转发 worker 内部事件，则允许等价的闭合证据：main 明确进入 segment wait、actor=main 的**非介入点注入** HopJIT 写动作数量为 0、隔离工作区却产生且完成唯一 HopJIT instance。
+- Codex flash：断言模式自适应三分支——出现正式 segment 时按 delegated 判据验 main 零写动作（同一豁免）；无 segment 但有 wait+main 零非介入点注入写动作=闭合证据 delegated；两者皆无时验 inline 判据（actor=main 的 run 恰为 1，命令与工具形态合计）。实际演练模式随凭证 `exercised_mode` 上报（delegated/delegated-closed/inline）。
   - 闭合证据分支的出处：codex collab 流只转发 wait 不转发 spawn_agent 的转发缺口形态,2026-08-13 实撞——业务账面已由前置 readTerminalEvidence 核过,证据链完整。
-- CC delegated：subagent 事件或带 `parent_tool_use_id` 的 forwarded subagent 内容可证明执行段存在；`hopjit run` 必须归 subagent。
+- CC delegated：subagent 事件或带 `parent_tool_use_id` 的 forwarded subagent 内容可证明执行段存在；run（命令或工具形态）必须归 subagent。
 
 仅有最终业务输出不足以证明 delegated。直接证据和上述 Codex 闭合证据均不成立时，测试失败并报告“观测协议不足”。
 
@@ -138,8 +156,8 @@ HopSop:
 | `cc:delegated` | CC 创建 driver subagent；run 归 subagent；引擎 JSON 原样回 main；业务终态通过 |
 | `codex:delegated` | spawn 直发成功；正式 segment 被派生；main 不写 HopJIT；业务终态通过 |
 | `codex:flash` | **弱模型长程命题场景**（2026-08-08 作者定命题反转：验的是 ds4flash 跑长程任务，不是降级路径）：deepseek-v4-flash 驱动完整业务，工具面与 delegated 一致（不压制不诱导）；**断言模式自适应**——spawn 起得来验 delegated 判据（main 零写命令），起不来验 inline 判据（main 恰 run 一次）；业务终态必须通过；凭证记 `exercised_mode` 供人核实际路径 |
-| `codex:demo` | `install-skill --carrier codex --demo` 生成 `$coffee-week`；直接显式调用后进入 hopspec driver 并完成同一业务终态 |
-| `cc:call` | **正向 call 场景**（2026-08-11 作者定"做"——call 机制单测已覆盖三层链，缺真机载体端到端信心）：driver 按 call 协议起子实例（`init --parent --step`）驱动子 spec（text-normalize）到 completed，`--child-instance` 回填；父继续消费回填值到 completed 终态。必须成立：父终态 completed + 父实例有 `calls/` 子实例目录 + 回填值真实流转（父 vars 的 `clean_doc` 来自子 spec 的 normalized，summary 基于它生成）+ G11 过程核验（父 HopLog call 步骤 done 块在轨 + 子实例自有 hoplog 完整 completed）。spec fixture 复用教学样例对 `examples/syntax/call-parent-summarize.md` + `call-child-normalize.md`（教学件即测试件——正向场景无需专用失败触发器）。载体 cc（与失败组同 launcher claude-ds）；入 live:core 批（2026-08-14 三档收敛）,不进发版硬闸 |
+| `codex:demo` | `setup --carrier codex` 缺省装出演示 HopAnt `demo-coffee-week`（落工作区内一次性家目录 `<workspace>/.e2e-home/.hopjit/ants/`）;`$hopspec run` 它的入口 spec 后完成同一业务终态（2026-10-06 演示件改 HopAnt;B 编排落地后改为 `$hop` 分派,todo/0142） |
+| `cc:call` | **正向 call 场景**（2026-08-11 作者定"做"——call 机制单测已覆盖三层链，缺真机载体端到端信心）：driver 按 call 协议起子实例（`init --parent --step`）驱动子 spec（text-normalize）到 completed，`--child-instance` 回填；父继续消费回填值到 completed 终态。必须成立：父终态 completed + 父实例有 `calls/` 子实例目录 + 回填值真实流转（父 vars 的 `clean_doc` 来自子 spec 的 normalized，summary 基于它生成）+ G11 过程核验（父 HopLog call 步骤 done 块在轨 + 子实例自有 hoplog 完整 completed）。spec fixture 复用教学样例对 `examples/syntax/call-parent-summarize.md` + `text-normalize.md`（教学件即测试件——正向场景无需专用失败触发器；子 spec 文件名必须等于 callee id，按 [[hopant#^anc-hopant-callee-resolve]] 同目录 `<id>.md` 寻址——2026-10-08 live:core 实撞：子件原名 `call-child-normalize.md`，复用模式起跑依赖核报 INIT_FAILED 找不到 text-normalize，改名对齐）。载体 cc（与失败组同 launcher claude-ds）；入 live:core 批（2026-08-14 三档收敛）,不进发版硬闸 |
 | `codex:standalone` | 当前固定 exit 2，说明能力尚未实现并指向 TODO；禁止伪装成 inline 通过 |
 
 **失败路径场景组**（2026-08-09 作者定 12345 全做；原单列批量入口,2026-08-14 三档收敛并入 live:core——近期稳定性已与快乐路径持平;**不进发版硬闸**（凭证仍只看双 delegated）；载体统一 cc（driver 协议最全，与 delegated 同 launcher claude-ds）。设计原则：**失败触发全部确定性**（hop_python body 计算异常 / 确定性 check 判据），不依赖"劝 LLM 犯错"——那不可复现）：
@@ -169,6 +187,7 @@ HopSop:
 
 - **审计对象 = 小 fixture 工程**（`examples/e2e-audit-fixture/`：2 模块 alpha/beta、十来个锚点），不审 hoplogic3 本身（14 模块全量太贵）。2 模块 → 并行恰 2 批。**fixture 埋确定性结构缺陷**（设计锚点无 @a 落点 + @a 引用不存在锚点各 ≥1），审计报告必须抓到——审计工具自身的召回率断言；
 - **被测 spec/脚本 = scripts/audit/ 活工具直用**（2026-08-09 作者纠正——"冻结拷贝"是对"避免工具变化影响测试基线"的错误解读，语法演进时工具与样例必须跟着变，双份拷贝只造成同步维护与旧语法豁免口子）：测试判据的稳定性靠**断言只锁不变量**（产物落点 fixture/.anchor-audit、批文件按模块名、埋设缺陷召回、hitl 数量、并行批隔离——全部由 spec 结构决定，工具文案怎么改都不动摇）；工具的结构性改动令 e2e 红了正是守卫在工作，修断言是显式动作；
+  - **工作区装配**：audit-kit/ 拷 `scripts/audit/` 下全部 `.py` 脚本与 anchor-audit 两份 md，不按文件名清单拷——spec 调用哪些脚本由 spec 决定，清单会随 spec 演进过期（实撞 2026-10-08：2026-09-01 spec 脚本化后新增 prep_env/make_batches/write_artifact/write_batch/tally_batches 五个脚本，清单仍是旧的四个，场景从此红到 10-08 才被发现）；工作区根写一份 hopjit.yaml，`commands:` 只列 `git` 与 `uv`——spec body 经 `uv run --with pyyaml python3` 调脚本，与本库根 hopjit.yaml 为 anchor-audit 已批准的白名单同一范围，不多放；
 - **ask 介入点处置**：步骤 2（确认范围，无 require_human）允许 driver 代答 approve；步骤 7 经 prompt 嘱咐选 report_only——e2e 只读，不进 anchor-fix 写路径（commit/loop 修复段不在本场景覆盖内，spec 静态面由 validate 兜底）；
 - **终态断言**：completed + report.md 与 semantic_audit_summary.yaml 落盘 + batch_alpha/beta_results.yaml 按模块名在场 + report 含全部埋设缺陷（召回）；
 - **prompt 深核**（LLM 交互正确性第 2 层——引擎喂给 LLM 的东西对不对；判据从真轨迹校准，形态见 main.yaml debug 级 llm.prompt 块）：
@@ -224,6 +243,7 @@ HopSop:
 
 核心协议五条：
 1. **驱动=无头 mcp**：scripts/hopbuild-selftest.mjs 直驱 HopjitMcpCore——startRun(skills/hopbuild/spec.md)→轮询 run_status→paused 逐个注入（skill_path 答样本路径/头部呈审答通过/终审 ask 答放行;require_human 在测试语境由 harness 作答,测翻译质量非人审环节）。
+   - **commit 停点**（2026-10-08 todo/0146 落地后补;同日随 commit 批准改为安全分析改写,[[exec-engine#^anc-exec-commit-approval]]）：harness 与 serve 一样注册 commit 安全分析函数，分析模型跟 commit 路由走（快档）。hopbuild2 第 7 步写盘 commit 改为 write 自动留旧版本后，全部动作落在引擎判定的安全档，直接放行、不调模型、不停——本档由此核的是"安全档 commit 零停点"这条路径;模型分析与转人工路径由单元测试覆盖。若某次 run 停在 `pause_reason: commit`，harness 读载荷里的 fingerprint 调 approveCommit(scope: once) 后续跑，并把载荷里的安全分析（动作、后果、建议）打进日志。转人工不判失败——需要人看的动作交人是设计行为，日志留给读的人判断分析是否合理;
    - **模型分档路由**：routing_rules 只把 commit 路由快档 deepseek-chat,其余留强档 v4-pro;
    - 实撞收回（初版 act 也入快档）:act 双形态——带 hop_python body 的引擎直执零 LLM 调用路由无关;无 body 的 act 是工具循环文本加工〔读原文/植锚/并入草稿/组装审阅件〕恰需能力,chat 档把说明散文塞进 draft_path 值→下游 read 报 Path traversal 毒值;真机械且走 LLM 的只有 commit 写盘。教训:"机械步"要按有无 body 分,不按步骤类型分;
 2. **样本=三例轻档并行**（作者定 2026-08-18）：mini 遍历+不可逆（for-each/commit）/branch 分档+人审（branch/case/confirm 把关链）/verify 核验闭环+裁量（check final/retry/ask）——各覆盖一组要素,轻档单轮直达量级几分钟。

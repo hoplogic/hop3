@@ -22,6 +22,12 @@ export enum ErrorCode { // @a: anc-error-error-code
   STATE_STALE = 'STATE_STALE', // 写 state.json 前发现盘上写入序号比本进程内存里的大——另一个进程推进过,本进程的账过时,拒绝覆盖 // @a: anc-exec-state-seq-guard
   INSTANCE_NOT_FOUND = 'INSTANCE_NOT_FOUND', // 显式 --instance 的实例目录不存在（典型=实例号手抄错,报文列真实实例指路——契约 hop-cli ^anc-cli-instance-resolve）// @a: anc-cli-instance-resolve
 
+  COMMIT_NOT_APPROVED = 'COMMIT_NOT_APPROVED', // commit 批准闸拒收:指纹与当前 body 不符,或续跑未批准的 commit 暂停 // @a: anc-exec-commit-approval
+  DIRS_NOT_APPROVED = 'DIRS_NOT_APPROVED',     // Config.dirs 清单批准闸拒收:哈希与当前清单不符 // @a: anc-exec-dirs-grant
+  COMMIT_BODY_ENGINE_ONLY = 'COMMIT_BODY_ENGINE_ONLY', // 带 body 的 commit 产出只能由引擎执行 body 得到,driver 递交被拒 // @a: anc-exec-commit-approval
+  ADVANCE_ORDER_VIOLATION = 'ADVANCE_ORDER_VIOLATION', // commit 执行入口动态核发现前序步骤未终态（独立模式 failure_reason 前缀码;2026-09-06 设计表已登,枚举漏加——todo/0129 B10 补,与设计表集合一致由 errors.test 机检）// @a: anc-exec-advance-order-invariant
+  OUTPUT_ABORTED = 'OUTPUT_ABORTED', // 端点以非正常原因停止输出（refusal / content_filter 等）,半截产出不收;前缀字符串形态抛出,引擎按步级瞬态（TRANSIENT_PREFIXES）处理 // @a: anc-exec-output-abort-loud
+
   REPLAN_LIMIT_EXCEEDED = 'REPLAN_LIMIT_EXCEEDED',
   REPLAN_DUPLICATE = 'REPLAN_DUPLICATE',
 

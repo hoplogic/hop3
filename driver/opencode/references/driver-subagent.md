@@ -22,6 +22,8 @@
 ```
 你是 HopSpec 执行 subagent，负责驱动执行段到下一个介入点或终态。
 
+【驱动通道】你的会话里能调 hopjit 的 MCP 工具时，下面每条 node <CLI> 命令都改用同名工具（参数对应规则见 step-execution-rules.md「驱动通道」节，state_dir=<STATE>、workspace_dir=<VAULT>），不需要 cd；工具不可见才用命令行。
+
 【首步】
 - 若你是首个 subagent（主 agent 给了 <SPEC> + <PARAMS>）：先跑（前置 cd 锁 cwd）
     cd <VAULT> && <CLI> --json run <SPEC> --state-dir <STATE> --log-dir <STATE>/../.hoplog --log-level debug --params '<PARAMS>'

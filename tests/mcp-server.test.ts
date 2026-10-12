@@ -16,11 +16,13 @@ import {
   collectSpecTools,
   HopjitMcpCore,
   buildServer,
+  resolveCommitAnalyzerProvider,
   type StandaloneConfig,
   type ProviderEntry,
 } from '../src/mcp-server.js';
 import { parseSpec } from '../src/parser.js';
 import { ExecutionEngine } from '../src/engine.js';
+import type { HostConfig } from '../src/provider-types.js';
 import { StepDispatcher } from '../src/dispatcher.js';
 
 const REPO = resolve(import.meta.dirname, '..');
@@ -481,6 +483,62 @@ describe('collectSpecTools', () => {
   });
 });
 
+// @v: anc-hopant-callee-resolve, anc-provider-spec-default —— 独立模式 call 寻址：startRun 挂的缺省 DirSpecProvider 带
+// antRoots(homedir(), hostConfig.workspace_dir),同目录没有的 callee 先落 <workspace_dir>/hop_tasks/ants/<id>/<id>.md,再落 <HOME>/.hopjit/ants/
+// （callee 纯 hop_python,不触 LLM）。本例只装项目级、用户级为空——变异 M21-mcp：项目级根改成 '/nonexistent-mut' → callee 找不到,run 不 completed,红
+describe('HopjitMcpCore 缺省 SpecProvider 两级寻址', () => {
+  it('正例：call 只装在 <workspace_dir>/hop_tasks/ants/ 的 HopAnt（用户级没有）→ run completed,子实例产出回到父', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'mcp-ants-home-'));   // 空的假 HOME：用户级 ~/.hopjit/ants/ 下什么都没有
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-ants-proj-'));   // 项目目录 = startRun 的 workspace_dir
+    const antDir = join(dir, 'hop_tasks', 'ants', 'helper-ant');
+    mkdirSync(antDir, { recursive: true });
+    writeFileSync(join(antDir, 'helper-ant.md'), `# H
+Id: helper-ant
+## Goal
+g
+## Inputs
+- q: text  # 词
+## Outputs
+- r: text  # 结果
+## Steps
+1. [act] 回显
+  - ← q
+  + → r: text  # 结果
+  > \`\`\`hop_python
+  > r = q + "!"
+  > \`\`\`
+`);
+    writeFileSync(join(dir, 's.md'), `# C
+Id: caller
+## Goal
+g
+## Outputs
+- out: text  # 结果
+## Steps
+1. [call helper-ant(q: "hi")] 调
+  + → out: r  # 收取
+`);
+    const oldHome = process.env['HOME'];
+    process.env['HOME'] = home;
+    try {
+      const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
+      const r = await core.startRun(join(dir, 's.md'), undefined, mkdtempSync(join(tmpdir(), 'mcp-ants-state-')), dir);
+      const runId = r['run_id'] as string;
+      expect(runId, JSON.stringify(r)).toBeDefined();
+      let st: Record<string, unknown> = {};
+      for (let i = 0; i < 50; i++) {
+        await new Promise(res => setTimeout(res, 100));
+        st = core.runStatus(runId);
+        if (st['status'] !== 'running') break;
+      }
+      expect(st['status'], JSON.stringify(st)).toBe('completed');
+      expect((st['outputs'] as Record<string, unknown>)['out']).toBe('hi!');
+    } finally {
+      process.env['HOME'] = oldHome;
+    }
+  });
+});
+
 // @v: anc-mcp-tools, anc-mcp-run-lifecycle —— 注册表核心：错误路径（不触 LLM）
 describe('HopjitMcpCore（无 LLM 错误路径）', () => {
   const config: StandaloneConfig = { providers: [VALID_PROVIDER] };
@@ -618,9 +676,10 @@ g
   });
 
   // @v: anc-exec-parallel-hitl-queue, anc-exec-call-child-persist —（37轮review:server重启后队列是空的,
-  // caller拿旧卡child来答——账上paused→resumeSpec重派发重暂停,同名child新卡入队后按原答继续;探针实证
-  // completed vals=[5]。双锚:落盘批连锁修①〔分派判据改退火标记〕的击杀面钉——TRACEABILITY 卡引用本钉）
-  it('U4b：server 重启后按旧卡 child_instance 应答 → 重派发重暂停接原答,completed', async () => {
+  // caller拿旧卡child来答——账上paused→resumeSpec对账,子实例 state.json 在场走 stale 续跑到暂停点重新入队,
+  // 同名child新卡入队后按原答继续;探针实证 completed vals=[5]。双锚:落盘批连锁修的击杀面钉——分派判据
+  // 2026-10-07 hopissues/0126 起按 state.json 在场判〔原按退火标记重派发〕,本钉形态两版行为一致）
+  it('U4b：server 重启后按旧卡 child_instance 应答 → 子实例续跑到暂停点重新入队接原答,completed', async () => {
     const core1 = new HopjitMcpCore(config);
     const dir = mkdtempSync(join(tmpdir(), 'mcp-qr-'));
     writeFileSync(join(dir, 's.md'), `# T
@@ -666,6 +725,86 @@ g
     }
     expect(st['status']).toBe('completed');
     expect((st['outputs'] as Record<string, unknown>)['vals']).toEqual([5]);
+  });
+
+  // hopissues/0126 的 MCP 真身：for-each × parallel 三子实例各停 commit 卡,server 重启后 resume_run(child_instance=…)
+  // 对 commit 卡被预检 INVALID_STATE 拒（父账上该步 done 非 running）,正路是 resume_run(step_id=<for-each 容器步>) 走崩溃恢复
+  // 分支——容器步 running 且非 confirm/ask/commit → recoverDanglingRunning + resumeSpec → 三子实例按 state.json 在场续跑收齐。
+  // 修前只回最后一项（outs=[6]）。design parallel-execution U4b 第 6 条 MCP 入口条 / mcp-server ^anc-mcp-run-restore。
+  // @v: anc-exec-parallel-hitl-queue, anc-mcp-run-restore
+  it('正例（0126 MCP 真身）：三子实例停 commit 卡,新 core 批准后 resume_run(step_id=容器步) 崩溃恢复路 → 三项全部续跑 outs=[2,4,6];resume_run(child_instance=…) 对 commit 卡 INVALID_STATE 拒（既有限制如实钉住）', async () => {
+    const echoConfig: StandaloneConfig = { ...config, commands: ['echo'] };   // commit body 跑外部命令才会停批准卡
+    const core1 = new HopjitMcpCore(echoConfig);
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-0126-'));
+    writeFileSync(join(dir, 's.md'), `# T
+Id: t-0126
+## Goal
+g
+## Inputs
+- items: [int]
+
+## Outputs
+- outs: [int]
+
+## Steps
+1. [loop for-each x in items, collect y into outs] 逐项
+  + → outs: [int]  # 收集
+  1.1. [subtask parallel] 单项
+    + → y: int  # 值
+    1.1.1. [act] 备值
+      - ← x
+      + → y0: int  # 值
+      > \`\`\`hop_python
+      > y0 = x * 2
+      > \`\`\`
+    1.1.2. [check final] 判定
+      - ← y0
+      + → ok: bool  # 判
+      + → note: text  # 说
+      > \`\`\`hop_python
+      > ok = True
+      > note = "ok"
+      > \`\`\`
+    1.1.3. [commit] 落值
+      - ← y0
+      + → y: int  # 值
+      > \`\`\`hop_python
+      > r = subprocess.run(["echo", "x"])
+      > y = y0
+      > \`\`\`
+`);
+    const sd = mkdtempSync(join(tmpdir(), 'mcp-0126-state-'));
+    const r = await core1.startRun(join(dir, 's.md'), { items: [1, 2, 3] }, sd, dir);
+    const runId = r['run_id'] as string;
+    let st: Record<string, unknown> = {};
+    for (let i = 0; i < 80; i++) {
+      await new Promise(res => setTimeout(res, 100));
+      st = core1.runStatus(runId);
+      if (st['status'] === 'paused' && ((st['paused_queue'] as unknown[])?.length ?? 0) === 3) break;
+    }
+    const queue = st['paused_queue'] as Array<{ child_instance?: string; step_id: string; pause_reason?: string; presented_data?: { context?: Record<string, unknown> } }>;
+    expect(queue.length).toBe(3);
+    expect(queue[0].pause_reason).toBe('commit');
+    const hash = String(queue[0].presented_data?.context?.['fingerprint']);
+    // server 重启:新 core 空注册表
+    const core2 = new HopjitMcpCore(echoConfig);
+    // 带卡上的 child_instance:新 core 队列为空,从 parallel/<child> load 子实例引擎批;scope=task 覆盖三张卡
+    expect((core2.approveCommit({ instance_id: runId, step_id: '1.1.3', fingerprint: hash, scope: 'task', state_dir: sd, child_instance: queue[0].child_instance }) as { status?: string }).status).toBe('ok');
+    expect((core2.approveCommit({ instance_id: runId, step_id: '1.1.3', fingerprint: hash, scope: 'task', state_dir: sd, child_instance: 'nope' }) as { error?: { code?: string } }).error?.code).toBe('INSTANCE_NOT_FOUND');
+    // 子实例 commit 卡带 child_instance 来答 → 预检拒（父账上 1.1.3 非 running）——既有限制,如实钉
+    const rejected = core2.resumeRun(runId, '1.1.3', {}, sd, queue[0].child_instance) as { error?: { code?: string } };
+    expect(rejected.error?.code).toBe('INVALID_STATE');
+    // 正路：容器步 step_id 走崩溃恢复分支
+    const a = core2.resumeRun(runId, '1', {}, sd) as { status?: string; recovered_from_crash?: boolean };
+    expect(a.status).toBe('running');
+    expect(a.recovered_from_crash).toBe(true);
+    for (let i = 0; i < 100; i++) {
+      await new Promise(res => setTimeout(res, 100));
+      st = core2.runStatus(runId);
+      if (['completed', 'failed'].includes(st['status'] as string)) break;
+    }
+    expect(st['status']).toBe('completed');
+    expect((st['outputs'] as Record<string, unknown>)['outs']).toEqual([2, 4, 6]);
   });
 
   // @v: anc-mcp-run-restore （0028 快照兜底:注册表不中纯读盘取问题卡——零 Dispatcher 零凭证;
@@ -1083,6 +1222,40 @@ g
     expect(core.runStatus('r-lc')['status']).toBe('aborted');   // 不被改写成 failed
   });
 
+  // @v: anc-mcp-stop-run —— 2026-10-11 语义审计 0156 B5：第四个回写口（resumeRun 的 rejected 回调）aborted 时同样收 tool provider
+  // （设计第 2 条"三处一律见 aborted 先返只做资源收尾"——此口此前先返但漏 close,窄竞态工具通道泄漏;变异=删该分支的 close → 本例红）
+  it('正/反（竞态防线·第四口）：resume 被拒收迟到时 run 已 aborted → 不改写终态且 tool provider 被 close;未 aborted 则回 paused+failure 且不 close', async () => {
+    const run = async (stopBeforeReject: boolean) => {
+      const core = new HopjitMcpCore(config);
+      let resolveLate: ((r: unknown) => void) | undefined;
+      let closeCalls = 0;
+      const toolProvider = { list: () => [], execute: async () => ({ success: true, result: null }), close: async () => { closeCalls++; } };
+      const entry: Record<string, unknown> = {
+        runId: 'r-rj', specPath: '/x/s.md', state: 'paused',
+        dispatcher: {
+          requestAbortCascade: () => {},
+          getToolProvider: () => toolProvider,
+          resume: () => new Promise(res => { resolveLate = res; }),   // 挂起,等 stop（或不 stop）后再以 rejected 形态回
+        },
+        paused: { status: 'paused', step_id: '1', pause_reason: 'ask' },
+        startedAt: '2026-08-22T00:00:00Z',
+      };
+      (core as any).runs.set('r-rj', entry);
+      core.resumeRun('r-rj', '1', { value: 'a' });   // 在飞
+      if (stopBeforeReject) core.stopRun('r-rj');    // 用户中止
+      resolveLate!({ status: 'paused', rejected: { code: 'ASK_ANSWER_SHAPE', message: '坏形态' } });   // 拒收迟到
+      await new Promise(res => setTimeout(res, 10));
+      return { status: core.runStatus('r-rj')['status'], closeCalls, failure: entry['failure'] };
+    };
+    const stopped = await run(true);
+    expect(stopped.status).toBe('aborted');     // 终态不被改写
+    expect(stopped.closeCalls).toBe(1);         // 反例半边：aborted 时第四口也收 tool provider
+    const alive = await run(false);
+    expect(alive.status).toBe('paused');        // 正例半边：未 aborted 走拒收回 paused+failure
+    expect((alive.failure as { reason: string }).reason).toContain('ASK_ANSWER_SHAPE');
+    expect(alive.closeCalls).toBe(0);           // 可修正重试,不收 provider
+  });
+
   // @v: anc-exec-doc-ref-resolve — 两级基准第一级在 MCP startRun 全链生效（audit spec 实撞形态）
   it('正例：spec 同目录知识文档（audit 形态）——workspace 指别处仍过 init（doc-ref 第一级 spec 目录命中）', async () => {
     const core = new HopjitMcpCore(config);
@@ -1405,13 +1578,17 @@ describe('HopjitMcpCore resume 状态机（mock dispatcher）', () => {
 // @v: anc-mcp-tools —— buildServer 工具注册面（zod schema 是对外稳定面，此前零直接测试）
 // @v: anc-struct-standalone-endpoint —— standalone 对外形态（五工具装配）
 describe('buildServer 工具面', () => {
-  it('注册恰好六工具且名称与契约一致（stop_run 2026-08-22 补——主动中止面;run_approved_command 2026-09-30 补——任务卡授权命令面）', async () => {
+  it('注册工具集与契约一致（独立模式六件 + 复用驱动七件 + approve_commit + approve_dirs + 管理八件 + server_status,2026-10-07 todo/0146 + 0148 + 2026-10-10 todo/0154）', async () => {   // @v: anc-mcp-admin-tools
     const { buildServer: build } = await import('../src/mcp-server.js');
     const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
     const server = build(core);
     // McpServer 内部注册表（SDK 私有结构，仅断言工具名集合——形状断言到此为止，行为归冒烟/真机）
     const tools = (server as any)._registeredTools;
-    expect(Object.keys(tools).sort()).toEqual(['list_runs', 'resume_run', 'run_approved_command', 'run_status', 'start_run', 'stop_run']);
+    expect(Object.keys(tools).sort()).toEqual([
+      'abort', 'ant_adapt', 'ant_bootstrap', 'ant_install', 'ant_list', 'ant_pack', 'ant_remove', 'ant_share', 'approve_commit', 'approve_dirs', 'doctor',
+      'list_runs', 'reap_and_fetch_next', 'resume', 'resume_run', 'run', 'run_approved_command',
+      'run_status', 'server_status', 'start_run', 'status', 'stop_run', 'submit_and_fetch_next', 'validate',
+    ]);
     expect(tools['start_run'].inputSchema).toBeTruthy();   // schema 存在（zod 对象）
     // stop_run 注解逐项（^anc-mcp-stop-run——destructiveHint 丢弃在飞进度如实标破坏性;
     // idempotentHint 终态幂等是设计点名条款,review 补断言）
@@ -1544,8 +1721,8 @@ describe('工具注解（ToolAnnotations——载体审批分级判据）', () =
   });
 });
 
-// @v: anc-mcp-config —— serve 启动面（子进程冒烟：fail-fast 三态，stdio server 无法进程内测）
-describe('serve 启动 fail-fast（子进程）', () => {
+// @v: anc-mcp-config, anc-mcp-server-status —— serve 启动面（子进程冒烟：配置三态都启动,独立模式能力如实报;stdio server 无法进程内测）
+describe('serve 启动——配置问题不阻止启动（子进程）', () => {
   function spawnServe(env: Record<string, string | undefined>): { code: number; err: string } {
     const entry = join(REPO, 'dist', 'mcp-server.js');
     if (!existsSync(entry)) throw new Error('dist/mcp-server.js 缺失——测试入口必须先执行 npm run build');
@@ -1556,25 +1733,37 @@ describe('serve 启动 fail-fast（子进程）', () => {
     return { code: r.status ?? -1, err: r.stderr ?? '' };
   }
 
-  it('配置缺失 → exit 1 报 STANDALONE_CONFIG_MISSING', () => {
+  it('配置缺失 → 照常启动,横幅说明独立模式不可用并带 STANDALONE_CONFIG_MISSING', () => {
     const r = spawnServe({ HOPJIT_CONFIG: '/nonexistent/cfg.yaml' });
-    expect(r.code).toBe(1);
+    expect(r.code).toBe(0);
+    expect(r.err).toContain('server 就绪（复用驱动工具可用;独立模式不可用');
     expect(r.err).toContain('STANDALONE_CONFIG_MISSING');
+    expect(r.err).not.toContain('启动失败');
   });
 
-  it('key env 未设 → 启动即拒（不等首次 start_run）报变量名', () => {
+  it('key env 未设 → 照常启动,横幅报变量名', () => {
     const p = writeConfig(JSON.stringify({ providers: [{ ...VALID_PROVIDER, api_key_env: 'HOPJIT_NO_SUCH_KEY' }] }));
     const r = spawnServe({ HOPJIT_CONFIG: p, HOPJIT_NO_SUCH_KEY: undefined });
-    expect(r.code).toBe(1);
+    expect(r.code).toBe(0);
+    expect(r.err).toContain('独立模式不可用');
     expect(r.err).toContain('HOPJIT_NO_SUCH_KEY');
-    expect(r.err).toContain('拒绝启动');
   });
 
-  it('配置合法+key 在 → exit 0 且就绪横幅落 stderr（stdin 关闭即退出）', () => {
+  it('配置非法（明文 key）→ 照常启动,横幅带配置报文', () => {
+    const p = writeConfig(JSON.stringify({ providers: [{ ...VALID_PROVIDER, api_key: 'sk-plain' }] }));
+    const r = spawnServe({ HOPJIT_CONFIG: p });
+    expect(r.code).toBe(0);
+    expect(r.err).toContain('独立模式不可用');
+    expect(r.err).toContain('STANDALONE_CONFIG_PLAINTEXT_KEY');
+    expect(r.err).toContain('api_key_env');
+    expect(r.err).not.toContain('sk-plain');   // 横幅不回显明文 key
+  });
+
+  it('配置合法+key 在 → exit 0 且就绪横幅说明独立模式可用（stdin 关闭即退出）', () => {
     const p = writeConfig(JSON.stringify({ providers: [VALID_PROVIDER] }));
     const r = spawnServe({ HOPJIT_CONFIG: p, HOPJIT_TEST_KEY_ENV: 'sk-smoke' });
     expect(r.code).toBe(0);
-    expect(r.err).toContain('standalone server 就绪');
+    expect(r.err).toContain('server 就绪（独立模式可用');
     expect(r.err).toContain('deepseek');
   });
 
@@ -1589,6 +1778,21 @@ describe('serve 启动 fail-fast（子进程）', () => {
     expect(r.code).toBe(0);
     expect(r.err).toMatch(/stdin 关闭|宿主断开/);
     expect(r.err).toContain('resume_run');
+  });
+
+  // @v: anc-mcp-config
+  it('HOPJIT_CONFIG 未设 → 配置路径回退到 <HOME>/.hopjit/config.yaml（假 HOME 下放一份合法配置即独立模式可用;空 HOME 即配置缺失）', () => {
+    const home = mkdtempSync(join(tmpdir(), 'mcp-home-'));
+    mkdirSync(join(home, '.hopjit'), { recursive: true });
+    writeFileSync(join(home, '.hopjit', 'config.yaml'), JSON.stringify({ providers: [VALID_PROVIDER] }));
+    const ok = spawnServe({ HOPJIT_CONFIG: undefined, HOME: home, HOPJIT_TEST_KEY_ENV: 'sk-smoke' });
+    expect(ok.code).toBe(0);
+    expect(ok.err).toContain('server 就绪（独立模式可用');
+    const emptyHome = mkdtempSync(join(tmpdir(), 'mcp-home-empty-'));
+    const missing = spawnServe({ HOPJIT_CONFIG: undefined, HOME: emptyHome, HOPJIT_TEST_KEY_ENV: 'sk-smoke' });
+    expect(missing.code).toBe(0);
+    expect(missing.err).toContain('独立模式不可用');
+    expect(missing.err).toContain('STANDALONE_CONFIG_MISSING');
   });
 });
 
@@ -1605,7 +1809,7 @@ describe('preflightProviderKeys', () => {
     delete process.env['HOPJIT_MISSING_K'];
     expect(() => preflightProviderKeys({
       providers: [VALID_PROVIDER, { ...VALID_PROVIDER, service_id: 'backup', api_key_env: 'HOPJIT_MISSING_K' }],
-    })).toThrow(/HOPJIT_MISSING_K.*backup.*拒绝启动/);
+    })).toThrow(/STANDALONE_KEY_MISSING.*HOPJIT_MISSING_K.*backup.*独立模式不可用/);
   });
 });
 
@@ -1928,6 +2132,75 @@ describe('language 配置节（0084 M2 合并断线修复）', () => {
       const entry = [...(core as any).runs.values()][0];
       expect((entry.dispatcher as any).hostConfig.hop_env?.['hop_env_language']).toBe('zh');
     } finally { delete process.env['HOPJIT_CONFIG']; }
+  });
+
+  // @v: anc-i18n-serialize-lang, anc-i18n-language-config —— 语义审计 #5 #6 #7（2026-10-12）：todo/0160 把 language 缺省
+  // 收口到 config-load.effectiveLanguage,但 mcp-server 的 startRun 与 restoreRun 四处仍写死 `=== 'zh' ? 'zh' : 'en'`
+  // ——键缺席落 en,中文机器上独立模式与复用模式劈叉。本组钉"键缺席跟随系统语言、键在场用键值"在 MCP 两路都成立。
+  it('正例（语义审计 #5 #6）：startRun 配置两级都没写 language、LANG=zh_CN.UTF-8 → HostConfig.language 与 hop_env_language 都是 zh（跟随系统语言,不再写死 en）', async () => {
+    process.env['HOPJIT_CONFIG'] = '/hermetic/no-project-reload.yaml';
+    const saved = { LC_ALL: process.env['LC_ALL'], LC_MESSAGES: process.env['LC_MESSAGES'], LANG: process.env['LANG'] };
+    delete process.env['LC_ALL']; delete process.env['LC_MESSAGES']; process.env['LANG'] = 'zh_CN.UTF-8';
+    try {
+      const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });   // 无 language 键
+      const dir = mkdtempSync(join(tmpdir(), 'mcp-lang-sys-'));
+      const r = await core.startRun(join(REPO, 'examples', 'coffee-week.md'), { daily_sales: [1, 2, 3, 4, 5, 6, 7], weekly_target: 10 }, join(dir, '.hopstate'));
+      expect(r['run_id']).toBeTruthy();
+      const hc = ([...(core as any).runs.values()][0].dispatcher as any).hostConfig;
+      expect(hc.language).toBe('zh');
+      expect(hc.hop_env?.['hop_env_language']).toBe('zh');
+    } finally {
+      delete process.env['HOPJIT_CONFIG'];
+      for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    }
+  });
+
+  it('反例（语义审计 #5 #6）：startRun 配置显式 language: en、LANG=zh_CN.UTF-8 → 仍是 en（键在场用键值,系统语言不覆盖显式配置）', async () => {
+    process.env['HOPJIT_CONFIG'] = '/hermetic/no-project-reload.yaml';
+    const saved = { LC_ALL: process.env['LC_ALL'], LC_MESSAGES: process.env['LC_MESSAGES'], LANG: process.env['LANG'] };
+    delete process.env['LC_ALL']; delete process.env['LC_MESSAGES']; process.env['LANG'] = 'zh_CN.UTF-8';
+    try {
+      const core = new HopjitMcpCore({ providers: [VALID_PROVIDER], language: 'en' });
+      const dir = mkdtempSync(join(tmpdir(), 'mcp-lang-explicit-'));
+      const r = await core.startRun(join(REPO, 'examples', 'coffee-week.md'), { daily_sales: [1, 2, 3, 4, 5, 6, 7], weekly_target: 10 }, join(dir, '.hopstate'));
+      expect(r['run_id']).toBeTruthy();
+      const hc = ([...(core as any).runs.values()][0].dispatcher as any).hostConfig;
+      expect(hc.language).toBe('en');
+      expect(hc.hop_env?.['hop_env_language']).toBe('en');
+    } finally {
+      delete process.env['HOPJIT_CONFIG'];
+      for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    }
+  });
+
+  it('正例（语义审计 #7）：restoreRun 项目级与 server 配置都没写 language、LANG=zh_CN.UTF-8 → 恢复后 HostConfig.language 与 hop_env_language 都是 zh（restoreRun 半边同口径）', () => {
+    const saved = { LC_ALL: process.env['LC_ALL'], LC_MESSAGES: process.env['LC_MESSAGES'], LANG: process.env['LANG'] };
+    delete process.env['LC_ALL']; delete process.env['LC_MESSAGES']; process.env['LANG'] = 'zh_CN.UTF-8';
+    try {
+      const projDir = mkdtempSync(join(tmpdir(), 'mcp-lang-restore-'));
+      writeFileSync(join(projDir, 'hopjit.yaml'), 'default_model: deepseek/m2\n');   // 无 language 键
+      const ASK_SPEC = `# T\nId: lang-restore-t\n## Goal\ng\n## Inputs\n- x: line\n## Outputs\n- r: line  # r\n## Steps\n1. [ask] 问\n  - ← x\n  + → r: line  # r\n`;
+      const stateDir = join(projDir, '.hopstate');
+      const engine = new ExecutionEngine();
+      engine.initExecution(ASK_SPEC, {
+        workspace_dir: projDir,
+        sandbox: { filesystem: { workspace_dir: '.', read_access: { allowed: ['.'], denied: [], confirm_required: [] } }, network: { trusted_hosts: [] }, runtime: { available: [] } },
+        api_key: '',
+        config_project_dir: projDir,
+      }, { stateDir, params: { x: 'a' }, specPath: join(projDir, 't.md') });
+      let n = engine.nextStep();
+      while (n.status === 'step_ready') { engine.completeStep((n as { step_id: string }).step_id, {}); n = engine.nextStep(); }
+      expect(n.status).toBe('paused');
+      const runId = readdirSync(stateDir)[0];
+      const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });   // server 配置也无 language
+      const r = core.resumeRun(runId, '1', { value: 'go' }, stateDir);
+      expect(JSON.stringify((r as { error?: unknown }).error ?? null)).toBe('null');
+      const hc = ((core as any).runs.get(runId).dispatcher as any).hostConfig;
+      expect(hc.language).toBe('zh');
+      expect(hc.hop_env?.['hop_env_language']).toBe('zh');
+    } finally {
+      for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    }
   });
 
   it('反例：非法值（fr）加载期响亮拒,不静默当 en;正例：合法枚举过', () => {
@@ -2462,6 +2735,139 @@ g
     const r = core.resumeRun(runId, '2', { value: 1 }, stateDir);
     expect((r['error'] as { code: string }).code).toBe('RESTORE_FAILED');
   });
+
+  // ===== 独立模式 commit 批准停点（todo/0146 review D7/D12/D37/D2,走真 dispatcher,不用 mock 引擎）=====
+  // confirm → commit(不留旧版本的写入 body):confirm 由人答,commit 由 dispatcher.executeCommit 的批准闸拦停
+  // （keep:0 写工作区文件=引擎判 review,本测试没有注册分析模型 → 模板分析转人工）。
+  const CC_SPEC = `# CC
+Id: cc-t
+
+## Goal
+g
+
+## Outputs
+- out: line  # 交付
+
+## Steps
+1. [confirm] 审批
+  + → approval: bool  # 审批
+2. [commit] 交付
+  + → out: line
+  > 覆盖写一个文件,不留旧版本
+  > \`\`\`hop_python
+  > w = write(path: "shipped.txt", content: "x", keep: 0)
+  > out = "shipped"
+  > \`\`\`
+`;
+  function setupConfirmSnapshot(dirArg?: string): { stateDir: string; runId: string; dir: string } {
+    const dir = dirArg ?? mkdtempSync(join(tmpdir(), 'mcp-cc-'));
+    const specPath = join(dir, 'cc.md');
+    writeFileSync(specPath, CC_SPEC);
+    const stateDir = join(dir, '.hopstate');
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(CC_SPEC, {
+      workspace_dir: dir,
+      sandbox: { filesystem: { workspace_dir: '.', read_access: { allowed: ['.'], denied: [], confirm_required: [] } }, network: { trusted_hosts: [] }, runtime: { available: [] } },
+      api_key: 'x',
+    }, { stateDir, specPath });
+    expect(init.status).toBe('ok');
+    const n = engine.nextStep();
+    expect(n.status).toBe('paused');
+    expect((n as { step_id: string }).step_id).toBe('1');
+    return { stateDir, runId: (init as { instance_id: string }).instance_id, dir };
+  }
+  // 新 core 从 confirm 快照恢复、答 approve,dispatcher 跑到 commit 批准停点
+  async function runToCommitPause(): Promise<{ stateDir: string; runId: string; dir: string; core: HopjitMcpCore; hash: string }> {
+    const s = setupConfirmSnapshot();
+    const core = new HopjitMcpCore(config);
+    expect((core.resumeRun(s.runId, '1', { value: 'approve' }, s.stateDir) as { status?: string }).status).toBe('running');
+    await new Promise(res => setTimeout(res, 400));
+    const st = core.runStatus(s.runId) as any;
+    expect(st.status).toBe('paused');
+    expect(st.paused.pause_reason).toBe('commit');
+    expect(st.paused.step_id).toBe('2');
+    return { ...s, core, hash: st.paused.presented_data.context.fingerprint };
+  }
+
+  // @v: anc-exec-commit-approval, anc-mcp-commit-approve
+  it('独立模式 commit 批准（真 dispatcher）:停在批准点→未批准 resume_run 拒且仍 paused→approve_commit 走注册表内存引擎→resume_run 执行 body;once 不跨运行,task 之后同 spec 再跑不停', async () => {
+    const { stateDir, runId, dir, core, hash } = await runToCommitPause();
+    // 未批准:resume_run 同步拒,run 保持 paused,报文带 instance_id 与"问用户"
+    const rej = core.resumeRun(runId, '2', {}) as any;
+    expect(rej.error.code).toBe('COMMIT_NOT_APPROVED');
+    expect(rej.error.message).toContain(`instance_id: "${runId}"`);
+    expect(rej.error.message).toContain('在对话里用三个选项问');
+    expect((core.runStatus(runId) as any).status).toBe('paused');
+    // dispatcher.resume 的 commit 分支（mcp 同步预检之后的第二个产生点）:未批准结构化拒,报文同源
+    const entry = (core as any).runs.get(runId);
+    const dr = await entry.dispatcher.resume('2', {});
+    expect(dr.rejected.code).toBe('COMMIT_NOT_APPROVED');
+    expect(dr.rejected.message).toContain(`instance_id: "${runId}"`);
+    expect(dr.rejected.message).toContain('在对话里用三个选项问');
+    // approve_commit:run 在本进程注册表里 → 用其内存引擎记账（事件记在内存引擎上即证明没走 load 分支）
+    const ok = core.approveCommit({ instance_id: runId, step_id: '2', fingerprint: hash, scope: 'once', state_dir: stateDir }) as any;
+    expect(ok.status).toBe('ok');
+    expect(entry.dispatcher.getEngine().getExecEvents().some((e: { event: string }) => e.event === 'commit_approved')).toBe(true);
+    expect(existsSync(join(stateDir, 'commit_approvals.json'))).toBe(true);
+    // 批准后 resume_run 放行,body 执行
+    expect((core.resumeRun(runId, '2', {}) as any).status).toBe('running');
+    await new Promise(res => setTimeout(res, 400));
+    const done = core.runStatus(runId) as any;
+    expect(done.status).toBe('completed');
+    expect(done.outputs.out).toBe('shipped');
+    // 同一 spec 再起一个实例:scope=once 只管本次运行,confirm 后再停在 commit;批 task 后第三个实例不再停
+    const again = setupConfirmSnapshot(dir);
+    expect((core.resumeRun(again.runId, '1', { value: 'approve' }, again.stateDir) as any).status).toBe('running');
+    await new Promise(res => setTimeout(res, 400));
+    const p2 = core.runStatus(again.runId) as any;
+    expect(p2.status).toBe('paused');
+    expect(p2.paused.pause_reason).toBe('commit');
+    expect((core.approveCommit({ instance_id: again.runId, step_id: '2', fingerprint: hash, scope: 'task', state_dir: again.stateDir }) as any).status).toBe('ok');
+    const third = setupConfirmSnapshot(dir);
+    expect((core.resumeRun(third.runId, '1', { value: 'approve' }, third.stateDir) as any).status).toBe('running');
+    await new Promise(res => setTimeout(res, 400));
+    const done3 = core.runStatus(third.runId) as any;
+    expect(done3.status).toBe('completed');
+    expect(done3.outputs.out).toBe('shipped');
+  });
+
+  // @v: anc-mcp-commit-approve
+  it('反例：approve_commit 的 scope 不是 once/task → INVALID_ARG,不记账,run 仍停在批准点', async () => {
+    const { stateDir, runId, core, hash } = await runToCommitPause();
+    for (const scope of ['forever', 'deny', '']) {
+      expect(core.approveCommit({ instance_id: runId, step_id: '2', fingerprint: hash, scope, state_dir: stateDir })).toMatchObject({ error: { code: 'INVALID_ARG' } });
+    }
+    // 账里只有关卡分析留下的 referred 记录,没有任何批准记录
+    const recs = JSON.parse(readFileSync(join(stateDir, 'commit_approvals.json'), 'utf-8')) as Array<{ outcome: string }>;
+    expect(recs.map(r => r.outcome)).toEqual(['referred']);
+    expect((core.runStatus(runId) as any).status).toBe('paused');
+  });
+
+  // @v: anc-mcp-run-restore, anc-exec-commit-approval
+  it('server 重启后的 commit 停点快照:新 core resume_run 未批准得 COMMIT_NOT_APPROVED（不当崩溃悬空步重跑）;config 缺失的 core 得 STANDALONE_UNAVAILABLE 且快照不动', async () => {
+    const { stateDir, runId } = await runToCommitPause();
+    const core2 = new HopjitMcpCore(config);   // 重启后的 server,注册表空
+    const r = core2.resumeRun(runId, '2', {}, stateDir) as any;
+    expect(r.recovered_from_crash).toBeUndefined();
+    expect(r).toMatchObject({ error: { code: 'COMMIT_NOT_APPROVED' } });
+    const statePath = join(stateDir, runId, 'state.json');
+    const before = readFileSync(statePath, 'utf-8');
+    const nullCore = new HopjitMcpCore(null, { reason: 'STANDALONE_CONFIG_MISSING: 测试', fix: '创建配置' });
+    expect(nullCore.resumeRun(runId, '2', {}, stateDir)).toMatchObject({ error: { code: 'STANDALONE_UNAVAILABLE', fix: '创建配置' } });
+    expect(readFileSync(statePath, 'utf-8')).toBe(before);
+  });
+
+  // @v: anc-exec-confirm-answer
+  it('独立模式 confirm 收到没有决定值的回答 → 拒收:run 回 paused,failure 带 SCHEMA_MISMATCH,不推进到 commit', async () => {
+    const { stateDir, runId } = setupConfirmSnapshot();
+    const core = new HopjitMcpCore(config);
+    expect((core.resumeRun(runId, '1', {}, stateDir) as any).status).toBe('running');
+    await new Promise(res => setTimeout(res, 300));
+    const st = core.runStatus(runId) as any;
+    expect(st.status).toBe('paused');
+    expect(st.failure.reason).toContain('SCHEMA_MISMATCH');
+    expect(st.paused).toBeUndefined();   // 恢复的 run 原本就没有暂停载荷;拒收不凭空造 commit 停点
+  });
 });
 
 // ===== run_status 在飞视图（统一模型收口 ^anc-mcp-run-status-inflight）=====
@@ -2986,6 +3392,148 @@ g
   });
 });
 
+// stop_run 快照兜底（hopissues/0117,^anc-mcp-stop-run 第 6 条）——MCP server 重启后注册表清空,
+// 重启前停在 paused 的 run 只剩盘上快照:stop_run 带 state_dir 按快照写墓碑中止。
+// @v: anc-mcp-stop-run
+describe('stop_run 快照兜底（注册表外的 run）', () => {
+  beforeAll(() => { process.env['HOPJIT_TEST_KEY_ENV'] = 'sk-test-fake'; });
+  const SPEC = `# T
+Id: t-stop-snap
+## Goal
+g
+## Inputs
+- base: int  # 底数
+
+## Outputs
+- result: int  # 结果
+
+## Steps
+1. [act] 备料
+  - ← base
+  + → prepared: int  # 备好的数
+  > 纯计算
+  > \`\`\`hop_python
+  > prepared = base + 1
+  > \`\`\`
+2. [ask require_human=true] 请确认数值
+  - ← prepared
+  + → result: int  # 人确认的值
+`;
+  /** 引擎直接跑到 paused 落盘（不经 startRun、不触 LLM）——等价于"server 重启前停在等人"的盘上形态。 */
+  function pausedSnapshot(driverChannel: 'mcp' | 'cli' = 'mcp'): { stateDir: string; runId: string; instDir: string } {
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-stop-snap-'));
+    const specPath = join(dir, 's.md');
+    writeFileSync(specPath, SPEC);
+    const stateDir = join(dir, '.hopstate');
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC, {
+      workspace_dir: dir,
+      sandbox: { filesystem: { workspace_dir: '.', read_access: { allowed: ['.'], denied: [], confirm_required: [] } }, network: { trusted_hosts: [] }, runtime: { available: [] } },
+      api_key: 'x',
+    }, { stateDir, params: { base: 41 }, specPath, driverChannel });
+    expect(init.status).toBe('ok');
+    let n = engine.nextStep();
+    while (n.status === 'step_ready') { engine.completeStep(n.step_id, { prepared: 42 }); n = engine.nextStep(); }
+    expect(n.status).toBe('paused');
+    const runId = (init as { instance_id: string }).instance_id;
+    return { stateDir, runId, instDir: join(stateDir, runId) };
+  }
+  /** 把盘上 state.json 的最后写入者改成指定 pid（模拟"别的进程最后写过这份快照"）。 */
+  function setLastWriter(instDir: string, pid: number): void {
+    const p = join(instDir, 'state.json');
+    const st = JSON.parse(readFileSync(p, 'utf-8'));
+    st.last_writer = { pid, at: '2026-10-04T00:00:00.000Z' };
+    writeFileSync(p, JSON.stringify(st));
+  }
+
+  it('正例：paused 快照不在注册表 → 写墓碑、删问题卡,返回 aborted+restored_from_snapshot;之后 run_status 报 aborted、resume_run 拒 RUN_ABORTED', () => {
+    const { stateDir, runId, instDir } = pausedSnapshot();
+    expect(existsSync(join(instDir, 'paused.json'))).toBe(true);
+    const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });   // 新 core = 重启后的空注册表
+    const r = core.stopRun(runId, stateDir);
+    expect(r).toEqual({ run_id: runId, status: 'aborted', restored_from_snapshot: true });
+    expect(existsSync(join(instDir, 'aborted.json'))).toBe(true);
+    expect(existsSync(join(instDir, 'paused.json'))).toBe(false);
+    expect((core as any).runs.has(runId)).toBe(false);                 // 纯盘操作,不建注册项
+    expect(core.runStatus(runId, stateDir)['status']).toBe('aborted');
+    const rr = core.resumeRun(runId, '2', { result: 42 }, stateDir);
+    expect((rr['error'] as { code: string }).code).toBe('RUN_ABORTED');
+    // 幂等:再停一次照样回 aborted,不报错
+    expect(core.stopRun(runId, stateDir)).toEqual({ run_id: runId, status: 'aborted', restored_from_snapshot: true });
+  });
+
+  it('正例：最后写入者是已退出的进程（server 重启的真实形态）→ 照常写墓碑中止', () => {
+    const { stateDir, runId, instDir } = pausedSnapshot();
+    const gone = spawnSync(process.execPath, ['-e', '']).pid as number;   // 子进程已退出,pid 不再存活
+    setLastWriter(instDir, gone);
+    const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
+    expect(core.stopRun(runId, stateDir)['status']).toBe('aborted');
+    expect(existsSync(join(instDir, 'aborted.json'))).toBe(true);
+  });
+
+  it('反例：没传 state_dir 且缺省目录下没有该 run → RUN_NOT_FOUND,报文提示传 start_run 返回的 state_dir', () => {
+    const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
+    const r = core.stopRun('no-such-run-0117');
+    expect((r['error'] as { code: string }).code).toBe('RUN_NOT_FOUND');
+    expect((r['error'] as { message: string }).message).toContain('state_dir');
+  });
+
+  it('反例：快照已是终态（completed）→ 幂等回终态,不写墓碑', () => {
+    const { stateDir, runId, instDir } = pausedSnapshot();
+    const p = join(instDir, 'state.json');
+    const st = JSON.parse(readFileSync(p, 'utf-8'));
+    st.terminal_state = 'completed';
+    writeFileSync(p, JSON.stringify(st));
+    const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
+    expect(core.stopRun(runId, stateDir)).toEqual({ run_id: runId, status: 'completed', restored_from_snapshot: true });
+    expect(existsSync(join(instDir, 'aborted.json'))).toBe(false);
+  });
+
+  it('反例：最后写入者是别的存活进程 → RUN_OWNED_ELSEWHERE,不写墓碑、问题卡原样', () => {
+    const { stateDir, runId, instDir } = pausedSnapshot();
+    setLastWriter(instDir, process.ppid);   // 父进程必然存活且不是本进程
+    const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
+    const r = core.stopRun(runId, stateDir);
+    expect((r['error'] as { code: string }).code).toBe('RUN_OWNED_ELSEWHERE');
+    expect((r['error'] as { message: string }).message).toContain(String(process.ppid));
+    expect(existsSync(join(instDir, 'aborted.json'))).toBe(false);
+    expect(existsSync(join(instDir, 'paused.json'))).toBe(true);
+  });
+
+  it('反例：run 属 CLI 通道（driver_channel=cli）→ DRIVER_CHANNEL_MISMATCH,报文指路 hopjit abort,不写墓碑', () => {
+    const { stateDir, runId, instDir } = pausedSnapshot('cli');
+    const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
+    const r = core.stopRun(runId, stateDir);
+    expect((r['error'] as { code: string }).code).toBe('DRIVER_CHANNEL_MISMATCH');
+    expect((r['error'] as { message: string }).message).toContain('hopjit abort');
+    expect(existsSync(join(instDir, 'aborted.json'))).toBe(false);
+  });
+
+  it('反例：墓碑写不进去（实例目录只读）→ STOP_WRITE_FAILED,如实报中止没有生效', () => {
+    if (process.getuid?.() === 0) return;   // root 无视目录权限,本例无从构造
+    const { stateDir, runId, instDir } = pausedSnapshot();
+    chmodSync(instDir, 0o555);
+    try {
+      const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
+      const r = core.stopRun(runId, stateDir);
+      expect((r['error'] as { code: string }).code).toBe('STOP_WRITE_FAILED');
+      expect(existsSync(join(instDir, 'aborted.json'))).toBe(false);
+    } finally { chmodSync(instDir, 0o755); }
+  });
+
+  it('工具面：stop_run 注册的入参里有可选的 state_dir,handler 把它透传给 core.stopRun', async () => {
+    const { buildServer: build } = await import('../src/mcp-server.js');
+    const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
+    const tool = (build(core) as any)._registeredTools['stop_run'];
+    const shape = tool.inputSchema.shape ?? tool.inputSchema._def?.shape?.();
+    expect(Object.keys(shape).sort()).toEqual(['run_id', 'state_dir']);
+    expect(shape.state_dir.isOptional()).toBe(true);
+    const spy = vi.spyOn(core, 'stopRun');
+    await tool.handler({ run_id: 'x', state_dir: '/tmp/somewhere' }, {});
+    expect(spy).toHaveBeenCalledWith('x', '/tmp/somewhere');
+  });
+});
+
 // provider 级输出上限声明（2026-08-27 作者定"按 LLM 的上限去设置"——快照键透传 dispatcher 解析链）
 // @v: anc-exec-output-budget
 describe('ProviderEntry.max_output_tokens（输出预算 provider 声明位）', () => {
@@ -3246,5 +3794,1320 @@ describe('mergeConfigs notify 键', () => {
   it('反例：两级都无 → 合并结果无 notify 键（不凭空造）', () => {
     const m = mergeConfigs({ ...base }, { ...base });
     expect(m.notify).toBeUndefined();
+  });
+});
+
+// todo/0146 —— 配置能力状态、复用驱动工具、commit 批准入口、放行清单
+describe('配置问题记为能力状态（todo/0146）', () => {
+  // @v: anc-mcp-server-status
+  it('classifyConfigError 四类各给修法', async () => {
+    const { classifyConfigError } = await import('../src/mcp-server.js');
+    expect(classifyConfigError('STANDALONE_CONFIG_MISSING: 找不到配置').fix).toContain('~/.hopjit/config.yaml');
+    expect(classifyConfigError('STANDALONE_CONFIG_MISSING_PROVIDERS: 缺 providers[]').fix).toContain('providers');
+    const key = classifyConfigError('STANDALONE_KEY_MISSING: 环境变量 MY_K 未设置（provider \'x\'）——独立模式不可用');
+    expect(key.fix).toContain('MY_K');
+    expect(classifyConfigError('STANDALONE_CONFIG_PLAINTEXT_KEY: 禁止').fix).toContain('api_key_env');
+    // 兜底分支:未识别的报文也给修法,且不冒充前三类
+    const other = classifyConfigError('WEIRD_CONFIG: 不认识的问题');
+    expect(other.reason).toBe('WEIRD_CONFIG: 不认识的问题');
+    expect(other.fix.length).toBeGreaterThan(0);
+    for (const known of ['STANDALONE_CONFIG_MISSING: x', 'STANDALONE_CONFIG_MISSING_PROVIDERS: x', 'STANDALONE_KEY_MISSING: 环境变量 K 未设置']) {
+      expect(other.fix).not.toBe(classifyConfigError(known).fix);
+    }
+  });
+
+  it('config 为 null:server_status 如实报不可用与修法,start_run / 独立模式 resume_run 返回 STANDALONE_UNAVAILABLE', async () => {
+    const core = new HopjitMcpCore(null, { reason: 'STANDALONE_CONFIG_MISSING: x', fix: '创建配置' }, '/nonexistent/cfg.yaml');
+    const st = core.serverStatus(['run']) as any;
+    expect(st.standalone).toMatchObject({ available: false, reason: 'STANDALONE_CONFIG_MISSING: x', fix: '创建配置', config_path: '/nonexistent/cfg.yaml' });
+    expect(st.reuse_tools_available).toBe(true);
+    // 闸缺席时 startRun 会在 config 为 null 处抛异常——接住转成对象,失败信息是"错误码不等"而不是 TypeError
+    const r = await core.startRun(join(REPO, 'examples', 'coffee-week.md'), {}).catch((e: unknown) => ({ thrown: String(e) }));
+    expect(r).toMatchObject({ error: { code: 'STANDALONE_UNAVAILABLE', fix: '创建配置' } });
+    // mock 补齐 resume_run 闸后会用到的全部方法:闸缺席时走到 resume 返回 running,失败信息同样是错误码不等
+    const engine = {
+      assertStateFresh: () => undefined, claimDriverChannel: () => undefined,
+      getStepStates: () => new Map([['2', 'running']]), checkCommitApproval: () => null,
+      getInflight: () => [], getSpec: () => ({ steps: [] }), getCumulativeTokens: () => 0,
+    };
+    const dispatcher = { getEngine: () => engine, getPausedChildren: () => new Map(), resume: async () => ({ status: 'completed', outputs: {} }) };
+    (core as any).runs.set('r1', { runId: 'r1', specPath: '/x.md', state: 'paused', dispatcher, paused: { status: 'paused', step_id: '2', pause_reason: 'ask' }, startedAt: 't' });
+    expect(core.resumeRun('r1', '2', { value: 'x' })).toMatchObject({ error: { code: 'STANDALONE_UNAVAILABLE' } });
+    expect((core as any).runs.get('r1').state).toBe('paused');
+  });
+
+  it('config 合法:server_status 报可用且无 reason', () => {
+    const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
+    const st = core.serverStatus([]) as any;
+    expect(st.standalone.available).toBe(true);
+    expect(st.standalone.reason).toBeUndefined();
+  });
+});
+
+describe('复用驱动工具与 commit 批准（todo/0146,经工具 handler 调用）', () => {
+  const SIMPLE = `# 简单
+Id: simple
+
+## Goal
+g
+
+## Outputs
+- answer: line  # 结果
+
+## Steps
+1. [act] 算
+  + → answer: line  # 结果
+  > 算出结果
+`;
+  const GATED = `# 批准
+Id: gated
+
+## Goal
+g
+
+## Outputs
+- out: line  # 交付
+
+## Steps
+1. [subtask] 把关
+  + → ok: bool
+  1.1. [check final] 核对
+    + → ok: bool  # 判定
+    + → note: text  # 说明
+    > pass
+2. [commit] 交付
+  + → out: line
+  > 覆盖写一个文件,不留旧版本（引擎判需要确认,没有分析模型 → 转人工）
+  > \`\`\`hop_python
+  > w = write(path: "shipped.txt", content: "x", keep: 0)
+  > out = "shipped"
+  > \`\`\`
+`;
+  type Tools = Record<string, { handler: (args: Record<string, unknown>, extra: unknown) => Promise<{ content: { text: string }[]; isError?: boolean }> }>;
+  let tools: Tools;
+  beforeAll(() => {
+    tools = (buildServer(new HopjitMcpCore(null, { reason: 'STANDALONE_CONFIG_MISSING: 测试', fix: '' })) as any)._registeredTools as Tools;
+  });
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const r = await tools[name].handler(args, {});
+    return { body: JSON.parse(r.content[0].text), isError: r.isError === true };
+  };
+  const ws = (spec: string) => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-drv-'));
+    writeFileSync(join(dir, 's.md'), spec);
+    return dir;
+  };
+
+  // @v: anc-mcp-reuse-driver-tools
+  it('正例：config 缺失时 run→submit→status 全程可用,validate 只读', async () => {
+    const dir = ws(SIMPLE);
+    const v = await call('validate', { spec_path: 's.md', workspace_dir: dir });
+    expect(v.body.status).toBe('ok');
+    expect(existsSync(join(dir, '.hopstate'))).toBe(false);   // validate 只读:不建状态目录
+    const r = await call('run', { spec_path: 's.md', workspace_dir: dir });
+    expect(r.body.status).toBe('step_ready');
+    expect(r.body.step_id).toBe('1');
+    const id = r.body.instance_id;
+    const done = await call('submit_and_fetch_next', { step_id: '1', output: { answer: '42' }, instance_id: id, workspace_dir: dir });
+    expect(done.body.status).toBe('completed');
+    expect(done.body.outputs.answer).toBe('42');
+    const st = await call('status', { instance_id: id, workspace_dir: dir });
+    expect(st.isError).toBe(false);
+    expect(st.body.execution_status).toBe('completed');
+    expect(st.body.instance_id).toBe(id);
+    expect(existsSync(join(dir, '.hopstate', id))).toBe(true);   // state_dir 缺省相对工作区根
+  });
+
+  // @v: anc-config-reuse-consume
+  it('正例（review 面三缺陷 3）：复用驱动 run 经 applyReuseConfig 吃两级配置——假 HOME 的 config.yaml commands/language + 工作区 hopjit.yaml 纯注释模板 → state.json host_context 带 available=[git] 与 hop_env_language=zh（三组合根之一此前零测试）', async () => {
+    const dir = ws(SIMPLE);
+    const fakeHome = mkdtempSync(join(tmpdir(), 'mcp-drv-home-'));
+    mkdirSync(join(fakeHome, '.hopjit'), { recursive: true });
+    writeFileSync(join(fakeHome, '.hopjit', 'config.yaml'), 'language: zh\ncommands: [git]\n');
+    writeFileSync(join(dir, 'hopjit.yaml'), '# 模板\n# language: en\n');
+    const savedHome = process.env.HOME; const savedCfg = process.env.HOPJIT_CONFIG;
+    process.env.HOME = fakeHome; delete process.env.HOPJIT_CONFIG;
+    try {
+      const r = await call('run', { spec_path: 's.md', workspace_dir: dir });
+      expect(r.body.status).toBe('step_ready');
+      const st = JSON.parse(readFileSync(join(dir, '.hopstate', r.body.instance_id, 'state.json'), 'utf-8'));
+      expect(st.host_context.sandbox.runtime.available).toEqual(['git']);   // 变异：reuse-driver 去掉 applyReuseConfig 调用 → [] 红
+      expect(st.host_context.hop_env.hop_env_language).toBe('zh');
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
+      if (savedCfg === undefined) delete process.env.HOPJIT_CONFIG; else process.env.HOPJIT_CONFIG = savedCfg;
+    }
+  });
+
+  it('反例：互斥提交形态 / work_zone 外 @路径 / 非法 status / 不存在的工作区 → 结构化错误,isError 标记', async () => {
+    const dir = ws(SIMPLE);
+    const r = await call('run', { spec_path: 's.md', workspace_dir: dir });
+    const id = r.body.instance_id;
+    const two = await call('submit_and_fetch_next', { step_id: '1', output: { answer: 'a' }, failure: 'x', instance_id: id, workspace_dir: dir });
+    expect(two.isError).toBe(true);
+    expect(two.body.error.code).toBe('INVALID_STATE');
+    writeFileSync(join(dir, 'outside.json'), '{"answer":"x"}');
+    const esc = await call('submit_and_fetch_next', { step_id: '1', output: '@outside.json', instance_id: id, workspace_dir: dir });
+    expect(esc.body.error.code).toBe('WORK_ZONE_VIOLATION');
+    const reap = await call('reap_and_fetch_next', { child_instance: 'c', status: 'done', instance_id: id, workspace_dir: dir });
+    expect(reap.body.error.code).toBe('INVALID_ARG');
+    const nows = await call('status', { workspace_dir: join(dir, 'nope') });
+    expect(nows.body.error.code).toBe('WORKSPACE_NOT_FOUND');
+    const noInst = await call('status', { instance_id: 'ghost', workspace_dir: dir });
+    expect(noInst.body.error.code).toBe('INSTANCE_NOT_FOUND');
+    const bad = ws('# 坏\n## Steps\n1. [nosuch] x\n');
+    expect((await call('validate', { spec_path: 's.md', workspace_dir: bad })).body.status).toBe('error');
+    // 中止后实例进终态
+    const ab = await call('abort', { instance_id: id, reason: '测试', workspace_dir: dir });
+    expect(ab.isError).toBe(false);
+    expect((await call('status', { instance_id: id, workspace_dir: dir })).body.execution_status).toBe('aborted');
+    const abGhost = await call('abort', { instance_id: 'ghost', workspace_dir: dir });
+    expect(abGhost.isError).toBe(true);
+    expect(abGhost.body.error.code).toBe('INSTANCE_NOT_FOUND');
+  });
+
+  it('反例：run 工具 spec 不存在 / log_level 非法 / max_runs 非正整数 / notify 渠道不支持 → 结构化错误,不建状态目录', async () => {
+    const dir = ws(SIMPLE);
+    const miss = await call('run', { spec_path: 'nope.md', workspace_dir: dir });
+    expect(miss.isError).toBe(true);
+    expect(miss.body.error.code).toBe('ENOENT');
+    expect(miss.body.error.message).toContain('nope.md');
+    for (const bad of [{ log_level: 'bad' }, { max_runs: 0 }, { max_runs: 1.5 }, { notify: 'sms' }]) {
+      const r = await call('run', { spec_path: 's.md', workspace_dir: dir, ...bad });
+      expect(r.isError).toBe(true);
+      expect(r.body.error.code).toBe('INVALID_ARG');
+    }
+    expect(existsSync(join(dir, '.hopstate'))).toBe(false);
+  });
+
+  // @v: anc-mcp-reuse-driver-tools
+  it('反例：answer/output 解析后不是 JSON 对象（字符串、数字、null、数组）→ INVALID_ARG,confirm 停点不动;正确形态照常推进', async () => {
+    const dir = ws(`# 确认
+Id: cfm
+
+## Goal
+g
+
+## Outputs
+- approval: bool  # 审批
+
+## Steps
+1. [confirm] 审批
+  + → approval: bool  # 审批
+`);
+    const r = await call('run', { spec_path: 's.md', workspace_dir: dir });
+    expect(r.body.status).toBe('paused');
+    const id = r.body.instance_id;
+    for (const bad of ['"approve"', '3', 'null', '[1]']) {
+      const s = await call('submit_and_fetch_next', { step_id: '1', answer: bad, instance_id: id, workspace_dir: dir });
+      expect(s.isError).toBe(true);
+      expect(s.body.error.code).toBe('INVALID_ARG');
+      expect(s.body.error.message).toContain('{"value":"approve"}');
+    }
+    const st = await call('status', { instance_id: id, workspace_dir: dir });
+    expect(st.body.execution_status).toBe('paused');
+    expect(st.body.current_step).toBe('1');
+    const ok = await call('submit_and_fetch_next', { step_id: '1', answer: { value: 'approve' }, instance_id: id, workspace_dir: dir });
+    expect(ok.body.status).toBe('completed');
+    expect(ok.body.outputs.approval).toBe(true);
+  });
+
+  // @v: anc-mcp-commit-approve, anc-mcp-dirs-approve
+  it('反例：approve_commit / approve_dirs 显式传了不存在的工作区 → WORKSPACE_NOT_FOUND（与驱动工具同一规则）', async () => {
+    const dir = ws(SIMPLE);
+    const c = await call('approve_commit', { instance_id: 'x', step_id: '2', fingerprint: 'h', scope: 'once', workspace_dir: join(dir, 'nope') });
+    expect(c.body.error.code).toBe('WORKSPACE_NOT_FOUND');
+    const d = await call('approve_dirs', { instance_id: 'x', dirs_hash: 'h', workspace_dir: join(dir, 'nope') });
+    expect(d.body.error.code).toBe('WORKSPACE_NOT_FOUND');
+  });
+
+  // @v: anc-exec-driver-channel
+  it('驱动工具起跑的 run 认领 cli 通道:state.json 记 driver_channel=cli,同一实例可改用 hopjit 命令行推进', async () => {
+    const dir = ws(SIMPLE);
+    const r = await call('run', { spec_path: 's.md', workspace_dir: dir });
+    const id = r.body.instance_id;
+    const state = JSON.parse(readFileSync(join(dir, '.hopstate', id, 'state.json'), 'utf-8'));
+    expect(state.driver_channel).toBe('cli');
+    const cli = spawnSync('node', [join(REPO, 'dist', 'cli.js'), '--json', 'submit_and_fetch_next', '1', '--output', '{"answer":"42"}', '--state-dir', '.hopstate', '--instance', id], { cwd: dir, encoding: 'utf-8', timeout: 30000 });
+    expect(cli.status).toBe(0);
+    expect(JSON.parse(cli.stdout).status).toBe('completed');
+  });
+
+  // @v: anc-hopant-commit-store
+  it('HopAnt 目录下的 spec:批准账落 <HopAnt 目录>/inner_store/commit_approvals.json,不落工作区 .hopstate', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'mcp-home-'));
+    const prevHome = process.env['HOME'];
+    process.env['HOME'] = home;   // 组合根按 homedir() 现取 HopAnt 根;测试结束恢复
+    try {
+      const antDir = join(home, '.hopjit', 'ants', 'gated');
+      mkdirSync(antDir, { recursive: true });
+      writeFileSync(join(antDir, 'gated.md'), GATED);
+      const dir = mkdtempSync(join(tmpdir(), 'mcp-drv-ws-'));
+      const r = await call('run', { spec_path: join(antDir, 'gated.md'), workspace_dir: dir });
+      expect(r.body.step_id).toBe('1.1');
+      const id = r.body.instance_id;
+      const p = await call('submit_and_fetch_next', { step_id: '1.1', output: { ok: true, note: '' }, instance_id: id, workspace_dir: dir });
+      expect(p.body.pause_reason).toBe('commit');
+      const ok = await call('approve_commit', { instance_id: id, step_id: '2', fingerprint: p.body.presented_data.context.fingerprint, scope: 'once', workspace_dir: dir });
+      expect(ok.body.status).toBe('ok');
+      expect(existsSync(join(realpathSync(antDir), 'inner_store', 'commit_approvals.json'))).toBe(true);
+      expect(existsSync(join(dir, '.hopstate', 'commit_approvals.json'))).toBe(false);
+    } finally {
+      if (prevHome === undefined) delete process.env['HOME']; else process.env['HOME'] = prevHome;
+    }
+  });
+
+  // @v: anc-mcp-commit-approve
+  it('commit：停在批准点→递交产出被拒→错哈希被拒→approve_commit→resume 执行;once 不跨运行,task 之后同 spec 再跑不停', async () => {
+    const dir = ws(GATED);
+    const r = await call('run', { spec_path: 's.md', workspace_dir: dir });
+    const id = r.body.instance_id;
+    expect(r.body.step_id).toBe('1.1');
+    const p = await call('submit_and_fetch_next', { step_id: '1.1', output: { ok: true, note: '' }, instance_id: id, workspace_dir: dir });
+    expect(p.body.status).toBe('paused');
+    expect(p.body.pause_reason).toBe('commit');
+    const ctx = p.body.presented_data.context;
+    expect(ctx.body).toContain('out = "shipped"');
+    const forged = await call('submit_and_fetch_next', { step_id: '2', output: { out: 'forged' }, instance_id: id, workspace_dir: dir });
+    expect(forged.body.code ?? forged.body.error?.code).toBe('COMMIT_BODY_ENGINE_ONLY');
+    const still = await call('resume', { instance_id: id, workspace_dir: dir });
+    expect(still.body.pause_reason).toBe('commit');   // 未批准续跑仍停,body 不执行
+    const wrong = await call('approve_commit', { instance_id: id, step_id: '2', fingerprint: 'deadbeef', scope: 'once', workspace_dir: dir });
+    expect(wrong.body.error.code).toBe('COMMIT_NOT_APPROVED');
+    const ok = await call('approve_commit', { instance_id: id, step_id: '2', fingerprint: ctx.fingerprint, scope: 'once', workspace_dir: dir });
+    expect(ok.body.status).toBe('ok');
+    expect(existsSync(join(dir, '.hopstate', 'commit_approvals.json'))).toBe(true);   // 任务卡/项目 spec 的账在 .hopstate 下
+    const done = await call('resume', { instance_id: id, workspace_dir: dir });
+    expect(done.body.status).toBe('completed');
+    expect(done.body.outputs.out).toBe('shipped');
+    // 新一次运行:once 不跨运行,再停;同一份分析不重复做,批 task 后第三次运行不停
+    const r2 = await call('run', { spec_path: 's.md', workspace_dir: dir });
+    const p2 = await call('submit_and_fetch_next', { step_id: '1.1', output: { ok: true, note: '' }, instance_id: r2.body.instance_id, workspace_dir: dir });
+    expect(p2.body.pause_reason).toBe('commit');
+    expect((await call('approve_commit', { instance_id: r2.body.instance_id, step_id: '2', fingerprint: ctx.fingerprint, scope: 'task', workspace_dir: dir })).body.status).toBe('ok');
+    const r3 = await call('run', { spec_path: 's.md', workspace_dir: dir });
+    const done3 = await call('submit_and_fetch_next', { step_id: '1.1', output: { ok: true, note: '' }, instance_id: r3.body.instance_id, workspace_dir: dir });
+    expect(done3.body.status).toBe('completed');
+  });
+
+  it('resume_run 遇未批准的 commit 停点 → COMMIT_NOT_APPROVED,run 保持 paused', () => {
+    const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
+    const engine = {
+      assertStateFresh: () => undefined, claimDriverChannel: () => undefined,
+      getStepStates: () => new Map([['2', 'running']]),
+      checkCommitApproval: () => ({ approved: false, decided_by: null, fingerprint: 'h1', body: 'out = 1', actions: [], store_path: '/x', analysis: null }),
+      getCumulativeTokens: () => ({ input: 0, output: 0 }),
+    };
+    (core as any).runs.set('r1', { runId: 'r1', specPath: '/x.md', state: 'paused', dispatcher: { getEngine: () => engine, getPausedChildren: () => new Map() }, paused: { status: 'paused', step_id: '2', pause_reason: 'commit' }, startedAt: 't' });
+    const r = core.resumeRun('r1', '2', {}) as any;
+    expect(r.error.code).toBe('COMMIT_NOT_APPROVED');
+    expect(r.error.fingerprint).toBe('h1');
+    expect((core as any).runs.get('r1').state).toBe('paused');   // 拒于状态翻转之前
+  });
+
+  // @v: anc-cli-install-skill-permission
+  it('放行清单 = 注册的全部工具（含 approve_commit 与 approve_dirs——两种批准的人同意都在对话里问,不靠载体弹窗）', async () => {
+    const { HOPJIT_ALLOWED_TOOLS, APPROVE_COMMIT_TOOL, APPROVE_DIRS_TOOL, OPENCODE_DISABLED_TOOLS, RUN_APPROVED_COMMAND_TOOL } = await import('../src/provider-types.js');
+    expect([...HOPJIT_ALLOWED_TOOLS].sort()).toEqual(Object.keys(tools).sort());
+    expect(HOPJIT_ALLOWED_TOOLS).toContain(APPROVE_COMMIT_TOOL);
+    expect(HOPJIT_ALLOWED_TOOLS).toContain(APPROVE_DIRS_TOOL);   // @v: anc-mcp-dirs-approve
+    // opencode 关闭清单 ⊆ 注册面,且与复用模式要用的件零交集（驱动七件 + 批准三件 + server_status）——mcp-server 新增独立模式工具时这里红 // @v: anc-cli-opencode-tools-gate
+    for (const t of OPENCODE_DISABLED_TOOLS) expect(Object.keys(tools)).toContain(t);
+    const ADMIN = ['doctor', 'ant_list', 'ant_install', 'ant_adapt', 'ant_remove', 'ant_bootstrap', 'ant_pack', 'ant_share'];   // 管理八件两模式共用（^anc-mcp-admin-tools） // @v: anc-mcp-admin-tools
+    const reuseNeeded = ['run', 'submit_and_fetch_next', 'reap_and_fetch_next', 'status', 'resume', 'abort', 'validate', APPROVE_COMMIT_TOOL, APPROVE_DIRS_TOOL, RUN_APPROVED_COMMAND_TOOL, 'server_status', ...ADMIN];
+    for (const t of reuseNeeded) expect(OPENCODE_DISABLED_TOOLS).not.toContain(t);
+    expect([...OPENCODE_DISABLED_TOOLS, ...reuseNeeded].sort()).toEqual(Object.keys(tools).sort());   // 两集合恰好瓜分注册面
+  });
+
+  // @v: anc-mcp-commit-approve
+  it('tools/list：所有工具（含 approve_commit 与 approve_dirs）都不带 _meta requiresUserInteraction——人批准不靠载体强制弹窗', async () => {
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const server = buildServer(new HopjitMcpCore(null, { reason: 'STANDALONE_CONFIG_MISSING: 测试', fix: '' }));
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await server.connect(st);
+    const client = new Client({ name: 't', version: '0' });
+    await client.connect(ct);
+    const listed = (await client.listTools()).tools;
+    await client.close();
+    const flag = (n: string) => (listed.find(t => t.name === n)?._meta as Record<string, unknown> | undefined)?.['anthropic/requiresUserInteraction'];
+    expect(listed.length).toBe(Object.keys(tools).length);
+    expect(listed.some(t => t.name === 'approve_commit')).toBe(true);
+    expect(listed.some(t => t.name === 'approve_dirs')).toBe(true);   // @v: anc-mcp-dirs-approve
+    for (const t of listed) expect(flag(t.name)).toBeUndefined();
+    // approve_commit 的 fingerprint 参数说明经 tools/list 直接给调用方 agent 看:只覆盖 body,不提输入值与引用文件
+    const fpDesc = (listed.find(t => t.name === 'approve_commit')?.inputSchema as any)?.properties?.fingerprint?.description as string;
+    expect(fpDesc).toContain('body 的指纹');
+    expect(fpDesc).not.toMatch(/输入值|引用文件/);   // @v: anc-mcp-commit-approve
+  });
+
+  it('server_status 工具列出全部注册工具;注解如实（只读件 readOnly,abort destructive）', async () => {
+    const st = await call('server_status', {});
+    expect([...st.body.tools].sort()).toEqual(Object.keys(tools).sort());
+    expect(st.body.standalone.available).toBe(false);
+    const ann = (n: string) => (tools as any)[n].annotations;
+    for (const n of ['status', 'validate', 'server_status', 'doctor', 'ant_list']) expect(ann(n)).toMatchObject({ readOnlyHint: true });
+    for (const n of ['run', 'submit_and_fetch_next', 'reap_and_fetch_next', 'resume', 'approve_commit']) expect(ann(n)).toMatchObject({ readOnlyHint: false, destructiveHint: false });
+    expect(ann('abort')).toMatchObject({ destructiveHint: true });
+    expect(ann('ant_remove')).toMatchObject({ destructiveHint: true });   // 删目录如实标破坏性 // @v: anc-mcp-admin-tools
+    expect(ann('ant_bootstrap')).toMatchObject({ openWorldHint: true });   // 跑 HopAnt 自带脚本可联网如实标 // @v: anc-mcp-admin-tools
+  });
+});
+
+// 管理工具面八件（^anc-mcp-admin-tools,todo/0154）：业务体在 hop-admin.ts,server 组合根读 homedir()/cwd/env 装 AdminContext。
+// 测试在假 HOME 下走 pack → install → adapt → list → remove 一条链;反例看结构化错误与 isError。
+// @v: anc-mcp-admin-tools
+describe('管理工具面（doctor / ant_*）', () => {
+  type Tools = Record<string, { handler: (args: Record<string, unknown>, extra: unknown) => Promise<{ content: { text: string }[]; isError?: boolean }> }>;
+  let tools: Tools;
+  const savedEnv: Record<string, string | undefined> = {};
+  let home: string;
+  beforeAll(() => {
+    tools = (buildServer(new HopjitMcpCore(null, { reason: 'STANDALONE_CONFIG_MISSING: 测试', fix: '' })) as any)._registeredTools as Tools;
+    // 假 HOME：os.homedir() 在 POSIX 上读 HOME,server 的 adminContext 由它取 ~/.hopjit;几个载体重定向变量一并清掉
+    for (const k of ['HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'OPENCODE_CONFIG_DIR', 'XDG_CONFIG_HOME', 'HOPJIT_CONFIG']) { savedEnv[k] = process.env[k]; delete process.env[k]; }
+    home = mkdtempSync(join(tmpdir(), 'mcp-admin-home-'));
+    process.env.HOME = home;
+  });
+  afterAll(() => { for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const r = await tools[name].handler(args, {});
+    return { body: JSON.parse(r.content[0].text), isError: r.isError === true };
+  };
+  const SPEC = (id: string) => `# Spec: ${id} 标题\nId: ${id}\nGoal: ${id} 的目标\n\n## Outputs\n- out % text  # 结果\n\n## Steps\n1. [act free] 干活\n  + → out % text  # 结果\n`;
+
+  it('正例：ant_pack → ant_install → ant_adapt → ant_list → ant_remove 一条链在假 HOME 下走通;响应与 CLI 同形（action 字段）', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'mcp-admin-ws-'));
+    writeFileSync(join(ws, 'weather.md'), SPEC('weather-brief'));
+    const p = await call('ant_pack', { spec_path: 'weather.md', workspace_dir: ws });
+    expect(p.isError).toBe(false);
+    expect(p.body.action).toBe('pack'); expect(p.body.id).toBe('weather-brief');
+    expect(p.body.pack.dir).toBe(join(ws, 'ants', 'weather-brief'));   // out 缺省 <workspace_dir>/ants
+    const dry = await call('ant_install', { dir: p.body.pack.dir, dry_run: true, workspace_dir: ws });
+    expect(dry.body.dry_run).toBe(true); expect(existsSync(join(home, '.hopjit', 'ants', 'weather-brief'))).toBe(false);
+    const i = await call('ant_install', { dir: join('ants', 'weather-brief'), workspace_dir: ws });   // 相对路径按 workspace_dir 解析
+    expect(i.isError).toBe(false); expect(i.body.result.installed).toEqual(['weather-brief']);
+    expect(existsSync(join(home, '.hopjit', 'ants', 'weather-brief', 'weather-brief.md'))).toBe(true);   // 写的是假 HOME,由 server 进程落盘
+    const a = await call('ant_adapt', { id: 'weather-brief', workspace_dir: ws });
+    expect(a.isError).toBe(false); expect(a.body.report.ok).toBe(true); expect(typeof a.body.stamp_written).toBe('string');
+    const l = await call('ant_list', { workspace_dir: ws });   // 显式传工作区——不传时项目级根按进程 cwd 算,仓库根下有 hop_tasks/ants/ 就多出条目（review D13 实撞）
+    expect(l.body.ants).toEqual([{ id: 'weather-brief', scope: 'user', title: 'weather-brief 标题', adapt_state: 'adapted' }]);   // 装到缺省的用户级,条目带 scope（两级根,设计 hopant 决策 9）
+    const b = await call('ant_bootstrap', { id: 'weather-brief', dry_run: true });
+    expect(b.body.has_bootstrap).toBe(false);   // 没有 bootstrap.js 不报错
+    const r = await call('ant_remove', { id: 'weather-brief' });
+    expect(r.body.removed).toBe(true);
+    expect((await call('ant_list', { workspace_dir: ws })).body.ants).toEqual([]);
+  });
+
+  it('正例：ant_share 首机无 owner_id 且不带 owner/yes → 不写包,返回 owner_prompt_required 与 owner_default;带 owner 重跑写包并把 owner 写回 config.yaml', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'mcp-admin-ws-'));
+    writeFileSync(join(ws, 's.md'), SPEC('share-me'));
+    const p = await call('ant_pack', { spec_path: 's.md', workspace_dir: ws });
+    await call('ant_install', { dir: p.body.pack.dir, workspace_dir: ws });
+    const ask = await call('ant_share', { ids: ['share-me'], workspace_dir: ws });
+    expect(ask.isError).toBe(false); expect(ask.body.owner_prompt_required).toBe(true); expect(typeof ask.body.owner_default).toBe('string');
+    expect(existsSync(join(ws, 'share-me', 'package.json'))).toBe(false);
+    const ok = await call('ant_share', { ids: ['share-me'], owner: 'tester-box', workspace_dir: ws });
+    expect(ok.isError).toBe(false); expect(ok.body.share.dir).toBe(join(ws, 'share-me'));
+    expect(existsSync(join(ws, 'share-me', 'package.json'))).toBe(true);
+    expect(readFileSync(join(home, '.hopjit', 'config.yaml'), 'utf-8')).toContain('owner_id: tester-box');
+    expect(ok.body.credential_scan.disclaimer).toBeTruthy();
+    // @v: anc-hopant-share —— 决策 8"答过不再问"：owner 写回 config.yaml 之后再分享不带 owner 也不问,直接用落盘值写包（变异 M15b：取值链去掉 savedOwnerId → 又返回 owner_prompt_required,红）
+    const out2 = mkdtempSync(join(tmpdir(), 'mcp-admin-share-out2-'));
+    const again = await call('ant_share', { ids: ['share-me'], workspace_dir: ws, out: out2 });
+    expect(again.isError).toBe(false);
+    expect(again.body.owner_prompt_required).not.toBe(true);
+    expect(again.body.share.dir).toBe(join(out2, 'share-me'));
+    expect(existsSync(join(out2, 'share-me', 'package.json'))).toBe(true);
+    expect(readFileSync(join(out2, 'share-me', 'package.json'), 'utf-8')).toContain('tester-box');
+    await call('ant_remove', { id: 'share-me' });
+  });
+
+  // @v: anc-mcp-admin-tools —— scope 全链（review 变异 G2 install scope 透传 / G5 adapt 两级查找 / G6 remove scope 透传 / G10 list 两级合并带 scope）：
+  // 同一个 id 先装用户级再装项目级不冲突（撞 id 只判目标级）;list 两条 project 在前;adapt 命中项目级;remove 按 scope 指定删,不传删项目级
+  it('正例：scope:project 全链——同 id 用户级与项目级并存不冲突;ant_list 两条 project 在前;ant_adapt 命中 project;ant_remove 指定 scope:user 删用户级留项目级,不传 scope 删项目级', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'mcp-admin-ws-'));
+    const id = 'two-level';
+    writeFileSync(join(ws, 'u.md'), SPEC(id));
+    const pu = await call('ant_pack', { spec_path: 'u.md', workspace_dir: ws, out: join(ws, 'src-user') });
+    expect(pu.isError).toBe(false);
+    const iu = await call('ant_install', { dir: pu.body.pack.dir, workspace_dir: ws });   // 不传 scope → 用户级
+    expect(iu.isError).toBe(false); expect(iu.body.scope).toBe('user');
+    expect(existsSync(join(home, '.hopjit', 'ants', id, `${id}.md`))).toBe(true);
+    // 另一份来源（同 id,内容多一段 Constraints 以便区分）装项目级：不报 HOPANT_ID_CONFLICT（变异 M2"两级任一存在即冲突"→ 红;变异 M9a scope 恒 user → 真撞 id 报冲突,红）
+    writeFileSync(join(ws, 'p.md'), SPEC(id).replace('## Outputs', '## Constraints\n- 项目级那份\n\n## Outputs'));
+    const pp = await call('ant_pack', { spec_path: 'p.md', workspace_dir: ws, out: join(ws, 'src-proj') });
+    expect(pp.isError).toBe(false);
+    const ip = await call('ant_install', { dir: pp.body.pack.dir, scope: 'project', workspace_dir: ws });
+    expect(ip.isError, JSON.stringify(ip.body)).toBe(false);
+    expect(ip.body.scope).toBe('project');
+    expect(ip.body.plan.root).toBe(join(ws, 'hop_tasks', 'ants'));
+    expect(existsSync(join(ws, 'hop_tasks', 'ants', id, `${id}.md`))).toBe(true);
+    expect(readFileSync(join(ws, 'hop_tasks', 'ants', id, `${id}.md`), 'utf-8')).toContain('项目级那份');
+    // list：两条同 id,project 在前 user 在后（G10）
+    const l = await call('ant_list', { workspace_dir: ws });
+    expect(l.body.ants.map((a: { id: string; scope: string }) => [a.id, a.scope])).toEqual([[id, 'project'], [id, 'user']]);
+    // adapt：两级查找命中项目级,响应 scope 为 project,戳写进项目级那份的 inner_store（G5;变异 M17 只查用户级 → scope 为 user,红）
+    const a = await call('ant_adapt', { id, workspace_dir: ws });
+    expect(a.isError).toBe(false); expect(a.body.scope).toBe('project'); expect(a.body.report.ok).toBe(true);
+    expect(a.body.stamp_written).toBe(join(ws, 'hop_tasks', 'ants', id, 'inner_store', 'adapt.yaml'));
+    expect(existsSync(join(home, '.hopjit', 'ants', id, 'inner_store', 'adapt.yaml'))).toBe(false);
+    // remove scope:user：删用户级,项目级那份仍在（G6;变异 M9b scope 不透传 → 删的是项目级,红）
+    const ru = await call('ant_remove', { id, scope: 'user', workspace_dir: ws });
+    expect(ru.isError).toBe(false); expect(ru.body.removed).toBe(true); expect(ru.body.scope).toBe('user');
+    expect(existsSync(join(home, '.hopjit', 'ants', id))).toBe(false);
+    expect(existsSync(join(ws, 'hop_tasks', 'ants', id, `${id}.md`))).toBe(true);
+    expect((await call('ant_list', { workspace_dir: ws })).body.ants.map((x: { scope: string }) => x.scope)).toEqual(['project']);
+    // remove 不传 scope：两级查找命中项目级,删它并回报 scope:project
+    const rp = await call('ant_remove', { id, workspace_dir: ws });
+    expect(rp.isError).toBe(false); expect(rp.body.removed).toBe(true); expect(rp.body.scope).toBe('project');
+    expect(existsSync(join(ws, 'hop_tasks', 'ants', id))).toBe(false);
+    expect((await call('ant_list', { workspace_dir: ws })).body.ants).toEqual([]);
+  });
+
+  it('反例：撞 id / 不存在的 id / spec 不存在 / 不存在的工作区 → 结构化错误且 isError,码取报文前缀', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'mcp-admin-ws-'));
+    writeFileSync(join(ws, 'd.md'), SPEC('dup-ant'));
+    const p = await call('ant_pack', { spec_path: 'd.md', workspace_dir: ws });
+    await call('ant_install', { dir: p.body.pack.dir, workspace_dir: ws });
+    const again = await call('ant_install', { dir: p.body.pack.dir, workspace_dir: ws });
+    expect(again.isError).toBe(true); expect(again.body.error.code).toBe('HOPANT_ID_CONFLICT');
+    const nf = await call('ant_adapt', { id: 'no-such-ant' });
+    expect(nf.isError).toBe(true); expect(nf.body.error.code).toBe('HOPANT_NOT_FOUND');
+    const pe = await call('ant_pack', { spec_path: 'missing.md', workspace_dir: ws });
+    expect(pe.isError).toBe(true); expect(pe.body.error.code).toBe('PACK_ERROR');
+    const wsErr = await call('ant_adapt', { id: 'dup-ant', workspace_dir: join(ws, 'nope') });
+    expect(wsErr.isError).toBe(true); expect(wsErr.body.error.code).toBe('WORKSPACE_NOT_FOUND');
+    const pe2 = await call('ant_pack', { spec_path: 'd.md', workspace_dir: ws });   // 目标已存在且非空
+    expect(pe2.isError).toBe(true); expect(pe2.body.error.code).toBe('HOPANT_TARGET_EXISTS');
+    await call('ant_remove', { id: 'dup-ant' });
+  });
+
+  it('正例：doctor 返回 DoctorReport 形态——八问 id 齐、summary 四档、exit_code;零载体假 HOME 下前六问 fail carrier none', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'mcp-admin-ws-'));
+    const d = await call('doctor', { workspace_dir: ws });
+    expect(d.isError).toBe(false);
+    expect(d.body.action).toBe('doctor'); expect(d.body.carriers).toEqual([]);
+    const ids = new Set(d.body.items.map((i: { id: string }) => i.id));
+    for (const q of ['skill_installed', 'skill_version', 'skill_visible', 'mcp_registered', 'mcp_handshake', 'permissions', 'mcp_llm_config', 'standalone_credential']) expect(ids.has(q), q).toBe(true);
+    for (const it of d.body.items.filter((i: { carrier: string }) => i.carrier === 'none')) expect(it.status).toBe('fail');
+    expect(d.body.summary.fail).toBeGreaterThanOrEqual(6); expect(d.body.exit_code).toBe(1);
+  });
+});
+
+// @v: anc-mcp-dirs-approve —— 复用驱动 run 停 paused/dirs → approve_dirs 工具 → resume;run approve_dirs 跳停;独立模式 start_run dirs 对账（缺 INIT_FAILED / 多 warn 不授 / 对上直通）
+describe('Config.dirs 的 MCP 面（approve_dirs 工具与 start_run dirs 参数,todo/0148）', () => {
+  const SPEC = `# DirsMcp
+Id: dirs-mcp
+
+## Goal
+g
+
+## Inputs
+- out % line  # 目录
+
+## Outputs
+- answer % line  # 结果
+
+## Config
+dirs:
+  readwrite: ["{out}"]
+
+## Steps
+1. [act] 算
+  - ← out
+  + → answer % line  # 结果
+  > 算出结果
+`;
+  type Tools = Record<string, { handler: (args: Record<string, unknown>, extra: unknown) => Promise<{ content: { text: string }[]; isError?: boolean }> }>;
+  let tools: Tools;
+  beforeAll(() => { tools = (buildServer(new HopjitMcpCore(null, { reason: 'STANDALONE_CONFIG_MISSING: 测试', fix: '' })) as any)._registeredTools as Tools; });
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const r = await tools[name].handler(args, {});
+    return { body: JSON.parse(r.content[0].text), isError: r.isError === true };
+  };
+  const ws = () => { const dir = mkdtempSync(join(tmpdir(), 'mcp-dirs-')); writeFileSync(join(dir, 's.md'), SPEC); const rw = mkdtempSync(join(tmpdir(), 'mcp-dirs-rw-')); return { dir, rw }; };
+
+  it('正例：复用驱动 run → paused/dirs → approve_dirs 工具（哈希不符拒）→ resume step_ready', async () => {
+    const { dir, rw } = ws();
+    const p = await call('run', { spec_path: 's.md', workspace_dir: dir, params: { out: rw } });
+    expect(p.body.status).toBe('paused'); expect(p.body.pause_reason).toBe('dirs');
+    const hash = p.body.presented_data.context.dirs_hash;
+    const bad = await call('approve_dirs', { instance_id: p.body.instance_id, dirs_hash: 'x', workspace_dir: dir });
+    expect(bad.isError).toBe(true); expect(bad.body.error.code).toBe('DIRS_NOT_APPROVED');
+    const ok = await call('approve_dirs', { instance_id: p.body.instance_id, dirs_hash: hash, workspace_dir: dir });
+    expect(ok.body.status).toBe('ok');
+    const next = await call('resume', { instance_id: p.body.instance_id, workspace_dir: dir });
+    expect(next.body.status).toBe('step_ready');
+  });
+
+  it('正例：run approve_dirs=true 起跑即批,直达 step_ready', async () => {
+    const { dir, rw } = ws();
+    const r = await call('run', { spec_path: 's.md', workspace_dir: dir, params: { out: rw }, approve_dirs: true });
+    expect(r.body.status).toBe('step_ready');
+    expect(existsSync(join(dir, '.hopstate', 'dirs_approvals.json'))).toBe(true);
+  });
+
+  // @v: anc-exec-dirs-grant —— 恢复重建两白名单 / run_status 兜底与源⑥同判（dirs 批 review 修复）
+  it('正例：server 重启恢复后 commit 写 readwrite 目录仍放行——restore 从 declared_dirs 重建两白名单（D2：首版 setHostConfig 盖掉 write_access,恢复后 commit 被拒）', async () => {
+    const { dir, rw } = ws();
+    const COMMIT_SPEC = `# DirsRestore
+Id: dirs-restore
+
+## Goal
+g
+
+## Inputs
+- out % line  # 目录
+
+## Outputs
+- r % line  # 结果
+
+## Config
+dirs:
+  readwrite: ["{out}"]
+
+## Steps
+1. [subtask] 把关
+  + → ok % bool
+  1.1. [check final] 核
+    + → ok % bool  # 判
+    + → note % text  # 说
+    > pass
+2. [commit] 写
+  - ← out
+  + → r % line  # 结果
+  > 写进读写目录
+  > \`\`\`hop_python
+  > w = write(path: out + "/restored.txt", content: "ok")
+  > r = "done"
+  > \`\`\`
+`;
+    writeFileSync(join(dir, 'c.md'), COMMIT_SPEC);
+    const sd = mkdtempSync(join(tmpdir(), 'mcp-dirs-restore-'));
+    // 用引擎直接造"进程 1"的快照：起跑（dirsGrant 对上记账）→ check 判过 → commit 停在批准停点 → 批准
+    const host = providerToHostConfig(VALID_PROVIDER, dir);
+    const eng1 = new ExecutionEngine();
+    const init = eng1.initExecution(COMMIT_SPEC, host, { stateDir: sd, specPath: join(dir, 'c.md'), params: { out: rw }, dirsGrant: { readwrite: [rw] }, driverChannel: 'mcp' });
+    expect(init.status, JSON.stringify(init)).toBe('ok');
+    const runId = init.instance_id!;
+    eng1.setHostConfig(host);
+    expect(eng1.checkDirsApproval()?.approved).toBe(true);
+    eng1.nextStep(); eng1.completeStep('1.1', { ok: true, note: 'x' });
+    const probe = eng1.checkCommitApproval('2')!; eng1.approveCommit('2', probe.fingerprint, 'once');
+    eng1.nextStep();   // 2 进 running（commit 待执行）
+    // "重启"：新 core 从快照恢复——restore 走 providerToHostConfig 新建沙箱 + setHostConfig,须重建两白名单
+    const core2 = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
+    const r = core2.resumeRun(runId, '2', { value: 'go' }, sd) as any;
+    expect(r.error, JSON.stringify(r)).toBeUndefined();
+    const eng2 = (core2 as any).runs.get(runId)?.dispatcher?.getEngine?.() as ExecutionEngine | undefined;
+    expect(eng2).toBeDefined();
+    const hc = (eng2 as any).hostConfig as HostConfig;
+    expect(hc.sandbox.filesystem.write_access?.allowed).toEqual([rw]);   // 两白名单已重建
+    expect(hc.sandbox.filesystem.read_access.allowed).toContain(rw);
+    for (let i = 0; i < 80 && !existsSync(join(rw, 'restored.txt')); i++) await new Promise(res => setTimeout(res, 50));
+    expect(existsSync(join(rw, 'restored.txt'))).toBe(true);   // 恢复后 commit 真写进 readwrite 目录
+    await core2.stopRun(runId);
+  });
+
+  it('正例：run_status 快照兜底对 dirs 卡——未批报 paused/dirs;账已批（卡残留）报陈卡不冒充 paused（与引擎源⑥同判）', async () => {
+    const { dir, rw } = ws();
+    const p = await call('run', { spec_path: 's.md', workspace_dir: dir, params: { out: rw } });
+    expect(p.body.pause_reason).toBe('dirs');
+    const id = p.body.instance_id;
+    const core = new HopjitMcpCore(null, { reason: 'STANDALONE_CONFIG_MISSING: 测试', fix: '' });
+    const st1 = core.runStatus(id, join(dir, '.hopstate')) as any;
+    expect(st1.status).toBe('paused'); expect(st1.paused?.pause_reason).toBe('dirs');
+    // 记账但故意把卡留下（模拟 approveDirs 删卡与进程退出之间崩溃）
+    const eng = ExecutionEngine.load(join(dir, '.hopstate', id));
+    const cardTxt = readFileSync(join(dir, '.hopstate', id, 'paused.json'), 'utf-8');
+    eng.approveDirs(p.body.presented_data.context.dirs_hash);
+    writeFileSync(join(dir, '.hopstate', id, 'paused.json'), cardTxt);
+    const st2 = core.runStatus(id, join(dir, '.hopstate')) as any;
+    expect(st2.status).not.toBe('paused');
+    expect(String(st2.error?.message ?? '')).toContain('清单已批准');
+  });
+
+  it('独立模式：start_run 未传 dirs → INIT_FAILED 列缺的;传了同一组 → 直通并记账;多传的 → 不授（不报错）', async () => {
+    const { dir, rw } = ws();
+    const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
+    const miss = await core.startRun(join(dir, 's.md'), { out: rw }, mkdtempSync(join(tmpdir(), 'mcp-dirs-st-')), dir);
+    expect((miss['error'] as any)?.code).toBe('INIT_FAILED');
+    expect((miss['error'] as any)?.message).toContain(`readwrite:${rw}`);
+    const extra = mkdtempSync(join(tmpdir(), 'mcp-dirs-extra-'));
+    const sd2 = mkdtempSync(join(tmpdir(), 'mcp-dirs-st-'));
+    const ok = await core.startRun(join(dir, 's.md'), { out: rw }, sd2, dir, { readwrite: [rw], read: [extra] });
+    expect(ok['run_id']).toBeDefined();
+    expect(existsSync(join(sd2, 'dirs_approvals.json'))).toBe(true);
+    expect((ok['warnings'] as string[])?.some(w => w.includes(`read:${extra}`) && w.includes('不授权'))).toBe(true);   // 多传的不授,提示随返回
+    const st = await core.stopRun(ok['run_id'] as string);
+    expect(st).toBeDefined();
+  });
+
+  // @v: anc-mcp-dirs-approve
+  it('正/反（dirs 授权 warnings 按 rule 筛）：rule 为 dirs 类的透传;rule 非 dirs 类的不透传（即使报文文字含\'目录\'字样）', async () => {
+    // 反例材料：Inputs 段塞一行全角冒号的孤儿行,文字里带 "Config.dirs" 与 "目录"——validator 出 rule=W1 的 warn,
+    // 报文形如 "Inputs 段第 N 行不合本段文法,已被忽略: 'Config.dirs：目录'"。原正则 /start_run\.dirs|Config\.dirs/ 按文字会把它误当 dirs 提示透传。
+    const { dir, rw } = ws();
+    writeFileSync(join(dir, 's.md'), SPEC.replace('- out % line  # 目录\n', '- out % line  # 目录\n- Config.dirs：目录\n'));
+    const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
+    const extra = mkdtempSync(join(tmpdir(), 'mcp-dirs-extra-'));
+    const sd = mkdtempSync(join(tmpdir(), 'mcp-dirs-st-'));
+    const ok = await core.startRun(join(dir, 's.md'), { out: rw }, sd, dir, { readwrite: [rw], read: [extra] });
+    expect(ok['run_id'], JSON.stringify(ok)).toBeDefined();
+    const warnings = (ok['warnings'] as string[]) ?? [];
+    expect(warnings.some(w => w.includes(`read:${extra}`) && w.includes('不授权'))).toBe(true);   // 正：引擎 dirs 对账的 warn（rule=CONFIG）透传
+    expect(warnings.some(w => w.includes('不合本段文法'))).toBe(false);   // 反：W1 的 warn 文字含 Config.dirs/目录 也不透传——证明按 rule 不按文字
+    expect(warnings.every(w => !/Config\.dirs：目录/.test(w))).toBe(true);
+    const st = await core.stopRun(ok['run_id'] as string);
+    expect(st).toBeDefined();
+  });
+});
+
+// commit 安全分析用哪个模型:routing_rules 里 step_type=commit 那条优先,没有就用默认模型;引用未知 service 报配置错
+// @v: anc-exec-commit-analyzer
+describe('resolveCommitAnalyzerProvider', () => {
+  const second: ProviderEntry = { service_id: 'other', protocol: 'openai-chat', base_url: 'https://x.example/v1', model: 'o-default', api_key_env: 'HOPJIT_TEST_KEY_ENV' };
+  it('正例：有 commit 路由用它（service/model 都取规则里的）;没有就用 default_model;都没写取第一个 provider 的缺省模型', () => {
+    const routed = resolveCommitAnalyzerProvider({ providers: [VALID_PROVIDER, second], default_model: 'deepseek/deepseek-v4-pro', routing_rules: [{ step_type: 'act', model: 'deepseek/a' }, { step_type: 'commit', model: 'other/o-review' }] });
+    expect(routed).toEqual({ service_id: 'other', protocol: 'openai-chat', base_url: 'https://x.example/v1', api_key: 'sk-test-fake', auth: null, model: 'o-review' });
+    const byDefault = resolveCommitAnalyzerProvider({ providers: [VALID_PROVIDER, second], default_model: 'other/o-big' });
+    expect(byDefault).toMatchObject({ service_id: 'other', model: 'o-big' });
+    const bare = resolveCommitAnalyzerProvider({ providers: [VALID_PROVIDER, second] });
+    expect(bare).toMatchObject({ service_id: 'deepseek', model: 'deepseek-v4-flash', protocol: 'anthropic' });
+  });
+  it('反例：commit 路由引用的 service 不在 providers 里 → STANDALONE_CONFIG_INVALID', () => {
+    expect(() => resolveCommitAnalyzerProvider({ providers: [VALID_PROVIDER], routing_rules: [{ step_type: 'commit', model: 'ghost/m' }] })).toThrow(/STANDALONE_CONFIG_INVALID.*ghost/);
+  });
+
+  // 以下用例逐分支侧钉住被审批次改动的函数（commit 安全分析批次 review 第五次阅卷后,机器枚举分支侧的 run20 存活项）
+  // @v: anc-exec-commit-analyzer
+  it('字段回落:裸模型名的 commit 路由取第一个 provider（不按名字找）;base_url 缺席记 null;key 环境变量未设记空串;auth 不是 bearer 记 null、是 bearer 原样记', () => {
+    const bearer: ProviderEntry = { ...second, service_id: 'br', auth: 'bearer', base_url: undefined as any, api_key_env: 'HOPJIT_NO_SUCH_KEY_FOR_TEST' };
+    delete process.env['HOPJIT_NO_SUCH_KEY_FOR_TEST'];
+    // 裸模型名:service_id 解析为 default → 取 providers[0],哪怕 providers 里有名为 default 的也不按名找
+    const bare = resolveCommitAnalyzerProvider({ providers: [VALID_PROVIDER, { ...second, service_id: 'default' }], routing_rules: [{ step_type: 'commit', model: 'plain-model' }] });
+    expect(bare).toMatchObject({ service_id: 'deepseek', model: 'plain-model', auth: null });
+    // 按名找时大小写不敏感
+    const byName = resolveCommitAnalyzerProvider({ providers: [VALID_PROVIDER, second], routing_rules: [{ step_type: 'commit', model: 'OTHER/x' }] });
+    expect(byName.service_id).toBe('other');
+    const r = resolveCommitAnalyzerProvider({ providers: [VALID_PROVIDER, bearer], routing_rules: [{ step_type: 'commit', model: 'br/m' }] });
+    expect(r).toEqual({ service_id: 'br', protocol: 'openai-chat', base_url: null, api_key: '', auth: 'bearer', model: 'm' });
+  });
+});
+
+// @v: anc-mcp-server-status
+describe('buildServer 的版本号', () => {
+  it('server 自报的 version 取 package.json 的版本号（getEngineVersion 读到值时不用 0.0.0 回落）', () => {
+    const server = buildServer(new HopjitMcpCore(null, { reason: 'STANDALONE_CONFIG_MISSING: 测试', fix: '' }));
+    const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf-8')) as { version: string };
+    const info = (server as any).server?._serverInfo ?? (server as any)._serverInfo;
+    expect(info?.version).toBe(pkg.version);
+    expect(pkg.version).not.toBe('0.0.0');
+  });
+});
+
+// todo/0163：reuse-driver 的 MCP 工具面此前只测过 output 一种提交形态;本组把另外六种提交形态、
+// reap 真收割、run 两条反例、resume 崩溃恢复都经工具 handler 走到引擎,断言状态推进。
+describe('复用驱动七种提交形态经 MCP 工具面（todo/0163;todo/0168 撤 branch 后七种）', () => {
+  type Tools = Record<string, { handler: (args: Record<string, unknown>, extra: unknown) => Promise<{ content: { text: string }[]; isError?: boolean }> }>;
+  const newTools = (): Tools => (buildServer(new HopjitMcpCore(null, { reason: 'STANDALONE_CONFIG_MISSING: 测试', fix: '' })) as any)._registeredTools as Tools;
+  let tools: Tools;
+  beforeAll(() => { tools = newTools(); });
+  const callWith = async (t: Tools, name: string, args: Record<string, unknown>) => {
+    const r = await t[name].handler(args, {});
+    return { body: JSON.parse(r.content[0].text), isError: r.isError === true };
+  };
+  const call = (name: string, args: Record<string, unknown>) => callWith(tools, name, args);
+  const ws = (files: Record<string, string>) => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-0163-'));
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
+    return dir;
+  };
+  // 引擎拼的 launch_command / init_command 里的 CLI 路径取自 driverContext 的 cli_abs_path——vitest 直接跑 src 时它指向
+  // 不存在的 src/cli.js,这里换成已构建的 dist/cli.js 再执行（与本文件"驱动工具起跑的 run 认领 cli 通道"用例同一依赖）。
+  const runCliCommand = (cmd: string, cwd: string) => {
+    const fixed = cmd.replace(/^node "[^"]+"/, `node "${join(REPO, 'dist', 'cli.js')}"`);
+    const r = spawnSync(fixed, { cwd, encoding: 'utf-8', shell: true, timeout: 60000 });
+    expect(r.status, r.stderr + r.stdout).toBe(0);
+    return r.stdout;
+  };
+  const readState = (dir: string, id: string) => JSON.parse(readFileSync(join(dir, '.hopstate', id, 'state.json'), 'utf-8'));
+
+  // 步 1 停在调用方手里时步 2 还是 pending——0163 原本拿这个窗口做"预选";todo/0168 撤了预选,同一夹具改测"引擎按值选路"与"branch 字段拒收"
+  const BRANCH_BY_VALUE_SPEC = `# Branch
+Id: branch-mcp
+
+## Goal
+选路
+
+## Inputs
+- mode: text  # 模式
+
+## Outputs
+- out: text  # 结果
+
+## Steps
+1. [reason] 前面
+  + → a: text  # 前置
+2. [branch] 选
+  2.1. [case] {mode}==fast
+    2.1.1. [reason] 快
+      - ← a
+      + → out: text  # 结果
+      > 快走
+  2.2. [case] {mode}==slow
+    2.2.1. [reason] 慢
+      - ← a
+      + → out: text  # 结果
+      > 慢走
+`;
+
+  const SIMPLE = `# 简单
+Id: simple
+
+## Goal
+g
+
+## Outputs
+- answer: line  # 结果
+
+## Steps
+1. [act] 算
+  + → answer: line  # 结果
+  > 算出结果
+`;
+  const CALLER = `# Caller
+Id: caller
+
+## Goal
+调子 spec
+
+## Inputs
+- base: int  # 底数
+
+## Outputs
+- result: int  # 结果
+
+## Steps
+1. [call double(n: base)] 调翻倍
+  + → result: doubled  # 映射
+`;
+  const CALLEE_PURE = `# Double
+Id: double
+
+## Goal
+翻倍
+
+## Inputs
+- n: int  # 数
+
+## Outputs
+- doubled: int  # 翻倍值
+
+## Steps
+1. [act] 算
+  - ← n
+  + → doubled: int  # 翻倍值
+  > 纯计算
+  > \`\`\`hop_python
+  > doubled = n * 2
+  > \`\`\`
+`;
+  const CALLEE_REASON = `# Double
+Id: double
+
+## Goal
+翻倍
+
+## Inputs
+- n: int  # 数
+
+## Outputs
+- doubled: int  # 翻倍值
+
+## Steps
+1. [reason] 想一个翻倍值
+  - ← n
+  + → doubled: int  # 翻倍值
+`;
+
+  // @v: anc-mcp-reuse-driver-tools
+  it('正例：child_instance 形态——call 子实例经 CLI init_command 建好并跑到 completed 后,父实例用 submit_and_fetch_next(child_instance) 回填 → 父实例 completed 且 result 是子实例算出的值', async () => {
+    const dir = ws({ 'caller.md': CALLER, 'double.md': CALLEE_PURE });
+    const r = await call('run', { spec_path: 'caller.md', params: { base: 20 }, workspace_dir: dir });
+    expect(r.body.status).toBe('step_ready');
+    expect(r.body.step_type).toBe('call');
+    const cp = r.body.call_protocol;
+    expect(cp.child_instance).toBe('1');
+    runCliCommand(cp.init_command, dir);
+    // 子实例的推进也走 MCP 工具（resume = recover + advanceToCaller,纯计算 body 一口气到终态）
+    const child = await call('resume', { state_dir: cp.child_state_dir, instance_id: cp.child_instance, workspace_dir: dir });
+    expect(child.body.status).toBe('completed');
+    expect(child.body.outputs.doubled).toBe(40);
+    const done = await call('submit_and_fetch_next', { step_id: '1', child_instance: cp.child_instance, instance_id: r.body.instance_id, workspace_dir: dir });
+    expect(done.isError).toBe(false);
+    expect(done.body.status).toBe('completed');
+    expect(done.body.outputs.result).toBe(40);   // 子实例变量经 auto-map 回填到父输出槽
+    expect(readState(dir, r.body.instance_id).step_states['1']).toBe('done');
+  });
+
+  // @v: anc-mcp-reuse-driver-tools
+  it('正例：failure_child 形态——call 子实例的步骤经 MCP 报失败后,父实例用 submit_and_fetch_next(failure_child) 回填 → 父 call 步 failed、父实例终态 failed 且失败原因带子 spec 标识', async () => {
+    const dir = ws({ 'caller.md': CALLER, 'double.md': CALLEE_REASON });
+    const r = await call('run', { spec_path: 'caller.md', params: { base: 3 }, workspace_dir: dir });
+    const cp = r.body.call_protocol;
+    runCliCommand(cp.init_command, dir);
+    const childReady = await call('resume', { state_dir: cp.child_state_dir, instance_id: cp.child_instance, workspace_dir: dir });
+    expect(childReady.body.status).toBe('step_ready');
+    expect(childReady.body.step_id).toBe('1');
+    const childFailed = await call('submit_and_fetch_next', { step_id: '1', failure: '算不出来', state_dir: cp.child_state_dir, instance_id: cp.child_instance, workspace_dir: dir });
+    expect(childFailed.body.status).toBe('failed');
+    const done = await call('submit_and_fetch_next', { step_id: '1', failure_child: cp.child_instance, instance_id: r.body.instance_id, workspace_dir: dir });
+    expect(done.isError).toBe(false);
+    expect(done.body.status).toBe('failed');
+    expect(String(done.body.failure_reason)).toContain('double');   // CalleeFailure 带 callee_spec_id
+    expect(readState(dir, r.body.instance_id).step_states['1']).toBe('failed');
+  });
+
+  // @v: anc-mcp-reuse-driver-tools
+  it('正例：failure 形态——单步 spec 的 act 步经 submit_and_fetch_next(failure) 报失败 → 引擎账上该步 failed,实例终态 failed 且失败原因是提交的文本', async () => {
+    const dir = ws({ 's.md': SIMPLE });
+    const r = await call('run', { spec_path: 's.md', workspace_dir: dir });
+    expect(r.body.step_id).toBe('1');
+    const done = await call('submit_and_fetch_next', { step_id: '1', failure: '数据源不可用', instance_id: r.body.instance_id, workspace_dir: dir });
+    expect(done.isError).toBe(false);
+    expect(done.body.status).toBe('failed');
+    expect(String(done.body.failure_reason)).toContain('数据源不可用');
+    expect(readState(dir, r.body.instance_id).step_states['1']).toBe('failed');
+  });
+
+  // @v: anc-mcp-reuse-driver-tools, anc-exec-branch-select-internal —— todo/0168：0163 的"branch 预选正例"方向写反,改为反例
+  it('反例（todo/0168）：submit_and_fetch_next 没有 branch 提交形态——调用方传 branch=2.1 试图替引擎预选 case → INVALID_ARG 结构化拒收,报文点名 branch 并列出七种合法形态;引擎账上 branch 步仍 pending、两个 case 都没被动过', async () => {
+    const dir = ws({ 'b.md': BRANCH_BY_VALUE_SPEC });
+    const r = await call('run', { spec_path: 'b.md', params: { mode: 'slow' }, workspace_dir: dir });
+    expect(r.body.step_id).toBe('1');
+    const id = r.body.instance_id;
+    const picked = await call('submit_and_fetch_next', { step_id: '2', branch: '2.1', reason: '人工定走快路', instance_id: id, workspace_dir: dir });
+    expect(picked.isError).toBe(true);
+    expect(picked.body.error.code).toBe('INVALID_ARG');
+    expect(String(picked.body.error.message)).toContain("'branch'");
+    for (const m of ['output', 'answer', 'child_instance', 'failure_child', 'failure', 'replan', 'tool_result']) expect(String(picked.body.error.message)).toContain(m);
+    expect(String(picked.body.error.message)).toContain('七种');
+    const st = readState(dir, id).step_states;
+    expect(st['2']).toBe('pending');
+    expect(st['2.1']).toBe('pending');
+    expect(st['2.2']).toBe('pending');
+  });
+
+  // @v: anc-exec-branch-select-internal
+  it('正例（todo/0168）：选路只由引擎按 case 条件求值——前序步交付 mode=slow 后,引擎进入 branch 命中 2.2：账上 2.2 running / 2.1 skipped（含 2.1.1）,下一介入点停在 2.2.1', async () => {
+    const dir = ws({ 'b.md': BRANCH_BY_VALUE_SPEC });
+    const r = await call('run', { spec_path: 'b.md', params: { mode: 'slow' }, workspace_dir: dir });
+    const id = r.body.instance_id;
+    const next = await call('submit_and_fetch_next', { step_id: '1', output: { a: '前置值' }, instance_id: id, workspace_dir: dir });
+    expect(next.body.status).toBe('step_ready');
+    expect(next.body.step_id).toBe('2.2.1');
+    const st = readState(dir, id).step_states;
+    expect(st['2']).toBe('running');
+    expect(st['2.2']).toBe('running');
+    expect(st['2.1']).toBe('skipped');
+    expect(st['2.1.1']).toBe('skipped');
+  });
+
+  // @v: anc-exec-branch-select-internal —— 工具 schema 面：branch / reason 两字段不再存在（tools/list 给调用方看的就是这份）
+  it('反例（todo/0168）：submit_and_fetch_next 的工具 schema 没有 branch / reason 字段,工具说明写的是七种形态', () => {
+    const shape = (tools as any)['submit_and_fetch_next'].inputSchema;
+    const keys = Object.keys(shape.shape ?? shape._def?.shape?.() ?? shape);
+    expect(keys).not.toContain('branch');
+    expect(keys).not.toContain('reason');
+    expect(keys).toEqual(expect.arrayContaining(['output', 'answer', 'child_instance', 'failure_child', 'failure', 'replan', 'tool_result']));
+    const desc = String((tools as any)['submit_and_fetch_next'].description);
+    expect(desc).toContain('七种提交形态');
+    expect(desc).not.toContain('branch');
+  });
+
+  // @v: anc-mcp-reuse-driver-tools
+  it('正例：replan 形态——subtask free 到步停在 adaptive_needed 后,submit_and_fetch_next(replan=子步骤 markdown 文本) 提交展开物 → 下一介入点是展开出的第一个子步骤 2.1 的 step_ready', async () => {
+    const dir = ws({ 'f.md': `# F
+Id: f
+
+## Goal
+g
+
+## Outputs
+- out: text  # 结果
+
+## Steps
+1. [reason] 前面
+  + → a: text  # 前置
+2. [subtask free] 到步展开
+  - ← a
+  + → out: text  # 结果
+` });
+    const r = await call('run', { spec_path: 'f.md', workspace_dir: dir });
+    expect(r.body.step_id).toBe('1');
+    const id = r.body.instance_id;
+    const need = await call('submit_and_fetch_next', { step_id: '1', output: { a: '真产出' }, instance_id: id, workspace_dir: dir });
+    expect(need.body.status).toBe('adaptive_needed');
+    expect(need.body.reason).toBe('initial_plan');
+    const plan = '1. [act free] 干\n  - ← a\n  + → out: text  # 结果\n2. [check final] 核\n  - ← out\n  + → ok: bool  # 判定\n  + → note: text  # 说明\n';
+    const next = await call('submit_and_fetch_next', { step_id: '2', replan: plan, instance_id: id, workspace_dir: dir });
+    expect(next.isError).toBe(false);
+    expect(next.body.status).toBe('step_ready');
+    expect(next.body.step_id).toBe('2.1');
+    expect(readState(dir, id).step_states['2']).toBe('running');   // 容器步进入执行,子步骤已挂上
+  });
+
+  // @v: anc-mcp-reuse-driver-tools
+  it('正例：tool_result 形态——act body 解释到工具调用点发 tool_request 后,submit_and_fetch_next(tool_result) 注入工具结果 → 引擎重放续跑到 completed,输出是工具结果', async () => {
+    const dir = ws({ 'm.md': `# Mixed
+Id: mixed
+
+## Goal
+g
+
+## Inputs
+- u: text  # 地址
+
+## Outputs
+- out: text  # 结果
+
+## Steps
+1. [act] 纯计算
+  - ← u
+  + → host: text  # 大写
+  > \`\`\`hop_python
+  > host = upper(u)
+  > \`\`\`
+2. [act] 含工具
+  - ← host
+  + → out: text  # 结果
+  > \`\`\`hop_python
+  > out = fetch(target: host)
+  > \`\`\`
+` });
+    const r = await call('run', { spec_path: 'm.md', params: { u: 'x.com' }, workspace_dir: dir });
+    expect(r.body.status).toBe('tool_request');
+    expect(r.body.step_id).toBe('2');
+    expect(r.body.tool).toBe('fetch');
+    const done = await call('submit_and_fetch_next', { step_id: '2', tool_result: '"FETCHED:X.COM"', instance_id: r.body.instance_id, workspace_dir: dir });
+    expect(done.isError).toBe(false);
+    expect(done.body.status).toBe('completed');
+    expect(done.body.outputs.out).toBe('FETCHED:X.COM');
+  });
+
+  // @v: anc-mcp-reuse-driver-tools
+  it('反例：同一次 submit_and_fetch_next 同时给 output 与 failure 两种形态 → INVALID_STATE 拒收,报文列出两个形态名,引擎状态不动（步 1 仍在等回写）', async () => {
+    const dir = ws({ 's.md': SIMPLE });
+    const r = await call('run', { spec_path: 's.md', workspace_dir: dir });
+    const id = r.body.instance_id;
+    const two = await call('submit_and_fetch_next', { step_id: '1', output: { answer: 'a' }, failure: '坏了', instance_id: id, workspace_dir: dir });
+    expect(two.isError).toBe(true);
+    expect(two.body.error.code).toBe('INVALID_STATE');
+    expect(two.body.error.message).toContain('output');
+    expect(two.body.error.message).toContain('failure');
+    const st = await call('status', { instance_id: id, workspace_dir: dir });
+    expect(st.body.execution_status).toBe('running');
+    expect(readState(dir, id).step_states['1']).toBe('running');
+    // 只给一种形态照常推进
+    const done = await call('submit_and_fetch_next', { step_id: '1', output: { answer: 'a' }, instance_id: id, workspace_dir: dir });
+    expect(done.body.status).toBe('completed');
+  });
+
+  // @v: anc-mcp-reuse-driver-tools
+  it('正例：reap_and_fetch_next 真收割——subtask parallel 派发出的 worker 子实例跑完后,reap(child_instance, status=completed) → 父 loop 收到子实例的值并推进到 completed', async () => {
+    const dir = ws({ 'pipe.md': `# ReusePipe
+Id: reuse-pipe
+
+## Goal
+流水线
+
+## Inputs
+- nums: [int]  # 列表
+
+## Outputs
+- outs: [int]  # 收集
+
+## Steps
+1. [loop for-each n in nums, collect o into outs] 逐项
+  + → outs: [int]  # 收集列表
+  1.1. [subtask parallel] 处理一项
+    + → o: int  # 单项
+    1.1.1. [act] 算
+      - ← n
+      + → o: int  # 结果
+      > \`\`\`hop_python
+      > o = n * 7
+      > \`\`\`
+2. [exit] 交付
+` });
+    const r = await call('run', { spec_path: 'pipe.md', params: { nums: [2] }, workspace_dir: dir });
+    expect(r.body.status).toBe('dispatch_ready');
+    expect(r.body.child_instance).toBe('1.1.1');
+    const id = r.body.instance_id;
+    runCliCommand(r.body.launch_command, dir);   // worker 子进程跑到终态落盘
+    expect(existsSync(join(dir, '.hopstate', id, 'parallel', '1.1.1', 'state.json'))).toBe(true);
+    const done = await call('reap_and_fetch_next', { child_instance: '1.1.1', status: 'completed', instance_id: id, workspace_dir: dir });
+    expect(done.isError).toBe(false);
+    expect(done.body.status).toBe('completed');
+    expect(done.body.outputs.outs).toEqual([14]);   // 子实例算的 2*7 被父 loop 收进 outs
+  });
+
+  // @v: anc-mcp-reuse-driver-tools
+  it('反例：run 的 spec 在 ## Tools 段声明了本机没注册的工具 → 依赖核不过返回 INIT_FAILED（带 missing_tools）,不建实例目录', async () => {
+    const dir = ws({ 't.md': `# T
+Id: t
+
+## Goal
+g
+
+## Tools
+- nowhere_tool_0163(q) -> v % text  # 本机没注册
+  - q % text  # 词
+
+## Outputs
+- out: text  # 结果
+
+## Steps
+1. [act free] 调
+  - 工具: nowhere_tool_0163
+  + → out: text  # 结果
+` });
+    const r = await call('run', { spec_path: 't.md', workspace_dir: dir });
+    expect(r.body.status).toBe('error');
+    expect(r.body.error_code).toBe('INIT_FAILED');
+    expect(r.body.missing_tools).toEqual(['t: nowhere_tool_0163']);
+    expect(r.body.message).toContain('工具没有注册');
+    expect(existsSync(join(dir, '.hopstate'))).toBe(false);
+  });
+
+  // @v: anc-mcp-reuse-driver-tools
+  it('反例：run 的 params 带形似凭证的 hop_env_api_key 键 → HOP_ENV_CREDENTIAL_REJECTED 结构化错误,不建实例目录', async () => {
+    const dir = ws({ 's.md': SIMPLE });
+    const r = await call('run', { spec_path: 's.md', params: { hop_env_api_key: 'x' }, workspace_dir: dir });
+    expect(r.isError).toBe(true);
+    expect(r.body.error.code).toBe('HOP_ENV_CREDENTIAL_REJECTED');
+    expect(r.body.error.message).toContain('hop_env_api_key');
+    expect(existsSync(join(dir, '.hopstate'))).toBe(false);
+  });
+
+  // @v: anc-mcp-reuse-driver-tools
+  it('正例：resume 崩溃恢复——run 把步 1 派出去（账上 running）后调用方没提交就没了,新 server core 调 resume → 悬空步被复位重派,响应回到步 1 的 step_ready,之后照常能提交', async () => {
+    const dir = ws({ 's.md': SIMPLE });
+    const r = await call('run', { spec_path: 's.md', workspace_dir: dir });
+    expect(r.body.step_id).toBe('1');
+    const id = r.body.instance_id;
+    expect(readState(dir, id).step_states['1']).toBe('running');   // 崩溃现场：步 1 悬空 running
+    const fresh = newTools();   // 模拟 server 进程重启:新 core,内存里什么都没有
+    const back = await callWith(fresh, 'resume', { instance_id: id, workspace_dir: dir });
+    expect(back.isError).toBe(false);
+    expect(back.body.status).toBe('step_ready');
+    expect(back.body.step_id).toBe('1');
+    expect(back.body.instance_id).toBe(id);
+    const done = await callWith(fresh, 'submit_and_fetch_next', { step_id: '1', output: { answer: '42' }, instance_id: id, workspace_dir: dir });
+    expect(done.body.status).toBe('completed');
+    expect(done.body.outputs.answer).toBe('42');
+  });
+});
+
+// ── todo/0164：mcp 组合根装配线"删一行必红"——startRun / restoreRun 把配置装配成 HostConfig、模型引擎、
+// 沙箱的每一行各配一条正例,断可观察面（模型客户端收到的实发请求参数 / 请求头、沙箱拒收报文、快照里的
+// host_context、start_run 的结构化错误码）,不断内部私有变量。模型客户端经 globalThis.fetch 打桩抄实发
+// 请求（SDK 走全局 fetch,与通知挂点组同一手法）,零网络。契约句在 mcp-server.md ^anc-mcp-config
+// "组合根装配线逐条契约"与 ^anc-mcp-run-restore M3 条。
+describe('mcp 组合根装配线删一行必红（todo/0164）', () => {
+  const origFetch = globalThis.fetch;
+  let sentRequests: Array<{ url: string; headers: Record<string, string>; body: Record<string, unknown> }>;
+
+  beforeEach(() => {
+    process.env['HOPJIT_TEST_KEY_ENV'] = 'sk-test-fake';   // 前方 describe 的 finally 会删全局 env——本组自设保障
+    sentRequests = [];
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const headers: Record<string, string> = {};
+      new Headers(init?.headers).forEach((v, k) => { headers[k.toLowerCase()] = v; });
+      sentRequests.push({ url: String(url), headers, body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+      const message = {
+        id: 'msg_0164', type: 'message', role: 'assistant', model: 'stub',
+        content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', stop_sequence: null,
+        usage: { input_tokens: 5, output_tokens: 5 },
+      };
+      return new Response(JSON.stringify(message), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch;
+  });
+  afterEach(() => { globalThis.fetch = origFetch; });
+
+  // 单步 reason 的 spec（无工具声明 → 单发纯推理,一次模型请求即可观察装配结果）
+  const REASON_SPEC = `# T\nId: t0164-reason\n## Goal\ng\n## Outputs\n- out: text  # o\n## Steps\n1. [reason] r\n  + → out: text  # o\n  > 回答 ok\n`;
+
+  async function waitTerminal(core: HopjitMcpCore, runId: string): Promise<Record<string, unknown>> {
+    let st: Record<string, unknown> = {};
+    for (let i = 0; i < 150; i++) {
+      await new Promise(res => setTimeout(res, 100));
+      st = core.runStatus(runId) as Record<string, unknown>;
+      if (['completed', 'failed'].includes(st['status'] as string)) break;
+    }
+    return st;
+  }
+
+  async function startReasonRun(config: StandaloneConfig, specText = REASON_SPEC): Promise<{ core: HopjitMcpCore; st: Record<string, unknown> }> {
+    const core = new HopjitMcpCore(config);
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-0164-'));
+    writeFileSync(join(dir, 's.md'), specText);
+    const r = await core.startRun(join(dir, 's.md'), undefined, join(dir, '.hopstate'), dir);
+    expect(r['error']).toBeUndefined();
+    const st = await waitTerminal(core, r['run_id'] as string);
+    expect(sentRequests.length).toBeGreaterThan(0);   // 真发过模型请求,下面断的是实发参数
+    return { core, st };
+  }
+
+  // @v: anc-mcp-config
+  it('正例：routing_rules 对 reason 写 thinking: disabled → 模型客户端收到的实发请求参数里 thinking.type 是 disabled（buildModelEngine 把规则的 thinking 透传进 ModelEngine;不透传则 reason 按引擎内建缺省发 enabled）', async () => {
+    await startReasonRun({
+      providers: [VALID_PROVIDER],
+      routing_rules: [{ step_type: 'reason', model: 'deepseek/m-think', thinking: 'disabled' }],
+    });
+    const first = sentRequests[0];
+    expect(first.body['model']).toBe('m-think');   // 路由命中的是这条规则
+    expect((first.body['thinking'] as { type?: string } | undefined)?.type).toBe('disabled');
+  });
+
+  // @v: anc-mcp-config
+  it('正例：routing_rules 的 model 不带 service 前缀（裸模型名）→ 规则的 service_id 归一为 providers[0].service_id,请求按该 service 级设置发出（{SID}_MAX_OUTPUT_TOKENS 决定实发 max_tokens;不归一则落到无 service 级设置的 default 客户端,max_tokens 回到引擎缺省 32768）', async () => {
+    await startReasonRun({
+      providers: [{ ...VALID_PROVIDER, max_output_tokens: 4321 }],
+      routing_rules: [{ step_type: 'reason', model: 'm-bare' }],
+    });
+    const first = sentRequests[0];
+    expect(first.body['model']).toBe('m-bare');
+    expect(first.body['max_tokens']).toBe(4321);
+  });
+
+  // @v: anc-mcp-config
+  it('正例：providers[0] 写 auth: bearer → 缺省 provider 路径（spec Config.model 裸模型名,走 defaultClient）的实发请求头是 Authorization: Bearer 且无 x-api-key;反例：auth 缺席 → 实发请求头是 x-api-key 且无 Authorization（providerToHostConfig 把 auth 贯穿到 HostConfig.auth）', async () => {
+    const BARE_MODEL_SPEC = REASON_SPEC.replace('## Outputs', '## Config\nmodel: bare-default-model\n## Outputs');
+    await startReasonRun({ providers: [{ ...VALID_PROVIDER, auth: 'bearer' }] }, BARE_MODEL_SPEC);
+    const bearerReq = sentRequests[0];
+    expect(bearerReq.body['model']).toBe('bare-default-model');   // 走的是缺省 provider 路径
+    expect(bearerReq.headers['authorization']).toBe('Bearer sk-test-fake');
+    expect(bearerReq.headers['x-api-key']).toBeUndefined();
+
+    sentRequests = [];
+    await startReasonRun({ providers: [VALID_PROVIDER] }, BARE_MODEL_SPEC);
+    const apiKeyReq = sentRequests[0];
+    expect(apiKeyReq.headers['x-api-key']).toBe('sk-test-fake');
+    expect(apiKeyReq.headers['authorization']).toBeUndefined();
+  });
+
+  // @v: anc-mcp-config
+  it('正例：run 里的 act body 读 workspace 内的 .env 与 secret.key → 都被沙箱拒,run 失败且拒收报文含 Read denied（providerToHostConfig 装的缺省拒读基线;基线为空则两个文件都读得到,run 直接 completed）', async () => {
+    for (const secretFile of ['.env', 'secret.key']) {
+      const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
+      const dir = mkdtempSync(join(tmpdir(), 'mcp-0164-denied-'));
+      writeFileSync(join(dir, secretFile), 'TOKEN=should-not-leak\n');
+      const F = '```';
+      writeFileSync(join(dir, 's.md'), `# T\nId: t0164-denied\n## Goal\ng\n## Outputs\n- out: text  # o\n## Steps\n1. [act] 读\n  + → out: text  # o\n  > ${F}hop_python\n  > out = read(path: "${secretFile}")\n  > ${F}\n`);
+      const r = await core.startRun(join(dir, 's.md'), undefined, join(dir, '.hopstate'), dir);
+      expect(r['error']).toBeUndefined();
+      const st = await waitTerminal(core, r['run_id'] as string);
+      expect(st['status'], `读 ${secretFile} 该被拒`).toBe('failed');
+      const reason = (st['failure'] as { reason?: string } | undefined)?.reason ?? '';
+      expect(reason).toContain('Read denied');
+      expect(reason).not.toContain('should-not-leak');
+    }
+    expect(sentRequests.length).toBe(0);   // 纯 body 步骤,全程没碰模型
+  });
+
+  // @v: anc-mcp-config
+  it('正例：start_run 显式传 workspace_dir（≠ server cwd）→ 快照 host_context 的 workspace_dir / 沙箱锚 / config_project_dir 三处都等于它,不是 server 进程 cwd', async () => {
+    const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
+    const specDir = mkdtempSync(join(tmpdir(), 'mcp-0164-spec-'));
+    const wsDir = mkdtempSync(join(tmpdir(), 'mcp-0164-ws-'));
+    const F = '```';
+    writeFileSync(join(specDir, 's.md'), `# T\nId: t0164-ws\n## Goal\ng\n## Outputs\n- out: text  # o\n## Steps\n1. [act] 算\n  + → out: text  # o\n  > ${F}hop_python\n  > out = "done"\n  > ${F}\n`);
+    const stateDir = mkdtempSync(join(tmpdir(), 'mcp-0164-ws-state-'));
+    const r = await core.startRun(join(specDir, 's.md'), undefined, stateDir, wsDir);
+    expect(r['error']).toBeUndefined();
+    const st = await waitTerminal(core, r['run_id'] as string);
+    expect(st['status']).toBe('completed');
+    const state = JSON.parse(readFileSync(join(stateDir, r['run_id'] as string, 'state.json'), 'utf-8')) as { host_context: { workspace_dir: string; config_project_dir?: string; sandbox: { filesystem: { workspace_dir: string } } } };
+    expect(wsDir).not.toBe(process.cwd());
+    expect(state.host_context.workspace_dir).toBe(wsDir);
+    expect(state.host_context.sandbox.filesystem.workspace_dir).toBe(wsDir);
+    expect(state.host_context.config_project_dir).toBe(wsDir);
+  });
+
+  // @v: anc-mcp-run-restore
+  it('正例（重启版）：项目级 hopjit.yaml 对 reason 写 thinking: disabled,run 停在 ask 后换新 core 恢复续跑 → 恢复后第一次模型请求的 thinking.type 仍是 disabled（restoreRun 用重读配置调 buildModelEngine 装 model_engine;不装则路由丢失,reason 按内建缺省发 enabled）', async () => {
+    const projDir = mkdtempSync(join(tmpdir(), 'mcp-0164-restore-think-'));
+    writeFileSync(join(projDir, 'hopjit.yaml'), 'routing_rules:\n  - step_type: reason\n    model: deepseek/m-think\n    thinking: disabled\n');
+    const SPEC = `# T\nId: t0164-rt\n## Goal\ng\n## Inputs\n- x: line\n## Outputs\n- out: text  # o\n## Steps\n1. [ask] 问\n  - ← x\n  + → v: line  # v\n2. [reason] r\n  - ← v\n  + → out: text  # o\n  > 回答 ok\n`;
+    const stateDir = join(projDir, '.hopstate');
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC, {
+      workspace_dir: projDir,
+      sandbox: { filesystem: { workspace_dir: projDir, read_access: { allowed: [projDir], denied: [], confirm_required: [] } }, network: { trusted_hosts: [] }, runtime: { available: [] } },
+      api_key: '',
+      config_project_dir: projDir,
+    }, { stateDir, params: { x: 'a' }, specPath: join(projDir, 't.md') });
+    expect(init.status).toBe('ok');
+    let n = engine.nextStep();
+    while (n.status === 'step_ready') { engine.completeStep((n as { step_id: string }).step_id, {}); n = engine.nextStep(); }
+    expect(n.status).toBe('paused');
+    const runId = (init as { instance_id: string }).instance_id;
+
+    const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });   // 新 core = 重启后的 server,server 配置无 routing_rules
+    const r = core.resumeRun(runId, '1', { value: 'go' }, stateDir);
+    expect(JSON.stringify((r as { error?: unknown }).error ?? null)).toBe('null');
+    await waitTerminal(core, runId);
+    expect(sentRequests.length).toBeGreaterThan(0);
+    const first = sentRequests[0];
+    expect(first.body['model']).toBe('m-think');
+    expect((first.body['thinking'] as { type?: string } | undefined)?.type).toBe('disabled');
+  });
+
+  // @v: anc-mcp-run-restore
+  it('正例（重启版）：显式 workspace_dir（≠ server cwd）的 run 停在 ask 后换新 core 恢复续跑 → 续跑的 body read 按原 workspace_dir 解析读到标记文件,快照 host_context.workspace_dir 仍是它（restoreRun 作业根从快照取;漂回 server cwd 则标记文件找不到,run 失败）', async () => {
+    const wsDir = mkdtempSync(join(tmpdir(), 'mcp-0164-restore-ws-'));
+    writeFileSync(join(wsDir, 'marker.txt'), 'marker-from-workspace');
+    const F = '```';
+    const SPEC = `# T\nId: t0164-rw\n## Goal\ng\n## Inputs\n- x: line\n## Outputs\n- out: text  # o\n## Steps\n1. [ask] 问\n  - ← x\n  + → v: line  # v\n2. [act] 读标记\n  - ← v\n  + → out: text  # o\n  > ${F}hop_python\n  > out = read(path: "marker.txt")\n  > ${F}\n`;
+    const stateDir = mkdtempSync(join(tmpdir(), 'mcp-0164-restore-ws-state-'));
+    const engine = new ExecutionEngine();
+    const init = engine.initExecution(SPEC, {
+      workspace_dir: wsDir,
+      sandbox: { filesystem: { workspace_dir: wsDir, read_access: { allowed: [wsDir], denied: [], confirm_required: [] } }, network: { trusted_hosts: [] }, runtime: { available: [] } },
+      api_key: '',
+    }, { stateDir, params: { x: 'a' }, specPath: join(wsDir, 't.md') });
+    expect(init.status).toBe('ok');
+    let n = engine.nextStep();
+    while (n.status === 'step_ready') { engine.completeStep((n as { step_id: string }).step_id, {}); n = engine.nextStep(); }
+    expect(n.status).toBe('paused');
+    const runId = (init as { instance_id: string }).instance_id;
+    expect(wsDir).not.toBe(process.cwd());
+
+    const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });   // 新 core = 重启后的 server
+    const r = core.resumeRun(runId, '1', { value: 'go' }, stateDir);
+    expect(JSON.stringify((r as { error?: unknown }).error ?? null)).toBe('null');
+    const st = await waitTerminal(core, runId);
+    expect(st['status']).toBe('completed');
+    expect((st['outputs'] as Record<string, unknown>)['out']).toBe('marker-from-workspace');
+    const state = JSON.parse(readFileSync(join(stateDir, runId, 'state.json'), 'utf-8')) as { host_context: { workspace_dir: string; sandbox: { filesystem: { workspace_dir: string } } } };
+    expect(state.host_context.workspace_dir).toBe(wsDir);
+    expect(state.host_context.sandbox.filesystem.workspace_dir).toBe(wsDir);
+  });
+
+  // @v: anc-mcp-config
+  it('反例：项目级 hopjit.yaml 的 tool_servers 条目过了配置文法核但注册文法不合法（binding.kind 不在枚举内）→ start_run 返回结构化错误码 TOOLS_FILE_INVALID,不裸抛', async () => {
+    const core = new HopjitMcpCore({ providers: [VALID_PROVIDER] });
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-0164-tfi-'));
+    writeFileSync(join(dir, 's.md'), REASON_SPEC);
+    writeFileSync(join(dir, 'hopjit.yaml'), 'tool_servers:\n  - name: srv\n    binding:\n      kind: carrier-pigeon\n    tools:\n      - name: fly\n');
+    const r = await core.startRun(join(dir, 's.md'), undefined, join(dir, '.hopstate'), dir);
+    const err = r['error'] as { code: string; message: string } | undefined;
+    expect(err?.code).toBe('TOOLS_FILE_INVALID');
+    expect(err?.message).toContain('carrier-pigeon');
+    expect(r['run_id']).toBeUndefined();
+    expect(sentRequests.length).toBe(0);
   });
 });

@@ -3,7 +3,7 @@
 	source: [[../design/codex-driver-carrier]]
 	source_id: hopjit-codex-driver-carrier
 	type: compact
-	last_sync: 2026-10-01T16:04+0800
+	last_sync: 2026-10-10T00:25+0800
 	note: 教程 1 Codex 版——双载体入口之一,与 CC 版平行（安装发现+delegated 全程 E2E 已真机验证 2026-08-05；inline 待配置修正后重验）
 %%
 
@@ -33,7 +33,7 @@
 
 ```bash
 cd <你的项目>
-hopjit install-skill --carrier codex --demo
+hopjit setup --carrier codex
 ```
 
 生成布局：
@@ -45,11 +45,13 @@ hopjit install-skill --carrier codex --demo
 │   └── segment-driver.md       # 执行段（连续 reason/act/check 循环）
 └── references/                 # discovery / execution-rules 等执行细则
 
-<项目根>/.agents/skills/demo-coffee-week/   ← demo 恒项目级(演示材料跟项目走)
-├── SKILL.md                    # $demo-coffee-week 具名演示入口
-├── spec.md
-└── coffee-sales.json
+~/.hopjit/ants/demo-coffee-week/          ← 演示 HopAnt（setup 缺省装,与载体无关,不进 $ 菜单）
+├── demo-coffee-week.md         # 入口 spec
+├── coffee-sales.json           # 演示数据
+└── inner_store/                # 本机状态,不分发
 ```
+
+同目录下还有 `demo-fact-check`（事实核查简化版）与 `demo-rename`（批量改名）两件。
 
 > 进阶：`--plus` 另装两个研究件 `$hop-fact-check` / `$hop-deep-research`（同为项目级），并把所需检索/浏览器工具配置并入 `~/.hopjit/config.yaml`——之后只差 `export DASHSCOPE_API_KEY=<百炼key>`。首跑先跳过。
 
@@ -58,10 +60,10 @@ hopjit install-skill --carrier codex --demo
 Codex 按 skill 的 description 隐式触发，也可用 `$` 显式调用：
 
 ```text
-$demo-coffee-week
+$hop 跑 ~/.hopjit/ants/demo-coffee-week/demo-coffee-week.md
 ```
 
-这条是最短首跑。通用驱动入口仍是：
+这条是最短首跑。跑任意 spec 也是同一个入口：
 
 ```
 $hop 跑 examples/data-quality.md
@@ -80,13 +82,13 @@ main orchestrator 会先定位 hopjit CLI（`command -v hopjit` 一条命令，�
 | 症状 | 处置 |
 |---|---|
 | Codex 不触发 skill | 确认 `~/.codex/skills/hopspec/SKILL.md` 存在且第一行是 `---`（旧项目级 `.agents/skills/hopspec/` 残留会盖住用户级——同名项目级优先,确认后删除残留）；显式对 `$hop` 说"跑 …"，仍未出现时重启 Codex |
-| `$demo-coffee-week` 不出现 | 用 `hopjit install-skill --carrier codex --demo --force` 重装；也可输入 `/skills` 从列表选择 |
+| `~/.hopjit/ants/demo-coffee-week/` 不存在 | 重跑 `hopjit setup --carrier codex`，看输出的 `demo_note` 字段写的失败原因；已装过的演示件不覆盖，要刷新先 `hopjit ant remove demo-coffee-week` |
 | 找不到引擎 | `npm i -g @hoplogic/hopjit`；或项目内 `npm i @hoplogic/hopjit` |
 | parallel 好像"卡住" | 对话驱动模式下并行步骤当前按顺序执行（结果一致），多个活依次完成后才继续——等它跑完即可 |
 
 ## 可选：独立模式（长任务转它）
 
-任务跑得久、跑得频、或想换轻量模型省成本时，配置一次独立模式：执行搬进独立 server 进程（不占你对话上下文），推理换成你指定的 API 模型（如 deepseek-chat）。配置步骤与两模式取舍详表见 `USAGE.md` §6；**Codex + DeepSeek 模型用户须先看 `docs/WORKAROUNDS.md` W-1**（上游 bug 补丁）。同一份 spec 两种模式通用，零修改。
+任务跑得久、跑得频、或想换轻量模型省成本时，配置一次独立模式：执行搬进独立 server 进程（不占你对话上下文），推理换成你指定的 API 模型（如 deepseek-chat）。配置步骤与两模式取舍详表见 `USAGE.md` §4；**Codex + DeepSeek 模型用户须先看 `docs/WORKAROUNDS.md` W-1**（上游 bug 补丁）。同一份 spec 两种模式通用，零修改。
 
 ## 下一步
 

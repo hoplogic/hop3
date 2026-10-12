@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// @a: anc-meta-ci-baseline
+// @a: anc-meta-ci-baseline, anc-meta-ci-detail-baseline
 // 锚点审计基线比对——check:audit 的挡线（ci-pipeline §4，2026-08-03 决策 3 拍板"基线锁定"）。
 // 语义：变差 exit 1（报出恶化项）；变好 exit 0 + 提示人工更新基线（不自动放松，防"悄悄放松"）；
 // 持平 exit 0。依赖 run-audit.mjs 先产出 .anchor-audit/cross_compare_results.yaml——
@@ -9,11 +9,14 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const require = createRequire(join(ROOT, 'package.json'));
+// HOPJIT_CHECK_ROOT：判据回归测试注入 fixture 仓库根（含 audits/baselines 两份基线与 .anchor-audit 产物）——与其他守卫同款可测性通道;生产恒缺省
+const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
+const ROOT = process.env['HOPJIT_CHECK_ROOT'] ?? REPO;
+const require = createRequire(join(REPO, 'package.json'));
 const yaml = require('js-yaml');
 
 const baselinePath = join(ROOT, 'audits', 'baselines', 'anchor-baseline.json');
+const detailPath = join(ROOT, 'audits', 'baselines', 'anchor-detail-baseline.json');   // 明细基线（todo/0133,^anc-meta-ci-detail-baseline）
 const resultsPath = join(ROOT, '.anchor-audit', 'cross_compare_results.yaml');
 
 if (!existsSync(baselinePath)) {
@@ -22,6 +25,10 @@ if (!existsSync(baselinePath)) {
 }
 if (!existsSync(resultsPath)) {
   console.error('缺 .anchor-audit/cross_compare_results.yaml——先跑 run-audit.mjs 产出扫描结果。不静默跳过。');
+  process.exit(2);
+}
+if (!existsSync(detailPath)) {
+  console.error('缺 audits/baselines/anchor-detail-baseline.json——明细基线文件必须入库（todo/0133）。不静默跳过。');
   process.exit(2);
 }
 
@@ -59,13 +66,38 @@ for (const [k, baseVal] of Object.entries(base)) {
   else if (improved) better.push(`${k}: 基线 ${baseVal} → 当前 ${cur}`);
 }
 
-if (worse.length) {
+// 明细增量比对（todo/0133,^anc-meta-ci-detail-baseline）：三张明细表按 id+file（去行号）对集合比,
+// 当前有、基线没有 → 新孤儿/新缺卡,红点名;当前比基线短 → 收紧提示（与数字基线同口径,agent 自己收）。
+// 数字基线只比计数——d147fbed 散文行锚让 orphans 多一条而 11 个数一个没变差,两道闸都漏。
+// @a: anc-meta-ci-detail-baseline
+const detail = JSON.parse(readFileSync(detailPath, 'utf-8'));
+const DETAIL_KEYS = {
+  code_to_design_orphans: d.code_to_design?.orphans ?? [],
+  code_to_traceability_missing: d.code_to_traceability?.missing ?? [],
+  design_to_traceability_missing: d.design_to_traceability?.missing ?? [],
+};
+const pairKey = (e) => `${e.id}@${String(e.location ?? e.file ?? '').replace(/:\d+$/, '')}`;
+const detailWorse = [], detailBetter = [];
+for (const [k, curList] of Object.entries(DETAIL_KEYS)) {
+  const baseList = detail[k];
+  if (!Array.isArray(baseList)) { console.error(`明细基线缺字段 ${k}——脚本与基线字段脱节`); process.exit(2); }
+  const baseSet = new Set(baseList.map(pairKey));
+  const curSet = new Set(curList.map(pairKey));
+  const added = [...curSet].filter(x => !baseSet.has(x));
+  const removed = [...baseSet].filter(x => !curSet.has(x));
+  if (added.length) detailWorse.push(`${k}: 新增 ${added.length} 条基线没有的条目——` + added.map(x => x.replace('@', '（') + '）').join('、'));
+  if (removed.length) detailBetter.push(`${k}: 基线 ${baseList.length} → 当前 ${curSet.size}（已修 ${removed.length} 条,把基线列表收紧到实测）`);
+}
+
+if (worse.length || detailWorse.length) {
   console.error('❌ 锚点审计相比基线变差（新增违规见 run-audit 输出明细）：');
   for (const w of worse) console.error('   ' + w);
+  for (const w of detailWorse) console.error('   ' + w);
   process.exit(1);
 }
+better.push(...detailBetter);
 if (better.length) {
-  console.log('✅ 未变差，且有改善——请人工确认后更新 audits/baselines/anchor-baseline.json（不自动改，防悄悄放松）：');
+  console.log('✅ 未变差，且有改善——提交本批次的 agent 把 audits/baselines/anchor-baseline.json（数字）与 anchor-detail-baseline.json（明细列表）收紧到下列实测值，不必问作者（收紧方向免确认，放松方向仍须作者确认；口径见 CLAUDE.md 与 design ci-pipeline ^anc-meta-ci-baseline）：');
   for (const b of better) console.log('   ' + b);
 } else {
   console.log('✅ 锚点审计与基线持平。');

@@ -13,7 +13,7 @@ shared-providers 的 `PersistenceProvider` 契约（见 [[shared-providers#^anc-
 
 ## persistence 模块定位【契约】 ^anc-provider-persistence
 
-> **模块版本**：persistence 模块（`persistence.ts`：FilePersistence/MemoryPersistence + readState/readVars/readSpec/readStateSeq/writeAtomic） `v0.6.0`（2026-09-30。本版=spec 运行时快照改为**内容寻址**——真身按 sha256 在 run 根 `specs/` 存一份,各实例 `spec.json` 只存引用,同内容跨实例跨步骤零重写;读侧兼容旧内联形态并按哈希缓存;契约 ^anc-provider-spec-content-addressed（todo/0130 承接 hopissues/0115：hopkb 单批 2309 份 spec.json 1.62G 只有 3 种内容）。上版 v0.5.0（2026-09-26）公开面加 readStateSeq——只读 state.json 的写入序号与最后写入者,供 engine 写盘前核对,todo/0114）。0.x 未承诺稳定。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
+> **模块版本**：persistence 模块（`persistence.ts`：FilePersistence/MemoryPersistence + readState/readVars/readSpec/readStateSeq/writeAtomic） `v0.6.1`（2026-10-07 `findRunRoot` 从内部转公开——todo/0146 commit 批准账按 run 根上一级定位,cli 与 mcp-server 两个组合根调用;函数行为不变）。上版 v0.6.0（2026-09-30。本版=spec 运行时快照改为**内容寻址**——真身按 sha256 在 run 根 `specs/` 存一份,各实例 `spec.json` 只存引用,同内容跨实例跨步骤零重写;读侧兼容旧内联形态并按哈希缓存;契约 ^anc-provider-spec-content-addressed（todo/0130 承接 hopissues/0115：hopkb 单批 2309 份 spec.json 1.62G 只有 3 种内容）。上版 v0.5.0（2026-09-26）公开面加 readStateSeq——只读 state.json 的写入序号与最后写入者,供 engine 写盘前核对,todo/0114）。0.x 未承诺稳定。**逐版演进史归 git log**（本行只记现行版本,升版只改号,演进论证归 commit message）。
 >
 > **vars.json format_version=2（2026-07-04）**：vars.json 从扁平变量字典（v1）升级为**完整 scope 树**（v2，结构与迁移见 [[exec-engine#^anc-exec-vars-scope-persist]]）——修复扁平序列化下兄弟 scope 同名变量跨进程互覆盖的静默数据损坏。
 >
@@ -35,9 +35,10 @@ shared-providers 的 `PersistenceProvider` 契约（见 [[shared-providers#^anc-
 | `writeChildParams` | 函数 | persistence.ts | fan-out 时落盘某 child 的 params_for_child 到其子实例目录（engine 写，for-each worker 参数通道，见 [[parallel-execution#^anc-exec-parallel-foreach-worker]]；+kind 第四参 parallel/calls——call 子实例落 calls/<cid>,0020 修:原写死 parallel 且 engine 侧 dead import 从未调用） | stable |
 | `readSpec` | 函数 | persistence.ts | 读实例目录 spec.json 重建 AST（cli 跨进程恢复面——load 之外的轻量读取口;**唯一合法读口**——spec.json 自 v0.6.0 起可能是引用形态 `{$spec_ref}`,裸 JSON.parse 拿不到 AST,mcp-server 0093 兜底读盘处随改;双形态与缓存见 ^anc-provider-spec-content-addressed） | stable |
 | `readChildParams` | 函数 | persistence.ts | worker init 按 cid 回读自己那份 params（engine 调，同上通道的读侧） | stable |
+| `findRunRoot` | 函数 | persistence.ts | 实例目录沿 parallel/calls 布局上溯到顶层实例目录（run 根）;cli 与 mcp-server 组合根据它定位 commit 批准账 `<run 根上一级>/commit_approvals.json`（[[exec-engine#^anc-exec-commit-approval]]） | stable |
 | `writeAtomic` | 函数 | persistence.ts | 原子写文件（先写 .tmp、fsync、再 rename 覆盖）。FilePersistence 内部落快照用;engine 写命令参数文件也用它（`<父实例目录>/cmd_args/`,每次拼命令都覆盖,见 [[exec-engine#^anc-exec-cmd-args-file]]——hopissues/0097） | stable |
 
-> **内部（表外即内部）**：`ensureStateDir` / `writeState` / `writeVars` / `writeSpec`（快照读写细节，仅 FilePersistence 内部调用;v0.6.0 起写侧做内容寻址去重）/ `findRunRoot`（实例目录上溯到顶层实例目录——getWorkZoneRoots 与 spec 真身定位共用）。readSpec 不在此列——它在上表公开面,cli 跨进程恢复消费;2026-09-12 0088 批清双登矛盾,原文两处同时把它记成公开与内部）。
+> **内部（表外即内部）**：`ensureStateDir` / `writeState` / `writeVars` / `writeSpec`（快照读写细节，仅 FilePersistence 内部调用;v0.6.0 起写侧做内容寻址去重）（`findRunRoot` 2026-10-07 起转公开,见上表）。readSpec 不在此列——它在上表公开面,cli 跨进程恢复消费;2026-09-12 0088 批清双登矛盾,原文两处同时把它记成公开与内部）。
 >
 > **测试可达面口径**：内部件带 export 供 tests/ 直测（writeState 被 persistence.test.ts import 属正当测试消费,不算越出内部边界——与 hop-cli 出口清单"测试可达面"同款口径,2026-09-12 补记）。
 >
@@ -77,7 +78,7 @@ contract: SpecContentAddressed
 **类型约定（HopType）**：
 
 - 引用文件 `spec.json`：`{ format_version: 1, $spec_ref: string }`——`$spec_ref` 装真身文件名去掉 `.json` 的 sha256 十六进制串（64 字符）;
-- `findRunRoot(instanceDir: string): string`——模块内部;入参实例目录绝对路径,返回顶层实例目录绝对路径（自身即顶层时返回自身）;
+- `findRunRoot(instanceDir: string): string`——公开（2026-10-07 起,原模块内部）;入参实例目录绝对路径,返回顶层实例目录绝对路径（自身即顶层时返回自身）;
 - `writeSpec(dir: string, spec: object): void`——模块内部,签名不变;`readSpec(dir: string): object`——公开,签名不变,返回值是独立的 AST 对象。
 
 **关键逻辑（HopSop）**：

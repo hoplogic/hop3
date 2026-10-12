@@ -20,6 +20,7 @@ export interface BodyExecContext {
   toolProvider: ToolProvider;
   allowCommit: boolean;              // commit=true 放行 requires_commit 工具
   workZone?: string;                 // 实例 work_zone 绝对路径——work_zone_path() 内置函数的注入源（见 ^anc-exec-work-zone）
+  specDir?: string;                  // spec 文件所在目录绝对路径——spec_dir() 内置函数的注入源;内存态无 spec 文件时缺席（^anc-exec-spec-dir）// @a: anc-exec-spec-dir
   // time 内置（now/today）的重放记值序列：本步已求值的时间值按序入列——重放撞第 n 次取 [n-1]，
   // 缺席取真实时钟并追加（调用方随既有持久化通道落盘；重试/完成清本步序列）。
   // 见 design/act-body.md ^anc-exec-time-builtins。// @a: anc-exec-time-builtins
@@ -422,6 +423,14 @@ export class BodyInterpreter {
       const rel = call.args.length > 0 ? String(await this.evalExpr(call.args[0].value, scope)) : '';
       if (rel.includes('..')) throw new Error(`TOOL_EXEC_ERROR: work_zone_path 禁 .. 穿越: ${rel}`);
       return rel ? `${this.ctx.workZone}/${rel}` : this.ctx.workZone;
+    }
+    // spec_dir(rel?)：spec 文件所在目录下的路径（无参=目录本身）——spec 自带脚本与数据随 spec 走,body 用它寻址;
+    // 只算路径不开权限（读写仍走文件工具权限链,跑脚本仍须已批准命令）。design/act-body.md ^anc-exec-spec-dir // @a: anc-exec-spec-dir
+    if (call.callee === 'spec_dir') {
+      if (!this.ctx.specDir) throw new Error('TOOL_EXEC_ERROR: spec_dir 不可用——本执行环境没有 spec 文件（内存态 spec 无所在目录）');
+      const rel = call.args.length > 0 ? String(await this.evalExpr(call.args[0].value, scope)) : '';
+      if (rel.includes('..')) throw new Error(`TOOL_EXEC_ERROR: spec_dir 禁 .. 穿越: ${rel}`);
+      return rel ? `${this.ctx.specDir}/${rel}` : this.ctx.specDir;
     }
     // subprocess.run 命令行白名单调用（^anc-exec-subprocess-run,2026-08-29 作者定 todo/0033）：
     // argv[0] ∈ 白名单(sandbox.runtime.available,缺席=关死);参数列表直接 spawnSync 不经 shell;

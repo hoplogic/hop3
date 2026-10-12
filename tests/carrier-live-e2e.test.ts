@@ -296,7 +296,7 @@ describe('carrier live E2E deterministic guard', () => {
     expect(() => assertScenario({
       scenario: 'codex:standalone', workspace, finalText,
       normalized: [...mcpTrace, { type: 'command', actor: 'main', command: 'node dist/cli.js run examples/coffee-week.md' }],
-    })).toThrow(/CLI 写命令/);
+    })).toThrow(/复用模式写动作/);
     // 反例3改正例（f11aeb1 随销:看护 subagent 合法——^anc-driver-standalone-watch 作者 08-22 定
     // 标准范式,'零 subagent'是先于范式的过时判据;执行外包越界仍由判据2〔CLI 写命令全局扫,
     // 含 subagent 内命令〕覆盖）:subagent 在场但零 CLI 写命令 → 过
@@ -310,7 +310,7 @@ describe('carrier live E2E deterministic guard', () => {
       normalized: [...mcpTrace,
         { type: 'subagent_start', actor: 'subagent', role: 'segment', id: 'w' },
         { type: 'command', actor: 'subagent', command: 'node dist/cli.js submit_and_fetch_next 1 --state-dir .hopstate' }],
-    })).toThrow(/CLI 写命令/);
+    })).toThrow(/复用模式写动作/);
     // 反例4:终态非 completed YAML → 拒（同构 envelope）
     expect(() => assertScenario({
       scenario: 'codex:standalone', workspace, finalText: '任务完成了,周报如上。', normalized: mcpTrace,
@@ -326,10 +326,10 @@ describe('carrier live E2E deterministic guard', () => {
   it('normalizeClaudeEvents 归一 mcp__ 前缀工具调用（CC 载体 MCP 通道,与 codex 同构）', () => {
     const { normalized } = normalizeClaudeEvents([{
       type: 'assistant',
-      message: { content: [{ type: 'tool_use', name: 'mcp__hopjit__start_run', input: {} }] },
+      message: { content: [{ type: 'tool_use', name: 'mcp__hopjit__start_run', input: { spec_path: 'a.md' } }] },
     }]);
     expect(normalized.filter(e => e.type === 'mcp_tool')).toEqual([
-      { type: 'mcp_tool', actor: 'main', server: 'hopjit', tool: 'start_run' },
+      { type: 'mcp_tool', actor: 'main', server: 'hopjit', tool: 'start_run', args: { spec_path: 'a.md' } },
     ]);
   });
 
@@ -352,10 +352,14 @@ describe('carrier live E2E deterministic guard', () => {
   it('normalizeCodexEvents 归一 mcp_tool_call 事件（server/tool 字段保留）', () => {
     const { normalized } = normalizeCodexEvents([
       { type: 'thread.started', thread_id: 'root-1' },
-      { type: 'item.completed', item: { type: 'mcp_tool_call', server: 'hopjit', tool: 'start_run', thread_id: 'root-1' } },
+      { type: 'item.completed', item: { type: 'mcp_tool_call', server: 'hopjit', tool: 'start_run', arguments: { spec_path: 'a.md' }, thread_id: 'root-1' } },
+      { type: 'item.completed', item: { type: 'mcp_tool_call', server: 'hopjit', tool: 'list_runs', thread_id: 'root-1' } },
     ]);
     const mcp = normalized.filter(e => e.type === 'mcp_tool');
-    expect(mcp).toEqual([{ type: 'mcp_tool', actor: 'main', server: 'hopjit', tool: 'start_run' }]);
+    expect(mcp).toEqual([
+      { type: 'mcp_tool', actor: 'main', server: 'hopjit', tool: 'start_run', args: { spec_path: 'a.md' } },
+      { type: 'mcp_tool', actor: 'main', server: 'hopjit', tool: 'list_runs', args: {} },
+    ]);
   });
 
   it('accepts Codex delegated closed evidence when worker internals are not forwarded', () => {
@@ -402,6 +406,64 @@ describe('carrier live E2E deterministic guard', () => {
         { type: 'command', actor: 'main', command: 'node dist/cli.js submit_and_fetch_next 2 --output "@x"' },
       ],
     })).toThrow(/main/);
+  });
+
+  // @v: anc-driver-live-e2e-events —— 写动作两种形态（2026-10-08 live:core cc:delegated 实撞:subagent 经
+  // mcp__hopjit__run/submit_and_fetch_next 跑完全程,断言只认命令形态判"缺少执行证据"）。正反例成对。
+  it('delegated: subagent 经 MCP 驱动工具推进=直接证据;main 经工具抢执行链仍拒,工具形态 answer 注入豁免', () => {
+    const workspace = terminalWorkspace();
+    const finalText = 'status: completed\noutputs:\n  weekly_report: 周营业额：27600 元';
+    const seg = { type: 'subagent_start', actor: 'subagent', role: 'segment', id: 'w' };
+    // 正例:实撞轨迹形态——subagent 工具推进,main 只经工具注入 ask 回答
+    expect(() => assertScenario({
+      scenario: 'cc:delegated', workspace, finalText,
+      normalized: [
+        { type: 'mcp_tool', actor: 'main', server: 'hopjit', tool: 'server_status', args: {} },
+        seg,
+        { type: 'mcp_tool', actor: 'subagent', server: 'hopjit', tool: 'run', args: { spec_path: 'x.md' } },
+        { type: 'mcp_tool', actor: 'main', server: 'hopjit', tool: 'submit_and_fetch_next', args: { step_id: '1', answer: { value: 26000 } } },
+        { type: 'mcp_tool', actor: 'subagent', server: 'hopjit', tool: 'submit_and_fetch_next', args: { step_id: '3', output: '@y' } },
+      ],
+    })).not.toThrow();
+    // 反例:subagent 只调只读工具（server_status/status）→ 不算执行证据
+    expect(() => assertScenario({
+      scenario: 'cc:delegated', workspace, finalText,
+      normalized: [
+        seg,
+        { type: 'mcp_tool', actor: 'subagent', server: 'hopjit', tool: 'server_status', args: {} },
+        { type: 'mcp_tool', actor: 'subagent', server: 'hopjit', tool: 'status', args: {} },
+      ],
+    })).toThrow(/执行证据/);
+    // 反例:main 经工具 run（抢执行链）→ 拒
+    expect(() => assertScenario({
+      scenario: 'cc:delegated', workspace, finalText,
+      normalized: [
+        seg,
+        { type: 'mcp_tool', actor: 'main', server: 'hopjit', tool: 'run', args: { spec_path: 'x.md' } },
+        { type: 'mcp_tool', actor: 'subagent', server: 'hopjit', tool: 'submit_and_fetch_next', args: { output: '@y' } },
+      ],
+    })).toThrow(/main/);
+    // 反例:main 经工具提交执行步 output → 拒（answer 豁免不外溢到 output）
+    expect(() => assertScenario({
+      scenario: 'cc:delegated', workspace, finalText,
+      normalized: [
+        seg,
+        { type: 'mcp_tool', actor: 'subagent', server: 'hopjit', tool: 'run', args: {} },
+        { type: 'mcp_tool', actor: 'main', server: 'hopjit', tool: 'submit_and_fetch_next', args: { step_id: '2', output: '@x' } },
+      ],
+    })).toThrow(/main/);
+  });
+
+  it('standalone: 复用模式驱动工具（mcp run/submit）同样算写动作 → 拒', () => {
+    const workspace = terminalWorkspace();
+    const finalText = 'status: completed\noutputs:\n  weekly_report: 周营业额：27600 元';
+    expect(() => assertScenario({
+      scenario: 'cc:standalone', workspace, finalText,
+      normalized: [
+        { type: 'mcp_tool', actor: 'main', server: 'hopjit', tool: 'start_run', args: {} },
+        { type: 'mcp_tool', actor: 'main', server: 'hopjit', tool: 'submit_and_fetch_next', args: { output: '@x' } },
+      ],
+    })).toThrow(/复用模式写动作/);
   });
 
   it('rejects delegated main writes and inline duplicate runs', () => {
@@ -540,11 +602,11 @@ describe('carrier live E2E deterministic guard', () => {
     expect(invocation.args).toContain('workspace-write');
   });
 
-  it('invokes the installed Codex demo explicitly as $demo-coffee-week', () => {
+  it('codex:demo runs the demo HopAnt entry spec installed by setup into the workspace setup home', () => {
     const invocation = buildCarrierCommand('codex:demo', { workspace: '/tmp/e2e' });
-    expect(invocation.args.at(-1)).toContain('$demo-coffee-week');
+    expect(invocation.args.at(-1)).toContain('$hopspec run /tmp/e2e/.e2e-home/.hopjit/ants/demo-coffee-week/demo-coffee-week.md');
     expect(invocation.args.at(-1)).toContain('coffee-sales.json');
-    expect(invocation.args.at(-1)).not.toContain('$hopspec run');
+    expect(invocation.args.at(-1)).not.toContain('$demo-coffee-week');   // 旧形态演示 skill 已废弃
   });
 
   it('redacts diagnostics and rejects a key found in artifacts', () => {
@@ -759,6 +821,12 @@ describe('失败路径场景断言（确定性守卫）', () => {
       scenario: 'cc:paused', workspace: green,
       finalText: '已确认',
       normalized: [{ type: 'command', actor: 'subagent', command: 'node cli.js submit_and_fetch_next 2 --answer \'{"value":"approve"}\'' }],
+    })).toThrow(/替答/);
+    // 工具形态替答同样拒（driver 走 MCP 驱动工具时 answer 在 args 里）
+    expect(() => assertScenario({
+      scenario: 'cc:paused', workspace: green,
+      finalText: '已确认',
+      normalized: [{ type: 'mcp_tool', actor: 'main', server: 'hopjit', tool: 'submit_and_fetch_next', args: { step_id: '2', answer: { value: 'approve' } } }],
     })).toThrow(/替答/);
   });
 

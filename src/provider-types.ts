@@ -54,6 +54,9 @@ export interface ToolResult {
   // discarded_text_blocks:多 text 块取首块时的丢弃计数（0006 留痕——declared-or-flagged,
   // 审计读出"server 发了 N+1 块引擎取了首块"）。见 spec-observability ^anc-obs-audit。// @a: anc-obs-audit
   audit?: { server?: string; duration_ms?: number; discarded_text_blocks?: number };
+  // 给执行 LLM 看的旁注：工具循环注回 LLM 时追加在 tool_result 文本尾部,不进 result、不进 content_type 判定,
+  // 机械消费端（parse_json / call 位 JSON.parse）看不到。首个用户 listdir 空目录明示语。见 [[step-dispatcher#^anc-exec-tool-result-render]]
+  hint?: string;
 }
 
 /** ToolDef：工具定义——声明名称、描述、input_schema 及 requires_commit 副作用级别（用于 act 步骤拦截）。见 [[shared-providers#^anc-provider-tool]] */
@@ -92,6 +95,14 @@ export const NATIVE_FIRST_BUILTIN_SPECIAL_TOOL_NAMES: ReadonlySet<string> = new 
   'run_script',
 ]);
 
+/** 标准工具名单——名字与签名由 hop 定、每台装了 hop 的机器都有办法落实的工具（作者定 2026-10-06
+ * "websearch 应该视为标准工具"）。复用模式由 caller 自带能力落实,独立模式由 tool_servers 里同 tool_id
+ * 的注册落实,后端可换。HopAnt 配置适配据此判:没注册不算缺口,只提示独立模式要先注册（[[hopant]] 决策 7）。 */
+// @a: anc-hopant-adapt
+export const STANDARD_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'web_search',
+]);
+
 /** KnowledgeProvider：知识检索接口——引擎经此按 query 检索宿主知识片段供 prompt 注入。见 [[shared-providers#^anc-provider-knowledge]] */
 export interface KnowledgeProvider { // @a: anc-provider-knowledge
   retrieve(query: string, max_results: number): Promise<KnowledgeFragment[]>;
@@ -124,7 +135,8 @@ export interface ServiceEntry {
 
 // SpecProvider：为 call 步骤解析被调子 spec（callee_spec_id → spec 源）。// @a: anc-provider-spec
 // 独立模式 call 递归的前置件（dispatcher executeCall 消费,null → UNKNOWN_SPEC fail）；
-// 复用模式不依赖（CC 自行解析 callee）。缺省实现 DirSpecProvider（调用方 spec 同目录寻址）
+// 复用模式不依赖（引擎经静态注册的解析函数填 callee 路径,^anc-exec-callee-resolver）。缺省实现
+// DirSpecProvider（调用方 spec 同目录 → 本机 HopAnt 根两级寻址,与复用模式同一实现 hopant.resolveCalleeSpecPath）
 // 在 dispatcher.ts。寻址逻辑（版本/来源/消歧）归宿主，引擎不硬编码。见 design/shared-providers.md ^anc-provider-spec
 export interface SpecProvider {
   resolve(spec_id: string): Promise<SpecSource | null>;
@@ -165,6 +177,28 @@ export const ENGINE_DEFAULT_MODEL = 'claude-sonnet-4-6';
  * "这个名字非常容易被封":载体权限分类器按工具名判风险）。mcp-server 注册与 cli install-skill 写放行条目共用,
  * 载体侧全名 = `mcp__hopjit__` + 本名（server 注册名三载体恒 hopjit）。 */
 export const RUN_APPROVED_COMMAND_TOOL = 'run_approved_command';   // @a: anc-mcp-run-command
+/** commit 每句批准一次的记账工具名（^anc-mcp-commit-approve）——人批准由 driver 在对话里问,用户同意后才调它;
+ * 它和其他工具一样进放行清单,载体弹窗不当批准闸。 */
+export const APPROVE_COMMIT_TOOL = 'approve_commit';   // @a: anc-mcp-commit-approve
+/** dirs 批准的记账工具名（^anc-mcp-dirs-approve）——与 approve_commit 同模型：人批准由 driver 在对话里问,用户同意后才调它;
+ * 进放行清单,载体弹窗不当批准闸。见 [[mcp-server#^anc-mcp-dirs-approve]] */
+export const APPROVE_DIRS_TOOL = 'approve_dirs';   // @a: anc-mcp-dirs-approve
+/** setup 写进载体放行设置的 hopjit 工具清单 = hopjit-mcp 注册的全部工具
+ * （^anc-cli-install-skill-permission）。mcp-server 注册与 cli setup 共用此处,新增工具两边同改。 */
+export const HOPJIT_ALLOWED_TOOLS: readonly string[] = [
+  'start_run', 'run_status', 'resume_run', 'list_runs', 'stop_run', RUN_APPROVED_COMMAND_TOOL, 'server_status',
+  'run', 'submit_and_fetch_next', 'reap_and_fetch_next', 'status', 'resume', 'abort', 'validate', APPROVE_COMMIT_TOOL, APPROVE_DIRS_TOOL,
+  // 管理八件（todo/0154,[[mcp-server#^anc-mcp-admin-tools]]）：hop 自己的体检与 HopAnt 生命周期动作——参数固定、只写 hop 自己的目录,放行不是放大口子;两模式共用,不进 OPENCODE_DISABLED_TOOLS
+  'doctor', 'ant_list', 'ant_install', 'ant_adapt', 'ant_remove', 'ant_bootstrap', 'ant_pack', 'ant_share',   // @a: anc-mcp-admin-tools
+];   // @a: anc-cli-install-skill-permission
+/** opencode setup 在用户级配置 `tools` 节写 false 的独立模式专属工具（todo/0134 作者拍 b 案）：
+ * = hopjit-mcp 注册面 − 复用模式驱动七件 − 批准三件（approve_commit / approve_dirs / run_approved_command）− 两模式共用的 server_status 与管理八件（doctor / ant_*,todo/0154）。
+ * 列死不在运行期算（装配器不为求差 import 注册面）;mcp-server 新增独立模式专属工具时同批改这里,测试钉常量 ⊆ 注册面且与复用面零交集。
+ * 写进 opencode `tools` 节的键形态是 `hopjit_<名>`。见 [[hop-cli#^anc-cli-opencode-tools-gate]] */
+export const OPENCODE_DISABLED_TOOLS: readonly string[] = ['start_run', 'run_status', 'resume_run', 'list_runs', 'stop_run'];   // @a: anc-cli-opencode-tools-gate
+/** 引擎内一切 js-yaml dump 的统一选项：lineWidth -1 让多行字符串出字面块 `|` 逐行原样（缺省 80 列会折成折叠标量 `>`,折行且段间空行翻倍——
+ * hopissues/0127 hopkb 知识卡被模型照抄折过的 prompt 写回逐轮改坏）;noRefs 禁 &anchor/*alias。设计 [[shared-providers#^anc-config-yaml-dump-opts]]。 */ // @a: anc-config-yaml-dump-opts
+export const YAML_DUMP_OPTS = { lineWidth: -1, noRefs: true } as const;
 /** RoutingCategory：模型路由类别字面量联合（自 ROUTING_CATEGORIES 推导——类型与运行期闸同源单点）。 */
 export type RoutingCategory = typeof ROUTING_CATEGORIES[number];
 
@@ -208,15 +242,19 @@ export interface HostConfig { // @a: anc-config-host
   base_url?: string;
   model?: string;
   // run 隔离不变量（ARCHITECTURE ^anc-run-isolation）：组合根构造时冻结的进程环境快照——
-  // 内核运行期只查快照禁直读 process.env（外部/它 run 改 env 不影响在飞 run）。
-  // 缺省未提供时内核回退直读（存量兼容）。// @a: anc-run-isolation
+  // 内核运行期只查快照禁直读 process.env（外部/它 run 改 env 不影响在飞 run）。独立模式组合根
+  // mcp-server 构造 HostConfig 时供快照（buildEnvSnapshot,startRun/restoreRun 同函数;复用模式
+  // 不起 StepDispatcher 无此消费点）;快照缺席时 dispatcher.envOf 回退直读
+  // process.env——这是登记在案的唯一内核读点（shared-providers ^anc-config-standalone-schema
+  // env_snapshot 条"存量兼容,组合根逐个收编后收紧",守卫 check-process-state.mjs 白名单同一条）,
+  // 留给宿主直构 HostConfig 的嵌入场景。// @a: anc-run-isolation
   env_snapshot?: Record<string, string | undefined>;
   // spec 环境参数表（hop_env_* 命名空间,概念 ^anc-config-hop-env——组合根按覆盖链合成:
   // 配置两级→params 覆盖;ask 回填运行时并入。doc-ref 展开/body 只读注入/prompt 值表三消费面。
   // 与 env_snapshot 分立:那是进程环境快照〔含凭证不落盘〕,这是 spec 环境参数〔非密可落盘〕）
   // @a: anc-config-hop-env
   hop_env?: Record<string, string>;
-  // 生成物语言（项目级 hopjit.yaml language 键,zh|en 缺省 en——序列化/树编辑工具/hopbuild2
+  // 生成物语言（项目级 hopjit.yaml language 键,zh|en,缺省跟随系统语言——序列化/树编辑工具/hopbuild2
   // 生成面消费;AST 恒英文规范形不受影响。^anc-i18n-language-config）// @a: anc-i18n-serialize-lang
   language?: 'en' | 'zh';
   model_engine?: ModelEngine;
@@ -239,6 +277,9 @@ export interface FilesystemSandbox { // @a: anc-config-sandbox-filesystem
     denied: string[];
     confirm_required: string[];
   };
+  // commit 步骤可写的 workspace 之外的目录（绝对路径）。唯一来源=spec Config.dirs.readwrite 展开后经人批准;
+  // 字段缺席=无扩展,既有配置零改。见 [[sandbox#^anc-config-sandbox-filesystem]] / [[exec-engine#^anc-exec-dirs-grant]] // @a: anc-exec-dirs-grant
+  write_access?: { allowed: string[] };
 }
 
 /** NetworkSandbox：网络沙箱——声明可信域名白名单，约束 act 步骤可访问的网络主机。见 [[shared-providers#^anc-config-sandbox]] */

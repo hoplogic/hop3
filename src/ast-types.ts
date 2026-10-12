@@ -92,17 +92,25 @@ export interface SpecConfig {
  * [[spec-ast]] ^anc-ast-config-keys-doc-sync）。新增引擎消费键三件同批：入本清单、
  * 概念层语法参考 Config 区记载、消费点用 config?.['键'] 索引形态（守卫的代码扫描面）。
  * 声明在场但零消费的键（max_depth/max_retries）不入列。 */ // @a: anc-ast-config-keys-doc-sync
-export const ENGINE_CONFIG_KEYS = ['model', 'models', 'expansion_max', 'engine_min_version', 'requires_commands'] as const;
+export const ENGINE_CONFIG_KEYS = ['model', 'models', 'expansion_max', 'engine_min_version', 'requires_commands', 'dirs'] as const;   // dirs=任务级目录声明（^anc-exec-dirs-grant,todo/0148）
+/** Config.dirs 条目 `{名字}` 引用的标识符判据——与 parser 变量名字符集同源（含中文,HopSpec 中文标识符是一等公民）;
+ * validator V16 与 engine resolveDeclaredDirs 同用一份,住 ast-types 层避免 validator→engine 回边。// @a: anc-exec-dirs-grant */
+export const DIRS_VAR_REF_RE = /^\{([A-Za-z_\u4e00-\u9fff][A-Za-z0-9_\u4e00-\u9fff]*)\}$/;
 
 /** subtask free 展开总数熔断缺省（Config expansion_max 可调——缺省 20:作者定 2026-08-29
  * "实例级 10 可能少了",渐进细化多洞多轮要给跑道）。与类型同居本文件:engine 消费、validator
  * 报文引用,两侧同源防字面脱钩（review 抓 validator 写死"20"）。 */ // @a: anc-exec-subtask-free-expand
 export const DEFAULT_EXPANSION_MAX = 20;
 
+/** 文件写类四件（write / edit_file / move / remove）keep 实参的缺省值:每个文件在回收站里保留最近 3 份旧版本。
+ * tools 执行留存与 engine commit 动作清单提取共用——engine 不引用 tools,两侧都已引用本层（同 DEFAULT_EXPANSION_MAX 先例）。
+ * 契约 [[tools/file-tools#^anc-exec-file-keep-recycle]]、[[exec-engine#^anc-exec-commit-action-facts]]。 */ // @a: anc-exec-file-keep-recycle, anc-exec-commit-action-facts
+export const DEFAULT_KEEP = 3;
+
 // --- Step types ---
 
 export type ExecutableStepType = 'reason' | 'act' | 'check' | 'confirm' | 'ask' | 'commit' | 'call'; // @a: anc-ast-step-type
-/** StructuralStepType：7 种结构/控制流步骤类型字面量（parallel 已降为属性）——由 ExecutionEngine 内部展开，不直接交 LLM。见 [[spec-ast#^anc-ast-step-type]] */
+/** StructuralStepType：8 种结构/控制流步骤类型字面量（parallel 已降为属性,on_fail 2026-08-21 入）——由 ExecutionEngine 内部展开，不直接交 LLM。见 [[spec-ast#^anc-ast-step-type]] */
 export type StructuralStepType = 'subtask' | 'loop' | 'branch' | 'case' | 'break' | 'continue' | 'exit' | 'on_fail';   // 'parallel' 类型 2026-08-07 退役（降为属性）;on_fail=失败兜底块（2026-08-21 作者立,^anc-step-on-fail）
 /** StepType：全部 15 种步骤类型联合（可执行 ∪ 结构），BaseStep.step_type 的判别基座。见 [[spec-ast#^anc-ast-step-type]] */
 export type StepType = ExecutableStepType | StructuralStepType;
@@ -208,6 +216,11 @@ export interface CheckStep extends BaseStep { // @a: anc-step-check
   // 可把"本层够不着的缺口"上交,接收端由拓扑定;声明时说明槽须 yaml〔结构化缺口〕）。
   // @a: anc-exec-check-escalate
   escalatable?: boolean;
+  // 节点工具授权 / 禁用（2026-10-11 todo/0161,作者定"check 工具可能要读文件,留个口子"）：无 body 的 check
+  // 与 reason 同一套声明制——`- 工具:` 声明什么下发什么,零声明零工具;与 ActStep / ReasonStep 同形态。
+  // 带 body 的 check 不消费这两个字段（解释器机械判定）。// @a: anc-exec-reason-tools, anc-step-tool-deny
+  tool_grants?: { name: string; note?: string }[];
+  tool_denies?: { name: string; note?: string }[];
 }
 
 /** ConfirmStep：confirm 步骤 AST 节点——纯审批闸门（+→ 仅 bool），可配 require_human 与 response_options。见 [[spec-ast#^anc-step-confirm]] */
@@ -373,6 +386,7 @@ export interface IfStmt {
   condition: ActExpr;
   then_body: ActStatement[];
   else_body?: ActStatement[];   // elif 在 parser 层展开为 else_body:[IfStmt] 嵌套
+  else_line?: number;           // else 行（elif 展开时为 elif 行）的 spec 文件行号 // @a: anc-rule-act-body-line
   line?: number;
 }
 

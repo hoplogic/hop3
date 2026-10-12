@@ -314,12 +314,13 @@ export function propagateCompletion(stepId: string, state: TraversalState, spec:
   if (!allTerminal) return;
 
   if (parent.step_type === 'loop') {
-    // parallel 形态 loop（for-each+parallel）不走迭代推进——fan-out/join 归 engine.joinParallel；
-    // worker 子实例（subtreeRoot=单 child）内 propagate 到父 loop 时若误入下方条件循环分支，
-    // 会 resetChildrenToPending 无限重跑同一 batch（2026-08-08 真机审计实撞：worker 内
-    // loop_counters 5.2:3、同批审 3 遍后 'No executable step found' failed——parallel 降属性
-    // 重构回归：旧 [parallel] 类型天然不匹配 step_type==='loop'，降属性后落进迭代逻辑）。
-    // @a: anc-exec-parallel-foreach-worker
+    // 史料：parallel 形态 loop（for-each+parallel）不走迭代推进——派发/收割归统一派发模型
+    // （engine.reapInflight 与收齐门,旧 joinParallel 通道已删）；worker 子实例（subtreeRoot=单 child）
+    // 内 propagate 到父 loop 时若误入下方条件循环分支，会 resetChildrenToPending 无限重跑同一 batch
+    // （2026-08-08 真机审计实撞：worker 内 loop_counters 5.2:3、同批审 3 遍后 'No executable step
+    // found' failed——parallel 降属性重构回归：旧 [parallel] 类型天然不匹配 step_type==='loop'，
+    // 降属性后落进迭代逻辑）。for-each worker 派发的锚落点在 engine.ts initExecution 的 params 回填
+    // 与 executeSubtreeOnly,此处不挂。
     const loop = parent as LoopStep;
     const fe = getForEach(loop);
     const allChildrenDoneOrSkipped = children.every(c => {
@@ -384,6 +385,22 @@ export function propagateCompletion(stepId: string, state: TraversalState, spec:
     }
   }
 
+  // 容器收口的失败判据（hopissues/0121,2026-10-07）：直接子步里有 failed、且这次失败没有被本容器的
+  // on fail 块消化 → 容器 failed,与 branch 同款。此前 subtask/case/loop 全终态即无条件 done——子步 failed、
+  // 容器 done、整场 failed 三者同框（概念 ^anc-exec-none-propagation：fail 没有"失败了还继续"的第三态）。
+  // retry 接住的失败在此之前已被 resetSubtaskForRetry 复位,级联看不到 failed;on fail 走完到此按消化判 done;
+  // parallel 子实例失败走收割路径不经本级联。失败容器不提升声明输出、不喂退化串行 collect（本判据位于两者之前;loop 的部分收集列表已在上方 loop 分支写回）。
+  // @a: anc-exec-container-fail-close
+  const childFailed = children.some(c => state.stepStates.get(c.step_id) === 'failed');
+  const onFailChild = getChildren(parent).find(c => c.step_type === 'on_fail');
+  const absorbedByOnFail = !!onFailChild && !!state.onFailConsumed?.has(onFailChild.step_id);
+  if (childFailed && !absorbedByOnFail) {
+    if (state.hasInflightFor?.(parentId)) return;   // 收齐门同样先于失败收口（被杀的活不计在飞,killed 不阻塞）
+    state.stepStates.set(parentId, 'failed');
+    state.newlyDone?.push({ node: parent, failed: true });
+    propagateCompletion(parentId, state, spec);
+    return;
+  }
   // 退化窗口（unifiedDispatch 关/配1）下的 parallel subtask 串行完成：声明输出喂 loop collect 的
   // __reaped_ 缓冲——与派发收割（engine.reapParallelSubtask）同一通道。否则 getAsyncUnitVars
   // 判该 unitVar 为异步而轮末传送带跳过、又无 reap 来喂 → collect 恒空（BUG-B

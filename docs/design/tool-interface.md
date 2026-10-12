@@ -64,7 +64,7 @@
 ## ToolSpec（第一层类型面）【契约】 ^anc-type-tool-spec
 
 ```
-struct: ToolSpec
+HopType: ToolSpec
   Id: tool-spec
   Fields:
     - name % line             # wire 上的工具名，全局唯一（字符串等值判；同名冲突=配置错误 fail-fast）。允许任意 Unicode
@@ -132,7 +132,7 @@ output_schema:          # HopSchema：字段名 → HopSpec 类型名
 外部工具的环境配置级注册。**宿主文件=统一配置的 `tool_servers:` 节**（作者定 2026-08-13——原独立 hoptools.yaml 文件形态退役）。**对外文法权威已迁 [[../reference/配置参考#^anc-ref-tool-servers]]**（对外契约的权威属对外文档）;本节管实现行为契约（加载 fail-fast/装配/双端校验语义）：
 
 - 系统级 `~/.hopjit/config.yaml` 与项目级 `<项目根>/hopjit.yaml` 均可声明,两级并集、工具名跨级判重 fail-fast（合并语义权威 [[shared-providers#^anc-config-standalone-schema]]）。工具面通常放项目级（跟项目走可进仓库;in-process `module:` 相对**所在配置文件**目录解析）;
-- 复用模式外部工具经 caller 自身工具面已可达（tool-channels ③）;引擎侧注册件已入直执面（0076 批实装——注册件经 loadProjectToolRegistry 进 CompositeToolProvider,body 内直执;原"CLI 入口待真需求再加"句 0084 批三销账）。
+- 复用模式外部工具经 caller 自身工具面已可达（tool-channels ③）;引擎侧注册件已入直执面（0076 批实装——注册件经 config-load 的 loadToolRegistry〔两级,2026-10-08 todo/0131 起;原项目级单读 loadProjectToolRegistry〕进 CompositeToolProvider,body 内直执;原"CLI 入口待真需求再加"句 0084 批三销账）。
 
 三种绑定形态各一例（云端 mcp / 本地 mcp / in-process 扩展模块——`tool_servers:` 节,写在系统级或项目级配置皆可）：
 
@@ -208,7 +208,7 @@ tool_servers:
   - 类型约定（HopType——server 条目解析产物,代码 `ToolServerEntry`）：
 
     ```
-    struct: ToolServerEntry
+    HopType: ToolServerEntry
       Id: tool-server-entry
       Fields:
         - name % line                  # server 逻辑名（HopLog 记账用;两级配置同名整体替换的键）
@@ -264,7 +264,7 @@ Constraints:
 ## 绑定机制（第二层）【契约】 ^anc-type-tool-binding
 
 ```
-struct: ToolBinding
+HopType: ToolBinding
   Id: tool-binding
   Fields:
     - kind % line   # 枚举 in-process/mcp（exec 挂起备用；未来形态 MINOR 加枚举）
@@ -296,7 +296,7 @@ Constraints:
 ```
 
 ```
-struct: McpBindingMember
+HopType: McpBindingMember
   Id: mcp-binding-member
   Fields:
     - entry % ToolServerEntry   # 注册条目（binding+tools 白名单）
@@ -371,7 +371,7 @@ run 终态收（引擎/mcp-server 生命周期钩子——**含 failed-via-throw
 **InProcessBinding 实装**： ^anc-exec-inprocess-binding
 
 ```
-struct: InProcessBindingMember
+HopType: InProcessBindingMember
   Id: inprocess-binding-member
   Fields:
     - entry % ToolServerEntry   # 注册条目（binding.module 模块路径 + tools 白名单——声明面与 mcp 完全同构）
@@ -499,7 +499,7 @@ Constraints:
 - close 传导: run 终态逐成员收,失败不拦终态;并连带关掉尚未关闭的派生视图（兜底）
 - 派生不扩权不改名: 派生视图的工具清单、路由、声明面与父视图逐项相同,差别只在"哪个成员实例在干活"
 
-struct: CompositeToolProvider
+HopType: CompositeToolProvider
   Id: tool-composite
   Fields:
     - members % [yaml]  # 成员清单：file 内置组（恒在）+ tool_servers 各 server + 宿主注入 ToolProvider（并入成员，不再整体替换）。每个成员记着自己是否来自 per_parallel_child 打开的注册条目（派生时据此判断换不换实例）

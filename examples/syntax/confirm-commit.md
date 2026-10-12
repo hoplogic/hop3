@@ -3,10 +3,13 @@ Id: confirm-commit
 Goal: 扫描目录下的文件，生成重命名方案，人工确认后执行不可逆重命名
 
 ## Inputs
-- target_dir % text  # 目标目录路径（须落在 workspace 内，相对写法或 workspace 内的绝对写法均可——步骤 5 备份读与步骤 6.1 重命名写均以 workspace 沙箱为界，workspace 外的路径会被拒）
+- target_dir % text  # 目标目录的绝对路径（须落在 workspace 内——步骤 5 备份读与步骤 6.1 重命名写均以 workspace 沙箱为界，workspace 外的路径会被拒；步骤 5 的备份命令在 work_zone 下执行，相对路径会按 work_zone 解析而找不到目录）
 
 ## Outputs
 - rename_report % text  # 重命名执行报告
+
+## 已批准命令
+- uv run python3 -c
 
 ## Steps
 1. [act] 扫描目标目录文件列表

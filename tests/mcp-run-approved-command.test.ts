@@ -110,11 +110,19 @@ describe('run_approved_command 按任务卡授权', () => {
     expect(r2.error.message).not.toContain('加一行');
   });
 
-  it('反例：cwd 指向 workspace 之外 → CWD_OUTSIDE_WORKSPACE;workspace 内相对路径放行', () => {
+  it('正例（todo/0152 撤闸）：cwd 指向 workspace 之外的临时目录 → 照跑,stdout 是该目录,账里 cwd 字段等于它;workspace 内相对路径仍按 workspace 解析', () => {
+    // 2026-10-09 前本例是反例"cwd 越界即拒"（todo/0152 撤的那道闸）。撤闸依据：授权本体是 argv 前缀匹配,cwd 不是授权要素;
+    // worktree / $TMPDIR 是正当工作面,原闸逼 agent 绕走载体 Bash 丢授权账。变异：把 isWithinDir 越界判加回 → 本例红
     const fx = track(makeRun([['pwd']]));
     const outside = mkdtempSync(join(tmpdir(), 'outside-'));
     try {
-      expect(call(fx, ['pwd'], { cwd: outside }).error.code).toBe('CWD_OUTSIDE_WORKSPACE');
+      const far = call(fx, ['pwd'], { cwd: outside });
+      expect(far.error).toBeUndefined();
+      expect(far.returncode).toBe(0);
+      expect(realpathSync(far.stdout.trim())).toBe(realpathSync(outside));
+      const text = readFileSync(join(fx.hoplogDir!, 'main.yaml'), 'utf-8');
+      const doc = yamlLoad(text.slice(text.indexOf('command:'))) as Record<string, any>;
+      expect(doc.command.cwd).toBe(outside);   // 账如实记实际执行目录,不是 workspace
       mkdirSync(join(fx.ws, 'sub'));
       const ok = call(fx, ['pwd'], { cwd: 'sub' });
       expect(ok.error).toBeUndefined();
@@ -182,7 +190,7 @@ describe('run_approved_command 按任务卡授权', () => {
   });
   // ---- 0132 工程链 review 面三补钉（变异 a/i/j/l/m 全绿的点位 + 面二 G2/G9 新分支）----
 
-  it('timeout：缺省 300 / 上限钳 3600 / 下限钳 1——传给原语的 timeoutSec 恰为这三值（变异 a/i 重放:去钳位或改缺省即红）', () => {
+  it('timeout：缺省 300 / 上限钳 1500 / 下限钳 1——传给原语的 timeoutSec 恰为这三值;上限恒低于 Claude Code 的 1800 秒 MCP 静默上限（hopissues/0128;变异:常量改回 3600 即红）', () => {
     const fx = track(makeRun([['echo']]));
     const seen: number[] = [];
     const spy = vi.spyOn(commandExec, 'runWhitelistedCommand').mockImplementation((_argv, opts) => { seen.push(opts.timeoutSec); return { stdout: '', stderr: '', returncode: 0 }; });
@@ -191,10 +199,16 @@ describe('run_approved_command 按任务卡授权', () => {
       call(fx, ['echo', 'b'], { timeout_sec: 999999 });
       call(fx, ['echo', 'c'], { timeout_sec: 0 });
       call(fx, ['echo', 'd'], { timeout_sec: 2.9 });
+      // 超限传入（旧上限 3600）截断到新上限照跑,不拒收——已写 timeout_sec: 3600 的任务卡不因此报错
+      const over = call(fx, ['echo', 'e'], { timeout_sec: 3600 });
+      expect((over as { error?: unknown }).error).toBeUndefined();
     } finally { spy.mockRestore(); }
-    expect(seen).toEqual([RUN_COMMAND_TIMEOUT_DEFAULT_SEC, RUN_COMMAND_TIMEOUT_MAX_SEC, 1, 2]);
+    expect(seen).toEqual([RUN_COMMAND_TIMEOUT_DEFAULT_SEC, RUN_COMMAND_TIMEOUT_MAX_SEC, 1, 2, RUN_COMMAND_TIMEOUT_MAX_SEC]);
     expect(RUN_COMMAND_TIMEOUT_DEFAULT_SEC).toBe(300);
-    expect(RUN_COMMAND_TIMEOUT_MAX_SEC).toBe(3600);
+    expect(RUN_COMMAND_TIMEOUT_MAX_SEC).toBe(1500);
+    // 决策分支:上限必须留在 Claude Code 对 MCP 工具 1800 秒静默上限之下——1800 以上的 timeout 在 CC 上必被载体中止,调用方拿不到回执（hopissues/0128）
+    const CLAUDE_CODE_MCP_IDLE_LIMIT_SEC = 1800;
+    expect(RUN_COMMAND_TIMEOUT_MAX_SEC).toBeLessThan(CLAUDE_CODE_MCP_IDLE_LIMIT_SEC);
   });
 
   it('反例：argv 为空数组（core 直调,绕过 zod）→ APPROVAL_REQUIRED 不炸（变异 l 重放）', () => {

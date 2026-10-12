@@ -3,7 +3,7 @@
 	source: [[HopSpec V3核心规范]]
 	source_id: hopspec-v3-core
 	type: compact
-	last_sync: 2026-10-01T10:44+0800
+	last_sync: 2026-10-12T15:07+0800
 	note: HopSpec v3 完整语法参考手册。§0 立设计理念（人机协同生成、关键逻辑可控可靠、探索逻辑可成长、语言层封装降复杂度、自洽上下文防望文生义），贯穿全篇；主体以标准语法写全部构造，末节单列变种语法（大纲语法）。语义权威以源文档为准，本文只做重组不新增语义
 %%
 
@@ -87,6 +87,9 @@ Config:                                 # 可选，Spec 级运行时配置
   expansion_max: 20                     # subtask free 一次运行里最多展开几次（不写就是 20）。用完不会硬停：引擎拒收下一次展开，报文里说明怎么请人追加额度
   engine_min_version: 0.15.1            # 本 spec 需要的引擎最低版本（pack 打包时自动写入）。引擎版本不够就不启动，报文告诉你两条路：升级引擎，或删掉这个键。不写这个键就不比对
   requires_commands: [git, jq]          # body 里 subprocess.run 要用到的本地命令。启动时逐个检查：命令名在项目 hopjit.yaml 的 commands 白名单里，或者在本 spec 下面《已批准命令》段某一行的第一个词里，二者有一即可；都没有就在进入任何步骤之前停下，报文说明去哪一处加。不写这个键就不检查；没声明的命令运行到那一步时仍会被白名单拦住
+  dirs:                                 # 本任务要碰的 workspace 之外的目录（见下表 dirs 一句）
+    read: ["{target_dir}", "~/.hopjit/ants/shared-kb"]
+    readwrite: ["{report_dir}"]
 ## 已批准命令                           # 可选。本 spec 自己批准的命令清单（英文段头 Approved Commands 同义），一行一条命令前缀
 - python3 scripts/ssh_exec.py --config configs/x.json   # 运行时的命令按词逐个与这一行比对，前面几个词全部相同就放行（python3 scripts/ssh_exec.py --config configs/x.json exec … 可以，python3 evil.py 不行）。第一个词不能是 hopjit
 ## Steps                                # 有 Steps → 具体实现；无 Steps → HopTrait（Hop契约）
@@ -103,7 +106,7 @@ N. [type] <一句话任务描述>
 | `Types:` | 否 | 复用类型定义，首字母大写（PascalCase 词组），步骤中直接引用 |
 | `Inputs:` | 否 | Spec 级输入变量声明，供 `[call]` 传参映射 |
 | `Outputs:` | 否 | Spec 级输出变量声明（交付物=完备性契约）。初始 `None`，执行中赋值；结束仍 `None`=完备性违约，run 判 failed（缺哪个输出入 failure_reason） |
-| `Config:` | 否 | Spec 级运行时配置。五个引擎消费键：`model`（默认模型）/`models`（按步骤类别分档路由）/`expansion_max`（subtask free 展开总数上限,缺省 20）/`engine_min_version`（引擎最低版本,不足启动即拒）/`requires_commands`（body 依赖的本地命令,启动时与宿主白名单对账缺即拦） | ^anc-spec-config-keys
+| `Config:` | 否 | Spec 级运行时配置。六个引擎消费键：`model`（默认模型）/`models`（按步骤类别分档路由）/`expansion_max`（subtask free 展开总数上限,缺省 20）/`engine_min_version`（引擎最低版本,不足启动即拒）/`requires_commands`（body 依赖的本地命令,启动时与宿主白名单对账缺即拦）/`dirs`（任务级目录声明：`read` 只读、`readwrite` 读写——写只对 `[commit]` 开，act/check 写域仍只有 work_zone。值两种写法：绝对路径（`/` 开头，或 `~` / `~/…` 表示当前用户家目录），或 `{Inputs 变量}` / `{hop_env_xxx}`——变量的值必须是 `/` 开头的绝对路径。值一律加引号写成字符串——`{变量}` 不加引号会被 YAML 当成映射，起跑即拒。不支持相对路径，含 `..` 的一律拒。起跑时逐个核目录存在，缺即停下指路。声明不等于授权：workspace 之外的目录第一次要跑时引擎停下来把清单给人看，人确认一次后记账，清单不变不再问） | ^anc-spec-config-keys
 | `## 已批准命令` | 否 | 任务级命令授权（`## Approved Commands` 同义,2026-09-30）：一行一个命令前缀,按空白切成 argv 项（含空白的项用单/双引号包）；运行期要执行的命令 argv 与某一行逐项相等地以它开头即放行,首项为 `hopjit` 的行是解析错误。批准的单位是**这个任务**,不是命令名——它是人写在卡上的授权,不是项目级白名单的替代；消费口：复用模式 hopjit-mcp `run_approved_command`（外部 agent 在本 run 上下文里执行,按前缀判）与 body 内 `subprocess.run`（并入命令名级白名单,见 §5） | ^anc-rule-approved-commands-section
 | `## Steps` | 条件 | 有 Steps：具体实现，至少一个步骤。无 Steps：**HopTrait（Hop契约）**——仅由 Goal/Constraints/Inputs/Outputs 定义接口契约 |
 
@@ -135,7 +138,7 @@ N. [type] <一句话任务描述>
 | `- ←` | 输入 | 输入变量，只写变量名（类型和说明已在源头声明）；**建议**就近加 `# 说明`，非强制 |
 | `+ →` | 输出 | 输出变量，首次出现**必须**标注类型和 `#` 含义说明 |
 | `- 工具:` | 工具授权 | 特殊工具的节点级授权（`- tools:` 同义）——每工具一行 `- 工具: 工具名  # 本步用它做什么`，`*` 表全量授权。无 body 的 act 与 reason 消费（授权声明才对本步下发该工具；基础文件工具零声明恒可用；check 无工具面）。位置在 `←`/`→` 之后、`>` 之前。权威见核心规范 `^anc-step-tool-grant` |
-| `- 禁工具:` | 工具禁用 | 工具的节点级禁用（`- deny_tools:` 同义）——每工具一行 `- 禁工具: 工具名  # 为什么禁`。授权行的对称半边，管辖面更宽：能关任意工具**含零声明恒可用的基础族**（如 write）；被禁工具从本步工具清单整体剔除，执行者根本看不到。禁 `*` 不合法（真要全禁逐件列名）；同名既授又禁写时报错。消费面同授权行（无 body 的 act 与 reason）。位置与授权行同带。权威见核心规范 `^anc-step-tool-deny` |
+| `- 禁工具:` | 工具禁用 | 工具的节点级禁用（`- deny_tools:` 同义）——每工具一行 `- 禁工具: 工具名  # 为什么禁`。授权行的对称半边，管辖面更宽：能关任意工具**含零声明恒可用的基础族**（如 write）；被禁工具从本步工具清单整体剔除，执行者根本看不到。禁 `*` 不合法（真要全禁逐件列名）；同名既授又禁写时报错。消费面同授权行（无 body 的 act、reason 与 check;commit 不收）。位置与授权行同带。权威见核心规范 `^anc-step-tool-deny` |
 | `>` | 执行说明 | 约束、方法、关注点、`@model`、`@thinking`、`@knowledge`（可选，段落级，放在 `←`/`→` 之后） |
 
 ```
@@ -556,7 +559,7 @@ Types:
 - **能力边界 = 白名单**：body 只能做四类事——
   1. 基础运算（算术 `+ - * / % // **`、字符串拼接与重复、比较、布尔 `and/or/not`、`in`/`not in`、字段/下标（含负数）、切片 `seq[start:stop]`（端点可省可负，钳位宽容；无步长形态——反转用 `reversed(l)`，隔位取用推导式配 `range`）、字面量构造 `[1, x]`/`{"k": v}`、f-string `f"共{n}条"`）；
   2. 白名单调用（内置 pure 函数 ∪ 宿主 `ToolProvider` 注册的工具）——pure 函数全表（**与 Python 同名同义**）：数值 `len` `min` `max` `round` `abs` `sum`｜文本 `lower` `upper` `strip` `split` `join` `replace` `startswith` `endswith`｜文本剥壳与解码 `strip_fence(text, key?)`（机械剥 LLM 产文本值外层的代码围栏壳；第二参 key 可选——给出且剥后首行恰为 `key:`/`key: |` 时连键前缀与其引入的缩进一并剥）`parse_json(text)`（JSON 文本 → 结构值，供内置工具族的 json 字符串返回值取字段；**幂等**——入参已是结构值/数字/布尔/null 时原样返回,复用模式回传链提前解析过也不炸〔2026-09-05 作者定容错〕；解析失败按计算异常折本步失败，不静默）｜序列 `sorted` `reversed` `range` `count`（**单参列表计数**——`count(xs)` 返回列表元素个数，字符串入参报"期望数组"；Python `str.count` 的双参子串计数形态引擎没有）｜聚合谓词 `any` `all`（接受列表；`any([])` 为 False、`all([])` 为 True——存在性判定与推导组合即成（嵌套≤2，见 §5 推导规则），如 `hit = any([startswith(c, g) for g in given_list])`）｜结构 `keys` `values` `get`｜类型转换 `int` `float` `str` `bool`（零副作用，case 条件亦可用）。成员测试用 `in`/`not in` 运算符；None 检测用 `x is None` 或 `x == None`（同义，`is` 仅限 None 判定）。
-     **实例上下文函数**（性质不同于 pure，不混列：依赖实例环境、零副作用，仅 act/commit body 可调——case 条件里调用为静态错误）：`work_zone_path(rel?)`（本实例涂鸦区下的绝对路径，无参返回涂鸦区根，禁 `..` 穿越）、`now()`（ISO 8601 当前时刻）、`today()`（当前日期 YYYY-MM-DD）——时间值首次求值入本步 journal，重试/崩溃恢复重放取记录值保确定性。另有 `subprocess.run`（白名单命令行调用，非纯——外部进程有副作用，同样仅 body 可调），完整写法与正反例见本章末专节；
+     **实例上下文函数**（性质不同于 pure，不混列：依赖实例环境、零副作用，仅 act/check/commit body 可调——case 条件里调用为静态错误）：`work_zone_path(rel?)`（本实例涂鸦区下的绝对路径，无参返回涂鸦区根，禁 `..` 穿越）、`spec_dir(rel?)`（spec 文件所在目录下的绝对路径，无参返回该目录，禁 `..` 穿越——spec 自带的脚本与数据用它寻址，读写仍走文件工具权限：spec 目录可读不可写）、`now()`（ISO 8601 当前时刻）、`today()`（当前日期 YYYY-MM-DD）——时间值首次求值入本步 journal，重试/崩溃恢复重放取记录值保确定性。另有 `subprocess.run`（白名单命令行调用，非纯——外部进程有副作用，同样仅 body 可调），完整写法与正反例见本章末专节；
   3. 赋值（局部变量与 `+ →` 输出）；
   4. 无推理分支（`if`/`elif`/`else`）。
   调白名单外的任何东西 = 非法。

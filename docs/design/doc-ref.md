@@ -111,7 +111,7 @@ doc-ref 解析归 **engine**（`assembleBasicContext`），不在 dispatcher—�
 
 ## hop_env 环境参数展开【契约】 ^anc-exec-doc-ref-hop-env
 
-概念权威 [[../concepts/HopSpec V3核心规范#^anc-config-hop-env]]（命名空间/覆盖链/只读语义）。doc-ref 路径位是 `{hop_env_*}` 的**唯一引擎展开位**（面最小原则——instruction 不展开值表随 prompt 注入,body 走 Python 自身 f-string）。
+概念权威 [[../concepts/HopSpec V3核心规范#^anc-config-hop-env]]（命名空间/覆盖链/只读语义）。**与 Config.dirs 的分工（2026-10-07 todo/0148）**：本条的"写配置即授权读"只管环境材料位置（知识库、材料库——跨任务稳定、按机器配置）;一个任务自己要读写的目录归 spec `Config.dirs` 声明并经人批准（[[exec-engine#^anc-exec-dirs-grant]]）,Inputs 参数经 `{var}` 被 dirs 引用才获得授权,参数本身不自带授权。两者只在 read_access.allowed 上合流。doc-ref 路径位是 `{hop_env_*}` 的**唯一引擎展开位**（面最小原则——instruction 不展开值表随 prompt 注入,body 走 Python 自身 f-string）。
 
 **展开实现（解析流程第 2 步前插一步"步骤 1b"）**：
 - **时机=注入期**（resolveDocRefs 入口）,值来源=引擎持有的 hop_env 表（HostConfig.hop_env,组合根按覆盖链合成——配置两级合并→params 覆盖→ask 回填经变量空间同步）;

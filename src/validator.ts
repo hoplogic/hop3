@@ -7,8 +7,8 @@
 // V1-V13 variables (V3 废除,V13 callee 插值断供核 2026-09-05), P1-P15 special steps (P2 已废除), B1-B10 act/commit body (B3 并入 B2, 编号位保留).
 // 与设计规则总表(design/spec-parser.md 附录)对齐——头注曾长期漏登 S13/S15/V12/B9/B10,本次随 S16 补齐.
 
-import type { SpecAST, StepNode, StepType, OutputDecl, VarBinding, TypeDecl, SubtaskStep, ParallelStep, LoopStep, BranchStep, CaseStep, CallStep, CommitStep, ConfirmStep, ExitStep, CheckStep, AskStep, DocRef, ActStep, ActBody, ActStatement, ActExpr, IfStmt, AssignStmt, CallStmt, CallExpr, BinaryExpr } from './ast-types.js';
-import { DEFAULT_EXPANSION_MAX } from './ast-types.js';   // @a: anc-exec-subtask-free-expand
+import type { SpecAST, StepNode, StepType, OutputDecl, VarBinding, TypeDecl, SubtaskStep, ParallelStep, LoopStep, BranchStep, CaseStep, CallStep, CommitStep, ConfirmStep, ExitStep, CheckStep, AskStep, DocRef, ActStep, ActBody, ActStatement, ActExpr, IfStmt, AssignStmt, CallStmt, CallExpr, BinaryExpr, UnaryExpr } from './ast-types.js';
+import { DIRS_VAR_REF_RE, DEFAULT_EXPANSION_MAX, DEFAULT_KEEP } from './ast-types.js';   // @a: anc-exec-subtask-free-expand, anc-rule-b2
 import type { ValidationError, ValidationSeverity, ParseError } from './errors.js';
 import type { SandboxConfig } from './provider-types.js';
 import { ROUTING_CATEGORIES } from './provider-types.js';
@@ -102,6 +102,8 @@ export function validateSpec(ast: SpecAST, docRefCtx?: DocRefCheckCtx, fragmentO
   variableRules(effectiveAst, errors, !!fragmentOpts);
   specialStepRules(effectiveAst, errors);
   if (!fragmentOpts) toolDeclConsumptionV14(effectiveAst, errors);   // 片段无 header 声明面,V14 不适用 // @a: anc-rule-v14
+  if (!fragmentOpts) configDirsV16(effectiveAst, errors);   // Config.dirs 形态与引用（起跑前就能知道） // @a: anc-rule-v16
+  if (!fragmentOpts) askStructuredDefaultV17(effectiveAst, errors);   // 结构化 ask 的建议值来源（写 spec 时就提醒） // @a: anc-rule-v17
   checkSelfVerdictV15(effectiveAst, errors);   // 判定材料=步骤自身声明,片段可判照验 // @a: anc-rule-v15
   if (docRefCtx) docRefRuleP15(effectiveAst, errors, docRefCtx); // 仅当有 workspace 访问能力时校验
 
@@ -126,6 +128,74 @@ export function validateSpec(ast: SpecAST, docRefCtx?: DocRefCheckCtx, fragmentO
       && !(e.rule === 'C7' && e.message.includes('must be inside a subtask')));
   }
   return errors;
+}
+
+// V17: 结构化类型的 ask 要有建议值来源（2026-10-08 作者定"yaml/列表型的输入究竟应该怎么交互,至少要给一个建议输入
+// 让人来改";设计 spec-parser ^anc-rule-v17）——ask 声明 yaml / 列表 / 类型面具名类型的输出,文档序前面没有任何步 +→ 同名、
+// 本步也没有 present_inputs → warn 指路前置备料。标量类型不核（人填一个值不需要样板）。只 warn 不 error：可用性缺口不是
+// 语义错误,运行期 driver 对无建议值的结构化 ask 会如实告诉人要给完整结构。
+// @a: anc-rule-v17
+function askStructuredDefaultV17(ast: SpecAST, errors: ValidationError[]): void {
+  const SCALAR = new Set(['line', 'text', 'markdown', 'int', 'float', 'bool', 'line(nonempty)']);
+  const declaredTypes = new Set((ast.header.types ?? []).map(t => t.name));
+  const isStructured = (t: string): boolean => {
+    if (SCALAR.has(t) || /^enum\(.+\)$/.test(t)) return false;
+    return t === 'yaml' || /^\[.+\]$/.test(t) || declaredTypes.has(t);
+  };
+  const produced = new Set<string>();   // 文档序累计：到当前步为止哪些变量被某步 +→ 声明过
+  for (const step of flattenSteps(ast.steps ?? [])) {
+    if (step.step_type === 'ask') {
+      const askStep = step as AskStep;
+      const hasPresent = (askStep.present_inputs?.length ?? 0) > 0;
+      for (const out of step.outputs ?? []) {
+        if (!isStructured(out.type)) continue;
+        if (hasPresent || produced.has(out.name)) continue;
+        errors.push(ve('V17', 'warn',
+          `V17: ask 步骤 "${step.step_id}" 声明了结构化输出 ${out.name}（${out.type}）,前序没有同名产出、也没有 present_inputs——执行时人要凭空写出整个结构。先考虑不向人要结构：前置步骤备好让人确认、拆成几个标量 ask、或用 enum 选;确实要的话前置一个步骤产出同名变量 ${out.name}（引擎会自动当建议值呈给人改）,或用 present_inputs 指一个样板`,
+          step.step_id));
+      }
+    }
+    for (const out of step.outputs ?? []) produced.add(out.name);
+  }
+}
+
+// V16: Config.dirs 声明形态与变量引用（todo/0148,设计 spec-parser ^anc-rule-v16）——validate 期只看文本形态：
+// ①形态非 {read?: [str], readwrite?: [str]} → warn（与 requires_commands 坏形态同口径,起跑期再拒一次）;
+// ②{名字} 引用的名字不在 Inputs 且不以 hop_env_ 开头 → error;③相对路径（不以 / ~ { 开头）或含 .. 段 → error。
+// 展开、存在性核、授权归引擎起跑（^anc-exec-dirs-grant）。// @a: anc-rule-v16
+function configDirsV16(ast: SpecAST, errors: ValidationError[]): void {
+  const raw = ast.header.config?.['dirs'];
+  if (raw === undefined) return;
+  const warn = (m: string) => errors.push(ve('V16', 'warn', `V16: Config.dirs ${m}——形态须是 {read?: [路径], readwrite?: [路径]},按缺席处理（起跑时会再拒一次）`));
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) { warn(`不是映射（实际 ${JSON.stringify(raw)}）`); return; }
+  const inputs = new Set((ast.header.inputs ?? []).map(i => i.name));
+  for (const key of Object.keys(raw as Record<string, unknown>)) {
+    if (key !== 'read' && key !== 'readwrite') { warn(`含未知键 "${key}"（只认 read / readwrite）`); continue; }
+    const list = (raw as Record<string, unknown>)[key];
+    if (!Array.isArray(list)) { warn(`.${key} 不是列表（实际 ${JSON.stringify(list)}）`); continue; }
+    for (const item of list) {
+      if (typeof item !== 'string' || !item.trim()) { warn(`.${key} 含非字符串条目 ${JSON.stringify(item)}`); continue; }
+      const v = item.trim();
+      const m = DIRS_VAR_REF_RE.exec(v);   // 与引擎同源,含中文标识符 // @a: anc-rule-v16
+      if (m) {
+        if (!inputs.has(m[1]) && !m[1].startsWith('hop_env_')) {
+          errors.push(ve('V16', 'error', `V16: Config.dirs.${key} 引用的 {${m[1]}} 既不在 Inputs 声明,也不是 hop_env_* 环境参数——起跑必败。在 Inputs 声明它,或改成 hop_env_ 前缀`));
+        }
+        continue;
+      }
+      if (v.startsWith('~') && !(v === '~' || v.startsWith('~/'))) {
+        errors.push(ve('V16', 'error', `V16: Config.dirs.${key} 不认 ${JSON.stringify(v)}——~ 只表示当前用户家目录（~ 或 ~/…）,不支持 ~用户名 形式`));
+        continue;
+      }
+      if (!(v === '~' || v.startsWith('~/') || v.startsWith('/'))) {
+        errors.push(ve('V16', 'error', `V16: Config.dirs.${key} 的 ${JSON.stringify(v)} 不是绝对路径——不支持相对路径（spec 目录起跑已可读,readwrite 不许指向 HopAnt 自身）;写 / 开头的绝对路径、~/…,或 {变量}`));
+        continue;
+      }
+      if (v.split('/').includes('..')) {
+        errors.push(ve('V16', 'error', `V16: Config.dirs.${key} 的 ${JSON.stringify(v)} 含 .. 段——写规范化后的绝对路径`));
+      }
+    }
+  }
 }
 
 // V14: Tools 段声明-授权行消费对账（D94 批,作者拍"validate 应该加验证"——声明零消费=工具对
@@ -251,8 +321,9 @@ const LANG_KEYWORDS = new Set([
   'reason', 'act', 'check', 'confirm', 'ask', 'commit', 'call', 'branch', 'case',
   'subtask', 'loop', 'parallel', 'break', 'continue', 'exit',
   'retry', 'max', 'adaptive', 'final', 'escalatable', 'free', 'collect', 'into', 'in', 'require_human',
-  'tools',   // 节点工具授权条目键（0054 ^anc-step-tool-grant——中文词 工具 经条目解析归一,同族保留）
-  'deny_tools',   // 节点工具禁用条目键（^anc-step-tool-deny——禁用半边 2026-09-05,中文词 禁工具 同族保留） // @a: anc-step-tool-deny
+  'tools', '工具',   // 节点工具授权条目键（0054 ^anc-step-tool-grant——中文词 工具 同族保留;2026-10-12 语义审计 #22 补中文词入集,此前注释自称保留而集合里没有）
+  'deny_tools', '禁工具',   // 节点工具禁用条目键（^anc-step-tool-deny——禁用半边 2026-09-05,中文词 禁工具 同族保留;#22 同补） // @a: anc-step-tool-deny
+  'on', 'fail', '失败兜底',   // on fail 兜底块类型词双语（概念 ^anc-step-on-fail 2026-08-21 "on、fail 入保留字族",i18n 术语表 "失败兜底 同入保留字族"——2026-10-12 语义审计 #22 补入,此前设计写了代码漏）
   // 中文关键词（术语表拍定 2026-08-15,design/i18n.md ^anc-i18n-glossary——双语同为保留字）
   '标识', '目标', '约束', '类型', '输入', '输出', '配置', '步骤',
   '推理', '探索', '检查', '确认', '询问', '提交', '调用', '分支', '条件',
@@ -1558,16 +1629,16 @@ export const B2_BUILTIN_FILE_TOOLS = new Set([
  * 且毒行躲在条件分支后 selftest 零通电）。// @a: anc-rule-b2 */
 export const B2_BUILTIN_TOOL_SIGS: ReadonlyMap<string, { props: readonly string[]; required: readonly string[] }> = new Map([
   ['read', { props: ['path', 'start_line', 'end_line'], required: ['path'] }],
-  ['write', { props: ['path', 'content'], required: ['path', 'content'] }],
+  ['write', { props: ['path', 'content', 'keep'], required: ['path', 'content'] }],
   ['listdir', { props: ['path'], required: ['path'] }],
   ['exists', { props: ['path'], required: ['path'] }],
   ['create', { props: ['path', 'content'], required: ['path', 'content'] }],
   ['append', { props: ['path', 'content'], required: ['path', 'content'] }],
-  ['edit_file', { props: ['path', 'old_text', 'new_text'], required: ['path', 'old_text', 'new_text'] }],
+  ['edit_file', { props: ['path', 'old_text', 'new_text', 'keep'], required: ['path', 'old_text', 'new_text'] }],
   ['search_file', { props: ['path', 'pattern', 'context_lines'], required: ['path', 'pattern'] }],
   ['makedirs', { props: ['path'], required: ['path'] }],
-  ['move', { props: ['from', 'to'], required: ['from', 'to'] }],
-  ['remove', { props: ['path'], required: ['path'] }],
+  ['move', { props: ['from', 'to', 'keep'], required: ['from', 'to'] }],
+  ['remove', { props: ['path', 'keep'], required: ['path'] }],
   ['validate_spec', { props: ['text', 'fragment', 'known_vars'], required: ['text'] }],
   ['insert_node', { props: ['spec_text', 'spec_is_fragment', 'work_items', 'node_path', 'fragment'], required: ['spec_text', 'node_path', 'fragment'] }],
   ['replace_node', { props: ['spec_text', 'spec_is_fragment', 'work_items', 'node_path', 'fragment', 'replacements'], required: ['spec_text'] }],
@@ -1576,6 +1647,16 @@ export const B2_BUILTIN_TOOL_SIGS: ReadonlyMap<string, { props: readonly string[
   ['read_spec_tree', { props: ['spec_text', 'mode', 'node_path', 'spec_is_fragment'], required: ['spec_text', 'mode'] }],
   ['run_script', { props: ['path', 'args'], required: ['path'] }],
 ]);
+/** keep 实参字面量不合法时返回给人看的原文,合法或不是字面量时返回 null。// @a: anc-rule-b2 */
+function keepLiteralInvalid(e: ActExpr): string | null {
+  if (e.type === 'unary' && (e as UnaryExpr).op === '-' && (e as UnaryExpr).operand.type === 'literal') {
+    return `-${JSON.stringify(((e as UnaryExpr).operand as { value?: unknown }).value)}`;
+  }
+  if (e.type !== 'literal') return null;
+  const lit = e as { literal_kind?: string; value?: unknown };
+  if (lit.literal_kind === 'number' && typeof lit.value === 'number' && Number.isInteger(lit.value) && lit.value >= 0) return null;
+  return lit.literal_kind === 'bool' ? (lit.value ? 'True' : 'False') : JSON.stringify(lit.value);
+}
 function b9LeftmostLiteral(e: ActExpr): boolean {
   if (e.type === 'literal') return (e as { literal_kind?: string }).literal_kind === 'string';   // LiteralExpr 系 spec-ast 表外内部符号,经 ActExpr 联合暴露不单独 import——内联收窄
   if (e.type === 'binary') return b9LeftmostLiteral((e as BinaryExpr).left);
@@ -1741,6 +1822,15 @@ function checkActExpr(expr: ActExpr, visible: Set<string>, step: StepNode, error
           if (unknownArgs.length > 0) {
             errors.push(ve('B2', 'error',
               `内置工具 "${call.callee}" 没有参数 ${unknownArgs.map(n => `"${n}"`).join('/')}——它的参数是 ${sig.props.join('/')}（step "${step.step_id}"）`,
+              step.step_id, loc));
+          }
+          // 第④判:keep 字面量须是非负整数（与 tools.ts KEEP_PARAM {integer, minimum 0} 同构）——
+          // 变量与表达式运行前不可知,不核;取负的数字字面量是字面量形态,照核。// @a: anc-rule-b2
+          const keepArg = sig.props.includes('keep') ? call.args.find(a => a.name === 'keep') : undefined;
+          const keepBad = keepArg ? keepLiteralInvalid(keepArg.value) : null;
+          if (keepBad !== null) {
+            errors.push(ve('B2', 'error',
+              `内置工具 "${call.callee}" 的 keep 须是非负整数（0 表示不留旧版本,缺省留 ${DEFAULT_KEEP} 份）——收到 ${keepBad}（step "${step.step_id}"）`,
               step.step_id, loc));
           }
           const missingReq = sig.required.filter(n => !givenNames.includes(n));
@@ -2778,7 +2868,7 @@ export function repairInlineColonScalars(text: string): string {
   return fixed.size ? lines.join('\n') : text;
 }
 
-/** 六处解析点共用的串联修复（清单见 design ^anc-exec-output-inline-colon-repair）:引号前缀全行扫描 →
+/** 七处解析点共用的串联修复（清单见 design ^anc-exec-output-inline-colon-repair）:引号前缀全行扫描 →
  * 裸冒号与保留字符开头按报错行逐行修。无命中返回原文本引用。
  * // @a: anc-exec-output-inline-colon-repair */
 export function repairYamlScalars(text: string): string {

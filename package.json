@@ -1,6 +1,6 @@
 {
   "name": "@hoplogic/hopjit",
-  "version": "0.19.1",
+  "version": "0.20.0",
   "description": "HopJIT execution engine for HopSpec v3 — structured execution runtime for LLM agents (CC / Codex reuse-mode drivers)",
   "type": "module",
   "license": "MPL-2.0",
@@ -51,6 +51,7 @@
     "README.md",
     "USAGE.md",
     "docs/AGENT-GUIDE.md",
+    "docs/agent-instructions-template.md",
     "docs/WORKAROUNDS.md",
     "docs/reference/配置参考.md",
     "docs/concepts/HopSpec V3语法参考.md",
@@ -67,7 +68,7 @@
     "docs/concepts/HopSpec核心创新.md",
     "docs/concepts/HopSop标准作业流程.md",
     "docs/concepts/HopType体系.md",
-    "docs/concepts/HopAnt概念-双态组件模型.md",
+    "docs/concepts/HopAnt概念.md",
     "docs/tutorials/00-新人导读.md",
     "docs/tutorials/01-第一次运行-ClaudeCode.md",
     "docs/tutorials/01-第一次运行-Codex.md",
@@ -87,7 +88,6 @@
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "npm run clean && tsc && chmod +x dist/cli.js dist/mcp-server.js",
-    "postinstall": "node dist/postinstall.js",
     "test": "npm run -s build && vitest run",
     "precommit": "./scripts/precommit.sh",
     "check:fast": "tsc --noEmit && node scripts/check-anchor-format.mjs && node scripts/check-text-integrity.mjs && node scripts/check-process-state.mjs && node scripts/check-driver-carriers.mjs && node scripts/check-layer-imports.mjs && node scripts/check-module-arch-audit.mjs && node scripts/check-threshold-sync.mjs && node scripts/check-teaching-sync.mjs && node scripts/check-line-length.mjs && npm run -s check:scripts-syntax",

@@ -2,23 +2,32 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 // @module: tools ^anc-struct-tools
-import { readFileSync, writeFileSync, appendFileSync, realpathSync, readdirSync, statSync, lstatSync, readlinkSync, mkdirSync, renameSync, unlinkSync, existsSync } from 'node:fs';
-import { resolve, isAbsolute, normalize, dirname, basename, join, sep } from 'node:path';
+import { readFileSync, writeFileSync, appendFileSync, realpathSync, readdirSync, statSync, lstatSync, readlinkSync, mkdirSync, renameSync, unlinkSync, existsSync, copyFileSync } from 'node:fs';
+import { resolve, isAbsolute, normalize, dirname, basename, join, sep, relative } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { ToolProvider, ToolDef, ToolResult, HostConfig, SandboxConfig, WriteScope } from './provider-types.js';
+import { YAML_DUMP_OPTS } from './provider-types.js';   // @a: anc-config-yaml-dump-opts
 import { runSandboxedPython } from './py-sandbox.js';   // Python 语法沙箱（.py 脚本一律先审后跑——^anc-pysb-exec） // @a: anc-exec-builtin-run-script
 import { parseSpec, parseFragment, serializeFragment } from './parser.js';
 import { insertNodeAt, replaceNodeAt, replaceChildrenAt, renumberSteps, syncWorkItems } from './spec-tree-edit.js';
 import type { StepNode } from './ast-types.js';
+import { DEFAULT_KEEP } from './ast-types.js';   // @a: anc-exec-file-keep-recycle
 import { validateSpec, type FragmentOptions } from './validator.js';
 import { dump as yamlDump } from 'js-yaml';
 
 /** 写侧工具 content 归一为文本：结构值（yaml 型变量直传）序列化为 YAML 文本落盘——概念
  * ^anc-type-yaml-structured 落盘条款（原 as string 裸断言,结构进来 writeFileSync 抛
  * TypeError 炸穿,三十六审探针实抓）;字符串原样;其余标量 String。// @a: anc-type-yaml-structured */
+/** 回收站留存件时间戳——本地时间 YYYYMMDD-HHMMSS（字典序即时间序,轮转按文件名升序） */
+function recycleStamp(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
 function contentToText(v: unknown): string {
   if (typeof v === 'string') return v;
   if (v === null || v === undefined) return '';
-  if (typeof v === 'object') return yamlDump(v).trimEnd() + '\n';
+  if (typeof v === 'object') return yamlDump(v, YAML_DUMP_OPTS).trimEnd() + '\n';   // @a: anc-config-yaml-dump-opts
   return String(v);
 }
 
@@ -161,6 +170,18 @@ const READ_TOOL: ToolDef = {
   returns: "文件内容（文本）——全文,或带 start_line/end_line 时该行号段",
 };
 
+// 覆盖与删除前留存旧版本（2026-10-08 作者定,与 commit 安全分析同批次）：write / edit_file / move / remove
+// 带可选 keep（缺省 DEFAULT_KEEP,住 ast-types.ts）——销毁 work_zone 外已有文件的内容前先复制进 <状态目录>/recycle/,同一文件每次 run 只留存一次
+// （接管账 recycle_ledger.json 记录）。契约 [[tools/file-tools#^anc-exec-file-keep-recycle]]。
+// @a: anc-exec-file-keep-recycle
+/** 回收站目录名（状态目录下的子目录）;不叫 backup——作者定,避免和用户自己的备份目录混淆 */
+const RECYCLE_DIR_NAME = 'recycle';
+/** 接管账文件名——放在顶层实例目录里,记录本次运行里每个文件是否已留存过,子实例共用,续跑与崩溃恢复后仍在 */
+const RECYCLE_LEDGER_FILE = 'recycle_ledger.json';
+/** 接管账条目——copy 装留存件绝对路径（字符串路径,不是内容）;created 表示当前内容是本 run 写出的 */
+type RecycleLedgerEntry = { copy: string } | { created: true };
+const KEEP_PARAM = { type: 'integer', minimum: 0, description: 'Before overwriting or deleting an existing file, keep its old version in the recycle area; at most this many versions per file. Default 3; 0 = keep nothing' };
+
 const WRITE_TOOL: ToolDef = {
   name: 'write',
   description: 'Write content to a file (create or overwrite).',
@@ -169,12 +190,13 @@ const WRITE_TOOL: ToolDef = {
     properties: {
       path: { type: 'string', description: 'Path to the file to write' },
       content: { type: 'string', description: 'Content to write' },
+      keep: KEEP_PARAM,
     },
     required: ['path', 'content'],
   },
   requires_commit: false,
   category: 'basic',   // 文件读写族恒 basic（0054——零声明可用）
-  returns: "写入回执一句话（文本,如 'Written N bytes to <path>'）",
+  returns: "写入回执一句话（文本,如 'Written N bytes to <path>';覆盖已有文件时末尾注明旧版本存放位置）",
 };
 
 // 内置文件/目录工具组（2026-08-10 作者定实装）：全部 requires_commit=false——
@@ -251,6 +273,7 @@ const EDIT_FILE_TOOL: ToolDef = {
       path: { type: 'string', description: 'Path of the file to edit' },
       old_text: { type: 'string', description: 'Exact text to replace — must match exactly one occurrence in the file' },
       new_text: { type: 'string', description: 'Replacement text (empty string = delete old_text; to insert, include old_text as anchor plus the new content)' },
+      keep: KEEP_PARAM,
     },
     required: ['path', 'old_text', 'new_text'],
   },
@@ -301,12 +324,13 @@ const MOVE_TOOL: ToolDef = {
     properties: {
       from: { type: 'string', description: 'Source path' },
       to: { type: 'string', description: 'Destination path' },
+      keep: KEEP_PARAM,
     },
     required: ['from', 'to'],
   },
   requires_commit: false,
   category: 'basic',   // 文件读写族恒 basic（0054——零声明可用）
-  returns: "移动回执一句话（文本）;源不存在则失败",
+  returns: "移动回执一句话（文本,目标已存在被替换时末尾注明旧版本存放位置）;源不存在则失败",
 };
 
 const DELETE_TOOL: ToolDef = {
@@ -314,12 +338,15 @@ const DELETE_TOOL: ToolDef = {
   description: 'Delete a file (fails if it does not exist).',
   input_schema: {
     type: 'object',
-    properties: { path: { type: 'string', description: 'Path of the file to delete' } },
+    properties: {
+      path: { type: 'string', description: 'Path of the file to delete' },
+      keep: KEEP_PARAM,
+    },
     required: ['path'],
   },
   requires_commit: false,
   category: 'basic',   // 文件读写族恒 basic（0054——零声明可用）
-  returns: "删除回执一句话（文本）;目标不存在则失败",
+  returns: "删除回执一句话（文本,末尾注明旧版本存放位置;keep=0 为永久删除）;目标不存在则失败",
 };
 
 // run_script 受控脚本执行（2026-09-22 作者拍 todo/0110 候选 B——实撞:standalone 的 [act free]
@@ -781,18 +808,26 @@ export class DefaultToolProvider implements ToolProvider { // @a: anc-exec-tool-
           return { result: `工具 "${tool_name}" 缺必填参数 ${missing.map(k => `"${k}"`).join('/')}（参数全集 ${legal.join('/')}）`, success: false, content_type: 'text' };
         }
       }
+      // keep 实参校验（^anc-exec-file-keep-recycle 参数条——与实参名进闸同一失败通道） // @a: anc-exec-file-keep-recycle
+      let keep = DEFAULT_KEEP;
+      if (tool_args.keep !== undefined) {
+        if (typeof tool_args.keep !== 'number' || !Number.isInteger(tool_args.keep) || tool_args.keep < 0) {
+          return { result: `工具 "${tool_name}" 的 keep 须是非负整数,实际: ${JSON.stringify(tool_args.keep)}`, success: false, content_type: 'text' };
+        }
+        keep = tool_args.keep;
+      }
       switch (tool_name) {
         case 'read': return this.executeRead(tool_args.path as string, tool_args.start_line as number | undefined, tool_args.end_line as number | undefined);
-        case 'write': return this.executeWrite(tool_args.path as string, contentToText(tool_args.content), write_scope);
+        case 'write': return this.executeWrite(tool_args.path as string, contentToText(tool_args.content), write_scope, keep);
         case 'listdir': return this.executeListDir(tool_args.path as string);
         case 'exists': return this.executeFileExists(tool_args.path as string);
         case 'create': return this.executeCreate(tool_args.path as string, contentToText(tool_args.content), write_scope);
         case 'append': return this.executeAppend(tool_args.path as string, contentToText(tool_args.content), write_scope);
-        case 'edit_file': return this.executeEditFile(tool_args.path as string, tool_args.old_text as string, tool_args.new_text as string, write_scope);
+        case 'edit_file': return this.executeEditFile(tool_args.path as string, tool_args.old_text as string, tool_args.new_text as string, write_scope, keep);
         case 'search_file': return this.executeSearchFile(tool_args.path as string, tool_args.pattern as string, tool_args.context_lines as number | undefined);
         case 'makedirs': return this.executeMkdir(tool_args.path as string, write_scope);
-        case 'move': return this.executeMove(tool_args.from as string, tool_args.to as string, write_scope);
-        case 'remove': return this.executeDelete(tool_args.path as string, write_scope);
+        case 'move': return this.executeMove(tool_args.from as string, tool_args.to as string, write_scope, keep);
+        case 'remove': return this.executeDelete(tool_args.path as string, write_scope, keep);
         case 'validate_spec': return executeValidateSpec(tool_args);   // 纯函数,无路径校验链 // @a: anc-exec-builtin-validate-tool
         case 'insert_node': return executeInsertNode(tool_args);        // 纯函数,树编辑四件 // @a: anc-exec-builtin-edit-tree-tool
         case 'replace_node': return executeReplaceNode(tool_args);
@@ -812,7 +847,7 @@ export class DefaultToolProvider implements ToolProvider { // @a: anc-exec-tool-
   // start 越界报错带总行数(宁拒不猜)/end 越界截尾(读到尾是自然语义)。契约 [[tools/file-tools#^anc-exec-builtin-search-file]]）
   // @a: anc-exec-builtin-search-file
   private executeRead(filePath: string, startLine?: number, endLine?: number): ToolResult {
-    const resolved = this.resolvePath(filePath);
+    const resolved = this.resolvePath(filePath, 'read');
     this.validateFileAccess(resolved, 'read');
     const content = readFileSync(resolved, 'utf-8');
     if (startLine === undefined && endLine === undefined) {
@@ -845,7 +880,7 @@ export class DefaultToolProvider implements ToolProvider { // @a: anc-exec-tool-
     if (!pattern) {
       return { result: 'pattern 不可为空', success: false, content_type: 'text' };
     }
-    const resolved = this.resolvePath(filePath);
+    const resolved = this.resolvePath(filePath, 'read');
     this.validateFileAccess(resolved, 'read');
     const allLines = readFileSync(resolved, 'utf-8').split('\n');
     const ctx = contextLines ?? 0;
@@ -864,18 +899,39 @@ export class DefaultToolProvider implements ToolProvider { // @a: anc-exec-tool-
     return { result: JSON.stringify(hits), success: true, content_type: 'json' };
   }
 
-  private executeWrite(filePath: string, content: string, scope: WriteScope): ToolResult {
+  // 写入类三件（write/create/append）与 move 目标侧的父目录缺失报文（hopissues/0120,设计
+  // [[tools/file-tools#^anc-exec-write-parent-missing]]）：ENOENT 且 dirname 不存在才改写——
+  // 指路 makedirs 不代建（makedirs 是显式原语,commit 里不藏隐式动作）;父目录在场的 ENOENT 原文照回。
+  // @a: anc-exec-write-parent-missing
+  private withParentDirHint<T>(resolved: string, fn: () => T): T {
+    try {
+      return fn();
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      const parent = dirname(resolved);
+      if (code === 'ENOENT' && !existsSync(parent)) {
+        const raw = err instanceof Error ? err.message : String(err);
+        throw new Error(`父目录 ${parent} 不存在,请先 makedirs 或改用已存在目录（原始错误：${raw}）`);
+      }
+      throw err;
+    }
+  }
+
+  private executeWrite(filePath: string, content: string, scope: WriteScope, keep: number = DEFAULT_KEEP): ToolResult {
     const resolved = this.resolvePath(filePath);
     this.validateFileAccess(resolved, 'write', scope);
-    writeFileSync(resolved, content, 'utf-8');
-    return { result: `Written ${content.length} bytes to ${filePath}`, success: true, content_type: 'text' };
+    const existed = existsSync(resolved);
+    const note = this.retainBeforeChange(resolved, keep);   // @a: anc-exec-file-keep-recycle
+    this.withParentDirHint(resolved, () => writeFileSync(resolved, content, 'utf-8'));
+    if (!existed || keep === 0) this.noteLedger(resolved, { created: true });
+    return { result: `Written ${content.length} bytes to ${filePath}${note ? ' ' + note : ''}`, success: true, content_type: 'text' };
   }
 
   // ── 内置文件/目录工具组（2026-08-10 实装，契约与流程见 [[tools/file-tools#^anc-exec-builtin-file-tools]]）──
   // @a: anc-exec-builtin-file-tools
 
   private executeListDir(dirPath: string): ToolResult {
-    const resolved = this.resolvePath(dirPath);
+    const resolved = this.resolvePath(dirPath, 'read');
     this.validateFileAccess(resolved, 'read');
     const entries = readdirSync(resolved).map(name => {
       const st = statSync(resolve(resolved, name));
@@ -883,16 +939,17 @@ export class DefaultToolProvider implements ToolProvider { // @a: anc-exec-tool-
       return { name, type: t, kind: t };   // type=正名(行业惯例),kind=兼容别名(2026-09-07 作者拍——R9 实撞 e.type 缺键恒假) // @a: anc-exec-builtin-file-tools
     });
     // 空目录语义明示（2026-09-18 作者对 Qwen 复读循环追问"listdir 符合常见 tool 行为么"后定——
-    // 裸 [] 对弱模型是哑数据:与"没返回"难区分,不构成换路信号,实撞连续 14 轮重扫同一空目录;
-    // JSON 前缀保持在首位,机械 parse 面不变,注记只进 LLM 通道）。// @a: anc-exec-builtin-file-tools
+    // 裸 [] 对弱模型是哑数据:与"没返回"难区分,不构成换路信号,实撞连续 14 轮重扫同一空目录）。
+    // 明示语走 hint 旁路,result 恒为纯 []——修前把注记拼进 result,content_type 仍标 json,parse_json
+    // 与 call 位 JSON.parse 都炸（2026-10-12 语义审计 #25 作者拍甲案）。// @a: anc-exec-builtin-file-tools
     if (entries.length === 0) {
-      return { result: '[]\n（目录存在但为空——没有任何文件或子目录。重复查询同一目录不会得到不同结果；若在找输入材料，本步所需输入已在提示词的"本步输入材料"段给出。）', success: true, content_type: 'json' };
+      return { result: '[]', success: true, content_type: 'json', hint: '（目录存在但为空——没有任何文件或子目录。重复查询同一目录不会得到不同结果；若在找输入材料，本步所需输入已在提示词的"本步输入材料"段给出。）' };
     }
     return { result: JSON.stringify(entries), success: true, content_type: 'json' };
   }
 
   private executeFileExists(filePath: string): ToolResult {
-    const resolved = this.resolvePath(filePath);
+    const resolved = this.resolvePath(filePath, 'read');
     this.validateFileAccess(resolved, 'read');
     // 探测语义：不存在不报错，返回 false
     if (!existsSync(resolved)) {
@@ -907,21 +964,24 @@ export class DefaultToolProvider implements ToolProvider { // @a: anc-exec-tool-
     const resolved = this.resolvePath(filePath);
     this.validateFileAccess(resolved, 'write', scope);
     // 'wx' 排他标志——检查+创建一步完成（OS 原子语义透传，无 TOCTOU 窗口）；已存在即 EEXIST
-    writeFileSync(resolved, content, { encoding: 'utf-8', flag: 'wx' });
+    this.withParentDirHint(resolved, () => writeFileSync(resolved, content, { encoding: 'utf-8', flag: 'wx' }));
+    this.noteLedger(resolved, { created: true });   // @a: anc-exec-file-keep-recycle
     return { result: `Created ${filePath} (${content.length} bytes)`, success: true, content_type: 'text' };
   }
 
   private executeAppend(filePath: string, content: string, scope: WriteScope): ToolResult {
     const resolved = this.resolvePath(filePath);
     this.validateFileAccess(resolved, 'write', scope);
-    appendFileSync(resolved, content, 'utf-8');
+    const existed = existsSync(resolved);
+    this.withParentDirHint(resolved, () => appendFileSync(resolved, content, 'utf-8'));
+    if (!existed) this.noteLedger(resolved, { created: true });   // @a: anc-exec-file-keep-recycle
     return { result: `Appended ${content.length} bytes to ${filePath}`, success: true, content_type: 'text' };
   }
 
   // edit_file 局部精确替换（HopSop 六步照 [[tools/file-tools#^anc-exec-builtin-edit-file-tool]]）：
   // old_text 恰匹配一处才替换，零匹配/多匹配报错带计数——宁拒不猜，调用方补上下文重试。
   // @a: anc-exec-builtin-edit-file-tool
-  private executeEditFile(filePath: string, oldText: string, newText: string, scope: WriteScope): ToolResult {
+  private executeEditFile(filePath: string, oldText: string, newText: string, scope: WriteScope, keep: number = DEFAULT_KEEP): ToolResult {
     if (oldText === '') {
       return { result: 'old_text 不可为空', success: false, content_type: 'text' };
     }
@@ -946,8 +1006,10 @@ export class DefaultToolProvider implements ToolProvider { // @a: anc-exec-tool-
     }
     const offset = content.indexOf(oldText);
     // 按偏移拼接而非 String.replace——replace 会解释 new_text 里的 $ 特殊模式（$& 等），字面替换语义禁此通道
+    const note = this.retainBeforeChange(resolved, keep);   // @a: anc-exec-file-keep-recycle
     writeFileSync(resolved, content.slice(0, offset) + newText + content.slice(offset + oldText.length), 'utf-8');
-    return { result: `Replaced 1 occurrence at char ${offset} in ${filePath}`, success: true, content_type: 'text' };
+    if (keep === 0) this.noteLedger(resolved, { created: true });
+    return { result: `Replaced 1 occurrence at char ${offset} in ${filePath}${note ? ' ' + note : ''}`, success: true, content_type: 'text' };
   }
 
   private executeMkdir(dirPath: string, scope: WriteScope): ToolResult {
@@ -957,20 +1019,115 @@ export class DefaultToolProvider implements ToolProvider { // @a: anc-exec-tool-
     return { result: `Directory ready: ${dirPath}`, success: true, content_type: 'text' };
   }
 
-  private executeMove(fromPath: string, toPath: string, scope: WriteScope): ToolResult {
+  private executeMove(fromPath: string, toPath: string, scope: WriteScope, keep: number = DEFAULT_KEEP): ToolResult {
     const from = this.resolvePath(fromPath);
     const to = this.resolvePath(toPath);
     this.validateFileAccess(from, 'write', scope);   // move 的源与目标都过写侧校验
     this.validateFileAccess(to, 'write', scope);
-    renameSync(from, to);   // rename 原子性透传（同文件系统内原子替换）
-    return { result: `Moved ${fromPath} → ${toPath}`, success: true, content_type: 'text' };
+    // 目标父目录缺失同走指路报文（^anc-exec-write-parent-missing move 侧——源在场而 rename ENOENT 且 dirname(to) 不存在;
+    // 源不在场的 ENOENT 是源的问题,原文照回）。// @a: anc-exec-write-parent-missing
+    // 目标侧已有文件会被 rename 替换——先留存;源侧内容原样到了目标,不留存（^anc-exec-file-keep-recycle 触发条件）
+    const note = existsSync(from) ? this.retainBeforeChange(to, keep) : '';   // @a: anc-exec-file-keep-recycle
+    const fromEntry = this.readLedger()[this.ledgerKey(from)] ?? null;   // rename 之前取——之后源路径已不存在
+    if (existsSync(from)) this.withParentDirHint(to, () => renameSync(from, to));
+    else renameSync(from, to);   // rename 原子性透传（同文件系统内原子替换）
+    // 接管账：B 现在装的是 A 的内容——B 的记录换成 A 的记录,A 的记录删除
+    this.noteLedger(to, fromEntry);
+    this.noteLedger(from, null);
+    return { result: `Moved ${fromPath} → ${toPath}${note ? ' ' + note : ''}`, success: true, content_type: 'text' };
   }
 
-  private executeDelete(filePath: string, scope: WriteScope): ToolResult {
+  private executeDelete(filePath: string, scope: WriteScope, keep: number = DEFAULT_KEEP): ToolResult {
     const resolved = this.resolvePath(filePath);
     this.validateFileAccess(resolved, 'write', scope);
+    const note = this.retainBeforeChange(resolved, keep);   // @a: anc-exec-file-keep-recycle
     unlinkSync(resolved);   // 不存在即 ENOENT（显式失败不静默）；仅文件——目录不删（最重操作不进 v1）
-    return { result: `Deleted ${filePath}`, success: true, content_type: 'text' };
+    return { result: `Deleted ${filePath}${note ? ' ' + note : ''}`, success: true, content_type: 'text' };
+  }
+
+  // ── 覆盖与删除前留存旧版本（HopSop 照 [[tools/file-tools#^anc-exec-file-keep-recycle]]）──
+  // @a: anc-exec-file-keep-recycle
+  private recycleTree: string | undefined;                          // setWorkZoneScope 推来的 tree 原样（本 run 顶层实例目录）
+  private memoryLedger = new Map<string, RecycleLedgerEntry>();     // tree 缺席时的内存接管账,键=目标真实路径
+
+  private ledgerKey(target: string): string {
+    try { return resolveRealDeep(target); } catch { return normalize(target); }
+  }
+
+  private readLedger(): Record<string, RecycleLedgerEntry> {
+    if (!this.recycleTree) return Object.fromEntries(this.memoryLedger);
+    const file = join(this.recycleTree, RECYCLE_LEDGER_FILE);
+    if (!existsSync(file)) return {};
+    try {
+      const v = JSON.parse(readFileSync(file, 'utf-8'));
+      return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, RecycleLedgerEntry> : {};
+    } catch { return {}; }   // 账坏了按空账处理——后果是多留存一份,不丢内容
+  }
+
+  /** 按接管账更新规则写账;entry=null 删除该键。每次重读——复用模式其他进程可能刚写过 */
+  private noteLedger(target: string, entry: RecycleLedgerEntry | null): void {
+    const key = this.ledgerKey(target);
+    if (this.isReadableWorkZone(key)) return;   // work_zone 不留存,也不入账——涂鸦区写入不该把账撑大
+    if (!this.recycleTree) {
+      if (entry) this.memoryLedger.set(key, entry); else this.memoryLedger.delete(key);
+      return;
+    }
+    const ledger = this.readLedger();
+    if (entry) ledger[key] = entry; else delete ledger[key];
+    const file = join(this.recycleTree, RECYCLE_LEDGER_FILE);
+    const tmp = `${file}.tmp-${process.pid}`;
+    mkdirSync(this.recycleTree, { recursive: true });
+    writeFileSync(tmp, JSON.stringify(ledger, null, 2), 'utf-8');
+    renameSync(tmp, file);   // 写临时文件再 rename——原子替换
+  }
+
+  /** target=已过写侧校验的宿主机绝对路径;返回拼进回执的说明;留存失败抛错（原语不执行） */
+  private retainBeforeChange(target: string, keep: number): string {
+    let st;
+    try { st = statSync(target); } catch { return ''; }   // 不存在——没有内容要销毁
+    if (!st.isFile()) return '';
+    const key = this.ledgerKey(target);
+    if (this.isReadableWorkZone(key)) return '';   // work_zone 豁免——涂鸦区可整体重建
+    const known = this.readLedger()[key];
+    if (known) return 'copy' in known ? `本次运行开始前的版本已存于 ${known.copy}` : '';
+    if (keep === 0) { this.noteLedger(key, { created: true }); return ''; }
+    const root = this.recycleTree ? join(dirname(this.recycleTree), RECYCLE_DIR_NAME) : join(tmpdir(), 'hopjit-recycle');
+    const ws = this.workspaceDir;
+    const rel = isWithinDir(key, ws) ? relative(ws, key) : join('_external', key.replace(/^[\\/]+/, '').replace(/^[A-Za-z]:[\\/]*/, ''));
+    const base = join(root, rel) + '.' + recycleStamp(new Date());
+    // 同一秒已有留存件:序号取现有最大值加 1,不复用轮转删出的空位（复用会让新件排在旧件前面被紧接着的轮转删掉）
+    let maxSeq = 0;
+    try {
+      const prefix = basename(base);
+      for (const f of readdirSync(dirname(base))) {
+        if (f === prefix) maxSeq = Math.max(maxSeq, 1);
+        else if (f.startsWith(prefix + '-') && /^\d+$/.test(f.slice(prefix.length + 1))) maxSeq = Math.max(maxSeq, Number(f.slice(prefix.length + 1)));
+      }
+    } catch { /* 目录还不存在 */ }
+    const copyPath = maxSeq === 0 ? base : `${base}-${maxSeq + 1}`;
+    try {
+      mkdirSync(dirname(copyPath), { recursive: true });
+      copyFileSync(target, copyPath);
+    } catch (err: unknown) {
+      throw new Error(`旧版本留存失败,没有覆盖/删除：${err instanceof Error ? err.message : String(err)}`);
+    }
+    this.noteLedger(key, { copy: copyPath });
+    // 轮转：只删匹配 <原文件名>.<8位>-<6位>(-n) 形态的件——回收站在 .hopstate 内,用户工具写不进来
+    let extra = '';
+    try {
+      const dir = dirname(copyPath);
+      const name = basename(key).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const re = new RegExp(`^${name}\\.(\\d{8}-\\d{6})(?:-(\\d+))?$`);
+      // 按（时间戳,序号数值）排序——字符串排序会把 -10 排到 -2 前面
+      const copies = readdirSync(dir).map(f => ({ f, m: re.exec(f) })).filter(x => x.m)
+        .map(x => ({ f: x.f, ts: x.m![1]!, seq: x.m![2] ? Number(x.m![2]) : 1 }))
+        .sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.seq - b.seq));
+      const self = basename(copyPath);
+      for (const old of copies.slice(0, Math.max(0, copies.length - keep))) if (old.f !== self) unlinkSync(join(dir, old.f));
+    } catch (err: unknown) {
+      extra = `;清理旧留存件失败：${err instanceof Error ? err.message : String(err)}`;
+    }
+    return `旧版本已存到 ${copyPath}（该文件在回收站最多保留 ${keep} 份）${extra}`;
   }
 
   // run_script 受控脚本执行（HopSop 六步在 [[tools/run-script#关键逻辑]]）：扩展名定解释器 →
@@ -1047,6 +1204,7 @@ export class DefaultToolProvider implements ToolProvider { // @a: anc-exec-tool-
   setWorkZoneScope(scope: { own: string; tree?: string }): void {
     this.ownRoots = new Set(scope.own ? DefaultToolProvider.bothForms(scope.own) : []);
     this.treeRoots = new Set(scope.tree ? DefaultToolProvider.bothForms(scope.tree) : []);
+    this.recycleTree = scope.tree || undefined;   // 回收站与接管账锚本 run 顶层实例目录 // @a: anc-exec-file-keep-recycle
   }
   private isOwnWorkZone(p: string): boolean {
     for (const root of this.ownRoots) if (isWithinDir(p, root)) return true;
@@ -1064,10 +1222,31 @@ export class DefaultToolProvider implements ToolProvider { // @a: anc-exec-tool-
     return false;
   }
 
-  private resolvePath(filePath: string): string {
+  private resolvePath(filePath: string, mode: 'strict' | 'read' = 'strict'): string {
     // 本 run 涂鸦区绝对路径放行（work_zone_path() 的产物,work_zone 可在 workspace 外）——其余绝对路径
     // 交 resolveWorkspacePath 判落区（workspace 内认,外拒）// @a: anc-exec-work-zone-registry
     if (isAbsolute(filePath) && !filePath.includes('..') && this.isReadableWorkZone(normalize(filePath))) return filePath;
+    // read 档：落在 read_access.allowed 某目录内的绝对路径放行（起跑把 spec 所在目录加进 allowed,spec_dir() 产物由此能读——
+    // 一条读授权覆盖 knowledge/数据样例/将来的 inner_store,作者 2026-10-07 定;写类与 run_script 走 strict 不认此形态;
+    // 放行后 validateFileAccess('read') 仍过 denied/confirm_required 链）。design tools/file-tools ^anc-exec-tool-path-resolve 第④形态
+    // @a: anc-exec-tool-path-resolve
+    if (mode === 'read' && isAbsolute(filePath) && !filePath.includes('..')) {
+      const p = normalize(filePath);
+      for (const allowed of this.sandbox.filesystem.read_access.allowed) {
+        const root = resolve(allowed);
+        if (isWithinDir(p, root) || isWithinDir(resolveRealDeep(p), resolveReal(root))) return p;
+      }
+    }
+    // strict 档第⑤形态（todo/0148,design tools/file-tools ^anc-exec-tool-path-resolve）：落在 write_access.allowed 某目录内的绝对路径放行
+    //（spec Config.dirs.readwrite 声明并经人批准）——随后 validateFileAccess('write', scope) 分域：act/check 仍 WORK_ZONE_ONLY,commit 放行;
+    // read 档已由 readwrite 并入 read_access.allowed 覆盖,此处只补写类。// @a: anc-exec-dirs-grant
+    if (mode === 'strict' && isAbsolute(filePath) && !filePath.includes('..')) {
+      const p = normalize(filePath);
+      for (const allowed of this.sandbox.filesystem.write_access?.allowed ?? []) {
+        const root = resolve(allowed);
+        if (isWithinDir(p, root) || isWithinDir(resolveRealDeep(p), resolveReal(root))) return p;
+      }
+    }
     return resolveWorkspacePath(this.workspaceDir, filePath);
   }
 
@@ -1084,8 +1263,11 @@ export class DefaultToolProvider implements ToolProvider { // @a: anc-exec-tool-
         throw new Error(`WORK_ZONE_ONLY: act/check 步骤的写域限 work_zone 涂鸦区（中间产物用 work_zone_path() 取路径）——持久产物写盘归 [commit] 步骤承载: ${realPath}`);
       }
       const wsDir = resolveReal(resolve(this.sandbox.filesystem.workspace_dir));
-      if (!isWithinDir(realPath, wsDir)) {
-        throw new Error(`Write outside workspace sandbox: ${realPath}`);
+      // commit 写域 = workspace ∪ write_access.allowed（Config.dirs.readwrite 经授权,真实路径判带分隔符边界——与 workspace 同判据）
+      // @a: anc-exec-dirs-grant
+      const inWriteAllowed = (this.sandbox.filesystem.write_access?.allowed ?? []).some(d => isWithinDir(realPath, resolveReal(resolve(d))));
+      if (!isWithinDir(realPath, wsDir) && !inWriteAllowed) {
+        throw new Error(`Write outside workspace sandbox: ${realPath}（commit 写域=workspace 根 ${wsDir}${this.sandbox.filesystem.write_access?.allowed?.length ? ' ∪ Config.dirs.readwrite ' + this.sandbox.filesystem.write_access.allowed.join(', ') : ''}）`);
       }
       if (realPath.includes('.hopstate')) {
         throw new Error('Write to .hopstate/ is forbidden');

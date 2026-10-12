@@ -3,7 +3,7 @@
 	source: [[../ARCHITECTURE]]
 	source_id: hopjit-design
 	type: extend
-	last_sync: 2026-08-22T20:02+0800
+	last_sync: 2026-10-10T12:31+0800
 	note: HopLog 设计规范——执行轨迹日志组件。内容分级（决策/契约/说明）+ 10 个契约锚点。三级日志、审计性字段、流式单文件输出。2026-07-02 修正 ^anc-obs-mode-boundary：复用模式 llm.prompt 非空（记引擎交付的 context 渲染，CC 即 llm），只有 response/tokens/tool 归 caller
 %%
 
@@ -47,7 +47,7 @@
 
 ## 定位【契约】 ^anc-obs-hoplog
 
-> **模块版本**：hoplog `v0.7.2`（2026-10-03 作者抓"任何时刻文件都是合法 YAML 这个概念有问题吧？很早以前就改成 YAMLL 了,怎么还留着"——设计层四处 v2 嵌套树口径残留清理：:187/:245/:276 三句与 ^anc-obs-hoplog-flush 实现约束 2 整段改为 YAMLL 口径（块内合法、块间独立、全文不求成树,概念权威 [[../concepts/HopSpec V3扩展-可观测性与YAMLL日志格式#^anc-obs-format-invariants]] 不变量 2）;v0.7.1 写进 ^anc-obs-log-retention 的"重建后仍合法 YAMLL"条款定罪语从"整文非法 YAML"改为"缺 execution: 标记致块区无法定位";测试侧 yamlLoad(整文) 断言改走已有的逐块校验 yamllErrors）。上版 v0.7.1（2026-10-03 工程链 review 修复：自愈重建后先重发最小 header 与 `execution:` 行再写 log_gap——原版重建的 main.yaml 无 header 整文非法 YAML、extractHopLogStepKeys 返回空、复用模式跨进程续写每个 done 被判孤儿,违反 ^anc-obs-hoplog-flush'任何时刻合法 YAML';'读失败的快照当活账'改为'略过+warn 一次'——原文字写了一个无物可收的行为;契约加'写失败/目录缺失不杀 run'条款;出口表登 collectLiveRunDirs;resume 段补重建失败支;Goal 行改;log_gap 入顶层块家族）。上版 v0.7.0（同日 hopissues/0116 修复：①计数保留跳过活 run——pruneRunDirs 只删被某份 state.json 以终态引用或无人引用的目录,未终态快照指向的目录恒留,构造器透传 stateDir 供反查;②append 写失败不杀 run——首次 ENOENT/EACCES/EPERM 尝试重建目录续写,再失败 warn 一次后降级 no-op,run 继续;③HopLog.resume 目录不在时重建并写 `log_gap:` 断档标记。接口面：HopLogOptions 加 stateDir?、pruneRunDirs 加第三参 liveRunDirs?、新导出 collectLiveRunDirs）。上版 v0.6.1（2026-10-01 工程链 review：^anc-obs-command-block 从列表项散文独立成契约节——原锚定形态不合法致真身悬空、三件套缺席;行为零变化）。上版 v0.6.0（2026-09-30）加 recordCommand 顶层 `command:` 块——hopjit-mcp run_approved_command 的执行账,todo/0132。上版 v0.5.0（同日）本版两件——对外分发后防塞爆硬盘（todo/0127,作者定）：①缺省级别 debug→info（prompt+response 占日志字节 65%,本机 8 月起 351 个 run 105 MB 从未清过）;②新增日志保留上限 `max_runs` 缺省 3——新建 run 目录前把日志根目录下多出的最老 run 整目录删掉,契约 ^anc-obs-log-retention。上版 v0.4.0（2026-09-02）新增 recordRuminationSuspect 文档级留档方法（^anc-exec-thinking-exhausted 二批,hopissues/0060）。0.x 未承诺稳定。日志 YAML 格式是半稳契约——人/agent 复盘读,格式破坏影响既有日志解析；此定位锚点即 hoplog 模块的归属锚点）
+> **模块版本**：hoplog `v0.10.3`（2026-10-12 语义审计 #3 收链尾：出口表登 `ToolCallRecord`——dispatcher 的 toolCallLog 改用该类型后成了跨模块 import,check:audit 模块边界校验要求它在出口表内;内部说明句补这一例外）。上版 v0.10.2（2026-10-11 语义审计 0156 C 类：`knowledge:` 流控字段在 ^anc-obs-step-mapping 字段表补行、v1 偏差表从"未实现"改"已实装"并指到测试名;ReplanAudit 结构指路从断链的 hop-cli 锚改为 src/hoplog.ts ReplanAuditRecord 与 src/cli-types.ts ReplanAudit 两处;hitl.responder 值域从 human|caller 收窄为恒 caller——复用模式由调用方代人应答,human 在引擎路径不可达,收窄比加分记便宜且不丢信息）。上版 v0.10.1（2026-10-09 commit 安全分析批次工程链 review 缺陷 D41：commit_audit.authorized_by 取 engine_safe 时,来源补一种——账上已有这一步的引擎判定记录、本次没有重新扫描）。上版 v0.10.0（2026-10-08 commit 批准改为安全分析：commit_audit.authorized_by 去掉 auto_review、加 engine_safe 与 model_safe;事件 commit_auto_review 改名 commit_analysis,记分析来源与逐个动作的结论——[[exec-engine#^anc-exec-commit-approval]]）。上版 v0.9.3（2026-10-08 todo/0151：`llm:` 块记录点从两处扩到三处——replan 流水线段 pipelineCall 也记,块加可选字段 `pipeline_stage`（哪一段）;StepMeta.llm 类型同加）。上版 v0.9.2（2026-10-08 发版前八项修复批工程链 review 修复：`settle:` 块的 `reaped:` 列表逐项按块缩进写（与 fanout 的 `children:` 同形）——v0.9.1 之前 todo/0129 B7 补第二参时用 `toYaml(list)` 整体插在键后,`- 子实例号` 行落到 0 列,块内不是合法 YAML,B7 落地时没有读回核对,本批补 reaped 精确比对测试时实抓;方法清单补 recordParallelReap / recordParallelSettle 两条并写明 reaped 只收子实例号形态）。上版 v0.9.1（2026-10-08 todo/0136 ③：resume 侧重建失败路径补测试时实抓——"目录不在"分支 catch 后下方还有一句无条件 mkdirSync 把 EACCES 原样抛出,"warn + 降级,run 继续"承诺落空;改为仅在未降级且目录仍不在时 mkdir。^anc-obs-hoplog-resume 步 1 条件分支不变,代码对齐）。上版 v0.9.0（2026-10-08 commit_audit.authorized_by 加 auto_review 与 task_always 两个取值,新增 commit_auto_review 事件——commit 批准改为自动研判优先,[[exec-engine#^anc-exec-commit-approval]]）。上版 v0.8.1（2026-10-08 ^anc-obs-step-done-timing 的 recordStepFailed 来源括注扩到 subtask/case/loop/on_fail 容器收口失败——六卡批 review 面四 G4-4）。上版 v0.8.0（2026-10-07 header 加 `workspace_dir`——本 run 工作区根绝对路径,紧随 started_at;作者问"运行时是否显示一下 cwd 是啥？或者写在 hoplog 里？"——此前只有 state.json 记,给人看的 main.yaml 头块缺;worker 子日志同记（值经 launch_command `--workspace` 继承父）;自愈重建的最小 header 一并重发;HopLogOptions 加 workspaceDir?。上版 v0.7.2（2026-10-03 作者抓"任何时刻文件都是合法 YAML 这个概念有问题吧？很早以前就改成 YAMLL 了,怎么还留着"——设计层四处 v2 嵌套树口径残留清理：:187/:245/:276 三句与 ^anc-obs-hoplog-flush 实现约束 2 整段改为 YAMLL 口径（块内合法、块间独立、全文不求成树,概念权威 [[../concepts/HopSpec V3扩展-可观测性与YAMLL日志格式#^anc-obs-format-invariants]] 不变量 2）;v0.7.1 写进 ^anc-obs-log-retention 的"重建后仍合法 YAMLL"条款定罪语从"整文非法 YAML"改为"缺 execution: 标记致块区无法定位";测试侧 yamlLoad(整文) 断言改走已有的逐块校验 yamllErrors）。上版 v0.7.1（2026-10-03 工程链 review 修复：自愈重建后先重发最小 header 与 `execution:` 行再写 log_gap——原版重建的 main.yaml 无 header 整文非法 YAML、extractHopLogStepKeys 返回空、复用模式跨进程续写每个 done 被判孤儿,违反 ^anc-obs-hoplog-flush'任何时刻合法 YAML';'读失败的快照当活账'改为'略过+warn 一次'——原文字写了一个无物可收的行为;契约加'写失败/目录缺失不杀 run'条款;出口表登 collectLiveRunDirs;resume 段补重建失败支;Goal 行改;log_gap 入顶层块家族）。上版 v0.7.0（同日 hopissues/0116 修复：①计数保留跳过活 run——pruneRunDirs 只删被某份 state.json 以终态引用或无人引用的目录,未终态快照指向的目录恒留,构造器透传 stateDir 供反查;②append 写失败不杀 run——首次 ENOENT/EACCES/EPERM 尝试重建目录续写,再失败 warn 一次后降级 no-op,run 继续;③HopLog.resume 目录不在时重建并写 `log_gap:` 断档标记。接口面：HopLogOptions 加 stateDir?、pruneRunDirs 加第三参 liveRunDirs?、新导出 collectLiveRunDirs）。上版 v0.6.1（2026-10-01 工程链 review：^anc-obs-command-block 从列表项散文独立成契约节——原锚定形态不合法致真身悬空、三件套缺席;行为零变化）。上版 v0.6.0（2026-09-30）加 recordCommand 顶层 `command:` 块——hopjit-mcp run_approved_command 的执行账,todo/0132。上版 v0.5.0（同日）本版两件——对外分发后防塞爆硬盘（todo/0127,作者定）：①缺省级别 debug→info（prompt+response 占日志字节 65%,本机 8 月起 351 个 run 105 MB 从未清过）;②新增日志保留上限 `max_runs` 缺省 3——新建 run 目录前把日志根目录下多出的最老 run 整目录删掉,契约 ^anc-obs-log-retention。上版 v0.4.0（2026-09-02）新增 recordRuminationSuspect 文档级留档方法（^anc-exec-thinking-exhausted 二批,hopissues/0060）。0.x 未承诺稳定。日志 YAML 格式是半稳契约——人/agent 复盘读,格式破坏影响既有日志解析；此定位锚点即 hoplog 模块的归属锚点）
 
 **① 自身定位**：HopLog 是 HopJIT 的执行轨迹日志组件——只追加、实时落盘的完整执行历史，**给人和 agent 排查深层次 bug 用的**。当 Spec 执行出现预期外结果（LLM 幻觉、数据异常、策略失败、retry 耗尽）时，HopLog 提供足够信息**还原完整的决策链路**：每一步什么时候开始、输入什么、产出什么、调了什么工具、谁批准了 commit、为什么失败。（解释性类比：类似飞行记录仪——事后复盘用，不参与飞行控制。）
 
@@ -70,8 +70,9 @@
 | `DEFAULT_MAX_RUNS` | 常量 | hoplog.ts | 保留上限缺省 3（cli/mcp-server 缺省口同源,不各写字面）。2026-09-30 todo/0127 | provisional |
 | `timestamp` | 函数 | hoplog.ts | 生成带时区偏移的毫秒精度本地时间戳（YAMLL 各事件的时间字段单点来源；engine 记 join/dispatch 时刻复用，保证与日志内时间同源同格式）。2026-08-01 补登 | stable |
 | `extractHopLogStepKeys` | 函数 | hoplog.ts | 从真实 YAMLL `execution:` 下提取精确步骤块键（HopLog resume / carrier-live-e2e G11 消费） | stable |
+| `ToolCallRecord` | 类型 | hoplog.ts | 步骤 `tool:` 行一条记录的结构（name / result / at / args_preview? / result_preview? / server? / duration_ms? / discarded_text_blocks? 八字段,^anc-obs-audit 契约的类型载体）——dispatcher 工具循环的 toolCallLog 直接用它积累、再交 recordStepMeta 落账,设计契约与写入点同一类型（2026-10-12 语义审计 #3） | provisional |
 
-> **内部（表外即内部）**：`StepRecord`/`HitlRecord` 等日志条目结构、各 record* 方法的参数类型——它们是 HopLog 类的实现细节，外部只经 `HopLog` 实例方法交互。
+> **内部（表外即内部）**：`StepRecord`/`HitlRecord` 等日志条目结构、各 record* 方法的参数类型——它们是 HopLog 类的实现细节，外部只经 `HopLog` 实例方法交互（`ToolCallRecord` 是例外：dispatcher 在写入点之前就按它积累条目,所以登出口表）。
 
 **③ 主要 traits 与主要成员**：
 
@@ -124,7 +125,7 @@ trait（按职责分三组）：
 **done 触发点设计**（^anc-obs-step-done-timing，本段行尾锚定）：`recordStepDone`/`recordStepFailed` 在 pending/running→终态各路径调用——叶子步骤由 `completeStep`/`failStep` 直接记录；容器 done 由 `propagateCompletion` 级联触发时记录:
 
 - **TraversalState 暴露可选 `newlyDone: StepNode[]` 通道**,propagateCompletion 把进入终态的容器（subtask/loop/branch/case + 选中分支链）push 进去；
-  - 调用方（`completeStep`/`joinParallel`/`handleFailStepRetry`/`selectBranch` 等）在 propagateCompletion 返回后消费 newlyDone，对每个容器调 recordStepDone（含容器声明的 `+→` 聚合输出，从父 scope 读取）或 recordStepFailed（branch 选中 case 失败→branch failed）。
+  - 调用方（`completeStep`/`joinParallel`/`handleFailStepRetry`/`selectBranch` 等）在 propagateCompletion 返回后消费 newlyDone，对每个容器调 recordStepDone（含容器声明的 `+→` 聚合输出，从父 scope 读取）或 recordStepFailed（branch 选中 case 失败→branch failed;2026-10-07 起 subtask/case/loop/on_fail 的直接子步 failed 未被 retry 或 on fail 接住 → 容器 failed 同经此通道,[[exec-engine#^anc-exec-container-fail-close]]）。
 - **parallel 容器**done 仍由 `joinParallel` 直接调（已在 v2 实装,不走此通道）。这保证 hoplog 里所有容器有完整 start→done 生命周期,审计可重建容器级耗时与 scope 边界。
 - **嵌套树缩进（见 [[#^anc-obs-nested-tree]]）**：容器 done 以容器自身深度缩进（status 在 `2d+2`）续写在子树之后——子步已写更深缩进，YAML 据缩进闭合子 mapping、status 归容器，无需重写 key 头、无重复 key。这依赖 propagateCompletion 保证"容器 done 必在其所有子步 done 之后"（本时序不变）。
 - **worker 掩码祖先豁免（2026-08-30,todo/0022 清账）**：worker 子实例（subtreeRoot 非空）里,子树根祖先链上的容器是 executeSubtreeOnly 设的 **scope 掩码——结构状态非执行态,worker 内从未 recordStepStart**;
@@ -156,7 +157,9 @@ trait（按职责分三组）：
   - **字段序 `max_concurrent` → `children` → `started_at`**（max_concurrent 先行，是窗口容量、比 children 列表更该先看到；`started_at` 表"开始持续派发"，parallel 阶段的"结束"由 join 的 `ended_at` 承载，fanout 不强做二元起止）;
   - 始终记录、无视级别。**前提：该 parallel 容器已经过 recordStepStart**
 - `recordParallelDispatch(parallelStepId, childId, logDir)`——每派发一个 child 一次（统一模型：dispatchParallelCall/Subtask 派发点逐个调），流式 append 一条 `dispatch:` 块（缩进 `2d+2`）：`child` + `dispatched_at`（=调用时刻，引擎动作时刻）+ `log`（子日志目录）。始终记录。见 ^anc-obs-parallel-dispatch。
-- **`reap:`/`settle:` 块（P1，2026-08-11 设计定形）** ^anc-obs-parallel-reap：`recordParallelReap(hostId, childId, status)` 随到随收逐条流式（child/status/reaped_at——对称 dispatch 块）；`recordParallelSettle(hostId, reaped)` 容器终态化一条（settled_at + 已收清单）。
+- `recordParallelReap(hostId, childId, status)`——每收割一个子实例一次,随到随收逐条流式 append 一条 `reap:` 块（child/status/reaped_at——对称 dispatch 块）。退化窗口串行执行的 parallel subtask 重试耗尽时引擎也调它,childId 写 `<步骤号>(serial)`,status failed——那不是子实例,只是把"这一项按集合语义不贡献元素"记进同一通道。
+- `recordParallelSettle(hostId, reaped)`——容器终态化一条 `settle:` 块（settled_at + 已收清单 `reaped: [<子实例号>…]`,空清单不写该行）。`reaped` 是**已收子实例清单**：引擎侧从本宿主范围内 parallel_reap 事件 detail 首词取,只收形如子实例号的词（`^\d+(\.\d+)*(#\d+)?$`）去重;串行退化事件的 detail 首词是 `serial-degraded`,不是子实例,不进这张清单（2026-10-08 todo/0129 B7 补第二参;同日 review 修复加形态过滤——此前把 `serial-degraded` 当子实例号混入）。
+- **`reap:`/`settle:` 块（P1，2026-08-11 设计定形）** ^anc-obs-parallel-reap：上两个方法的块契约。
   - 记录点=引擎 reapParallelCall/Subtask 与 settleHostAfterReap（两模式共用）。理由：派发入轨而收割不入轨=G11 对收割段全盲。契约细节见 [[parallel-execution#^anc-exec-parallel-reap-log]]。
 - `recordParallelJoin(parallelStepId, childResults, startedAt)`——join 完成时记录（join_parallel 单进程）。在 parallel 步骤 body 内写 `join:` 块（缩进 `2d+2`，`stepDepth` 自算）。
   - 块字段：`children`（各 child 终态 completed/failed **+ 各自 `log` 子日志路径**，join 时本就逐个读了 child 子实例、顺手带出定位线索）+ `started_at`（进入 join 的时刻，由 engine 在 join 起始捕获传入）+ `ended_at`（merge 完的时刻，方法内 `timestamp()`）。
@@ -165,8 +168,8 @@ trait（按职责分三组）：
 
 **生命周期组**——run 的创建、收尾与跨进程续写：
 
-- `constructor(options)`——创建 run 目录，立即写入 header（spec_id/run_id/trace_id/level/spec/inputs）+ `execution:` 标记。
-  - **header 中外部来源值（spec_id=用户 Id、trace_id=调用方传入）须过 `toYaml` 转义**（含空格/冒号即破 header YAML）；run_id/level 是内部生成/枚举可裸写。
+- `constructor(options)`——创建 run 目录，立即写入 header（spec_id/run_id/trace_id/level/started_at/workspace_dir/spec/inputs）+ `execution:` 标记。`workspace_dir` 是本 run 工作区根的绝对路径（与 state.json host_context.workspace_dir 同值）,来自 `HopLogOptions.workspaceDir`;该选项缺席（直接构造 HopLog 的测试/工具场景）则不写此行,生产路径 engine 恒传。
+  - **header 中外部来源值（spec_id=用户 Id、trace_id=调用方传入、workspace_dir=路径含空格/冒号）须过 `toYaml` 转义**（含空格/冒号即破 header YAML）；run_id/level 是内部生成/枚举可裸写。
   - 这是 [[../ARCHITECTURE#^anc-string-escape]]（字符串转义规范·强制）hoplog 通道的落点——所有写进 main.yaml 的值字段均过 toYaml，仅 step_type/status 等内部枚举有意裸写。
 - `close(status)`——run 收尾。追加顶层 `status:`（completed/failed/cancelled）+ `ended_at`。close 后不应再有写入
 - `static resume(runDir, level?)`——跨进程续写。不解析历史内容（文件已有完整记录），返回可继续写入的实例。startedSteps 从空开始。**resume marker 不立即 append**——见下「resume marker 的延迟结构化写入」。startedSteps 从空开始
@@ -273,7 +276,7 @@ specs/
 - **Run ID**：`{YYYYMMDD}T{HHMMSS}-{4hex}`，4 位 hex 防止同秒冲突
 - **Trace ID**：`trace_id` 统一使用 `instance_id`（UUID）——顶层 run 的 `trace_id` = 自己的 `instance_id`；call/parallel worker 子实例继承父的 `instance_id` 作为 `trace_id`。这保证**同一个 trace_id 串起所有关联 run**（父+子），grep 一个 trace_id 就能找到整棵执行树的全部日志。`run_id`（时间戳格式）标识单个 run，`trace_id`（UUID）标识关联的执行树 ^anc-obs-trace-inherit
 - **Run 目录**：`.hoplog/{spec_id}-{run_id}/`
-- **主文件**：`{run_dir}/main.yaml`——唯一输出文件，人和 agent 共用，流式追加的 YAMLL（元数据头块 + `execution:` 标记 + 顺序追加的事件块 + 终态块;块内合法、块间不求成树——见 [[#^anc-obs-nested-tree]] v3 转向）
+- **主文件**：`{run_dir}/main.yaml`——唯一输出文件，人和 agent 共用，流式追加的 YAMLL（元数据头块〔spec_id / run_id / trace_id / level / started_at / workspace_dir / spec / inputs,顺序固定,新字段只追加在既有字段之后——半稳契约,消费者按键读不按行号读〕+ `execution:` 标记 + 顺序追加的事件块 + 终态块;块内合法、块间不求成树——见 [[#^anc-obs-nested-tree]] v3 转向）
 - **卫星文件**：`{run_dir}/{step_id}.yaml`（parallel/call 并发分支）
 
 ### 文件输出
@@ -396,6 +399,7 @@ contract: HopLogRetention
 
 - `HopLogOptions.maxRuns?: number`——本次 run 建目录前日志根目录允许保留的 run 目录数上限（含本次）;缺省 3;
 - `HopLogOptions.stateDir?: string`——快照根目录,供清理前反查哪些日志目录被未终态 run 引用;engine initExecution 透传自己的 stateDir;缺席则不做活账保护（2026-10-03 hopissues/0116）;
+- `HopLogOptions.workspaceDir?: string`——本 run 工作区根绝对路径,写进 header `workspace_dir:` 行;engine 从 hostConfig.workspace_dir 透传;缺席不写该行（2026-10-07）;
 - `pruneRunDirs(logDir, keep, liveRunDirs?: Set<string>)`——第三参=活 run 日志目录绝对路径集合,命中即跳过;缺席（undefined）=空集,退回纯计数;`collectLiveRunDirs(stateDir): Set<string>` 从 stateDir 下每份 state.json 读 `hoplog_run_dir` 与 `terminal_state` 组集合;**读/解析失败的快照略过并 stderr warn 一次（点名文件）**——它给不出任何目录路径,无物可收;引擎自己的 persistence 走 tmp→fsync→rename 原子写不会产半写快照,读失败几乎只来自外部损坏,为此让整轮停删是用近零概率的误删换确定性的永久停删,不划算（review 2026-10-03 定形;v0.7.0 首稿写"当活账收入"是一个不可实现的行为）;
 - `EngineOptions.maxRuns?: number`——透传给 HopLog（与 logLevel 同路）;
 - CLI `--max-runs <n>`（run / resume 系命令,与 `--log-level` 并列）;
@@ -414,12 +418,12 @@ HopLog.constructor(options) 建目录前:
 
 HopLog.append(text) 每次写盘:
 1. appendFileSync 成功 → 返回
-2. 失败且错误码 ∈ {ENOENT, EACCES, EPERM}：首次（本实例 dirRecreated 未置位——与 resume 自愈共用同一个一次性额度）→ mkdirSync(runDir, recursive) 后**先重发最小 header**（spec_id/run_id/trace_id/level/started_at 从实例字段取,构造时已存;`execution:` 行跟上）,再追加 `log_gap: {at, reason: dir_recreated}` 块,再重试原 text;成功则 stderr warn 一行"日志目录曾丢失,已重建续写"
+2. 失败且错误码 ∈ {ENOENT, EACCES, EPERM}：首次（本实例 dirRecreated 未置位——与 resume 自愈共用同一个一次性额度）→ mkdirSync(runDir, recursive) 后**先重发最小 header**（spec_id/run_id/trace_id/level/started_at/workspace_dir 从实例字段取,构造时已存;`execution:` 行跟上）,再追加 `log_gap: {at, reason: dir_recreated}` 块,再重试原 text;成功则 stderr warn 一行"日志目录曾丢失,已重建续写"
 3. 重建/重试仍失败 → **当场**置 appendDead 并 warn 一行（带重建失败的原因,不是首次写失败的原因——review 变异实锤：内层静默落到下一次写才降级,期间 appendDead 状态不实）;非上述错误码 → 直接置 appendDead 并 warn 一行（带首次错误）。两路都只 warn 一次,此后 append 全部 no-op,run 继续——日志是核验通道不是执行前提（同本契约第 5 条对删除失败的态度;原实现裸 appendFileSync 上抛把整批杀死,与自述矛盾）
 
 HopLog.resume(runDir):
-1. [条件(runDir 不存在)] mkdirSync(runDir, recursive) → 当场写最小 header（spec_id/run_id/trace_id 从目录名与 state 取不到就写 `(unknown)`,level 用传入或 info,started_at 当前时刻）+ `execution:` 行 + `log_gap: {at, reason: dir_missing_on_resume}`——续跑不因 ENOENT 失败,断档在日志里可见（state 的 hoplog_run_dir 不变）;置 dirRecreated（之后 append 再失败不二次重建,直接降级）
-   - [条件(重建失败)] stderr warn 一行 + appendDead（本实例后续写全部 no-op,run 继续）——与 append 步 3 同一态度,不静默
+1. [条件(runDir 不存在)] mkdirSync(runDir, recursive) → 当场写最小 header（spec_id/run_id/trace_id 从目录名与 state 取不到就写 `(unknown)`,level 用传入或 info,started_at 当前时刻,workspace_dir 实例字段有则写）+ `execution:` 行 + `log_gap: {at, reason: dir_missing_on_resume}`——续跑不因 ENOENT 失败,断档在日志里可见（state 的 hoplog_run_dir 不变）;置 dirRecreated（之后 append 再失败不二次重建,直接降级）
+   - [条件(重建失败)] stderr warn 一行 + appendDead（本实例后续写全部 no-op,run 继续）——与 append 步 3 同一态度,不静默;**resume 其余步骤不得再对 runDir 做会抛错的 mkdir**（2026-10-08 todo/0136 ③ 实抓：步 2 之后一句无条件 mkdirSync 让本分支的承诺落空）
 2. 既有流程（读 level/重建 startedSteps/延迟 resume marker）
 ```
 
@@ -487,7 +491,7 @@ execution:
     hitl:
       shown: 确认评审模式   # =summary（问题面;#34 受众分流——选项归 response_options,instruction 归 paused 卡整卡）
       response: manual_confirm
-      responder: human
+      responder: caller
     outputs:
       confirmed_mode: manual_confirm
     status: completed
@@ -726,6 +730,8 @@ confirm 与 ask 步骤产生 HITL 记录（`hitl:` 是审计性字段，任何�
 - instruction 是驱动侧作业指引不进人眼，审计再记它="还原人当时看到了什么"失真（观测记录点必须在事实边界）；
 - 结构化选项归 response_options 字段；完整呈现载荷的审计痕=paused 问题卡整卡（writePausedCard 落全载荷）。对齐 [[step-dispatcher#^anc-exec-hitl-presentation]] 受众分流条款。
 
+**responder 取值：恒 `caller`（2026-10-11 语义审计 0156 C8 设计收窄——原值域 human | caller）**：复用模式由调用方代人应答，human 值在引擎路径不可达；收窄比加分记便宜且不丢信息。独立模式下 resume_run 注入的回答同样经调用方通道进入引擎，引擎没有"直接面对真人"的输入口，所以也记 caller。应答是否出自真人、出自哪个真人，由调用方自己的记录面负责（例如 CC 对话记录），不进 hoplog。
+
 **response 取值规则（记应答原文——审计块必须能还原"谁答了什么"）**：
 
 - 应答规范化后**恰一个输出值且为原始类型**（string/number/bool）→ 直接记该值；
@@ -746,7 +752,7 @@ hitl:
     - value: dismiss
       label: 驳回
   response: gap                      # 人的选择（取值规则见上方"response 取值规则"）
-  responder: human                   # human | caller
+  responder: caller                  # 恒 caller（值域收窄见 ^anc-obs-hitl-record「responder 取值」）
   at: "2026-05-30 00:42:15+08:00"
 ```
 
@@ -765,8 +771,8 @@ hitl:
 | 步骤类型 | 审计性字段 | 内容 |
 | ------- | --------- | ---- |
 | act | `tool: [{name, result, at, args_preview?, result_preview?, server?, duration_ms?, discarded_text_blocks?}]` | 每次工具调用的名称、成败、时间；外部工具（mcp 绑定）另记 server 逻辑名与耗时——外部调用出引擎进程,归属与延迟是审计必需（2026-08-12 hopkb 五点需求⑤兑现）；discarded_text_blocks=多 text 块取首块的丢弃计数（0006 留痕——审计读出"server 发了 N+1 块引擎取了首块",declared-or-flagged）；**args_preview/result_preview=调用参数与注回结果的截断预览（debug 级才记,各截 500 字符超长加 `…[截断,原长N]` 尾标——2026-09-18 作者定"应该加入,对 result 大小做个控制":Qwen 复读循环验尸全程只能猜模型看见了什么〔空目录注记送没送到靠 dist grep 旁证〕,tool_result 是模型每轮决策的直接输入,不在账上=观测面在事实边界内侧断链;500 字符对空目录注记/报错文案/短 JSON 全文在账,大文件 read 只留头部——账是行为对证不是数据备份）** |
-| commit | `commit_audit: {target, authorized_by, result, at}` | 不可逆操作的目标、授权来源、结果 |
-| confirm | `hitl: {response, responder, at}` | 决策内容、决策者（human / caller——引擎绝不替 caller 决策，无超时默认值） |
+| commit | `commit_audit: {target, authorized_by, result, at}` | 不可逆操作的目标、授权来源、结果。authorized_by 取值:engine_safe（引擎从 body 判定全部动作可逆或低危,自动放行——本次扫描得出,或账上已有这一步的引擎判定记录）/ model_safe（分析模型判定全部动作安全,自动放行）/ human（人在转人工停点批准这一次）/ task_always（人选过"这一步以后都通过"）/ policy（批准关卡关闭,授权由前序 check final 或 confirm 建立）/ caller / none。安全分析本身另记事件 `commit_analysis`（来源 model 或 template、模型、每个动作的行号/分类/结论、建议前 200 字;[[exec-engine#^anc-exec-commit-approval]]） |
+| confirm | `hitl: {response, responder, at}` | 决策内容、决策者（responder 恒 `caller`，值域收窄见 ^anc-obs-hitl-record「responder 取值」——引擎绝不替 caller 决策，无超时默认值） |
 | call | `callee_spec_id` | 被调 Spec 的 ID（子 run 经 trace_id 继承关联，见命名规则） |
 | subtask（replan 时） | `replan_audit: {spec_id, step_id, error_reason, generated_children, base, at}` | adaptive 降级阶梯第 3/4 档运行时生成的提报记录——供离线沉淀为预声明备用链路 |
 
@@ -783,7 +789,7 @@ hitl:
 **replan_audit 审计事件** ^anc-obs-replan-audit：adaptive 的运行时生成（降级阶梯第 3/4 档，[[../concepts/HopSpec V3核心规范#^anc-exec-retry-adaptive]]）属"运行时 LLM 生成、可信度低、必须沉淀"的操作——记为审计事件（始终记录，无视日志级别）。
 
 - 绑定四元组 `(spec_id, step_id, error_reason, generated_children)` + `base`（scratch=从零第4档 / fallback=基于备用链路第3档）。
-- 运维离线 `grep 'replan_audit:'` 提取介入记录 → 审核 → 晋升为预声明备用链路（渐进固化"动态→候选→沉淀"，对接 [[../concepts/HopSpec V3扩展-有序思考与渐进固化]] L87）。结构 `ReplanAudit` 见 [[hop-cli#anc-obs-replan-audit]]。
+- 运维离线 `grep 'replan_audit:'` 提取介入记录 → 审核 → 晋升为预声明备用链路（渐进固化"动态→候选→沉淀"，对接 [[../concepts/HopSpec V3扩展-有序思考与渐进固化]] L87）。结构两处同形：日志侧 `ReplanAuditRecord`（`src/hoplog.ts`，recordStepMeta 的 `replan_audit` 字段类型）与 CLI 响应侧 `ReplanAudit`（`src/cli-types.ts`，next 响应载荷里的提报结构），两者字段同为上述四元组 + base + at。
 
 ---
 
@@ -849,6 +855,7 @@ hitl:
 | call | `callee_spec_id:` + `satellite:` 或内联 | 被调用 spec 的执行记录 |
 | subtask | `retry:` + `attempts:` (如有重试) | 重试历史 |
 | 重试容器内带反馈重跑的步骤 | `retry_feedback:` | L2c 注入的上次失败说明（attempt + reason，info 级流控字段） |
+| 带 KnowledgeProvider 检索的步骤（reason 等） | `knowledge: [{source_id, at}]` | 本步 L2 知识注入实际检索到的来源 id 与时间（info 级流控字段，只读检索非审计范畴）；检索结果为空不写该字段。写入点=step-dispatcher 的 injectKnowledge 调 recordStepMeta；测试 @v: tests/dispatcher.test.ts「knowledge retrieval records source_ids as flow field in HopLog」/「retrieve 返回空数组 → HopLog 不写 knowledge 流控字段」、tests/hoplog.test.ts「always records audit fields regardless of log level」（warn 级不写 knowledge） |
 | loop | `iterations:` | 每次迭代的独立记录 |
 | branch | `taken:` | 选中的 case |
 | case | `condition:` | 分支条件（仅在选中时展开记录） |
@@ -907,4 +914,4 @@ hitl:
 | ~~嵌套执行树~~ | **v2 已实现**：纯缩进嵌套（缩进=step-id 深度）+ loop `#iter` key，见 [[#^anc-obs-nested-tree]] | ~~v1 扁平平铺~~ 已修（省 children 键、完整 id、不用 iterations 数组） |
 | `llm:` 块的 system/prompt/response | 仅 model/tokens | LLM 完整交互记录待 v2 |
 | 卫星文件（parallel/call 并发分支） | 未实现 | 全部记录在主文件 |
-| `knowledge:` 流控字段（reason 知识访问） | 未实现 | KnowledgeProvider 访问记录待补 |
+| `knowledge:` 流控字段（reason 知识访问） | **已实装** | step-dispatcher 的 injectKnowledge 在检索到来源时经 recordStepMeta 写 `knowledge: [{source_id, at}]`（info 级，FLOW 通道）；字段行见 [[#^anc-obs-step-mapping]]。测试 @v: tests/dispatcher.test.ts「knowledge retrieval records source_ids as flow field in HopLog」（正例）/「retrieve 返回空数组 → HopLog 不写 knowledge 流控字段」（反例）、tests/hoplog.test.ts「always records audit fields regardless of log level」（warn 级裁掉 knowledge） |

@@ -3,7 +3,7 @@
 	source: [[codex-driver-carrier]], [[exec-engine]], [[hop-cli]]
 	source_id: hopjit-codex-driver-carrier, hopjit-exec-engine, hopjit-hop-cli
 	type: extract
-	last_sync: 2026-09-24T01:43+0800
+	last_sync: 2026-10-09T00:52+0800
 	note: Codex segment driver 与 parallel worker 共用的 step_ready 执行与提交规则。
 %%
 
@@ -16,6 +16,10 @@
 ```
 
 不得再额外前置 `node`。
+
+## 驱动通道：MCP 工具优先（todo/0146）
+
+会话里能调 hopjit MCP 的工具时，本文件与角色文件里的 `<CLI> --json <子命令> ...` 一律改用同名工具：`run` / `submit_and_fetch_next` / `reap_and_fetch_next` / `status` / `resume` / `abort` / `validate`。参数名是 CLI 参数去掉 `--`、连字符换下划线（`--instance` → `instance_id`、`--tool-result` → `tool_result`、`--log-dir` → `log_dir`），`--output "@<output_path>"` 对应 `output = "@<output_path>"`；`state_dir` 传 `<STATE>` 绝对路径，含 doc-ref 时 `workspace_dir` 传 `<VAULT>`（工具没有 cwd，doc-ref 与相对路径都按它解析，不需要 `cd`）。响应与命令行完全相同，原样读完，不截断不摘录。工具不可见时才用命令行。`call_protocol` 与 `launch_command` 里引擎拼好的命令照旧原样交给 shell 执行（见下"call"节）。
 
 ## step_ready
 
@@ -59,7 +63,7 @@
 
 ### commit
 
-与 act 同源，严格执行已授权的不可逆动作。执行 agent 不自行增加审批步骤。
+与 act 同源，严格执行已授权的不可逆动作。执行 agent 不自行增加审批步骤。带 hop_python body 的 commit 由引擎执行 body，不能用 `--output` 提交产出（返回 `COMMIT_BODY_ENGINE_ONLY`）；这一步第一次执行前引擎先做安全分析：动作全部可逆或低危就直接执行；有动作需要人确认时转人工，响应是 `paused` + `pause_reason: commit`，按介入点规则停下返回 main。执行 agent 不自己做安全判断，也不替用户批准。
 
 ## 输出文件
 
@@ -95,7 +99,7 @@
 
 `step_type` 为 `call` 时整步归你驱动。响应带 **`call_protocol` 载荷——四条命令引擎已拼好，照抄执行**（禁改参数、禁 `run --call-parent`、禁查 `--help` 自选路线——worker 入口混用会双重嵌套跑死野目录）：
 
-1. 照抄 `call_protocol.init_command`，唯一动作是把 `<CALLEE_SPEC_PATH:id>` 占位符替换为 callee spec 真实路径（callee_spec_id + 与父 spec 同目录约定）。
+1. 照抄 `call_protocol.init_command`。callee spec 的绝对路径引擎已填好（先找父 spec 同目录的 `<id>.md`,再找已装 HopAnt 的 `~/.hopjit/ants/<id>/<id>.md`）;两处都找不到时命令里留 `<CALLEE_SPEC_PATH:id>` 占位,这时唯一动作是按 spec 发现流程把它替换为 callee spec 真实路径。
 2. 先照抄 `call_protocol.child_advance` 领取子实例首个介入点（init 建的子实例是未推进态），再走标准循环（state-dir 照抄 `child_state_dir`、instance 照抄 `child_instance`）直到终态。
 3. 子实例 completed：照抄 `call_protocol.report_completed`（引擎按映射回填，你不搬数据）。
 4. 子实例 failed：照抄 `call_protocol.report_failed`（**禁止 `--failure` 自由文本转述**——引擎读子实例失败记录原封组装 CalleeFailure）。
@@ -123,7 +127,7 @@
 cd "<VAULT>" && <CLI> <command> ...
 ```
 
-除固定 cwd 外，不使用管道、命令替换或多命令链。
+除固定 cwd 外，不使用管道、命令替换或多命令链；不 `| head` 截断输出（截断会丢掉响应后半截的字段，管道还会多触发一次载体确认），响应原样读完。
 
 ## 介入点
 

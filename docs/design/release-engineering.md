@@ -9,7 +9,8 @@
 
 # 发版工程——快照制（release snapshot）
 
-> **模块版本**：release-engineering `v0.3.1`（2026-10-03 工程链 review 修复：HopTrait PkgDocsLifecycle 从散文改写成 trait 块〔三模式 Inputs/Outputs/失败条件 + ensures/preserves——preserves 钉 prepack 恒经 build 与 driver 指路路径恒在清单〕;净度验收散文区改用与清洗同一把 CommonMark 尺并加 NUL 第八样;词表缺席分叉明示;分项计数 14 份;守卫条目补七条反例;⑤ 删未兑现子句、⑥ 改三条）。上版 v0.3.0（2026-10-02 ^anc-release-tarball-self-contained 定形：进包的是打包期清洗后的发布件〔prepack 原地替换/postpack 备份恢复〕,清单权威 scripts/pkgdocs-manifest.json,D 系列/工程实现链/ARCHITECTURE 不进;同日 v0.2.0 首稿曾按整目录进包,作者抓'发布版本不应留内部信息'后改定形）。上版 v0.1.0（2026-09-04 快照制立文,此前无版本行——本行首立）。逐版演进史归 git log。
+> **模块版本**：release-engineering `v0.3.2`（2026-10-03 todo/0139 挂钩②改形态——作者定"agents.md 是给 git clone 的人用的,不是 hop3 用户用的"：进包清单 35→36,新增入口件 `docs/agent-instructions-template.md`——可贴进用户项目 CLAUDE.md / AGENTS.md 的 hop 使用指令模板,正文 ≤10 行〔每会话常驻〕,源文件恒为发布件形态〔零 @trace/锚点/双链/卡号,清洗对它是空操作〕;agent 问过用户才贴,install-skill 不写用户指令文件）；
+> - 上版 v0.3.1=2026-10-03 工程链 review 修复：HopTrait PkgDocsLifecycle 从散文改写成 trait 块〔三模式 Inputs/Outputs/失败条件 + ensures/preserves——preserves 钉 prepack 恒经 build 与 driver 指路路径恒在清单〕;净度验收散文区改用与清洗同一把 CommonMark 尺并加 NUL 第八样;词表缺席分叉明示;分项计数 14 份;守卫条目补七条反例;⑤ 删未兑现子句、⑥ 改三条）。上版 v0.3.0（2026-10-02 ^anc-release-tarball-self-contained 定形：进包的是打包期清洗后的发布件〔prepack 原地替换/postpack 备份恢复〕,清单权威 scripts/pkgdocs-manifest.json,D 系列/工程实现链/ARCHITECTURE 不进;同日 v0.2.0 首稿曾按整目录进包,作者抓'发布版本不应留内部信息'后改定形）。上版 v0.1.0（2026-09-04 快照制立文,此前无版本行——本行首立）。逐版演进史归 git log。
 
 **给谁**：改 `scripts/release.sh` 的人（agent 或维护者）。逐次操作归维护者操作手册（内部维护面,不随快照分发,人每次发版照走）；本文是行为权威——脚本怎么改、为什么这么定，冲突以本文为准。
 
@@ -210,9 +211,9 @@ release.sh 静态断言两条——`POLL_SLEEPS` 求和不少于 540 秒、`✅ 
 
 ```yaml
 PkgDocsManifest:
-  files % list[path]        # 进包的源文件相对路径,35 项——
-    # 入口五件：README.md / USAGE.md / docs/AGENT-GUIDE.md / docs/WORKAROUNDS.md / docs/reference/配置参考.md
-    # 概念层 15 份：语法参考 / 核心规范 / 配套HopJIT运行时能力 / 错误模型 / 五份扩展（事务与补偿、可观测性与YAMLL、有序思考与渐进固化、Python语法沙箱、模型变速箱适配）/ Prompt组装参考 / prompt-author / 核心创新 / HopSop标准作业流程 / HopType体系 / HopAnt概念-双态组件模型
+  files % list[path]        # 进包的源文件相对路径,36 项——
+    # 入口六件：README.md / USAGE.md / docs/AGENT-GUIDE.md / docs/agent-instructions-template.md（贴进用户项目 CLAUDE.md / AGENTS.md 的指令模板,正文 ≤10 行,源即发布件形态——它每会话常驻,长了是用户的上下文税）/ docs/WORKAROUNDS.md / docs/reference/配置参考.md
+    # 概念层 15 份：语法参考 / 核心规范 / 配套HopJIT运行时能力 / 错误模型 / 五份扩展（事务与补偿、可观测性与YAMLL、有序思考与渐进固化、Python语法沙箱、模型变速箱适配）/ Prompt组装参考 / prompt-author / 核心创新 / HopSop标准作业流程 / HopType体系 / HopAnt概念
     # 教程用户系列 14 份：00-新人导读、01-第一次运行 ×4（ClaudeCode/Codex/cfuse/opencode 四载体各一份）、02-读懂一份spec … 10-钉钉通知 共 9 份
     # 例外 1 份：D10-hop_python计算体——挂 D 系列名但是用户写 act body 的必需知识（用户系列引用 12 次,教程 03 '下一篇 D10 讲'、08 列为前提）,随包;其余 D 篇不进
   excluded_prefixes % list[path]   # 守卫用：files 白名单里不许出现的源路径前缀——docs/design/ TRACEABILITY.md Doctree.md docs/i18n/ docs/obsolete/ ARCHITECTURE.md docs/tutorials/D docs/concepts/工程实现链

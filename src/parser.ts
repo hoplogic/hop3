@@ -522,7 +522,16 @@ function parseApprovedCommandsSection(lines: string[], sec: Section, errors: Par
 // 前缀文本 → 词元：按空白切;单/双引号包住的段落内空白不切、引号剥掉;不做反斜杠转义
 // （hop_python 字符串字面量同一子集,不是完整 shell-words）。行读完仍在引号内 → unclosed=true,
 // 调用方报 parse error（原静默收尾——review 探针抓出,与 Tools 段同档响亮）。// @a: anc-rule-approved-commands
-function splitArgvPrefix(text: string): { tokens: string[]; unclosed: boolean } {
+/** Tools 段签名行取工具名：`- 名(…)` 形态（中文名同认,与 parseSpec 用同一条 RE_TOOL_SIG）;非签名行返回 undefined。
+ * 导出给 hopant reconcileHeader 改写面：删条目时按 parser 同一文法判"这一行是不是那个条目"（设计 ^anc-hopant-pack 第 5 步）。 */ // @a: anc-hopant-pack
+export function toolSigName(line: string): string | undefined {
+  const m = line.trim().match(RE_TOOL_SIG);
+  return m ? m[1] : undefined;
+}
+
+/** 已批准命令条目按引号切词（`- "my cmd" --x` 首项是 `my cmd`;词元边界上的 `#` 起行尾注释）。parseSpec 内部用它识别条目;
+ * 2026-10-09 导出给 hopant reconcileHeader 改写面——删条目时按同一切词判首项,不自写 `\S+` 正则（review 抓带引号命令"报删实未删"）。 */ // @a: anc-hopant-pack
+export function splitArgvPrefix(text: string): { tokens: string[]; unclosed: boolean } {
   const tokens: string[] = [];
   let cur = '';
   let quote: string | null = null;
@@ -787,6 +796,7 @@ interface FlatStep {
   outputs: OutputDecl[];
   rawOutputs: string[];  // 原始 + → 文本（call 步骤据此解析 output_mapping）
   instruction: string[];
+  instruction_lines: number[];  // 与 instruction 等长:每个指令行在 spec 文本里的 1 起算行号 // @a: anc-rule-act-body-line
   forEach?: { listVar: string; itemVar: string };  // for-each: X → Y
   headingFlavor?: boolean;  // 标题风步骤（step 行带 `#` 前缀）——启用段落吸收进 instruction。内部字段，不入 AST。 // @a: anc-rule-surface-heading-flavor
   source_location: SourceLocation;
@@ -825,10 +835,12 @@ function parseStepSection(
         captureFence = true;
         fenceIndent = line.length - line.trimStart().length;
         current.instruction.push(trimmed);
+        current.instruction_lines.push(i + 1);
         continue;
       }
       if (captureFence) {
         current!.instruction.push(trimmed);
+        current!.instruction_lines.push(i + 1);
         captureFence = false;
         continue;
       }
@@ -839,6 +851,7 @@ function parseStepSection(
     if (captureFence) {
       // body 行：按开栏缩进 de-indent（act body 缩进敏感），不足则整体 trimStart 兜底。
       current!.instruction.push(line.length >= fenceIndent ? line.slice(fenceIndent) : line.trimStart());
+      current!.instruction_lines.push(i + 1);
       continue;
     }
     if (inFence) continue;
@@ -972,6 +985,7 @@ function parseStepSection(
         outputs: [],
         rawOutputs: [],
         instruction: [],
+        instruction_lines: [],
         ...(isHeadingFlavor ? { headingFlavor: true } : {}),
         source_location: { line_start: i + 1, line_end: i + 1 },
       };
@@ -1006,6 +1020,14 @@ function parseStepSection(
       }
       const cur = current as FlatStep & { tool_grants?: { name: string; note?: string }[] };
       cur.tool_grants = cur.tool_grants ?? [];
+      // `*` 与具名互斥（设计注记② 文法第二钉——2026-10-12 语义审计 #19 补实装:此前 * 与具名同收,* 当通配标志静默吞掉具名,
+      // 作者写具名是想收窄面,被 * 盖掉与意图相反）。// @a: anc-step-tool-grant
+      const hasStar = namePart === '*' || cur.tool_grants.some(g => g.name === '*');
+      if (hasStar && (cur.tool_grants.length > 0)) {
+        errors.push({ kind: 'parse', line: i + 1,
+          message: `\`- 工具: *\`（全量授权）与具名授权互斥,二选一——要收窄面就逐件列名,要全量就只写一行 *` });
+        continue;
+      }
       cur.tool_grants.push({ name: namePart, ...(note ? { note } : {}) });
       continue;
     }
@@ -1122,6 +1144,7 @@ function parseStepSection(
     const instrMatch = trimmed.match(RE_INSTRUCTION);
     if (instrMatch) {
       current.instruction.push(instrMatch[1]);
+      current.instruction_lines.push(i + 1);
       continue;
     }
 
@@ -1137,6 +1160,7 @@ function parseStepSection(
     // 见 design ^anc-rule-surface-heading-flavor。// @a: anc-rule-surface-heading-flavor
     if (current.headingFlavor) {
       current.instruction.push(trimmed);
+      current.instruction_lines.push(i + 1);
       continue;
     }
     // 内联风孤儿行收集（^anc-rule-decl-zone-warn Steps 扩围,2026-08-30 作者令"这个也修掉"）：
@@ -1462,21 +1486,22 @@ const ATTR_HOST_HINT: Record<string, string> = {
 };
 
 function checkAttrGate(flat: FlatStep, errors: ParseError[]): void {
-  // 工具授权条目仅 act 步合法（0054 ^anc-step-tool-grant——其余类型报错指路,防静默无效声明）
-  // 工具授权宿主扩员 reason（^anc-step-tool-grant 2026-09-01 作者拍"等同于 act 的能力,
-  // 不能 commit 写"——standalone reason 消费声明;check 维持无工具面判官纯判定）。
+  // 工具授权条目宿主：act（0054 ^anc-step-tool-grant）→ 扩员 reason（2026-09-01 作者拍"等同于 act 的能力,
+  // 不能 commit 写"）→ 扩员 check（2026-10-11 todo/0161 作者定"check 工具可能要读文件,留个口子"——
+  // 无 body 的 check 与 reason 同一套声明制）。其余类型（confirm / ask / commit / 容器步）报错指路,防静默无效声明。
   // @a: anc-exec-reason-tools
+  const TOOL_LINE_HOSTS = new Set(['act', 'reason', 'check']);
   const tg = (flat as FlatStep & { tool_grants?: unknown[] }).tool_grants;
-  if (tg?.length && flat.step_type !== 'act' && flat.step_type !== 'reason') {
+  if (tg?.length && !TOOL_LINE_HOSTS.has(flat.step_type)) {
     errors.push({ kind: 'parse', line: flat.source_location?.line_start ?? 0,
-      message: `步骤 "${flat.step_id}" [${flat.step_type}] 带工具授权行（- 工具:）——该条目仅 act/reason 步骤可用（check 无工具面判官纯判定;带 body 的 act 工具走白名单通道声明可省）` });
+      message: `步骤 "${flat.step_id}" [${flat.step_type}] 带工具授权行（- 工具:）——该条目仅 act/reason/check 步骤可用（带 body 的 act / check 工具走白名单通道声明可省）` });
   }
-  // 工具禁用条目同闸（^anc-step-tool-deny——消费面与授权行同族:仅 act/reason;
+  // 工具禁用条目同闸（^anc-step-tool-deny——消费面与授权行同族:仅 act/reason/check;
   // 同名既授又禁=笔误或想不清,写时红点名,不做运行期静默偏一边）。// @a: anc-step-tool-deny
   const td = (flat as FlatStep & { tool_denies?: { name: string }[] }).tool_denies;
-  if (td?.length && flat.step_type !== 'act' && flat.step_type !== 'reason') {
+  if (td?.length && !TOOL_LINE_HOSTS.has(flat.step_type)) {
     errors.push({ kind: 'parse', line: flat.source_location?.line_start ?? 0,
-      message: `步骤 "${flat.step_id}" [${flat.step_type}] 带工具禁用行（- 禁工具:）——该条目仅 act/reason 步骤可用` });
+      message: `步骤 "${flat.step_id}" [${flat.step_type}] 带工具禁用行（- 禁工具:）——该条目仅 act/reason/check 步骤可用` });
   }
   if (td?.length && (tg as { name: string }[] | undefined)?.length) {
     const grantNames = new Set((tg as { name: string }[]).map(g => g.name));
@@ -1731,7 +1756,10 @@ function flatToStepNode(flat: FlatStep, errors: ParseError[]): StepNode {
       // 纯机械判定 body（2026-08-19 作者拍板 A,概念 ^anc-step-check-body）——与 act 同解析;
       // 原静默面收口:此前围栏滑进 instruction 变提示词。// @a: anc-step-check-body
       const { body, instruction } = parseActBodyFromFlat(flat, errors);
-      return { ...base, step_type: 'check', instruction, ...(is_finally ? { is_finally: true } : {}), ...(escalatable ? { escalatable: true } : {}), ...(body ? { body } : {}) } as CheckStep;
+      // 工具授权 / 禁用随 check 入声明制（todo/0161）——与 reason 分支同形材料化 // @a: anc-exec-reason-tools
+      const grants = (flat as FlatStep & { tool_grants?: { name: string; note?: string }[] }).tool_grants;
+      const denies = (flat as FlatStep & { tool_denies?: { name: string; note?: string }[] }).tool_denies;
+      return { ...base, step_type: 'check', instruction, ...(is_finally ? { is_finally: true } : {}), ...(escalatable ? { escalatable: true } : {}), ...(body ? { body } : {}), ...(grants?.length ? { tool_grants: grants } : {}), ...(denies?.length ? { tool_denies: denies } : {}) } as CheckStep;
     }
     case 'confirm': {
       const require_human = boolAttr(flat.attrs, 'require_human');
@@ -1775,15 +1803,16 @@ function parseActBodyFromFlat(flat: FlatStep, errors: ParseError[]): { body?: Ac
   // 指令级围栏未闭合响亮拒（^anc-rule-unclosed-fence 同族——文档级已拒,指令级原静默接受:
   // 闭栏行删掉 body 照样提取,产物截断不可见）// @a: anc-rule-unclosed-fence
   if (unclosed) {
-    errors.push({ kind: 'parse', line: (flat.source_location?.line_start ?? 0) + bodyStartIndex - 1,
+    errors.push({ kind: 'parse', line: flat.instruction_lines[bodyStartIndex - 1] ?? flat.source_location?.line_start ?? 0,   // 开栏行的真实行号 // @a: anc-rule-act-body-line
       message: '步骤 ' + flat.step_id + ' 的 hop_python 围栏未闭合（```hop_python 开了没关）——补 "> ```" 闭栏行,检查产物是否被截断' });
   }
   const { instruction: narrativeNoModel } = extractModelAnnotation(narrative);
   const instruction = narrativeNoModel.length > 0 ? narrativeNoModel.join('\n') : undefined;
   if (!bodyLines) return { instruction };
-  // 围栏行在原文的绝对行号：步骤起始 + body 在 instruction 中的偏移（近似，错误定位用）
-  const baseLine = (flat.source_location?.line_start ?? 0) + bodyStartIndex;
-  const body = parseActBody(bodyLines, baseLine, errors) ?? undefined;
+  // body 每行的真实行号:instruction_lines 与 instruction 逐项对应,body 行在 instruction 里连续 // @a: anc-rule-act-body-line
+  const lineNumbers = flat.instruction_lines.slice(bodyStartIndex, bodyStartIndex + bodyLines.length);
+  const baseLine = lineNumbers[0] ?? (flat.source_location?.line_start ?? 0) + bodyStartIndex;
+  const body = parseActBody(bodyLines, baseLine, errors, lineNumbers) ?? undefined;
   return { body, instruction };
 }
 
@@ -1997,6 +2026,14 @@ function collectNarrativeSections(lines: string[]): Array<{ title: string; conte
   }
   flush(lines.length);
   return out;
+}
+
+/** 只读段切分：spec 全文 → 各段的 kind 与行区间（0 基,endLine 不含）。薄包装 identifySections,
+ * 不解析段内容、不报错——parser 认什么段头（中英 ## 段头、内联标签形）调用方就认什么。
+ * 消费方 hopant.headerHash（design/hopant.md ^anc-hopant-stamp——自写段头正则漏中文头的 review 实撞后补）。*/
+export function sectionSpans(markdown: string): { kind: string; startLine: number; endLine: number }[] { // @a: anc-struct-spec-parser
+  const sections = identifySections(markdown.split('\n'));
+  return sections.map(s => ({ kind: s.kind, startLine: s.startLine, endLine: s.endLine }));
 }
 
 /** spec 全文解析入口——markdown → SpecAST + 解析错误集（容错收集不首错即停）。见 [[spec-parser#^anc-struct-spec-parser]]。 */

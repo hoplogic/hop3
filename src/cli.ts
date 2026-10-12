@@ -3,27 +3,34 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 // @module: hop-cli ^anc-struct-hop-cli
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { dump as yamlDump, load as yamlLoad } from 'js-yaml';
 import { parse as parseJsonc, modify as jsoncModify, applyEdits as jsoncApplyEdits, type ParseError } from 'jsonc-parser';
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync, copyFileSync, cpSync, realpathSync, rmSync } from 'node:fs';
-import { resolve, join, isAbsolute, dirname, sep } from 'node:path';
+import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync, copyFileSync, cpSync, renameSync, appendFileSync, realpathSync, rmSync, mkdtempSync } from 'node:fs';
+import { resolve, join, isAbsolute, dirname, sep, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { homedir } from 'node:os';
-import { ExecutionEngine, type EngineOptions } from './engine.js';
+import { homedir, hostname, userInfo, tmpdir } from 'node:os';
+import { ExecutionEngine, DECLARED_DIRS_PARAM, type DeclaredDirs, getEngineVersion, type EngineOptions } from './engine.js';
 import { parseSpec, parseFragment , flattenFragmentNumbering , convertSpecKeywords , convertSchemaSeparators } from './parser.js';
 import { validateSpec } from './validator.js';
-import { readVars, readState, readSpec, stateExists, flattenVars } from './persistence.js';
+import { readVars, readState, readSpec, stateExists, flattenVars, findRunRoot } from './persistence.js';
 import { hasChildren, getChildren, isParallelContainer, getForEach } from './ast-helpers.js';
 import type { StepNode } from './ast-types.js';
 import type { CommandResponse, ListResponse, NextResponse } from './cli-types.js';
 import type { SpecError, ValidationError } from './errors.js';
 import type { HostConfig } from './provider-types.js';
-import { credentialLikeHopEnvKey, hopEnvCredentialError, ENGINE_DEFAULT_MODEL, RUN_APPROVED_COMMAND_TOOL } from './provider-types.js';
+import { credentialLikeHopEnvKey, hopEnvCredentialError, OPENCODE_DISABLED_TOOLS, YAML_DUMP_OPTS } from './provider-types.js';
 import { CompositeToolProvider, makeEngineToolProviderFactory } from './tools-composite.js';
 
-import { parseToolServers, enrichParamsComments, loadProjectToolRegistry } from './tools-registry.js';
+import { parseToolServers, enrichParamsComments, loadTwoLevelRegistry } from './tools-registry.js';
+import { configPaths, loadReuseConfig, loadToolRegistry, applyReuseConfig } from './config-load.js';   // 复用模式两级配置（todo/0131,[[config-load#^anc-config-reuse-consume]]） // @a: anc-config-reuse-consume
 import { sendDingtalk, composeRunCard } from './tools-notify.js';   // 复用模式通知挂点（^anc-cli-notify-reuse） // @a: anc-cli-notify-reuse
+import { antDir, antsRoot, antRoots, planInstall, applyInstall, resolveCalleeSpecPath, checkRunDeps, commitApprovalStorePath } from './hopant.js';   // 演示 HopAnt 安装 / 依赖核 / callee 与批准账解析（^anc-cli-install-skill-demo-ants / ^anc-cli-run-deps-gate）
+// hop 管理面业务体（doctor 八问 / ant 七动作 / 载体探测助手）住 hop-admin.ts,本文件的 doctor / ant 子命令与 setup 的探测半边都调它（todo/0154,^anc-mcp-admin-tools）。
+import { type AdminContext, type Carrier, type McpHandshake, CARRIER_VALUES, carrierFamily, resolveCarrierHome, detectCarriers, installedHopDriverVersion, learnStandaloneEntry, readMcpRegistration, ccFamilyRegistration, writeCcLocalRegistration, ccPermissionMissing, mcpHandshake, rewriteSpecId,
+  runDoctor, formatDoctorReport, antList, antInstall, antAdapt, antRemove, antBootstrap, antPack, antShare } from './hop-admin.js';   // @a: anc-mcp-admin-tools
+// tests/cli.test.ts 既有的导入面（搬家前这些符号在本文件导出）——转发保持可达,不是跨模块出口。
+export { resolveCarrierHome, detectCarriers, installedHopDriverVersion, readSkillFrontmatter, readMcpRegistration, detectCcHopjitRegistration, ccFamilyRegistration, writeCcLocalRegistration, ccPermissionMissing, mcpHandshake, learnStandaloneEntry, runDoctor, formatDoctorReport, rewriteSpecId, type Carrier, type DoctorReport, type DoctorItem, type DoctorStatus, type McpRegistration, type McpHandshake, type StandaloneEntry, type AdminContext } from './hop-admin.js';
 
 // 在 spec 树中按 step_id 查找节点（join_parallel 用于定位 parallel 容器及其 children）
 function findStepInSpec(stepId: string, steps: StepNode[]): StepNode | null {
@@ -50,7 +57,11 @@ function readPackageVersion(): string { // @a: anc-cli-version-single-source
 
 const program = new Command();
 program.option('--json', 'Force single-line JSON output (default is YAML; machine consumers should pass this)');
-program.hook('preAction', (thisCommand) => { setOutputJson(thisCommand.opts().json === true); });
+program.hook('preAction', (thisCommand) => {
+  setOutputJson(thisCommand.opts().json === true);
+  const hint = firstRunHint(process.argv.slice(2), process.env, readPackageVersion());   // 只写 stderr,不碰 --json 的 stdout（^anc-cli-first-run-hint） // @a: anc-cli-first-run-hint
+  if (hint) process.stderr.write(hint + '\n');
+});
 program.name('hopjit').version(readPackageVersion()).description('HopJIT execution engine CLI'); // @a: anc-struct-hop-cli, anc-cli-dispatch
 
 /** stdout 输出：缺省 YAML（人可读，2026-08-06 拍板），--json flag 或 HOPJIT_OUTPUT=json 强制
@@ -64,7 +75,7 @@ export function output(data: unknown): void { // @a: anc-cli-json-io, anc-string
   if (FORCE_JSON) {
     process.stdout.write(JSON.stringify(data) + '\n');
   } else {
-    process.stdout.write(yamlDump(data as object, { lineWidth: -1, noRefs: true }));
+    process.stdout.write(yamlDump(data as object, YAML_DUMP_OPTS));   // @a: anc-config-yaml-dump-opts
   }
 }
 
@@ -190,26 +201,6 @@ export function resolveInstance(stateDir: string, instanceId?: string): string {
   return join(stateDir, entries[0].name);
 }
 
-/** 复用模式项目级 commands 键读取（^anc-exec-subprocess-run 配置通路——复用模式此前零配置
- * 加载面,本键是首个:只读 hopjit.yaml 的 commands 一个键,不引入完整配置合并;文件缺席/坏 YAML/
- * 键缺席全部回空名单=能力关死,配置钝感不炸 CLI）。 */ // @a: anc-exec-subprocess-run
-export function readProjectCommands(): string[] {
-  try {
-    const p = resolve(process.cwd(), 'hopjit.yaml');
-    if (!existsSync(p)) return [];
-    const parsed = yamlLoad(readFileSync(p, 'utf-8')) as { commands?: unknown } | null;
-    const c = parsed?.commands;
-    if (!(Array.isArray(c) && c.every(x => typeof x === 'string'))) return [];
-    // hopjit 恒拒名单配置面（^anc-exec-subprocess-deny-hopjit）——本函数其余形态钝感（坏 YAML
-    // 回空=能力关死,安全侧),唯此例外响亮:写了 hopjit 是明确的越层配置,静默剔除会让作者
-    // 误以为生效,运行期再撞恒拒报文更迷惑。// @a: anc-exec-subprocess-deny-hopjit
-    if (c.some(x => x === 'hopjit' || x.split('/').pop() === 'hopjit')) {
-      throw new Error('CONFIG_ERROR: hopjit.yaml commands 白名单不得含 hopjit——act/commit 步骤不驱动引擎（跑别的 spec 用 [call],不可逆动作走注册工具）');
-    }
-    return c;
-  } catch (err) { if (err instanceof Error && err.message.startsWith('CONFIG_ERROR:')) throw err; return []; }
-}
-
 /** 复用模式通知挂点（^anc-cli-notify-reuse——五个可达终态/停点的命令统一出口:一处实现五处调用）。
  * 二与门（2026-08-31 作者定"每次 hop 时说,否则太烦"——渠道随话语走零配置文件）:
  * ①engine.notifyChannel 在场（run --notify <渠道> 置值入快照跨进程,渠道来自用户话语点名）
@@ -252,25 +243,42 @@ async function outputWithNotify(result: { status: string }, engine: ExecutionEng
 }
 
 /** 构造 CLI 默认 HostConfig（workspace=cwd + 默认沙箱），供独立模式命令实例化 Engine/Dispatcher。见 [[hop-cli#^anc-struct-hop-cli]] */
-/** 项目级 language 键读取（hopjit.yaml language: zh|en,缺省 en——文件缺席/坏 YAML/坏值一律
- * 回 en 安全侧,读法与 readProjectCommands 同款单键读。^anc-i18n-language-config）。// @a: anc-i18n-serialize-lang */
-export function readProjectLanguage(): 'en' | 'zh' {
-  try {
-    const p = resolve(process.cwd(), 'hopjit.yaml');
-    if (!existsSync(p)) return 'en';
-    const parsed = yamlLoad(readFileSync(p, 'utf-8')) as { language?: unknown } | null;
-    return parsed?.language === 'zh' ? 'zh' : 'en';
-  } catch { return 'en'; }
-}
-
 // 引擎自有工具执行体工厂注册（执行主体原则 2026-09-05——组合根注入,engine 不越层 import
 // tools-composite;body 消化路径经此构造 provider 直执。直执面=内置两成员∪hopjit.yaml 注册件
 // （0076 补齐注入半边——工厂内现读,engine 零感知;构造/解析错误经消化路径 catch 折步骤 fail）。
 // ^anc-exec-tool-request 分派判据四条款）
 // @a: anc-exec-tool-request
 ExecutionEngine.setEngineToolProviderFactory(
-  makeEngineToolProviderFactory(() => loadProjectToolRegistry(process.cwd())),   // cwd 读在组合根（run 隔离不变量）
+  // 项目根取本 run 的 HostConfig.workspace_dir（`run --workspace WS` 从别处 cwd 起跑时 WS 的 hopjit.yaml 才是项目级文件,
+  // ^anc-cli-workspace-arg;review 面二 A 真机 INIT_FAILED 复现）;home 仍在组合根读一次。两级 tool_servers（todo/0131） // @a: anc-config-reuse-consume
+  makeEngineToolProviderFactory(hc => loadToolRegistry(reuseConfigPaths(hc.workspace_dir), hc.workspace_dir)),
 );
+
+// 复用模式 call 的 callee 路径解析注册（两级:调用方同目录 → ~/.hopjit/ants/<id>/<id>.md;家目录读在组合根）。
+// 引擎拿它把 init_command / launch_command 里的 callee 位置填成真实路径。^anc-exec-callee-resolver // @a: anc-exec-callee-resolver
+ExecutionEngine.setCalleeSpecResolver((callerSpecPath, calleeId, workspaceDir) => resolveCalleeSpecPath(dirname(callerSpecPath), antRoots(homedir(), workspaceDir), calleeId));   // 两级 HopAnt 根：项目级取本实例工作区（^anc-hopant-home 决策 9）;不做 process.cwd 兜底——引擎传空串只在 hostConfig 缺席时,空串直传等价只查用户级（exec-engine ^anc-exec-callee-resolver）
+// commit 批准账位置（^anc-exec-commit-approval / ^anc-hopant-commit-store）:HopAnt 记在 ant 目录 inner_store,
+// 任务卡记在 run 根旁（.hopstate/commit_approvals.json）。规则唯一真身在 hopant.commitApprovalStorePath,mcp-server 同注册。
+// @a: anc-exec-commit-approval
+ExecutionEngine.setCommitApprovalStoreResolver((specPath, instanceDir, workspaceDir) => commitApprovalStorePath(antRoots(homedir(), workspaceDir), specPath, dirname(findRunRoot(instanceDir))));
+
+/** 顶层 run/init 起跑依赖核：不过时输出 INIT_FAILED 响应并返回 false（调用方直接 return,不建实例）。
+ * 判定在 hopant.checkRunDeps,这里只取注册面与家目录。^anc-cli-run-deps-gate // @a: anc-cli-run-deps-gate */
+function runDepsGate(content: string, specAbsPath: string, workspaceDir: string): boolean {
+  const { sysPath, projPath } = reuseConfigPaths(workspaceDir);   // 项目级按工作区根读（^anc-cli-workspace-arg）;路径唯一来源 config-load.configPaths // @a: anc-config-reuse-consume, anc-struct-config-load-exports
+  const reg = loadTwoLevelRegistry(sysPath, projPath);
+  const rep = checkRunDeps(content, specAbsPath, { roots: antRoots(homedir(), workspaceDir), tool_servers: reg.tool_servers });
+  if (rep.ok) return true;
+  const lines = [...rep.tools.missing.map(t => `工具没有注册 ${t}`), ...rep.tools.errors, ...rep.calls.missing.map(c => `call 目标找不到 ${c}`), ...rep.calls.unreadable];
+  const message = `INIT_FAILED 依赖核:${lines.join(';')}`;
+  // 与引擎 init 失败同形（status:error + errors[] 带 rule INIT_FAILED,退出码 0 走业务错误通道）,另带三个结构化字段
+  output({
+    status: 'error', error_code: 'INIT_FAILED', message,
+    errors: [{ kind: 'validate', rule: 'INIT_FAILED', severity: 'error', message }],
+    missing_tools: rep.tools.missing, missing_calls: rep.calls.missing, hints: rep.hints,
+  });
+  return false;
+}
 
 // --max-runs 文法核:非正整数响亮拒,不静默当缺省（与 log_level 同姿势）。见 ^anc-obs-log-retention // @a: anc-obs-log-retention
 function parseMaxRuns(raw: unknown): number {
@@ -282,28 +290,75 @@ function parseMaxRuns(raw: unknown): number {
   return n;
 }
 
-/** 构造 CLI 默认 HostConfig（workspace=cwd+默认沙箱+项目级 commands/language 键读取）——复用模式
+/** `--approve-dirs`：起跑即把 Config.dirs 清单记进批准账,跳过 dirs 停点——写参数的人就是批准的人（脚本 / CI 场景）。
+ * 实例没有 workspace 外目录时什么都不做（INVALID_STATE 不是错,是无需批）。见 [[hop-cli#^anc-cli-approve-dirs]]。 */ // @a: anc-cli-approve-dirs
+export function approveDirsIfFlagged(engine: ExecutionEngine, flagged: boolean | undefined): void {
+  if (!flagged) return;
+  const st = engine.checkDirsApproval();
+  if (!st || st.approved) return;
+  const r = engine.approveDirs(st.dirs_hash);
+  if (r.status === 'error') errorExit(r.message);
+}
+
+/** run / init 的 `--workspace <dir>` 解析：缺席返 cwd（既有行为零改动）;显式值绝对路径 normalize、相对路径按 cwd
+ * 解析,不存在或不是目录即 errorExit WORKSPACE_NOT_FOUND（报文形态与 mcp-server start_run 同款——只接受显式
+ * 路径,不做搜索）。工作区此前只由进程 cwd 隐式决定,CC 会话里用户看不见 cwd、Bash cd 过别处它还会变,作者
+ * 2026-10-07 问"复用模式下的 cwd 是哪儿来的"后补齐与独立模式 workspace_dir 对称的一半。
+ * 见 [[hop-cli#^anc-cli-workspace-arg]]。 */ // @a: anc-cli-workspace-arg
+export function resolveWorkspaceArg(arg: string | undefined, cwd: string = process.cwd()): string {
+  if (arg === undefined) return cwd;
+  const p = isAbsolute(arg) ? normalize(arg) : resolve(cwd, arg);
+  let isDir = false;
+  try { isDir = statSync(p).isDirectory(); } catch { /* 不存在 */ }
+  if (!isDir) errorExit(`WORKSPACE_NOT_FOUND: workspace 不存在（${p}）——只接受显式路径,不做搜索`);
+  return p;
+}
+
+/** 构造 CLI 默认 HostConfig（workspace=cwd 或 --workspace 显式值+默认沙箱+项目级 commands/language 键读取）——复用模式
  * 组合根,独立模式命令实例化 Engine/Dispatcher 同用;tool_registry 不在此装配,归工厂内现读〔0076〕。
  * 见 [[hop-cli#^anc-struct-hop-cli]]。（出口注释沿革:2026-09-04 review 抓缺补;2026-09-06 review 抓
  * 0076 批插函数把本注释顶开挂错主后合并归位） */
-export function buildHostConfig(): HostConfig {
-  return {
-    workspace_dir: process.cwd(),
+export function buildHostConfig(workspaceDir: string = process.cwd()): HostConfig {
+  // 工作区根=本 run 唯一一次定（缺省读 cwd;run/init 的 --workspace 显式传则用它,^anc-cli-workspace-arg）。
+  // sandbox.filesystem.workspace_dir 必须与 workspace_dir 同值且是绝对路径——
+  // 原 '.' 存进 state.json 后在每个续推 hopjit 进程里按该进程 cwd 重新展开,driver cd 进 work_zone 敲 submit
+  // 即把 commit 写权限边界带偏（2026-10-04 三翻译 worker 全被 Write outside workspace sandbox 拒;MCP 侧
+  // 2026-08-20 同款已改）。见 [[sandbox#^anc-config-sandbox-workspace-root]]。// @a: anc-config-sandbox-workspace-root
+  const hc: HostConfig = {
+    workspace_dir: workspaceDir,
     sandbox: {
-      filesystem: { workspace_dir: '.', read_access: { allowed: ['.'],
+      filesystem: { workspace_dir: workspaceDir, read_access: { allowed: ['.'],
         // 默认拒读基线：密钥/凭证类即使在 workspace 内也拦（sandbox.md 读权限优先级
         // denied > allowed；2026-08-08 语义审计 ❌ 实抓：设计一贯示例含 .env/*.key,
         // 代码 denied=[] 致默认部署下凭证文件对 LLM read 工具可读）。// @a: anc-config-sandbox-filesystem
         denied: ['.env', '.env.*', '*.key', '*.pem', '.hopstate/**', '.hoplog/**'], confirm_required: [] } },   // .hoplog（#50:LLM 逛日志树 read 巨型 main.yaml 灌爆上下文,dr19 实撞）
       network: { trusted_hosts: [] },
-      runtime: { available: readProjectCommands() },   // 配置通路:项目级 hopjit.yaml commands 键（^anc-exec-subprocess-run） // @a: anc-exec-subprocess-run
+      runtime: { available: [] },   // 下方 applyReuseConfig 按两级合并结果填（^anc-exec-subprocess-run 配置通路） // @a: anc-exec-subprocess-run
     },
-    language: readProjectLanguage(),   // 生成物语言（^anc-i18n-language-config） // @a: anc-i18n-serialize-lang
-    // language 同步注入 hop_env（hop_env_language 键——hopbuild2 拼头 body/doc-ref 经既有通道
-    // 消费生成物语言,零新机制;params 显式传 hop_env_language 时按覆盖链后到覆盖）。// @a: anc-i18n-serialize-lang
-    hop_env: { hop_env_language: readProjectLanguage() },
+    language: 'en',   // 占位,applyReuseConfig 按键值或系统语言填（^anc-i18n-language-config,todo/0160） // @a: anc-i18n-serialize-lang
+    hop_env: { hop_env_language: 'en' },   // 占位,同上由 applyReuseConfig 覆盖
     api_key: process.env['HOPJIT_ANTHROPIC_API_KEY'] ?? '',
   };
+  // 复用模式两级配置（todo/0131——此前只读项目级三个单键,系统级 ~/.hopjit/config.yaml 一个键都不读）：
+  // 系统级 + 项目级合并,commands / language / env / resource_limits 四样装入;容错两档——读坏回缺省并 stderr 一行,
+  // commands 含 hopjit 响亮抛（CONFIG_ERROR）。家目录与 HOPJIT_CONFIG 在本组合根读一次。// @a: anc-config-reuse-consume
+  const { config, warnings } = loadReuseConfig(reuseConfigPaths(workspaceDir));
+  for (const w of warnings) process.stderr.write(`${w}\n`);
+  applyReuseConfig(hc, config);
+  return hc;
+}
+
+/** 组合根读进程状态装管理面上下文（设计 HopSchema AdminContext,[[mcp-server#^anc-mcp-admin-tools]]）：cwd 缺省进程 cwd;login 取不到为空串。 */ // @a: anc-mcp-admin-tools
+function adminContext(cwd: string = process.cwd()): AdminContext {
+  let login = '';
+  try { login = userInfo().username; } catch { /* 容器里可能取不到 */ }
+  const home = homedir();
+  return { home, cwd, env: process.env, exec_path: process.execPath, login, hostname: hostname(), roots: antRoots(home, cwd) };
+}
+
+/** 复用模式两级配置路径（组合根算一次：home / HOPJIT_CONFIG / 工作区根）。 */ // @a: anc-config-reuse-consume
+function reuseConfigPaths(workspaceDir: string) {
+  return configPaths(homedir(), workspaceDir, process.env['HOPJIT_CONFIG'] || undefined);
 }
 
 /** 复用模式组合根的 hop_env 合成：--params 里 hop_env_* 键摘出入 HostConfig.hop_env（覆盖链
@@ -331,9 +386,17 @@ export function extractHopEnvIntoHostConfig(hostConfig: HostConfig, params: Reco
   }
 }
 
+/** 子实例继承的 Config.dirs 清单：父经 launch_command / init_command 的参数文件以保留键 DECLARED_DIRS_PARAM 透传,
+ * 组合根摘出进 EngineOptions.inheritedDirs（不是 Inputs,从 params 删掉）。见 [[exec-engine#^anc-exec-dirs-grant]] 子实例与恢复条。 */ // @a: anc-exec-dirs-grant
+export function extractInheritedDirs(params: Record<string, unknown> | undefined): DeclaredDirs | undefined {
+  if (!params || !(DECLARED_DIRS_PARAM in params)) return undefined;
+  const v = params[DECLARED_DIRS_PARAM]; delete params[DECLARED_DIRS_PARAM];
+  return v && typeof v === 'object' && Array.isArray((v as DeclaredDirs).read) ? v as DeclaredDirs : undefined;
+}
+
 /** context 精简档 resolve：env HOPJIT_CONTEXT_MODE > --context-mode flag > 默认 full。见 [[prompt-assembler#^anc-exec-context-mode]] */
 export function resolveContextMode(flag?: string): 'full' | 'minimal' {
-  const v = (process.env['HOPJIT_CONTEXT_MODE'] ?? flag ?? '').toLowerCase();
+  const v = (process.env['HOPJIT_CONTEXT_MODE'] || flag || '').toLowerCase();   // 空串视同未设,与 MCP 驱动工具同（^anc-exec-context-mode）
   return v === 'minimal' ? 'minimal' : 'full';
 }
 
@@ -360,8 +423,8 @@ program.command('validate <spec>')
       // fragment 无文件身份,维持缺席跳过。见 spec-parser ^anc-rule-p15。// @a: anc-rule-p15
       const docRefCtx = opts.fragment ? undefined : {
         workspace_dir: process.cwd(),
-        // spec 目录入 allowed——与 init 组合点"随 spec 引用即授权"同款（spec 可在 cwd 外）
-        sandbox: { filesystem: { workspace_dir: '.', read_access: { allowed: ['.', dirname(resolve(specPath))], denied: [], confirm_required: [] } }, network: { trusted_hosts: [] }, runtime: { available: [] } },
+        // spec 目录入 allowed——与 init 组合点"随 spec 引用即授权"同款（spec 可在 cwd 外）;沙箱根恒绝对路径（^anc-config-sandbox-workspace-root,单进程语境也不留 '.' 写法）
+        sandbox: { filesystem: { workspace_dir: process.cwd(), read_access: { allowed: ['.', dirname(resolve(specPath))], denied: [], confirm_required: [] } }, network: { trusted_hosts: [] }, runtime: { available: [] } },
         spec_dir: dirname(resolve(specPath)),
         lenient_cross_dir: true,   // validate 时点 cwd 是猜测非运行期权威——跨目录"文件未找到"降 warn
       };
@@ -513,6 +576,8 @@ program.command('init <spec>')
   .option('--parallel-child <id>', 'Parallel child step ID (subinstance落 <parent>/parallel/<id>/)')
   .option('--trace <id>', 'Trace ID')
   .option('--upstream-feedback <text>', 'Parent-layer revision feedback for call child, text or @file (D41 reuse-mode leg — engine renders it as L5 upstream entry)')
+  .option('--workspace <dir>', 'Workspace root (default: cwd; explicit path must exist — ^anc-cli-workspace-arg)')
+  .option('--approve-dirs', 'Approve the Config.dirs directory list at init (skip the dirs pause — ^anc-cli-approve-dirs)')
   .option('--state-dir <dir>', 'State directory', '.hopstate')
   .option('--log-dir <dir>', 'Log directory for .hoplog output')
   .option('--log-level <level>', 'Log level: debug | info | warn (default info)')
@@ -520,9 +585,10 @@ program.command('init <spec>')
   .action((specPath: string, opts) => {
     try {
       const content = readFileSync(resolve(specPath), 'utf-8');
-      const hostConfig = buildHostConfig();
+      const hostConfig = buildHostConfig(resolveWorkspaceArg(opts.workspace));   // @a: anc-cli-workspace-arg
       let params = resolveParam(opts.params) as Record<string, unknown> | undefined;
       extractHopEnvIntoHostConfig(hostConfig, params);   // @a: anc-config-hop-env
+      const inheritedDirs = extractInheritedDirs(params);   // @a: anc-exec-dirs-grant
       // 子实例（复用模式）两类：call → <stateDir>/<parent>/calls/<step>/；parallel → <parent>/parallel/<child>/
       const callMode = opts.parent && opts.step; // @a: anc-step-call
       const isParallelChild = !!(opts.parallelParent && opts.parallelChild); // @a: anc-exec-parallel-subinstance
@@ -569,6 +635,7 @@ program.command('init <spec>')
         specPath: resolve(specPath),
         cliAbsPath: resolve(fileURLToPath(import.meta.url)),
         ...(params ? { params } : {}),
+        ...(inheritedDirs ? { inheritedDirs } : {}),   // @a: anc-exec-dirs-grant
         ...(opts.logDir ? { logDir: resolve(opts.logDir) } : {}),   // 与 run 路径同：绝对化入账,活账反查按绝对路径比对（review 面二缺陷 5）
         ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
         ...(opts.maxRuns !== undefined ? { maxRuns: parseMaxRuns(opts.maxRuns) } : {}),   // @a: anc-obs-log-retention
@@ -579,9 +646,12 @@ program.command('init <spec>')
               ...(opts.upstreamFeedback ? { upstreamFeedback: resolveTextParam(String(opts.upstreamFeedback)) } : {}),   // H2 复用半边（D41）——init_command 携带,汇入 standalone 同一注入口;引擎烘焙恒 @<反馈文件>（^anc-exec-cmd-args-file） // @a: anc-exec-l2c-retry-feedback, anc-exec-cmd-args-file
       };
 
+      // 顶层实例起跑依赖核（call/parallel 子实例不核——父实例起跑时已核过整棵 call 树）^anc-cli-run-deps-gate
+      if (!callMode && !isParallelChild && !runDepsGate(content, resolve(specPath), hostConfig.workspace_dir)) return;
       const engine = new ExecutionEngine();
       const result = engine.initExecution(content, hostConfig, engineOpts);
 
+      if (result.status === 'ok') approveDirsIfFlagged(engine, opts.approveDirs);   // @a: anc-cli-approve-dirs
       output(result);
     } catch (err: unknown) {
       errorExit(err instanceof Error ? err.message : String(err));
@@ -597,6 +667,8 @@ program.command('run <spec>')
   .option('--parallel-child <id>', 'Parallel child step ID (worker scope)')
   .option('--call-parent <id>', 'Parent instance ID (for call child subinstance——统一模型 call parallel worker)')
   .option('--call-step <id>', 'Call child instance ID（<step>.<iter>,目录 calls/<ci>/）')
+  .option('--workspace <dir>', 'Workspace root (default: cwd; explicit path must exist — ^anc-cli-workspace-arg)')
+  .option('--approve-dirs', 'Approve the Config.dirs directory list at start (skip the dirs pause; the person writing this flag is the approver — ^anc-cli-approve-dirs)')
   .option('--state-dir <dir>', 'State directory', '.hopstate')
   .option('--log-dir <dir>', 'Log directory for .hoplog output')
   .option('--log-level <level>', 'Log level: debug | info | warn (default info)')
@@ -606,7 +678,7 @@ program.command('run <spec>')
   .action(async (specPath: string, opts) => {
     try {
       const content = readFileSync(resolve(specPath), 'utf-8');
-      const hostConfig = buildHostConfig();
+      const hostConfig = buildHostConfig(resolveWorkspaceArg(opts.workspace));   // @a: anc-cli-workspace-arg
 
       const isWorker = !!(opts.parallelParent && opts.parallelChild);
       // call parallel worker（统一模型 §U8）：callee spec 全量执行,子实例落 calls/<ci>/——
@@ -645,6 +717,7 @@ program.command('run <spec>')
         : undefined;
       const params = resolveParam(opts.params, runWorkZoneBase) as Record<string, unknown> | undefined;
       extractHopEnvIntoHostConfig(hostConfig, params);   // 子实例经 launch_command params 透传父表,同一组合根摘出 // @a: anc-config-hop-env
+      const inheritedDirs = extractInheritedDirs(params);   // @a: anc-exec-dirs-grant
 
       // for-each worker 的 itemVar 经引擎单一权威、driver 透传的 --params 注入——
       // worker 不翻父实例自播种（破隔离+权威倒置，已撤；缺 itemVar 由 engine init 硬校验报错）。
@@ -658,6 +731,7 @@ program.command('run <spec>')
         ...(isWorker ? { subtreeRoot: opts.parallelChild, parentInstanceId: opts.parallelParent, callStepId: opts.parallelChild, traceId: opts.parallelParent } : {}), // @a: anc-obs-trace-inherit
         ...(isCallWorker ? { parentInstanceId: opts.callParent, callStepId: opts.callStep, traceId: opts.callParent } : {}),
         ...(params ? { params } : {}),
+        ...(inheritedDirs ? { inheritedDirs } : {}),   // @a: anc-exec-dirs-grant
         // HopLog 恒开（缺省 <state-dir>/../.hoplog，同 driver 模板约定与 mcp-server 先例）——
         // 轨迹是 G11 核真过程的凭证，不能依赖 driver LLM 记得传参（2026-08-08 E2E 实撞：
         // subagent 漏抄模板参数即无轨迹假红）。--log-dir 仍可显式改址。// @a: anc-obs-hoplog-always-on
@@ -667,9 +741,12 @@ program.command('run <spec>')
         contextMode: resolveContextMode(opts.contextMode),  // env > flag > full。 // @a: anc-exec-context-mode
         driverChannel: 'cli',   // 双执行硬闸落账 // @a: anc-exec-driver-channel
       };
+      // 顶层实例起跑依赖核（worker 子实例不核）^anc-cli-run-deps-gate
+      if (!isWorker && !isCallWorker && !runDepsGate(content, resolve(specPath), hostConfig.workspace_dir)) return;
       const engine = new ExecutionEngine();
       const initResult = engine.initExecution(content, hostConfig, engineOpts);
       if (initResult.status !== 'ok') { output(initResult); return; }
+      approveDirsIfFlagged(engine, opts.approveDirs);   // @a: anc-cli-approve-dirs
       // 统一模型渐进派发（§U8）：顶层实例开门（worker/call 子实例不开——嵌套退化串行不变式）。
       // driver 收 dispatch_ready 起后台 worker + advance 续推。// @a: anc-exec-parallel-reuse-protocol
       if (!isWorker && !isCallWorker) engine.setUnifiedDispatch(true);
@@ -693,23 +770,22 @@ program.command('run <spec>')
 // 节奏归引擎，见 design/exec-engine.md ^anc-exec-advance-to-caller。// @a: anc-cli-dispatch
 program.command('submit_and_fetch_next <step-id>')
   .description('Submit step result and fetch next caller-action point (driver main loop)')
-  .option('--output <json>', 'Step result (reason/check/act) as JSON or @file')
-  .option('--answer <json>', 'Confirm decision (HITL) as JSON or @file')
+  .option('--output <json>', 'Step result (reason/check/act) as a JSON object keyed by output name, e.g. \'{"listing": "..."}\', or @file')
+  .option('--answer <json>', 'HITL reply (confirm/ask) as a JSON object, e.g. \'{"value":"approve"}\', or @file')
   .option('--child-instance <id>', 'Call child instance ID (maps callee outputs back)')
   .option('--failure-child <id>', 'Call child instance ID that FAILED (engine assembles CalleeFailure from child state)')
   .option('--failure <text>', 'Step failure reason')
-  .option('--branch <case-id>', 'Branch case selection')
   .option('--replan <md>', 'Replanned children markdown or @file (for adaptive_needed)')
   .option('--proactive', '主动计划编辑（不经失败,/hop 边跑边改——只编未执行部分,^anc-exec-replan-proactive）')
   .option('--extend-expansion', '展开超限续批（EXPANSION_LIMIT 后经真人批准重交——一次授权放行一次,^anc-exec-subtask-free-expand 契约7）')
   .option('--tool-result <json>', 'Single tool result (answers tool_request) as JSON or @file')
-  .option('--reason <text>', 'Optional reason (for branch selection audit)')
   .option('--instance <id>', 'Instance ID')
   .option('--state-dir <dir>', 'State directory', '.hopstate')
   .action(async (stepId: string, opts) => {
     try {
       // 互斥校验：一次只提交一种
-      const modes = ['output', 'answer', 'childInstance', 'failureChild', 'failure', 'branch', 'replan', 'toolResult']
+      // 没有 branch 形态：选路只由引擎按 case 条件求值,调用方不替引擎选 case。// @a: anc-exec-branch-select-internal
+      const modes = ['output', 'answer', 'childInstance', 'failureChild', 'failure', 'replan', 'toolResult']
         .filter(k => opts[k] !== undefined);
       if (modes.length > 1) {
         throw new Error(`INVALID_STATE: 互斥参数只能给一个，收到 [${modes.join(', ')}]`);
@@ -752,8 +828,6 @@ program.command('submit_and_fetch_next <step-id>')
       } else if (opts.failure !== undefined) {   // 步骤失败
         const reason = resolveTextParam(opts.failure, workZoneBase) ?? opts.failure;
         writeResult = engine.failStep(stepId, reason);
-      } else if (opts.branch !== undefined) {    // 分支选择
-        writeResult = engine.selectBranch(stepId, opts.branch, opts.reason);
       } else if (opts.replan !== undefined) {    // 重规划 children
         const stepsMd = resolveTextParam(opts.replan, workZoneBase) ?? opts.replan;
         // 片段编号归一（P2-2 裁定 A——复用模式驱动侧 LLM 同有沿用原步骤号倾向,与 standalone
@@ -769,7 +843,16 @@ program.command('submit_and_fetch_next <step-id>')
         // @a: anc-cli-file-arg-safety
         if (opts.output !== undefined) assertOutputInWorkZone(opts.output, instanceDir, workZoneBase);
         const raw = opts.output ?? opts.answer;
-        const outputs = raw ? (resolveParam(raw, workZoneBase) as Record<string, unknown>) : undefined;
+        const parsed = raw ? resolveParam(raw, workZoneBase) : undefined;
+        // 解析结果必须是对象（todo/0146 probe 3 实撞:--answer '"approve"' 进引擎 'decision' in 字符串抛 TypeError）——
+        // 在调引擎之前按用法错误拒,状态不动。见 [[hop-cli#^anc-cli-json-io]]。// @a: anc-cli-json-io
+        if (raw && (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))) {
+          const flag = opts.output !== undefined ? '--output' : '--answer';
+          const shape = flag === '--answer' ? `'{"value":"approve"}'（或 '{"value":"<用户给的值>"}'）` : `'{"<输出槽名>": <值>}'`;
+          errorExit(`INVALID_ARG: ${flag} 解析后须是 JSON 对象（收到 ${parsed === null ? 'null' : Array.isArray(parsed) ? '数组' : typeof parsed}）——正确形态 ${shape}`);
+          return;
+        }
+        const outputs = parsed as Record<string, unknown> | undefined;
         // 升层应答专用消化路（^anc-exec-check-escalate——CLI 半边,与 dispatcher.resume 对称:
         // guidance 回注反馈通道不走 completeStep 声明匹配）// @a: anc-exec-check-escalate
         if (engine.getEscalatePending() === stepId && opts.answer !== undefined) {
@@ -880,6 +963,41 @@ program.command('abort')
     }
   });
 
+// commit 转人工后的批准 CLI 入口（^anc-cli-approve-commit——本宿主不注册安全分析函数,需要模型判的动作按模板转人工;与 MCP 工具 approve_commit 同一引擎方法、同一批准账;
+// 加载走 load 不认领通道,两种通道的 run 都可批;只记账不推进,批准后 resume 续跑。权威 [[exec-engine#^anc-exec-commit-approval]]）
+// @a: anc-cli-approve-commit
+program.command('approve_commit <step-id>')
+  .description('Approve a [commit] step after the safety analysis referred it to a human (scope once|task); then resume')
+  .requiredOption('--fingerprint <fp>', 'fingerprint from presented_data.context of the commit pause')
+  .requiredOption('--scope <scope>', 'once (this run only) | task (always for this step while its body is unchanged)')
+  .option('--instance <id>', 'Instance ID')
+  .option('--state-dir <dir>', 'State directory (relative to --workspace)', '.hopstate')
+  .option('--workspace <dir>', 'Workspace root the run was started on (default: cwd); must exist')
+  .action((stepId: string, opts) => {
+    try {
+      const ws = resolveWorkspaceArg(opts.workspace);   // 与 run/init 同一解析,显式路径不存在 → WORKSPACE_NOT_FOUND
+      const engine = ExecutionEngine.load(resolveInstance(resolve(ws, opts.stateDir), opts.instance));
+      output(engine.approveCommit(stepId, opts.fingerprint, opts.scope));   // scope 非 once/task 由引擎回 INVALID_STATE
+    } catch (err: unknown) {
+      errorExit(err instanceof Error ? err.message : String(err));
+    }
+  });
+
+// Config.dirs 清单批准的 CLI 入口（^anc-cli-approve-dirs——与 MCP 工具 approve_dirs 同一引擎方法、同一批准账 dirs_approvals.json;
+// 人批准由 driver 在对话里问——先把清单呈给用户问同不同意,同意后才跑本命令;载体弹窗不当批准）。// @a: anc-cli-approve-dirs
+program.command('approve_dirs <dirs-hash>')
+  .description('Approve the Config.dirs directory list once (dirs_hash from the pause payload); then resume')
+  .option('--instance <id>', 'Instance ID')
+  .option('--state-dir <dir>', 'State directory', '.hopstate')
+  .action((dirsHash: string, opts) => {
+    try {
+      const engine = ExecutionEngine.load(resolveInstance(opts.stateDir, opts.instance));
+      output(engine.approveDirs(dirsHash));
+    } catch (err: unknown) {
+      errorExit(err instanceof Error ? err.message : String(err));
+    }
+  });
+
 program.command('status')
   .description('Get execution status')
   .option('--instance <id>', 'Instance ID')
@@ -906,10 +1024,10 @@ program.command('tool-call <name>')
   .action(async (name: string, opts: { args: string }) => {
     try {
       const hostConfig = buildHostConfig();
-      // 项目级 tool_servers 注册面装配（与消化路径直执面同一公共函数 loadProjectToolRegistry——
-      // 0076 提取消重复;坏节 fail-fast 由 parseToolServers 承担）
+      // 两级 tool_servers 注册面装配（与消化路径直执面同一公共函数 loadToolRegistry——
+      // todo/0131 两级;坏节 fail-fast 由 parseToolServers 承担）// @a: anc-config-reuse-consume
       try {
-        const reg = loadProjectToolRegistry(process.cwd());
+        const reg = loadToolRegistry(reuseConfigPaths(hostConfig.workspace_dir), hostConfig.workspace_dir);   // tool-call 无 --workspace,buildHostConfig 缺省即 cwd // @a: anc-config-reuse-consume
         if (reg) {
           (hostConfig as HostConfig & { tool_registry?: unknown }).tool_registry = reg;
         }
@@ -978,85 +1096,40 @@ program.command('resume')
 // cfuse-cc/cfuse-codex 固定 ~/.codefuse/engine/{cc,codex}（裸终端显式指定 cfuse 目标,不读环境变量——
 // 裸终端跑 install-skill 时目标 agent 可能未启动,环境变量无法表达"装给谁",须显式 carrier 声明目标）。
 // driver 源用 carrierFamily 派生（cc|codex）——cfuse-* 复用对应原生源,不新写 driver。
-// @a: anc-cli-carrier-home-resolution
-type Carrier = 'cc' | 'codex' | 'cfuse-cc' | 'cfuse-codex' | 'opencode';
-type DriverFamily = 'cc' | 'codex';
-const CARRIER_VALUES: Carrier[] = ['cc', 'codex', 'cfuse-cc', 'cfuse-codex', 'opencode'];
-function carrierFamily(c: Carrier): DriverFamily {
-  return c === 'codex' || c === 'cfuse-codex' ? 'codex' : 'cc';
-}
-function resolveCarrierHome(c: Carrier): string {
-  const h = homedir();
-  switch (c) {
-    case 'cc':          return process.env.CLAUDE_CONFIG_DIR || join(h, '.claude');
-    case 'codex':       return process.env.CODEX_HOME       || join(h, '.codex');
-    case 'cfuse-cc':    return join(h, '.codefuse', 'engine', 'cc');
-    case 'cfuse-codex': return join(h, '.codefuse', 'engine', 'codex');
-    // opencode 用 XDG：OPENCODE_CONFIG_DIR 重定向 config 目录,缺席回落 $XDG_CONFIG_HOME/opencode（默认 ~/.config/opencode,非 ~/.opencode）。
-    case 'opencode':    return process.env.OPENCODE_CONFIG_DIR || join(process.env.XDG_CONFIG_HOME || join(h, '.config'), 'opencode');
+// 载体名、载体 home 解析、自动探测、版本戳读取、MCP 注册判定、握手、放行缺口、归属标识等助手 2026-10-10 todo/0154 搬到 hop-admin.ts（hop-cli 模块出口文件,mcp-server 也要用）;
+// 本文件只保留 setup 自己的写半边与各命令薄壳。tests 既有的导入面经下方 re-export 保持可达。// @a: anc-mcp-admin-tools
+
+// 首次运行提示（^anc-cli-first-run-hint,todo/0143 撤 postinstall 钩子后的唯一兜底）：用户只敲了 npm install -g 没敲 setup,
+// 本包第一个有代码在跑的时机就是下一条 hopjit 命令。纯函数七支——只算出那一行,写 stderr 与否由 preAction 钩子做;
+// 零状态（装过就有版本戳）、不自动装（用户环境拦安装脚本正说明不希望包自作主张改东西）。// @a: anc-cli-first-run-hint
+const FIRST_RUN_EXEMPT = new Set(['setup', 'install-skill', 'doctor']);   // doctor 与 setup 同豁免：体检命令不自己提示自己（^anc-cli-doctor）
+/** 算出首次运行提示那一行（空串=不提示）：豁免 setup/版本/帮助 → 静音与 CI → 零载体 → 逐载体读版本戳 → 有未装指路 setup / 只落后指路刷新。见 [[hop-cli#^anc-cli-first-run-hint]]。 */ // @a: anc-cli-first-run-hint
+export function firstRunHint(argv: readonly string[], env: NodeJS.ProcessEnv, engineVersion: string,
+  probe: (c: Carrier) => string | null = c => installedHopDriverVersion(adminContext(), c)): string {
+  const sub = argv.find(a => !a.startsWith('-'));
+  if (!sub || FIRST_RUN_EXEMPT.has(sub)) return '';
+  if (argv.some(a => a === '--version' || a === '-V' || a === '--help' || a === '-h')) return '';
+  if (env.HOPJIT_SKIP_SKILL === '1' || env.CI) return '';
+  const carriers = detectCarriers(adminContext());
+  if (carriers.length === 0) return '';
+  const missing: string[] = []; const stale: string[] = [];
+  for (const c of carriers) {
+    const v = probe(c);
+    if (v === null) missing.push(c);
+    else if (v !== engineVersion) stale.push(`${c} 装于 v${v}`);
   }
-}
-// 载体自动探测：home 目录在场=用户至少启动过一次该载体。按解析后的 home 去重（cfuse 会话里
-// CLAUDE_CONFIG_DIR 把 cc 重定向到 ~/.codefuse/engine/cc,与 cfuse-cc 同目录只装一次,名取先探到的）。
-// 零探到返回空数组,由调用方回落 cc。见 hop-cli ^anc-cli-carrier-autodetect。// @a: anc-cli-carrier-autodetect
-export function detectCarriers(): Carrier[] {
-  const seen = new Set<string>();
-  const found: Carrier[] = [];
-  for (const c of ['cc', 'codex', 'opencode', 'cfuse-cc', 'cfuse-codex'] as Carrier[]) {
-    const home = resolve(resolveCarrierHome(c));
-    if (!existsSync(home) || seen.has(home)) continue;
-    seen.add(home);
-    found.push(c);
-  }
-  return found;
+  if (missing.length) return `[hopjit] /hop 还没装进本机 agent（${missing.join(', ')}）——运行 hopjit setup;静音：HOPJIT_SKIP_SKILL=1`;
+  if (stale.length) return `[hopjit] /hop 版本落后（${stale.join('、')},当前 v${engineVersion}）——重跑 hopjit setup 刷新;静音：HOPJIT_SKIP_SKILL=1`;
+  return '';
 }
 
-// postinstall 该不该跳过（纯函数,钩子入口 dist/postinstall.js 调它）。四种环境只打一行指路、退出码 0——
-// 钩子抛错=npm install 失败=用户连 hopjit 命令都拿不到,代价远大于少装一个 skill。
-// 见 hop-cli ^anc-cli-postinstall。// @a: anc-cli-postinstall
-export function postinstallSkipReason(env: NodeJS.ProcessEnv, uid: number | undefined, pkgDir: string, distExists: boolean): string | null {
-  if (env.HOPJIT_SKIP_SKILL === '1') return 'HOPJIT_SKIP_SKILL=1';
-  if (env.CI) return 'CI 环境无载体';
-  if (uid === 0 && env.SUDO_USER) return 'sudo 下 HOME 是 root 的,探测会落空或写错家目录';
-  // 源码仓自身 npm install（开发者加依赖/dev-install.sh）：包路径不在 node_modules 下。开发装机由 dev-install.sh 自己跑 install-skill --force
-  if (!/[\\/]node_modules[\\/]/.test(pkgDir)) return '源码仓自身装依赖,不是装包';
-  if (!distExists) return 'dist/cli.js 不在';
-  return null;
-}
-
+/** --carrier 取值校验（载体名全集 CARRIER_VALUES 在 hop-admin.ts）。 */ // @a: anc-cli-carrier-home-resolution
 function assertCarrier(c: string, cmd: string): asserts c is Carrier {
   if (!CARRIER_VALUES.includes(c as Carrier))
     throw new Error(`${cmd}_ERROR: 未知 carrier '${c}'（支持: ${CARRIER_VALUES.join(' | ')}）`);
 }
 
-// opencode 配置文件:跟随 opencode globalConfigFile,candidates [opencode.jsonc, opencode.json],
-// 第一个存在;都不存在用 opencode.jsonc（opencode 标准,首次启动生成它）。见 ^anc-cli-install-skill opencode 载体。
-function resolveOcConfigPath(carrier: Carrier): string {
-  const home = resolveCarrierHome(carrier);
-  for (const f of ['opencode.jsonc', 'opencode.json', 'config.json']) {   // 对齐 opencode globalConfigFile 三候选
-    const p = join(home, f);
-    if (existsSync(p)) return p;
-  }
-  return join(home, 'opencode.jsonc');
-}
-
-// 递归 deep-merge(对齐 opencode mergeDeep):object 递归合并(后者覆盖同名),数组/原始值后者覆盖。
-// 用于 opencode 自举 deep-merge provider——options 内部(baseURL/apiKey)也合并,而非浅 merge 整体覆盖。
-function deepMerge<T>(a: T, b: unknown): T {
-  if (typeof a === 'object' && a !== null && !Array.isArray(a) && typeof b === 'object' && b !== null && !Array.isArray(b)) {
-    const result: Record<string, unknown> = { ...(a as Record<string, unknown>) };
-    for (const [k, v] of Object.entries(b as Record<string, unknown>)) {
-      result[k] = deepMerge(result[k], v);
-    }
-    return result as T;
-  }
-  return (b ?? a) as T;
-}
-
-// --mcp 配置自举：两级 standalone 配置全缺席时,按载体学习宿主 LLM 后端写系统级配置。
-// CC=ANTHROPIC_* 环境变量族;Codex=~/.codex/config.toml 的 model_provider 链。只写凭证名不写值。
-// 学习源缺失→不写文件,note 明示需自建。见 design/hop-cli.md ^anc-cli-install-skill --mcp 配置自举子条。
-// @a: anc-cli-install-skill
+/** 自举 standalone 配置（setup 第 3 项职责）：已存在短路 → learnStandaloneEntry 学一条 → 写 ~/.hopjit/config.yaml（只写凭证变量名）。学习半边已抽成 learnStandaloneEntry 供 doctor 复用。 */ // @a: anc-cli-install-skill
 export function bootstrapStandaloneConfig(carrier: Carrier): { written: string | null; note: string } {
   const sysPath = join(homedir(), '.hopjit', 'config.yaml');
   const projPath = resolve(process.cwd(), 'hopjit.yaml');
@@ -1064,131 +1137,17 @@ export function bootstrapStandaloneConfig(carrier: Carrier): { written: string |
     return { written: null, note: `standalone 配置已存在（${existsSync(sysPath) ? sysPath : projPath}）——未改动（用户资产）` };
   }
 
-  let entry: { service_id: string; protocol: string; base_url: string; model: string; api_key_env: string };
-  if (carrier === 'opencode') {
-    // opencode 自举：deep-merge 三文件（opencode 加载顺序 config.json → opencode.json → opencode.jsonc,
-    // 后者覆盖、.jsonc 优先,与 opencode 加载一致）取 model + provider.<id>.options.baseURL + env[0]（凭证名）。
-    // protocol 忠实照抄 provider.<id>.npm 字段（0020 批改定——npm 字段=opencode 的 wire_api 等价物:
-    // 声明该 provider 用哪个 AI SDK,官方文档明定 @ai-sdk/openai→/v1/responses、
-    // @ai-sdk/openai-compatible→chat/completions、@ai-sdk/anthropic→Anthropic 原生）;
-    // npm 缺席（内置 provider 协议定义在 opencode 内置注册表,配置文件里抄不到）回退 id 推断:
-    // 含 anthropic→anthropic,否则保守取 openai-chat（猜 responses 撞无此面端点=启动即炸,不猜）。
-    // 只写凭证名不写值。学习源缺失→不写文件,note 明示。见 design/hop-cli.md ^anc-cli-install-skill opencode 载体 LLM 自举子条。
-    // @a: anc-cli-install-skill
-    const home = resolveCarrierHome(carrier);
-    const ocFiles = ['config.json', 'opencode.json', 'opencode.jsonc'].map(f => join(home, f));   // opencode 加载顺序
-    let model: string | undefined;
-    const provider: Record<string, { options?: { baseURL?: string }; env?: string[]; npm?: string }> = {};
-    let anyExists = false;
-    for (const f of ocFiles) {
-      if (!existsSync(f)) continue;
-      anyExists = true;
-      const errs: ParseError[] = [];
-      const c = parseJsonc(readFileSync(f, 'utf-8'), errs) as { model?: string; provider?: Record<string, { options?: { baseURL?: string }; env?: string[]; npm?: string }> };
-      if (errs.length > 0) continue;   // 坏文件跳过(best-effort,不阻断 deep-merge 其他文件)
-      if (c.model) model = c.model;   // 后者覆盖(.jsonc 优先)
-      if (c.provider) {
-        for (const [id, p] of Object.entries(c.provider)) {
-          provider[id] = deepMerge(provider[id], p);   // 递归 deep-merge provider.<id>(对齐 opencode mergeDeep,options 内部也合并)
-        }
-      }
-    }
-    if (!anyExists) {
-      return { written: null, note: `未自举 standalone 配置：${resolveOcConfigPath(carrier)} 不存在——请自建 ~/.hopjit/config.yaml` };
-    }
-    if (!model || !model.includes('/')) {
-      return { written: null, note: `未自举 standalone 配置：opencode 配置缺 model（"provider/model-id" 格式）——请自建 ~/.hopjit/config.yaml` };
-    }
-    const slashIdx = model.indexOf('/');
-    const providerId = model.slice(0, slashIdx);
-    const modelId = model.slice(slashIdx + 1);
-    const prov = provider[providerId];
-    const baseUrl = prov?.options?.baseURL;
-    const envKey = prov?.env?.[0];
-    if (!baseUrl) {
-      return { written: null, note: `未自举 standalone 配置：provider.${providerId} 缺 options.baseURL——请自建 ~/.hopjit/config.yaml` };
-    }
-    entry = {
-      service_id: 'opencode_host',
-      protocol: prov?.npm === '@ai-sdk/anthropic' ? 'anthropic'
-        : prov?.npm === '@ai-sdk/openai' ? 'openai-responses'
-        : prov?.npm ? 'openai-chat'   // @ai-sdk/openai-compatible 及其余 SDK 包一律 chat
-        : providerId.toLowerCase().includes('anthropic') ? 'anthropic' : 'openai-chat',
-      base_url: baseUrl,
-      model: modelId,
-      api_key_env: envKey ?? 'OPENAI_API_KEY',
-    };
-  } else if (carrierFamily(carrier) === 'cc') {
-    // 两级学习链：①进程环境 ANTHROPIC_* ②CC settings 文件族 env 块+顶层 model（项目级>用户级——
-    // 覆盖"普通终端跑装配"形态:settings env 块只在 CC 会话内注入子进程;运行期 server 由 CC 拉起
-    // 必继承 env 块,凭证名引用仍有效）。只取"哪个名字被配了"不抄值（standalone 不变量第 1 条）。
-    // 用户级 settings 路径按 carrier home 解析（^anc-cli-carrier-home-resolution——cfuse-cc 读 ~/.codefuse/engine/cc）。
-    const settingsEnv: Record<string, string> = {};
-    let settingsModel: string | undefined;
-    for (const sp of [
-      join(resolveCarrierHome(carrier), 'settings.json'),
-      resolve(process.cwd(), '.claude', 'settings.json'),
-      resolve(process.cwd(), '.claude', 'settings.local.json'),   // 后读者赢=项目级>用户级
-    ]) {
-      if (!existsSync(sp)) continue;
-      try {
-        const s = JSON.parse(readFileSync(sp, 'utf-8')) as { env?: Record<string, string>; model?: string };
-        for (const [k, v] of Object.entries(s.env ?? {})) if (typeof v === 'string') settingsEnv[k] = v;
-        if (typeof s.model === 'string' && s.model.trim()) settingsModel = s.model;
-      } catch { /* 坏 settings 不阻塞自举——学习链落下一级 */ }
-    }
-    const has = (name: string) => !!(process.env[name]?.trim() || settingsEnv[name]?.trim());
-    const val = (name: string) => process.env[name]?.trim() || settingsEnv[name]?.trim() || '';
-    const keyEnv = has('ANTHROPIC_AUTH_TOKEN') ? 'ANTHROPIC_AUTH_TOKEN'
-      : has('ANTHROPIC_API_KEY') ? 'ANTHROPIC_API_KEY' : null;
-    if (!keyEnv) {
-      // 两级链都空（如 OAuth 订阅登录——凭证在 keychain 无 env 名,且订阅凭证本不可复用给独立 server）
-      return { written: null, note: '未自举 standalone 配置：进程环境与 CC settings 文件均无 ANTHROPIC_AUTH_TOKEN/ANTHROPIC_API_KEY（OAuth 订阅登录的凭证不可复用给独立 server）——请自建 ~/.hopjit/config.yaml 并配 API key（格式见 docs/reference/配置参考）' };
-    }
-    entry = {
-      service_id: 'cc_host',
-      protocol: 'anthropic',
-      base_url: val('ANTHROPIC_BASE_URL') || 'https://api.anthropic.com',
-      model: val('ANTHROPIC_MODEL') || settingsModel || ENGINE_DEFAULT_MODEL,   // 缺省=引擎缺省模型同源常量（0086 续账修:原字面量第二真值）
-      api_key_env: keyEnv,
-    };
-  } else {
-    const tomlPath = join(resolveCarrierHome(carrier), 'config.toml');
-    if (!existsSync(tomlPath)) {
-      return { written: null, note: `未自举 standalone 配置：${tomlPath} 不存在——请自建 ~/.hopjit/config.yaml` };
-    }
-    const toml = readFileSync(tomlPath, 'utf-8');
-    const model = toml.match(/^model\s*=\s*"([^"]+)"/m)?.[1];
-    const providerId = toml.match(/^model_provider\s*=\s*"([^"]+)"/m)?.[1];
-    // provider 表：providerId 命中 [model_providers.<id>] 节内取 base_url/env_key（节界=下一个 [ 行）
-    let baseUrl: string | undefined; let envKey: string | undefined; let wireApi: string | undefined;
-    if (providerId) {
-      const section = toml.split(new RegExp(`\\[model_providers\\.${providerId}\\]`))[1]?.split(/\n\[/)[0];
-      baseUrl = section?.match(/base_url\s*=\s*"([^"]+)"/)?.[1];
-      envKey = section?.match(/env_key\s*=\s*"([^"]+)"/)?.[1];
-      wireApi = section?.match(/wire_api\s*=\s*"([^"]+)"/)?.[1];
-    }
-    if (!model || !baseUrl) {
-      return { written: null, note: `未自举 standalone 配置：${tomlPath} 缺 model/model_provider 的 base_url——请自建 ~/.hopjit/config.yaml` };
-    }
-    entry = {
-      service_id: 'codex_host',
-      // protocol 忠实照抄宿主 wire_api（0020 批撤强制降级——responses 适配器实装后照抄即忠实,
-      // 原"一律学 openai-chat"防的是预留枚举启动即炸,前提已消;缺省 chat 与 Codex 同）
-      protocol: wireApi === 'responses' ? 'openai-responses' : 'openai-chat',
-      base_url: baseUrl,
-      model,
-      api_key_env: envKey ?? 'OPENAI_API_KEY',
-    };
-  }
+  const learned = learnStandaloneEntry(adminContext(), carrier);
+  if (!learned.entry) return { written: null, note: learned.note };
+  const entry = learned.entry;
 
   mkdirSync(dirname(sysPath), { recursive: true });
   // providers 节走 YAML 序列化器——值来自宿主配置不可控,裸模板拼接遇 ": "/"#" 类字符产物
   // 即炸自家加载器（二审探针实抓:model 值含冒号空格 → loadStandaloneConfig bad indentation）
-  const yaml = `# hopjit standalone 配置——install-skill --mcp 自举于 ${new Date().toISOString()}
+  const yaml = `# hopjit standalone 配置——hopjit setup 自举于 ${new Date().toISOString()}
 # 学习源：${carrier === 'opencode' ? 'opencode 宿主配置文件（deep-merge config.json/opencode.json/opencode.jsonc,model + provider.<id>）' : carrierFamily(carrier) === 'cc' ? 'Claude Code 宿主环境变量（ANTHROPIC_*）' : 'Codex 宿主 config.toml（model_provider 链）'}
 # 凭证只存环境变量名（${entry.api_key_env}）,值不落盘。格式与改法见 docs/reference/配置参考.md
-` + yamlDump({ providers: [entry] });
+` + yamlDump({ providers: [entry] }, YAML_DUMP_OPTS);   // @a: anc-config-yaml-dump-opts
   writeFileSync(sysPath, yaml, 'utf-8');
   return {
     written: sysPath,
@@ -1211,72 +1170,118 @@ export function readStandaloneCredentialNames(): string[] | null {
   } catch { return null; }
 }
 
-/** CC 载体放行 run_approved_command（^anc-cli-install-skill-permission,2026-10-01 作者定）：Claude Code 对每个 MCP 工具
- * 调用缺省弹窗且只认工具名看不见命令——放行这一个工具名=撤掉空闸,命令能不能跑全交 hopjit 的任务卡闸。
- * 落点 <cwd>/.claude/settings.local.json 的 permissions.allow;幂等（已含不动）;保留其他键与条目;坏 JSON 不写只报 note;
- * 只加这一个精确工具名,不加 Bash 规则不动 deny。返回写入路径或 null + note。 */
+/** CC 载体放行 hopjit 的 MCP 工具（^anc-cli-install-skill-permission;2026-10-01 首版只放行 run_approved_command,
+ * 2026-10-07 todo/0146 扩为 HOPJIT_ALLOWED_TOOLS 清单）：Claude Code 对每个 MCP 工具调用缺省弹窗且只认工具名看不见参数——
+ * 放行清单里的工具名=撤掉空闸,把关交给 hopjit 自己（任务卡闸、commit 批准、confirm/ask）。approve_commit 也在清单里——
+ * commit 的人批准由 driver 在对话里问,载体弹窗不当批准闸。落点 <cwd>/.claude/settings.local.json 的 permissions.allow;幂等（缺的逐个补,
+ * 全在则不动）;保留其他键与条目;坏 JSON 不写只报 note;只加精确工具名,不加通配、不加 Bash 规则、不动 deny。 */
 // @a: anc-cli-install-skill-permission
+/** CC 载体放行写入（^anc-cli-install-skill-permission）：缺口由 ccPermissionMissing 算（只读半边,doctor 共用）,本函数只做写与写失败降 note。 */ // @a: anc-cli-install-skill-permission
 export function ensureCcPermission(cwd: string): { written: string | null; note?: string } {
-  const entry = `mcp__hopjit__${RUN_APPROVED_COMMAND_TOOL}`;
-  const p = resolve(cwd, '.claude', 'settings.local.json');
-  let cfg: Record<string, unknown> = {};
-  if (existsSync(p)) {
-    try { cfg = JSON.parse(readFileSync(p, 'utf-8')) as Record<string, unknown>; }
-    catch { return { written: null, note: `${p} 不是合法 JSON——未写放行（不覆盖用户配置,请修复后重跑 install-skill,或手动在 permissions.allow 加 "${entry}"）` }; }
-    if (typeof cfg !== 'object' || cfg === null || Array.isArray(cfg)) return { written: null, note: `${p} 顶层不是对象——未写放行` };
-  }
-  // ⑥⑦：permissions / allow 在场但形态非法——不覆盖用户原值,只 note（首版静默替换成 {}/[] 后写盘,review 实抓）
-  if (cfg['permissions'] !== undefined && (typeof cfg['permissions'] !== 'object' || cfg['permissions'] === null || Array.isArray(cfg['permissions']))) return { written: null, note: `${p} 的 permissions 不是对象——未写放行（不覆盖用户配置,请手动在 permissions.allow 加 "${entry}"）` };
+  const gap = ccPermissionMissing(cwd);   // 查法=写法：缺口判定只此一处,doctor 问 6 调同一个（^anc-cli-doctor）
+  const { path: p, missing, cfg, allow } = gap;
+  if (gap.invalid) return { written: null, note: gap.invalid };
+  if (missing.length === 0) return { written: null, note: `hopjit 工具已全部放行（${p}）,未改动` };
   const perms = (cfg['permissions'] as Record<string, unknown> | undefined) ?? {};
-  if (perms['allow'] !== undefined && !Array.isArray(perms['allow'])) return { written: null, note: `${p} 的 permissions.allow 不是数组——未写放行（不覆盖用户配置,请手动改成数组并加 "${entry}"）` };
-  const allow = (perms['allow'] as unknown[] | undefined) ?? [];
-  if (allow.includes(entry)) return { written: null, note: `已放行 ${entry}（${p}）,未改动` };
-  perms['allow'] = [...allow, entry];
+  perms['allow'] = [...allow, ...missing];
   cfg['permissions'] = perms;
   try {   // 环境性失败（目录不可写等）降 note,不让 skill 安装跟着失败——与注册面同律（review 测试'注册面环境性失败'实抓:注册 catch 住了,放行这里又炸整条安装）
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, JSON.stringify(cfg, null, 2) + '\n');
   } catch (e) {
-    return { written: null, note: `放行写入失败（${e instanceof Error ? e.message : String(e)}）——请手动在 ${p} 的 permissions.allow 加 "${entry}"` };
+    return { written: null, note: `放行写入失败（${e instanceof Error ? e.message : String(e)}）——请手动在 ${p} 的 permissions.allow 加 hopjit 工具 ${missing.join(', ')}` };
   }
   return { written: p };
 }
 
-// CC 跨 scope 已注册感知：user 级（<CC home>/.claude.json 顶层 mcpServers）与 local 级（projects["<cwd>"]
-// .mcpServers）任一有 hopjit 即返回所在 scope 描述,均无返回 null。<CC home>/.claude.json 缺席/解析失败
-// 一律 null（best-effort——CC 内部格式演进不拦装）。.claude.json 位置按 ^anc-cli-carrier-home-resolution
-// 解析:cfuse-cc 固定 ~/.codefuse/engine/cc/.claude.json;cc 载体读 CLAUDE_CONFIG_DIR（设时 .claude.json 在
-// 其下,未设在 home 根 ~/.claude.json——.claude.json 原生与 ~/.claude/ 目录不同层,CLAUDE_CONFIG_DIR
-// 重定向后才进配置目录）。见 hop-cli ^anc-cli-install-skill 注册条。
-// @a: anc-cli-install-skill
-export function detectCcHopjitRegistration(carrier: 'cc' | 'cfuse-cc' = 'cc'): string | null {
-  const ccJsonPath = carrier === 'cfuse-cc'
-    ? join(resolveCarrierHome('cfuse-cc'), '.claude.json')
-    : (process.env.CLAUDE_CONFIG_DIR ? join(process.env.CLAUDE_CONFIG_DIR, '.claude.json') : join(homedir(), '.claude.json'));
-  if (!existsSync(ccJsonPath)) return null;
+/** 本器自带件的旧名（改过名的安装件）——陈旧扫描按自带件处置,不当用户自建件（^anc-cli-stale-skill-scan） */
+const STALE_LEGACY_BUNDLED_NAMES = ['hopskill-build'];   // 2026-08 改名为 hopbuild（f66cc8cc）
+
+/** 一次 setup 的陈旧副本备份区;root 首次挪动时才建 */
+export interface StaleBackup { root: string }
+
+/** 把陈旧副本整目录挪进备份区（^anc-cli-stale-skill-scan）：先 rename,跨文件系统改为复制后删除;
+ * 撞名加 -2/-3 后缀;成功后在 RESTORE.txt 追加"备份路径 → 原路径"。任何一步失败原目录不动,返回错误说明。 */
+// @a: anc-cli-stale-skill-scan
+export function moveStaleToBackup(dir: string, backup: StaleBackup): { ok: true; dest: string } | { ok: false; error: string } {
   try {
-    const cc = JSON.parse(readFileSync(ccJsonPath, 'utf-8')) as {
-      mcpServers?: Record<string, unknown>;
-      projects?: Record<string, { mcpServers?: Record<string, unknown> }>;
-    };
-    if (cc.projects?.[process.cwd()]?.mcpServers?.['hopjit']) return `CC local 级,${ccJsonPath} projects["${process.cwd()}"]`;
-    if (cc.mcpServers?.['hopjit']) return `CC user 级,${ccJsonPath}`;
-    return null;
-  } catch { return null; }
+    mkdirSync(backup.root, { recursive: true });
+    const base = dir.split(sep).pop()!;
+    let dest = join(backup.root, base);
+    for (let i = 2; existsSync(dest); i++) dest = join(backup.root, `${base}-${i}`);
+    try {
+      renameSync(dir, dest);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EXDEV') throw e;
+      cpSync(dir, dest, { recursive: true });
+      rmSync(dir, { recursive: true, force: true });
+    }
+    appendFileSync(join(backup.root, 'RESTORE.txt'), `${dest} → ${dir}\n`, 'utf-8');
+    return { ok: true, dest };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
 }
 
-// install-skill：把包内 driver/ 的 skill 源展开到 .claude/skills/（CC）或 .agents/skills/（Codex）。
-// 纯文件拷贝、不涉引擎状态。包根用 import.meta.url 定位（不依赖 cwd）。见 design/hop-cli.md ^anc-cli-install-skill。
+/** 注册后的握手自检（^anc-cli-install-skill-handshake）：以当前 node 跑包内 server 走一遍 MCP 握手,另查注册 command 在 PATH 上
+ * 能否找到。只报告不修改注册;失败不抛。 */
+
+
+// 演示集：包内原件 → HopAnt id（作者定"demo 保留前缀"）。原件留在 examples/ 不动,装时生成 HopAnt 目录。
+const DEMO_ANTS: { spec: string; id: string; asset?: string }[] = [
+  { spec: 'coffee-week.md', id: 'demo-coffee-week', asset: 'coffee-sales.json' },
+  { spec: 'fact-check-demo.md', id: 'demo-fact-check', asset: 'fact-check-sample.md' },
+  { spec: join('syntax', 'confirm-commit.md'), id: 'demo-rename' },
+];
+
+// setup 第 7 项：三个演示件缺省装成 HopAnt（`<home>/.hopjit/ants/demo-*`,与载体无关）。
+// 已存在的不读不写（--force 也不覆盖——inner_store 是本机状态）;失败只进 notes 不抛,不拦 skill 安装。
+// 安装本身走 hopant 的 planInstall/applyInstall,与 `hopjit ant install` 同一条路径。
+// 见 [[hop-cli#^anc-cli-install-skill-demo-ants]]。
+// @a: anc-cli-install-skill-demo-ants
+export function installDemoAnts(pkgRoot: string, home: string): { installed: string[]; notes: string[] } {
+  const installed: string[] = [];
+  const notes: string[] = [];
+  for (const demo of DEMO_ANTS) {
+    if (existsSync(antDir(antsRoot(home), demo.id))) {
+      notes.push(`${demo.id} 已装，跳过（要刷新先 hopjit ant remove ${demo.id}）`);
+      continue;
+    }
+    let tmp: string | undefined;
+    try {
+      tmp = mkdtempSync(join(tmpdir(), 'hopjit-demo-'));
+      const srcDir = join(tmp, demo.id);
+      mkdirSync(srcDir);
+      const raw = readFileSync(join(pkgRoot, 'examples', demo.spec), 'utf-8');
+      writeFileSync(join(srcDir, `${demo.id}.md`), rewriteSpecId(raw, demo.id), 'utf-8');
+      if (demo.asset) copyFileSync(join(pkgRoot, 'examples', demo.asset), join(srcDir, demo.asset));
+      applyInstall(planInstall(srcDir, antsRoot(home)));   // 演示件恒落用户级（hopant 决策 1）
+      installed.push(demo.id);
+    } catch (err: unknown) {
+      notes.push(`${demo.id} 安装失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      if (tmp) rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+  return { installed, notes };
+}
+
+// 对外命令名 setup;install-skill 是隐藏别名（不进 --help,stderr 提示改名,保留一个版本周期——todo/0143）。
+// 两个名字共用 defineSetupCommand 一处定义的选项与 action,不复制。
 // @a: anc-cli-install-skill
-program.command('install-skill')
-  .description('Install hopspec driver skills for Claude Code / Codex (native or cfuse) from the package driver/ sources')
+function defineSetupCommand(name: 'setup' | 'install-skill'): void {
+const isLegacyAlias = name === 'install-skill';
+program.command(name, { hidden: isLegacyAlias })
+  .description('Install the hop skills into every detected coding agent (Claude Code / Codex / opencode, native or cfuse) and register the hopjit MCP server')
   .option('--dir <target>', 'Skills root directory (default: resolved per carrier — cc/codex read CLAUDE_CONFIG_DIR/CODEX_HOME, cfuse-cc/cfuse-codex use ~/.codefuse/engine/{cc,codex}/skills, opencode uses ~/.config/opencode/skills)')
   .option('--carrier <carrier>', 'Driver carrier: cc | codex | cfuse-cc | cfuse-codex | opencode (default: auto-detect every carrier whose home directory exists; falls back to cc)')
-  .option('--demo', 'Also install the coffee-week demo skill for the selected carrier')
+  .addOption(new Option('--demo', 'Compatibility alias — the demo HopAnts are installed by default now (2026-10-06); passing this flag changes nothing').hideHelp())   // 隐藏的无作用参数,保留一个版本周期（^anc-cli-install-skill-demo-ants） // @a: anc-cli-install-skill-demo-ants
   .option('--plus', 'Also install the hop-fact-check and hop-deep-research research skills, and merge their tool_servers config into ~/.hopjit/config.yaml')
   .option('--mcp', 'Compatibility alias — MCP server registration and standalone config bootstrap now happen by default (2026-10-01); passing this flag changes nothing')   // 缺省即注册（作者定"缺省安装 mcp"）,flag 留作兼容别名 // @a: anc-cli-install-skill
   .option('--force', 'Overwrite existing files')
   .action((opts) => {
+    // 旧名调用：stdout 与 setup 完全相同,只在 stderr 多一行改名提示（旧版 driver 仍会调旧名）// @a: anc-cli-install-skill
+    if (isLegacyAlias) process.stderr.write('[hopjit] install-skill 已改名为 setup，请改用 hopjit setup（旧名将在后续版本移除）\n');
     try {
       // 包根 = cli.js（dist/cli.js）的 dist 的上一级
       const pkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -1295,24 +1300,30 @@ program.command('install-skill')
       } else if (opts.dir !== undefined) {
         carriers = ['cc'];
       } else {
-        carriers = detectCarriers();
+        carriers = detectCarriers(adminContext());
         if (carriers.length === 0) {
           carriers = ['cc'];
-          detectNote = '未探到任何载体 home（~/.claude / ~/.codex / ~/.config/opencode / ~/.codefuse）,按 Claude Code 装到 ~/.claude/skills;其他载体装好后重跑 hopjit install-skill 即自动补装';
+          detectNote = '未探到任何载体 home（~/.claude / ~/.codex / ~/.config/opencode / ~/.codefuse）,按 Claude Code 装到 ~/.claude/skills;其他载体装好后重跑 hopjit setup 即自动补装';
         } else {
           detectNote = `自动探测到载体：${carriers.join(', ')}（要只装一个用 --carrier）`;
         }
       }
-      // postinstall 路径（cwd 是 npm 包目录不是用户项目）：CC 的 .mcp.json 注册与 settings.local.json 放行是项目作用域,跳过;首次 /hop 时补。// @a: anc-cli-postinstall
-      const projectScope = process.env.HOPJIT_POSTINSTALL !== '1';
       const driverVersion = readPackageVersion();
+      // 陈旧副本备份区:同一次 setup 的所有载体共用一个时间戳目录,首次需要挪动时才建（^anc-cli-stale-skill-scan）
+      const staleBackup: StaleBackup = { root: join(homedir(), '.hopjit', 'stale-backup', new Date().toISOString().replace(/:/g, '-')) };
 
+      // CC 系载体的注册决策按族算一次（^anc-cli-install-skill 注册条 (a)/(b)）：族=本机在场的全部 CC 系载体（home 目录存在,不只本次要装的——
+      // --carrier 只装一个时其余仍参与"已注册感知"）。anyRegistered 为 true 走 (b)：不写 .mcp.json,缺注册的被装载体往自己的 .claude.json 写 local 级;
+      // 为 false 走 (a)：写一次共用的 .mcp.json。// @a: anc-cli-install-skill
+      // 族集合 = 本次要装的 CC 系载体 ∪ 本机探到的 CC 系载体（--dir 形态下 carriers 只有 cc 且 home 可能不在场,仍要查 cc 自己的 .claude.json）
+      const ccFamilyPresent = [...new Set<'cc' | 'cfuse-cc'>([...carriers, ...detectCarriers(adminContext())].filter((c): c is 'cc' | 'cfuse-cc' => carrierFamily(c) === 'cc'))];
+      const ccFamily = ccFamilyRegistration(adminContext(), ccFamilyPresent);
       const installOne = (carrier: Carrier): Record<string, unknown> => {
       // 目标按 carrier home 解析（^anc-cli-carrier-home-resolution）：cc/codex 读官方环境变量
       // CLAUDE_CONFIG_DIR/CODEX_HOME（自动适配当前环境,如 cfuse 内置载体重定向）;cfuse-cc/cfuse-codex
       // 固定 ~/.codefuse/engine/{cc,codex}/skills（裸终端显式指定 cfuse 目标）。--dir 覆盖。
-      // demo 例外恒项目级见 --demo 段。见 [[hop-cli#^anc-cli-carrier-home-resolution]]。
-      const targetArg = opts.dir ?? join(resolveCarrierHome(carrier), 'skills');
+      // 见 [[hop-cli#^anc-cli-carrier-home-resolution]]。
+      const targetArg = opts.dir ?? join(resolveCarrierHome(adminContext(), carrier), 'skills');
       const target = isAbsolute(targetArg) ? targetArg : resolve(process.cwd(), targetArg);
       const installed: string[] = [];
       const force = opts.force === true;
@@ -1379,14 +1390,19 @@ program.command('install-skill')
             }
           }
         }
-        // 每次装机（force 与否）落 manifest——本次源清单即下次清理的管辖面
+        // 每次装机（force 与否）落 manifest——本次源清单即下次清理的管辖面。内容逐字节不变时不写
+        //（todo/0146 probe 3:CC 沙箱禁写 ~/.claude/skills,零安装的 setup 因重写同内容 manifest 撞 EPERM）
         if (existsSync(dstDir)) {
-          writeFileSync(join(dstDir, MANIFEST_NAME),
-            JSON.stringify({ version: readPackageVersion(), files: [...sourceNames].sort() }, null, 2), 'utf-8');
+          const mfPath = join(dstDir, MANIFEST_NAME);
+          const mfText = JSON.stringify({ version: readPackageVersion(), files: [...sourceNames].sort() }, null, 2);
+          let same = false;
+          try { same = existsSync(mfPath) && readFileSync(mfPath, 'utf-8') === mfText; } catch { same = false; }
+          if (!same) writeFileSync(mfPath, mfText, 'utf-8');
         }
       };
 
-      let codexLegacyNote: string | undefined;
+      let codexLegacyPaths: string[] = [];   // 文案在陈旧扫描之后生成——被挪走的路径不再点名（^anc-cli-stale-skill-scan）
+      const movedStale: string[] = [];
       if (carrier === 'opencode') {
         // opencode 载体（driver/opencode/ 自有内容层——2026-09-19 作者抓"opencode 完全复用 cc 的?"后立:
         // 0089 批只适配了路径与配置面,driver 正文逐字节搭 CC 车（AskUserQuestion/subagent 等 CC 原语
@@ -1436,13 +1452,10 @@ program.command('install-skill')
         const skillDir = join(target, 'hopspec');
         // 旧项目级残留检测（作者抓"项目级留着老skill只会造成版本冲突"——Codex 同名 project>user,
         // cwd 的 .agents/skills 旧件会永久盖住用户级新版=静默旧版锁定）：正式件残留响亮提示;
-        // 不自动删（可能是用户有意的项目级钉版,删除权归人）。demo 件属项目级正品不报。
+        // 不自动删（可能是用户有意的项目级钉版,删除权归人）。旧 demo-* skill 由陈旧扫描另报废弃。
         const legacyRoot = join(process.cwd(), '.agents', 'skills');
         if (resolve(legacyRoot) !== resolve(target)) {
-          const legacy = ['hopspec', 'hop'].filter(n => existsSync(join(legacyRoot, n, 'SKILL.md')));
-          if (legacy.length > 0) {
-            codexLegacyNote = `⚠️ 当前项目 .agents/skills/ 有旧安装残留（${legacy.join(', ')}）——Codex 同名 skill 项目级优先于用户级,残留会盖住本次安装的新版。确认非有意钉版后删除:rm -rf ${legacy.map(n => join(legacyRoot, n)).join(' ')}`;
-          }
+          codexLegacyPaths = ['hopspec', 'hop'].filter(n => existsSync(join(legacyRoot, n, 'SKILL.md'))).map(n => join(legacyRoot, n));
         }
         // 双名双壳（2026-08-27 四改）：恒装两壳——$hopspec（复用）与 $hopspec-mcp（MCP 薄壳）
         // 不同名并存,名字即模式;配置自举+注册 server 缺省即做（2026-10-01）。// @a: anc-cli-install-skill
@@ -1545,42 +1558,6 @@ program.command('install-skill')
         if (existsSync(legacy)) { rmSync(legacy, { recursive: true, force: true }); installed.push(`${legacy}/ （旧名残留已清理）`); }
       }
 
-      // --demo：附装 carrier 对应的 coffee-week 演示 skill（CC=/coffee-week，Codex=$coffee-week）。
-      // 内部走 carrier-aware packSpec，保持具名能力生成逻辑单一实现。
-      // 见 [[hop-cli#^anc-cli-install-skill]] --demo 条。
-      let demoNote: string | undefined;
-      if (opts.demo === true) {
-        // demo 集全装,skill 名一律 demo- 前缀（命名空间:一眼识别演示件/可整批删/不与用户 skill 撞名;
-        // spec Id 不改——Id 牵动 call 引用与 hoplog spec_id）。见 [[hop-cli#^anc-cli-install-skill]] --demo 条。
-        const DEMO_SET: { spec: string; name: string; assets?: string }[] = [
-          { spec: 'coffee-week.md', name: 'demo-coffee-week', assets: 'coffee-sales.json' },
-          { spec: 'fact-check-demo.md', name: 'demo-fact-check', assets: 'fact-check-sample.md' },
-          { spec: join('syntax', 'confirm-commit.md'), name: 'demo-rename', assets: undefined },
-        ];
-        // demo 恒项目级（2026-08-27 作者定"只有 demo 是项目级"——演示材料跟项目走,正式件用户级）：
-        // Codex 落 cwd 的 .agents/skills;CC 维持 target（CC 无项目级/用户级张力,demo 随正式件同点）。
-        const demoTarget = carrierFamily(carrier) === 'codex'
-          ? join(process.cwd(), '.agents', 'skills')
-          : target;
-        const demoNotes: string[] = [];
-        for (const demo of DEMO_SET) {
-          const demoResult = packSpec(join(pkgRoot, 'examples', demo.spec), {
-            dir: demoTarget,
-            carrier: carrier,
-            name: demo.name,
-            assets: demo.assets,
-            force,
-          });
-          if (demoResult.status === 'ok') {
-            installed.push(...demoResult.installed);
-            if (demoResult.installed.length === 0) demoNotes.push(`${demo.name} 已存在（--force 覆盖）`);
-          } else {
-            demoNotes.push(`${demo.name} 安装失败：${demoResult.message}`);
-          }
-        }
-        if (demoNotes.length > 0) demoNote = demoNotes.join('；');
-      }
-
       // --plus 附装进阶研究件+工具配置落位（2026-08-30 作者定"install-skill --plus 这样比较
       // 简单的"——进阶件不进缺省:缺省件铁律=零配置可跑,这两件依赖外部工具注册;--plus 一开关
       // 到位,装完只差一个 API key 环境变量）。见 [[hop-cli#^anc-cli-install-skill]] --plus 条。
@@ -1620,7 +1597,7 @@ program.command('install-skill')
           if (plusToolsMerged.length > 0) {
             cfg['tool_servers'] = servers;
             mkdirSync(join(homedir(), '.hopjit'), { recursive: true });
-            writeFileSync(cfgPath, yamlDump(cfg, { lineWidth: -1, noRefs: true }), 'utf-8');
+            writeFileSync(cfgPath, yamlDump(cfg, YAML_DUMP_OPTS), 'utf-8');   // @a: anc-config-yaml-dump-opts
           }
         } catch (e) {
           plusNotes.push(`工具配置合并失败（skill 已装,手动把 examples/hoptools-*.yaml 抄进 ~/.hopjit/config.yaml）：${e instanceof Error ? e.message : String(e)}`);
@@ -1663,42 +1640,49 @@ program.command('install-skill')
           // 保留原格式不重新格式化用户文件,是"高质量优雅"取舍,不严格跟随 opencode 非 .jsonc 的 stringify）。
           // 检测 candidates 查 mcp.hopjit（.jsonc/opencode.json/config.json 任一已有则跳过,消除只查一个文件漏其他的静默冲突）。
           // 坏 JSON best-effort 不阻断 skill 安装（与 cc 分支 .claude.json 同纪律）。// @a: anc-cli-install-skill
-          const home = resolveCarrierHome(carrier);
-          const candidates = [join(home, 'opencode.jsonc'), join(home, 'opencode.json'), join(home, 'config.json')];
-          const existing = candidates.find(p => {
-            if (!existsSync(p)) return false;
-            const errs: ParseError[] = [];
-            const c = parseJsonc(readFileSync(p, 'utf-8'), errs) as { mcp?: Record<string, unknown> };
-            return errs.length === 0 && !!c.mcp?.['hopjit'];   // 坏 JSON(errs 非空)不算已配
-          });
-          if (existing) {
-            mcpNote = `已有 mcp.hopjit 条目，未改动（${existing}）——请自查 command`;
+          const reg = readMcpRegistration(adminContext(), carrier);   // 已注册判定只此一处,doctor 问 4 调同一个（^anc-cli-doctor）
+          // 已有条目三分（^anc-cli-opencode-tools-gate）："已有即跳过"只保护用户资产;command 是 hopjit-mcp 且 enabled:false
+          // 的条目是 2026-09-15 至 10-08 之间 setup 自己写的旧形态,由 setup 升级,不留给 doctor 叫用户手工翻。
+          const ownStale = reg.registered && reg.command === 'hopjit-mcp' && reg.enabled === false;
+          if (reg.registered && !ownStale) {
+            mcpNote = `已有 mcp.hopjit 条目，未改动（${reg.config_path}）——请自查 command`;
           } else {
-            const configPath = candidates.find(p => existsSync(p)) ?? candidates[0];
+            const configPath = reg.config_path;
             const text = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '{}';
             const errs: ParseError[] = [];
             parseJsonc(text, errs);
             if (errs.length > 0) {   // jsonc-parser parse 不抛错,坏 JSON 填 errs
-              mcpNote = `${configPath} 不是合法 JSON——未注册 MCP（不覆盖用户配置,请修复后重跑 install-skill）`;
+              mcpNote = `${configPath} 不是合法 JSON——未注册 MCP（不覆盖用户配置,请修复后重跑 hopjit setup）`;
             } else {
-              // 默认 enabled:false——避免 LLM 在有 hopjit_start_run MCP 工具可用时自决调它、劫持 // @a: anc-cli-install-skill
-              // hopspec 复用模式（名字即模式:hopspec=复用 CLI / hopspec-mcp=standalone MCP）。
-              // opencode 无 MCP 优先机制（MCP 工具与内置工具平级注入同一工具字典，session/tools.ts:390-490（1.18.31）
-              // 无优先级/权重，工具选择由 LLM 在 toolChoice:auto 下自决）——劫持是 LLM 的自决倾向，
-              // 非 opencode 引导；enabled:false 经 opencode mcp/index.ts:514-517（1.18.31）使 server 不启动、工具不注入，
-              // 机制层兜住（skill 指令拦不住 LLM 用 MCP）。走 standalone（hopspec-mcp）时用户手动改 enabled:true。
-              const value = { type: 'local', command: ['hopjit-mcp'], enabled: false, environment: {} };
-              const edits = jsoncModify(text, ['mcp', 'hopjit'], value, { formattingOptions: { insertSpaces: true, tabSize: 2 } });
+              // enabled:true + tools 节关独立模式专属工具（todo/0134 作者拍 b 案,翻 2026-09-15 的 enabled:false）：
+              // 复用模式需要 server 活着（驱动七件与 run_approved_command 走 MCP 工具）,而 LLM 看到 hopjit_start_run
+              // 会自决调它劫持执行（opencode 无 MCP 工具优先机制,skill 指令拦不住——hopissues/0099）。opencode 官方文档
+              // 核实全局 tools 配置支持按 `<server>_<tool>` 关闭且 server 保持开启——server 开着,只关会劫持的五件。
+              // tools 节逐键 jsoncModify：只写缺席或值不为 false 的键,用户已有的其他键不动（幂等）。// @a: anc-cli-opencode-tools-gate
+              // 旧形态升级只翻 enabled 这一个键（其余键如 environment 是用户可能改过的,不动）;首装写整条。
+              let out = ownStale
+                ? jsoncApplyEdits(text, jsoncModify(text, ['mcp', 'hopjit', 'enabled'], true, { formattingOptions: { insertSpaces: true, tabSize: 2 } }))
+                : jsoncApplyEdits(text, jsoncModify(text, ['mcp', 'hopjit'], { type: 'local', command: ['hopjit-mcp'], enabled: true, environment: {} }, { formattingOptions: { insertSpaces: true, tabSize: 2 } }));
+              const cur = (parseJsonc(out) as { tools?: Record<string, unknown> } | null)?.tools ?? {};
+              for (const t of OPENCODE_DISABLED_TOOLS) {
+                const key = `hopjit_${t}`;
+                if (cur[key] === false) continue;
+                out = jsoncApplyEdits(out, jsoncModify(out, ['tools', key], false, { formattingOptions: { insertSpaces: true, tabSize: 2 } }));
+              }
               mkdirSync(dirname(configPath), { recursive: true });
-              writeFileSync(configPath, jsoncApplyEdits(text, edits), 'utf-8');
+              writeFileSync(configPath, out, 'utf-8');
               mcpRegistered = configPath;
-              mcpNote = `已注册 mcp.hopjit（默认 enabled:false,避免劫持 hopspec 复用模式）。走 standalone（用 hopspec-mcp skill）时手动改 enabled:true`;
+              const toolsList = OPENCODE_DISABLED_TOOLS.map(t => `hopjit_${t}`).join(' / ');
+              mcpNote = ownStale
+                ? `旧形态升级：mcp.hopjit 原为 hopjit 自己写的 enabled:false（2026-10-08 之前的 setup 产物）,已改 enabled:true,并在 tools 节关闭独立模式专属工具 ${toolsList}。走 standalone（用 hopspec-mcp skill）时把这几键改 true 或删掉`
+                : `已注册 mcp.hopjit（enabled:true）,并在 tools 节关闭独立模式专属工具 ${toolsList}（防复用模式下模型误调 start_run）。走 standalone（用 hopspec-mcp skill）时把这几键改 true 或删掉`;
             }
           }
         } else if (carrierFamily(carrier) === 'codex') {
-          const configPath = join(resolveCarrierHome(carrier), 'config.toml');
+          const reg = readMcpRegistration(adminContext(), carrier);   // ^anc-cli-doctor 同一判定
+          const configPath = reg.config_path;
           const existing = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '';
-          if (/\[mcp_servers\.hopjit\]/.test(existing)) {
+          if (reg.registered) {
             mcpNote = `已有 [mcp_servers.hopjit] 条目，未改动（${configPath}）——请自查 command 与 env_vars`;
           } else {
             // env_vars 联动 standalone 配置的 api_key_env 并集（2026-08-20 实撞立——硬编码 ANTHROPIC 对,
@@ -1713,18 +1697,21 @@ program.command('install-skill')
           // CC 跨 scope 已注册感知（2026-08-20 实撞立——local/user 级注册在场时又写 project 级,
           // CC 报同名多 scope 冲突且新注册被窄 scope 盖住）。~/.claude.json 读不了照常走 .mcp.json
           // 判定（best-effort,CC 内部格式演进不拦装）。// @a: anc-cli-install-skill
-          const existingScope = detectCcHopjitRegistration(carrier as 'cc' | 'cfuse-cc');
-          const configPath = resolve(process.cwd(), '.mcp.json');
-          if (!projectScope) {
-            mcpNote = 'postinstall 阶段不写项目级 .mcp.json（cwd 不是用户项目）——首次 /hop 时在项目里自动补注册';
-          } else if (existingScope) {
-            mcpNote = `已有 hopjit 注册（${existingScope}）,未写 .mcp.json——同名多 scope 会冲突且窄 scope 优先;请自查该注册指向`;
+          const reg = readMcpRegistration(adminContext(), carrier);   // ^anc-cli-doctor 同一判定（user/local 级 + 项目级 .mcp.json 两级）
+          const configPath = reg.config_path;
+          if (reg.note) throw new Error(`INSTALL_SKILL_ERROR: ${configPath} 不是合法 JSON——修复后重试（不覆盖用户配置）`);
+          const ownScope = ccFamily.perCarrier[carrier as 'cc' | 'cfuse-cc'] ?? null;
+          if (ownScope) {
+            // 本载体自己已在 user / local 级注册——不写任何东西,note 指明 scope
+            mcpNote = `已有 hopjit 注册（${ownScope}）,未写 .mcp.json——同名多 scope 会冲突且窄 scope 优先;请自查该注册指向`;
+          } else if (ccFamily.anyRegistered) {
+            // (b) 族内兄弟载体已在 user / local 级注册——写 .mcp.json 会给兄弟制造同名双 scope;改往本载体自己的 .claude.json 写 local 级条目
+            const written = writeCcLocalRegistration(adminContext(), carrier as 'cc' | 'cfuse-cc');
+            if (written) mcpRegistered = written;
+            else mcpNote = `族内其他 CC 系载体已有 hopjit 注册,未写 .mcp.json;本载体的 .claude.json 不存在（载体没启动过）,启动一次后重跑 hopjit setup 即补 local 级注册`;
           } else {
             let config: { mcpServers?: Record<string, unknown> } = {};
-            if (existsSync(configPath)) {
-              try { config = JSON.parse(readFileSync(configPath, 'utf-8')); }
-              catch { throw new Error(`INSTALL_SKILL_ERROR: ${configPath} 不是合法 JSON——修复后重试（不覆盖用户配置）`); }
-            }
+            if (existsSync(configPath)) config = JSON.parse(readFileSync(configPath, 'utf-8'));
             config.mcpServers = config.mcpServers ?? {};
             if (config.mcpServers['hopjit']) {
               mcpNote = `已有 mcpServers.hopjit 条目，未改动（${configPath}）——请自查 command`;
@@ -1738,54 +1725,101 @@ program.command('install-skill')
       } catch (e) {
         // 用户配置损坏（INSTALL_SKILL_ERROR 前缀）仍响亮失败——不静默覆盖用户文件是既有契约;只有环境性失败（家目录不可写/受限）才降为 note
         if (e instanceof Error && e.message.startsWith('INSTALL_SKILL_ERROR:')) throw e;
-        mcpNote = `MCP server 注册失败（${e instanceof Error ? e.message : String(e)}）——skill 已装好,但 hopjit MCP 工具不可达;修复后重跑 install-skill 即补注册`;
+        mcpNote = `MCP server 注册失败（${e instanceof Error ? e.message : String(e)}）——skill 已装好,但 hopjit MCP 工具不可达;修复后重跑 hopjit setup 即补注册`;
       }
 
       const skipped = installed.length === 0;
-      // 陈旧副本新鲜度提示（hopissues/0096——作者定"给的不是清理命令,是 hopfix 这样的升级命令"：
-      // 只读扫描本安装器写过的旧位置,发现陈旧报 stale_notes 携升级路径,不代删不代改。
-      // 认领判据=SKILL.md 含本器版本戳才认（非本器文件零打扰）;陈旧判据=戳版本落后当前包版本,
-      // 或 spec.md 无 engine_min_version 指纹（0093 前旧产物）。0096 实撞:8-14 旧 demo 副本
-      // 缺 web_search 授权在历史用户级位置静默活着,29 child 全灭 116 次失败提交后才被发现。
-      // 见 hop-cli ^anc-cli-stale-skill-scan）。// @a: anc-cli-stale-skill-scan
+      // 陈旧副本处置（hopissues/0096 立"给升级路径不给清理命令";2026-10-07 作者同意自带件自动挪进备份区）:
+      // 扫描本安装器写过的旧位置。认领判据=SKILL.md 含本器版本戳（非本器文件零打扰）;陈旧判据=戳版本落后
+      // 当前包版本,或 spec.md 无 engine_min_version 指纹（0093 前旧产物）;旧 demo-* 不看版本带戳即废弃。
+      // 本器自带件（六件+旧名 hopskill-build+hop-*+demo-*）整目录挪到 ~/.hopjit/stale-backup/<时间戳>/ 并写
+      // RESTORE.txt——旧位置 --force 刷不到、载体可能优先加载盖住新版,挪走不删则用户改过也不丢;任何一步
+      // 失败退回只提示。用户自建件（pack 产物）本器无新版源,仍只提示指路 /hopfix。
+      // 见 hop-cli ^anc-cli-stale-skill-scan。// @a: anc-cli-stale-skill-scan
       const staleNotes: string[] = [];
       {
         const scanRoots = carrierFamily(carrier) === 'codex'
-          ? [join(homedir(), '.agents', 'skills')]                       // Codex 族历史用户级装载点（demo 恒项目级口径前）
-          : [join(homedir(), '.claude', 'skills')];                      // CC 族:demo 改恒项目级前的旧装位置
-        for (const root of scanRoots) {
-          if (resolve(root) === resolve(target)) continue;               // 现行目标不算旧位置
+          ? [join(homedir(), '.agents', 'skills'), join(process.cwd(), '.agents', 'skills')]   // Codex 族历史用户级装载点 + 2026-08-27 至 10-06 项目级 demo 装载点
+          : [join(homedir(), '.claude', 'skills')];                      // CC 族历史装位置
+        // 各载体的现行安装目录:一次 setup 依次装多个载体,A 的现行目录对 B 不是旧位置（2026-10-07 实撞:opencode 轮把
+        // ~/.claude/skills 当旧位置,挪走了 CC 在用的当前版 hopbuild2）。只有 Codex 的两处历史位置做完整扫描,其余只看 demo-*
+        const currentInstallDirs = new Set([...CARRIER_VALUES.map(c => resolve(resolveCarrierHome(adminContext(), c), 'skills')), resolve(target)]);
+        const seenRoots = new Set<string>();
+        for (const root of [...scanRoots, target]) {
+          const demoOnly = carrierFamily(carrier) !== 'codex' || currentInstallDirs.has(resolve(root));
+          if (seenRoots.has(resolve(root))) continue;
+          seenRoots.add(resolve(root));
           if (!existsSync(root)) continue;
           for (const name of readdirSync(root)) {
-            const sk = join(root, name, 'SKILL.md');
+            const isOldDemo = name.startsWith('demo-');
+            if (demoOnly && !isOldDemo) continue;
+            const dir = join(root, name);
+            const sk = join(dir, 'SKILL.md');
             if (!existsSync(sk)) continue;
             let head = '';
             try { head = readFileSync(sk, 'utf-8'); } catch { continue; }
             const m = head.match(/driver: @hoplogic\/hopjit v(\S+)/);
             if (!m) continue;                                            // 非本安装器产物,零打扰
-            const specPath = join(root, name, 'spec.md');
-            const noFingerprint = existsSync(specPath) && !readFileSync(specPath, 'utf-8').includes('engine_min_version');
-            const older = m[1] !== driverVersion;
-            if (!older && !noFingerprint) continue;
             // 六件清单=本器安装集（用户可见只 hop 一个,其余五件 user_invocable:false 由 /hop 分派——^anc-cli-install-skill-single-entry;单入口的代码面是各 skill 源的 frontmatter,这里是安装集的唯一枚举点） // @a: anc-cli-install-skill-single-entry
-            const isBundled = ['hopspec', 'hopspec-mcp', 'hop', 'hopbuild', 'hopbuild2', 'hopfix'].includes(name) || name.startsWith('demo-') || name.startsWith('hop-');
-            staleNotes.push(isBundled
-              ? `⚠️ 旧位置发现陈旧副本 ${join(root, name)}（装于 v${m[1]},当前 v${driverVersion}）——该位置已不受本次安装管辖,可能被载体优先加载盖住新版。升级:现行位置已随本次安装刷新;旧位置文件请自行处置（确认无自改内容后可删,路径如上）`
-              : `⚠️ 旧位置发现陈旧的自建 skill ${join(root, name)}（装于 v${m[1]},当前 v${driverVersion}）——升级走 /hopfix 定向修正（validate error 清单为工单的版本迁移正门,不是简单覆盖）`);
+            const isBundled = ['hopspec', 'hopspec-mcp', 'hop', 'hopbuild', 'hopbuild2', 'hopfix'].includes(name)
+              || STALE_LEGACY_BUNDLED_NAMES.includes(name) || name.startsWith('hop-') || isOldDemo;
+            // engine_min_version 指纹由 pack 注入,只用来判用户自建件;自带件的 spec.md 本来不带它（hopbuild2 实撞误判）
+            const specPath = join(dir, 'spec.md');
+            const noFingerprint = !isBundled && existsSync(specPath) && !readFileSync(specPath, 'utf-8').includes('engine_min_version');
+            const older = m[1] !== driverVersion;
+            if (!isOldDemo && !older && !noFingerprint) continue;
+            // Codex 的 --plus 进阶件现行就装在 <cwd>/.agents/skills——那里的 hop-* 是现行位置不是旧位置,不挪,指路重装
+            const isPlusHome = carrierFamily(carrier) === 'codex' && resolve(root) === resolve(process.cwd(), '.agents', 'skills');
+            if (isPlusHome && name.startsWith('hop-')) {
+              staleNotes.push(`⚠️ 进阶件 ${dir} 版本落后（装于 v${m[1]},当前 v${driverVersion}）——在项目目录重跑 hopjit setup --carrier codex --plus --force 刷新`);
+              continue;
+            }
+            if (!isBundled) {
+              staleNotes.push(`⚠️ 旧位置发现陈旧的自建 skill ${dir}（装于 v${m[1]},当前 v${driverVersion}）——升级走 /hopfix 定向修正（validate error 清单为工单的版本迁移正门,不是简单覆盖）`);
+              continue;
+            }
+            const reason = isOldDemo
+              ? `旧形态演示 skill,演示件已改为 HopAnt 装在 ${antsRoot(homedir())}/`
+              : name.startsWith('hop-')
+                ? `装于 v${m[1]},当前 v${driverVersion};进阶件要用时以 hopjit setup --plus 重装`
+                : `装于 v${m[1]},当前 v${driverVersion};现行位置已随本次安装刷新,旧位置可能被载体优先加载盖住新版`;
+            const moved = moveStaleToBackup(dir, staleBackup);
+            if (moved.ok) {
+              movedStale.push(resolve(dir));
+              staleNotes.push(`已挪走陈旧副本：${dir} → ${moved.dest}（${reason}）。需要时按 ${join(staleBackup.root, 'RESTORE.txt')} 挪回`);
+            } else {
+              staleNotes.push(`⚠️ 发现陈旧副本 ${dir}（${reason}）——自动挪进备份区失败（${moved.error}）,原目录未动,请自行删除或挪走`);
+            }
           }
         }
       }
-      // CC 放行 run_approved_command;其他载体指路不猜格式。判据显式枚举——carrierFamily 把 opencode 也归 'cc'（包装模板选型语义）,借它会把 CC 文件写进 opencode 项目（review 实抓） // @a: anc-cli-install-skill-permission
+      const legacyLeft = codexLegacyPaths.filter(p => !movedStale.includes(resolve(p)));
+      const codexLegacyNote = legacyLeft.length > 0
+        ? `⚠️ 当前项目 .agents/skills/ 有旧安装残留（${legacyLeft.map(p => p.split(sep).pop()).join(', ')}）——Codex 同名 skill 项目级优先于用户级,残留会盖住本次安装的新版。确认非有意钉版后删除:rm -rf ${legacyLeft.join(' ')}`
+        : undefined;
+      // CC 放行 hopjit 工具清单;其他载体指路不猜格式。判据显式枚举——carrierFamily 把 opencode 也归 'cc'（包装模板选型语义）,借它会把 CC 文件写进 opencode 项目（review 实抓） // @a: anc-cli-install-skill-permission
       let permissionWritten: string | null = null;
       let permissionNote: string | undefined;
-      if ((carrier === 'cc' || carrier === 'cfuse-cc') && !projectScope) {
-        permissionNote = 'postinstall 阶段不写项目级 settings.local.json 放行——首次 /hop 时在项目里自动补';
-      } else if (carrier === 'cc' || carrier === 'cfuse-cc') {
+      if (carrier === 'cc' || carrier === 'cfuse-cc') {
         const r = ensureCcPermission(process.cwd());
         permissionWritten = r.written;
         permissionNote = r.note;
       } else {
-        permissionNote = `请在 ${carrier} 载体里放行 hopjit 的 ${RUN_APPROVED_COMMAND_TOOL} 工具（按 <server>_<tool> 粒度的放行配置）${carrier === 'opencode' ? ',并把 opencode 配置里 mcp.hopjit.enabled 改为 true（安装缺省 false,server 不启动则工具不存在;缺省值待定 todo/0134）' : ''}——任务卡里批准的命令才能不再逐条弹窗`;
+        permissionNote = `请在 ${carrier} 载体里放行 hopjit 的 MCP 工具（按 <server>_<tool> 粒度的放行配置）${carrier === 'opencode' ? ';server 已启用（mcp.hopjit.enabled: true）,独立模式专属工具已在 tools 节关闭,要走 standalone 时把那几键改 true' : ''}——驱动工具与任务卡里批准的命令才能不再逐条弹窗`;   // @a: anc-cli-opencode-tools-gate
+      }
+
+      // 注册后的握手自检（^anc-cli-install-skill-handshake）——只报告不改注册,失败不阻断。
+      // @a: anc-cli-install-skill-handshake
+      let handshake: McpHandshake | undefined;
+      {
+        let command = 'hopjit-mcp';
+        if (carrier === 'cc' || carrier === 'cfuse-cc') {
+          try {
+            const c = JSON.parse(readFileSync(resolve(process.cwd(), '.mcp.json'), 'utf-8')) as { mcpServers?: { hopjit?: { command?: unknown } } };
+            if (typeof c.mcpServers?.hopjit?.command === 'string') command = c.mcpServers.hopjit.command;
+          } catch { /* 没有项目级注册或读不了——按缺省 command 判 */ }
+        }
+        handshake = mcpHandshake(process.execPath, join(pkgRoot, 'dist', 'mcp-server.js'), command, process.env.PATH ?? '');
       }
 
       return {
@@ -1793,14 +1827,14 @@ program.command('install-skill')
         target,
         installed,
         ...(removed.length ? { removed } : {}),   // 受管目录清理清单（--force 档）// @a: anc-cli-install-skill
-        ...(demoNote ? { demo_note: demoNote } : {}),
         ...(plusNote ? { plus_note: plusNote, plus_tools_merged: plusToolsMerged } : {}),
         ...(codexLegacyNote ? { legacy_note: codexLegacyNote } : {}),
         mcp_registered: mcpRegistered,
         ...(mcpNote ? { mcp_note: mcpNote } : {}),
         mcp_config_bootstrapped: mcpConfigBootstrapped,
         ...(mcpConfigNote ? { mcp_config_note: mcpConfigNote } : {}),
-        permission_written: permissionWritten,   // CC 放行 run_approved_command 的落点（^anc-cli-install-skill-permission） // @a: anc-cli-install-skill-permission
+        ...(handshake ? { mcp_handshake: handshake } : {}),   // @a: anc-cli-install-skill-handshake
+        permission_written: permissionWritten,   // CC 放行 hopjit 工具清单的落点（^anc-cli-install-skill-permission） // @a: anc-cli-install-skill-permission
         ...(permissionNote ? { permission_note: permissionNote } : {}),
         ...(staleNotes.length ? { stale_notes: staleNotes } : {}),   // @a: anc-cli-stale-skill-scan
         ...(skipped ? { note: '无文件写入（目标已存在，用 --force 覆盖）' } : {}),
@@ -1809,6 +1843,8 @@ program.command('install-skill')
 
       // 多载体响应：顶层字段取第一个载体的值（兼容只读顶层的旧消费方）,全部结果在 results（^anc-cli-carrier-autodetect）。// @a: anc-cli-carrier-autodetect
       const results = carriers.map(installOne);
+      // 演示 HopAnt 与载体无关,每次调用只装一次（^anc-cli-install-skill-demo-ants） // @a: anc-cli-install-skill-demo-ants
+      const demo = installDemoAnts(pkgRoot, homedir());
       output({
         status: 'ok',
         ...results[0],
@@ -1817,17 +1853,24 @@ program.command('install-skill')
         driver_version: driverVersion,
         driver_source: pkgRoot,
         ...(detectNote ? { detect_note: detectNote } : {}),
+        demo_ants: demo.installed,
+        ...(demo.notes.length ? { demo_note: demo.notes.join('；') } : {}),
+        // 装包必经点指路 agent 使用说明——带包内绝对路径,agent 不必再算 npm root（todo/0139 挂钩①,^anc-cli-install-skill）// @a: anc-cli-install-skill
+        next_step: `装完请读 ${join(pkgRoot, 'docs', 'AGENT-GUIDE.md')}（给 agent 的使用说明：装完你的行为要变在哪、三条必须守的边界）；要让项目里的 agent 稳定走 hop,先问用户一句,同意再把 ${join(pkgRoot, 'docs', 'agent-instructions-template.md')} 里的那段贴进项目的 CLAUDE.md 或 AGENTS.md`,
       });
     } catch (err: unknown) {
       errorExit(err instanceof Error ? err.message : String(err));
     }
   });
+}
+defineSetupCommand('setup');
+defineSetupCommand('install-skill');
 
 
 // pack：把一个 hopskill spec 打包成载体对应的独立具名 skill。
 // 产品形态：用户拿到的是具名能力（"帮我评审文档"），HopSpec/hopjit 是实现细节不外露。
 // 薄包装只做触发+参数引导+执行委托，驱动协议单一权威在 hopspec skill（内嵌=第二真值必漂移）。
-// 核心逻辑提炼为 packSpec()——pack 命令与 install-skill --demo 共用（单一实现，不复制）。
+// 核心逻辑提炼为 packSpec()——pack 命令与 setup --plus 共用（单一实现，不复制）。
 // 见 design/hop-cli.md ^anc-cli-pack。
 // @a: anc-cli-pack
 type PackResult =
@@ -1850,7 +1893,7 @@ function packSpec(specPath: string, opts: { dir: string; carrier: Carrier; name?
   const packSpecDir = dirname(resolve(specPath));
   const packDocRefCtx = {
     workspace_dir: process.cwd(),
-    sandbox: { filesystem: { workspace_dir: '.', read_access: { allowed: ['.', packSpecDir], denied: [], confirm_required: [] } }, network: { trusted_hosts: [] }, runtime: { available: [] } },
+    sandbox: { filesystem: { workspace_dir: process.cwd(), read_access: { allowed: ['.', packSpecDir], denied: [], confirm_required: [] } }, network: { trusted_hosts: [] }, runtime: { available: [] } },
     spec_dir: packSpecDir,
   };
   const allErrors = validateSpec(ast, packDocRefCtx);
@@ -1909,17 +1952,22 @@ function packSpec(specPath: string, opts: { dir: string; carrier: Carrier; name?
   const paramLines = inputs.length
     ? inputs.map(i => `- \`${i.name}\`（${i.type}）${i.description ? `：${i.description}` : ''}`).join('\n')
     : '- 本 spec 无输入参数。';
-  const knowledgeNote = knowledgeDocs.length
-    ? `\n本目录还包含判据知识文档（${knowledgeDocs.join('、')}），引擎执行时按 spec 内 doc-ref 自动切片注入，无需手动引用。`
-    : '';
+  // 壳里不提知识文档（^anc-cli-pack-shell 内务零披露——点名文件就是诱导预读;todo/0151 作者定删）。文件照样随包拷入,PackResponse.knowledge_docs 仍列。
+  // 交付段（四段式第四段,^anc-cli-pack-shell——壳的参数段对齐 Inputs,交付段对齐 Outputs,两头都不悬空;
+  // 2026-08-15 作者抓"壳的输出还没对上",设计写定后模板一直没读 header.outputs,2026-09-30 语义审计抓,todo/0129 B5 补）// @a: anc-cli-pack-shell
+  const outputs = ast.header.outputs ?? [];
+  const deliverLines = outputs.length
+    ? outputs.map(o => `- \`${o.name}\`（${o.type}）${o.description ? `：${o.description}` : ''}`).join('\n')
+    : '- 本 spec 未声明交付物——终态后把引擎返回的 outputs 原样报告。';
+  const deliverSection = `## 交付\n\n任务到终态后，按下列交付物逐项向用户交付（与 spec \`## Outputs\` 一一对应，不漏不改写）：\n\n${deliverLines}\n\n单一 text/markdown 交付物直接展示正文；多项或结构化交付物保底用 YAML 块防漏。`;
 
   // 前置段装驱动命令/位置按 carrier 生成（^anc-cli-carrier-home-resolution——cfuse-* 载体的 pack 产物
   // 要指引用户装到 cfuse home,不能硬编码原生 ~/.claude / ~/.codex,否则 cfuse 用户照做装错位置）
-  const installHint = opts.carrier === 'cfuse-cc' ? '`hopjit install-skill --carrier cfuse-cc`'
-    : opts.carrier === 'cfuse-codex' ? '`hopjit install-skill --carrier cfuse-codex`'
-    : opts.carrier === 'opencode' ? '`hopjit install-skill --carrier opencode`'
-    : carrierFamily(opts.carrier) === 'codex' ? '`hopjit install-skill --carrier codex`'
-    : '`hopjit install-skill`';
+  const installHint = opts.carrier === 'cfuse-cc' ? '`hopjit setup --carrier cfuse-cc`'
+    : opts.carrier === 'cfuse-codex' ? '`hopjit setup --carrier cfuse-codex`'
+    : opts.carrier === 'opencode' ? '`hopjit setup --carrier opencode`'
+    : carrierFamily(opts.carrier) === 'codex' ? '`hopjit setup --carrier codex`'
+    : '`hopjit setup`';
   const codexHopspecPath = opts.carrier === 'cfuse-codex'
     ? '~/.codefuse/engine/codex/skills/hopspec/SKILL.md'
     : '~/.codex/skills/hopspec/SKILL.md';
@@ -1958,7 +2006,9 @@ ${paramLines}
 /hopspec run <本 skill 目录>/spec.md --params '<组装的参数 JSON>'
 \`\`\`
 
-**输入确认等暂停点由 spec 内的 ask/confirm 步骤引擎强制**——按 hopspec 协议原样呈给用户拍板（不要代答）；终态后向用户报告 outputs。${knowledgeNote}
+**输入确认等暂停点由 spec 内的 ask/confirm 步骤引擎强制**——按 hopspec 协议原样呈给用户拍板（不要代答）；终态后按下面「交付」段向用户报告。
+
+${deliverSection}
 
 ## 🔴 用户注意力纪律（本 skill 面向非程序员，非 debug 模式）
 
@@ -1992,7 +2042,9 @@ ${paramLines}
 
 1. 读取 hopspec 的 SKILL.md（前置第 2 条定位到的那份），把它作为本次执行的 main orchestrator 协议；
 2. 按该协议运行本目录 \`spec.md\`，传入组装的参数——**输入确认等暂停点由 spec 内 ask/confirm 步骤引擎强制**，原样交用户拍板（不要代答）；
-3. 终态完整输出 YAML。${knowledgeNote}
+3. 终态按下面「交付」段逐项交付。
+
+${deliverSection}
 
 ## 用户注意力
 
@@ -2033,7 +2085,7 @@ ${paramLines}
   if (opts.name && ast.header.id && opts.name !== ast.header.id) {
     if (!existsSync(specDst) || opts.force === true) {
       mkdirSync(dirname(specDst), { recursive: true });
-      const rewritten = injectEngineMinVersion(raw.replace(/^Id:\s*\S+.*$/m, `Id: ${opts.name}`));
+      const rewritten = injectEngineMinVersion(rewriteSpecId(raw, opts.name));
       writeFileSync(specDst, rewritten, 'utf-8');
       installed.push(specDst);
     }
@@ -2100,6 +2152,76 @@ program.command('pack <spec>')
       errorExit(err instanceof Error ? err.message : String(err));
     }
   });
+
+// ---------- hopjit ant：HopAnt 安装/适配/索引/卸载/bootstrap（^anc-cli-ant,业务全在 hopant 模块） ----------
+// 组合根职责：取 home、两级配置的 tool_servers 与 providers、PATH、git 用户名、登录名、主机名、引擎版本,
+// 全部作为参数交给 hopant 的纯函数;子进程只在 ant bootstrap 一处（跑 HopAnt 自带的 bootstrap.js）。
+
+// ---------- hopjit doctor / ant：业务体在 hop-admin.ts,这里只做"读进程状态 → 调一个函数 → 输出 / 退出码"的薄壳（^anc-cli-doctor / ^anc-cli-ant「实现落点」） ----------
+
+/** ant 子命令共用的壳：成功 output,业务体抛的 `大写码:` Error 走 errorExit（stderr + 退出码 1,stdout 不出 JSON）。 */ // @a: anc-cli-ant
+function antShell(fn: (ctx: AdminContext) => Record<string, unknown>, afterOutput?: (r: Record<string, unknown>) => void): void {
+  try {
+    const r = fn(adminContext());
+    output(r);
+    afterOutput?.(r);
+  } catch (err: unknown) { errorExit(err instanceof Error ? err.message : String(err)); }
+}
+
+program.command('doctor')
+  .description('Health check after install: skill / version / menu / MCP registration / handshake / permissions / MCP server LLM config / standalone credential (design/hop-cli.md ^anc-cli-doctor)')
+  .action(() => {   // @a: anc-cli-doctor
+    try {
+      const r = runDoctor(adminContext());
+      if (FORCE_JSON) output(r); else process.stdout.write(formatDoctorReport(r));
+      process.exitCode = r.exit_code;   // fail 是正常报告不是命令出错——不走 errorExit
+    } catch (err: unknown) { errorExit(err instanceof Error ? err.message : String(err)); }
+  });
+
+const ant = program.command('ant').description('HopAnt: install / adapt / list / remove / bootstrap / pack / share (design/hopant.md)');
+
+ant.command('install <dir>')
+  .description('Install a HopAnt directory or a HopAnt package root (ants/<id>/) into ~/.hopjit/ants/')
+  .option('--dry-run', 'Only print the install plan; write nothing')
+  .addOption(new Option('--scope <scope>', 'Install into the user-level (~/.hopjit/ants, default) or project-level (<cwd>/hop_tasks/ants) HopAnt root').choices(['user', 'project']).default('user'))
+  .action((dirArg: string, opts: { dryRun?: boolean; scope: 'user' | 'project' }) => antShell(ctx => antInstall(ctx, dirArg, opts.dryRun === true, opts.scope)));   // @a: anc-cli-ant
+
+ant.command('adapt <id>')
+  .description('Check this machine against the HopAnt entry spec header: tools / credentials / commands / engine version; write adapt stamp when all green')
+  .action((id: string) => antShell(ctx => antAdapt(ctx, id), r => { if (!(r['report'] as { ok: boolean }).ok) process.exitCode = 1; }));   // 报告有缺口：stdout 仍是完整 JSON、退出码 1 // @a: anc-cli-ant
+
+ant.command('list')
+  .description('List installed HopAnts with adapt state (adapted / stale / never)')
+  .action(() => antShell(ctx => antList(ctx)));   // @a: anc-cli-ant
+
+ant.command('remove <id>')
+  .description('Remove an installed HopAnt')
+  .option('--keep-store', 'Move inner_store/ to ~/.hopjit/ants-store-backup/<id>/ before removing')
+  .addOption(new Option('--scope <scope>', 'Which level to remove from; default = whichever level the id resolves to (project first)').choices(['user', 'project']))
+  .action((id: string, opts: { keepStore?: boolean; scope?: 'user' | 'project' }) => antShell(ctx => antRemove(ctx, id, opts.keepStore === true, opts.scope)));   // @a: anc-cli-ant
+
+ant.command('bootstrap <id>')
+  .description('Run the HopAnt\'s own bootstrap.js (installs its runtime deps); --dry-run only prints its plan')
+  .option('--dry-run', 'Pass --dry-run to bootstrap.js')
+  .action((id: string, opts: { dryRun?: boolean }) => antShell(ctx => antBootstrap(ctx, id, opts.dryRun === true),
+    r => { if (r['has_bootstrap'] === true && r['returncode'] !== 0) process.exitCode = 1; }));   // 脚本非零：本命令退出码 1 // @a: anc-cli-ant
+
+ant.command('pack <spec>')
+  .description('Pack a spec into an installable HopAnt directory <out>/<id>/ (reconciles Tools / approved-commands header against the body; copies doc-ref files and --assets)')
+  .option('--out <dir>', 'Output root (default: ./ants)', 'ants')
+  .option('--id <id>', 'HopAnt id (default: the spec Id line)')
+  .option('--assets <files...>', 'Extra files to copy into the HopAnt root (relative to the spec dir or absolute)')
+  .action((spec: string, opts: { out: string; id?: string; assets?: string[] }) => antShell(ctx => antPack(ctx, spec, { out: opts.out, id: opts.id, assets: opts.assets })));   // @a: anc-cli-ant, anc-hopant-pack
+
+ant.command('share <ids...>')
+  .description('Bundle installed HopAnts (distributable face only) into a HopAnt package directory <out>/<name>/ with package.json; four checks must pass')
+  .option('--out <dir>', 'Output root (default: cwd)', '.')
+  .option('--name <name>', 'Package name (default: the single id; required for several)')
+  .option('--pkg-version <v>', 'Package version (transport label; not --version, that is the engine version flag)', '0.1.0')
+  .option('--owner <id>', 'Owner identifier to record in the package (also saved to ~/.hopjit/config.yaml owner_id)')
+  .option('--yes', 'Use the default owner identifier without asking')
+  .action((ids: string[], opts: { out: string; name?: string; pkgVersion: string; owner?: string; yes?: boolean }) =>
+    antShell(ctx => antShare(ctx, ids, { out: opts.out, name: opts.name, pkg_version: opts.pkgVersion, owner: opts.owner, yes: opts.yes })));   // @a: anc-cli-ant, anc-hopant-share
 
 export { program };
 

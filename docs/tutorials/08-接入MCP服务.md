@@ -3,14 +3,16 @@
 	source: [[../design/tool-interface]]
 	source_id: hopjit-tool-interface
 	type: compact
-	last_sync: 2026-10-01T16:02+0800
+	last_sync: 2026-10-10T00:25+0800
 	note: 用户教程 08——把 MCP 服务接成 spec 可调用的工具：配置文件 tool_servers 节注册（云端/本地两形态）→ body 里按名调用 → 安全与故障语义。对外文法权威在 reference/配置参考 ^anc-ref-tool-servers
 %%
 
 # 教程 8 · 接入 MCP 服务：让 spec 调外面的工具
 
+> **先分清"MCP"的两个意思。** 本篇讲的是 **spec 调外部 MCP 工具**——把别人的 MCP server 注册成 spec 里能按名调用的工具。如果你要的是**把 HopJIT 自己当 MCP server 跑**（独立模式），那在 `USAGE.md` §4，不在这里。两件事名字都带 MCP，先分清再往下读。
+
 **目标**：把一个 MCP 服务（云端 API 或本地 server）注册成你的 spec 里可以按名调用的工具——搜索、知识库、任何生态里现成的 MCP 能力。
-**前提**：完成 [[D10-hop_python计算体]]（body 里调工具的语法在那篇）；使用独立模式（standalone——对 `/hop` 明说"走 MCP 跑 <spec>"即进入，配置见 `USAGE.md` §6；外部工具注册当前走 standalone 配置面）。
+**前提**：完成 [[D10-hop_python计算体]]（body 里调工具的语法在那篇）；使用独立模式（standalone——对 `/hop` 明说"走 MCP 跑 <spec>"即进入，配置见 `USAGE.md` §4；外部工具注册当前走 standalone 配置面）。
 
 ## 一分钟看懂机制
 

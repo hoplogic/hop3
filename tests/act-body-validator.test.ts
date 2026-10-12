@@ -403,6 +403,14 @@ ${toolsSection}## Outputs
     expect(validateSpec(ast).filter(e => e.rule === 'B2' && e.severity === 'warn' && e.message.includes('run_shell')).length).toBe(1);
   });
 
+  it('正例：commit 步 body 调实例上下文内置 spec_dir / work_zone_path → B2 零 error（占位项保静态校验认名——spec_dir 批 review 变异 e 抓占位项删除只因文案副作用红一例后补）', () => { // @v: anc-exec-spec-dir
+    const spec = SPEC('commit', '').replace('r = run_shell(command: "echo hi")', 'r = spec_dir("scripts/x.py") + work_zone_path("o.txt")');
+    const { ast } = parseSpec(spec);
+    const es = validateSpec(ast);
+    expect(es.filter(e => e.rule === 'B2' && e.severity === 'error')).toEqual([]);
+    expect(es.filter(e => e.rule === 'B2' && e.severity === 'warn' && /spec_dir|work_zone_path/.test(e.message))).toEqual([]);
+  });
+
   it('正例：commit 步但 Tools 段声明过该名 → warn 档不拦（声明过=作者显式知情;standalone 另有 init 对账）', () => {
     const tools = '## Tools\n- run_shell(command: line) -> r: text  # 声明过的外部工具\n';
     const { ast } = parseSpec(SPEC('commit', tools));
@@ -560,6 +568,59 @@ g
   it('反例：read 臆造 filename 参数 → error（path/content 族以外的第二形态）', () => {
     const errs = v('r = read(filename: p)');
     expect(errs.some(e => e.rule === 'B2' && e.severity === 'error' && e.message.includes('没有参数 "filename"'))).toBe(true);
+  });
+
+  // 第④判:keep 字面量须是非负整数（commit 安全分析批次 review D7——非法字面量此前过静态校验,
+  // 安全分析当"keep 定不了"转人工,人批准后运行期才报错）。// @v: anc-rule-b2
+  it('正例：keep 字面量 0 与 3、变量 keep 都不报 B2 error', () => {
+    for (const k of ['0', '3', 'p']) {
+      const errs = v(`r = write(path: p, content: p, keep: ${k})`);
+      expect(errs.filter(e => e.severity === 'error'), k).toHaveLength(0);
+    }
+    expect(v('r = remove(path: p, keep: 0)').filter(e => e.severity === 'error')).toHaveLength(0);
+  });
+
+  it('反例：keep 字面量 -1 / 1.5 / "3" / True → B2 error,move 与 edit_file 同样核', () => {
+    const cases: [string, string][] = [
+      ['r = write(path: p, content: p, keep: -1)', '-1'],
+      ['r = write(path: p, content: p, keep: 1.5)', '1.5'],
+      ['r = write(path: p, content: p, keep: "3")', '"3"'],
+      ['r = write(path: p, content: p, keep: True)', 'True'],
+      ['r = move(from: p, to: p, keep: -2)', '-2'],
+      ['r = edit_file(path: p, old_text: p, new_text: p, keep: 2.5)', '2.5'],
+    ];
+    for (const [body, shown] of cases) {
+      const es = v(body).filter(e => e.rule === 'B2' && e.severity === 'error' && e.message.includes('keep 须是非负整数'));
+      expect(es, body).toHaveLength(1);
+      expect(es[0].message).toContain(`收到 ${shown}`);
+    }
+  });
+
+  it('反例：签名里没有 keep 的工具（append / create）写了 keep → 只报"没有参数 keep",不再报"keep 须是非负整数"', () => {
+    for (const body of ['r = append(path: p, content: p, keep: -1)', 'r = create(path: p, content: p, keep: -1)']) {
+      const es = v(body).filter(e => e.rule === 'B2' && e.severity === 'error');
+      expect(es.some(e => e.message.includes('没有参数 "keep"')), body).toBe(true);
+      expect(es.some(e => e.message.includes('keep 须是非负整数')), body).toBe(false);
+    }
+  });
+
+  // 以下用例逐分支侧钉住 keep 字面量第④判的各个条件（commit 安全分析批次 review 第五次阅卷后,机器枚举分支侧的 run20 存活项）
+  // @v: anc-rule-b2
+  it('keep 第④判逐条件:not 一元、取负的变量、取负的字符串字面量、False、None 各自的报法;只有数字字面量且是非负整数才放行', () => {
+    const bad = (body: string) => v(body).filter(e => e.rule === 'B2' && e.severity === 'error' && e.message.includes('keep 须是非负整数'));
+    // not p:一元但运算符不是 -,不是字面量 → 不核（运行前不可知）
+    expect(bad('r = write(path: p, content: p, keep: not p)')).toHaveLength(0);
+    // -p:取负作用在变量上,不是字面量 → 不核
+    expect(bad('r = write(path: p, content: p, keep: -p)')).toHaveLength(0);
+    // -"3":取负作用在字符串字面量上 → 报 -"3"
+    expect(bad('r = write(path: p, content: p, keep: -"3")')[0]?.message).toContain('收到 -"3"');
+    // False:布尔字面量 → 报 False（不是 "false" 也不是 0）
+    expect(bad('r = write(path: p, content: p, keep: False)')[0]?.message).toContain('收到 False');
+    // None:null 字面量 → 报 null
+    expect(bad('r = write(path: p, content: p, keep: None)')[0]?.message).toContain('收到 null');
+    // 0 与 7 放行
+    expect(bad('r = write(path: p, content: p, keep: 0)')).toHaveLength(0);
+    expect(bad('r = write(path: p, content: p, keep: 7)')).toHaveLength(0);
   });
 
   it('正例：签名表外调用（外部工具名）不受三判影响——既有 warn 档不变', () => {

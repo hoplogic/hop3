@@ -120,7 +120,7 @@ OutputDecl 定义步骤输出变量的名称、类型和描述 ^anc-type-output-
 | `enum(<取值串>)` | 枚举 |
 
 ```
-struct: OutputDecl
+HopType: OutputDecl
   Id: output-decl
   Fields:
     - name % line         # 输出变量名
@@ -129,7 +129,7 @@ struct: OutputDecl
     - default % yaml      # 可选。`+ → x: type = 初值` 的初值（parser 解析）——容器节点=init 一次、叶子=每次执行重置。见 [[exec-engine#^anc-exec-output-init]]
     - fields % [yaml]     # 可选。复合类型 YAML 展开的字段说明（每项 name/type/description）——仅供人读与 L6 输出约束渲染，不注册为独立变量（见 [[spec-parser]] 复合输出解析）
 
-struct: StepSummary
+HopType: StepSummary
   Id: step-summary
   Fields:
     - step_id % line
@@ -137,7 +137,7 @@ struct: StepSummary
     - summary % line
     - outputs % [line]    # 变量名列表
 
-struct: RetryRecord
+HopType: RetryRecord
   Id: retry-record
   Fields:
     - attempt % number
@@ -145,7 +145,7 @@ struct: RetryRecord
     - steps_tried % [StepSummary]
     - event_seq % number   # 可选（v0.3.0,todo/0107）。记账那一刻执行事件流的长度（位置戳）;L2c 注入只取位置在容器本轮起点（祖先 loop 最晚一条轮进事件）之后的记录,缺席按本轮处理（旧状态文件）。权威 [[exec-engine#^anc-exec-retry-feedback-iter-scope]]
 
-struct: ExecEvent
+HopType: ExecEvent
   Id: exec-event
   Fields:
     - at % line       # ISO 8601 时刻

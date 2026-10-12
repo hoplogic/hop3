@@ -1,6 +1,6 @@
 ---
 name: hopspec
-description: Run an existing HopSpec file (reuse mode — Codex itself is the reasoning LLM via CLI, zero API key): confirm parameters, answer intervention points, present the final state by contract. Dispatched by $hop; users do not invoke it directly. Ad-hoc tasks without a spec go through $hop.
+description: Run an existing HopSpec file (reuse mode — Codex itself is the reasoning LLM; hopjit driver tools via MCP first, CLI fallback; zero API key): confirm parameters, answer intervention points, present the final state by contract. Dispatched by $hop; users do not invoke it directly. Ad-hoc tasks without a spec go through $hop.
 user-invocable: false
 ---
 
@@ -9,7 +9,7 @@ user-invocable: false
 	source: [[codex-driver-carrier]]
 	source_id: hopjit-codex-driver-carrier
 	type: extract
-	last_sync: 2026-10-01T15:45+0800
+	last_sync: 2026-10-11T01:58+0800
 	note: Codex 复用模式 main orchestrator。普通执行段由 agents/segment-driver.md 承担（parallel-worker/batch-fanout 已随旧通道退役，P0.5）。
 %%
 
@@ -30,6 +30,7 @@ user-invocable: false
 1. 按 `references/cli-discovery.md` 探测并固化 `<CLI>`。`<CLI>` 是完整调用前缀，后续只写 `<CLI> <command>`。
 2. `<STATE>` 固定为项目根 **`.hopstate/`** 的绝对路径；所有有状态命令都带绝对 `--state-dir "<PROJECT_ROOT>/.hopstate"`。`.hopspec/` 仅存 `recent-dirs.json`，绝不能作为 state-dir；`.hoplog/` 仅存日志。
 3. `run/list` 的 spec 定位、recent-dirs 和 params 确认按 `references/discovery.md`。
+4. **驱动通道：MCP 工具优先，命令行回退**（todo/0146）：会话里能调 hopjit MCP 的工具时，本文件与 segment driver 里的 `<CLI> --json <子命令>` 一律改用同名工具（`run` / `submit_and_fetch_next` / `reap_and_fetch_next` / `status` / `resume` / `abort` / `validate` / `approve_commit`），参数对应规则见 `references/execution-rules.md`"驱动通道"节；工具放行后推进不逐条弹窗。工具不可见时用 `<CLI>`，每条命令只做一件事，不加管道、不截断输出，响应原样读完。派生 segment driver 时在 envelope 之外写明"hopjit 工具可见则用工具"。
 
 ### 0.0 注意力纪律
 
@@ -117,6 +118,8 @@ user-invocable: false
 
 Main 必须停下向用户展示问题并等待回复，不得替答。例外：仅 `require_human: false` 且问题确实可由上下文无歧义推断时才允许代答——判断参考 `presented_data.instruction`（spec 作者写给驱动侧的作业指引；question 是给人的纯问题面不含指引——#34 受众分流）。默认倾向问人，拿不准就问。
 
+- `dirs`（`pause_reason: dirs`，todo/0148）：spec 在 `## Config` 的 `dirs` 里声明了 workspace 之外的目录、本机没批过这份清单时，run 起跑后第一个停点。`presented_data.context` 里有 `dirs`（每条 path + mode，read 只读 / readwrite 读写）与 `dirs_hash`；`step_id` 为空。把清单逐条给用户看（路径 + 只读/读写），在对话里问同不同意——这一问就是批准，每份清单只问一次；同意后调 hopjit 的 `approve_dirs(instance_id, dirs_hash)` 再 `resume`，不同意则不调、告诉用户活没开始。起跑带 `approve_dirs` 可跳过停点。
+- `commit`（`pause_reason: commit`，todo/0146）：每个 `[commit]` 步骤第一次执行前，引擎先做安全分析：body 里的动作全部可逆或低危（新建文件、追加、建目录、移动、写入前已把旧版本留存进回收站的覆盖与删除、只写 work_zone 的写入）时直接执行，不出现停点，main 什么也不用做；有动作会销毁内容且找不回（`keep: 0` 的覆盖与删除）、运行命令、发通知或调外部工具时，由 hopjit 配置的模型分析一次——模型判全部安全同样直接执行、以后不再问，否则转人工停在这里；本宿主没有分析模型（命令行 hopjit 不配置分析模型）或分析出错时也转人工。main 自己不做安全判断。引擎判过安全、模型判过安全或人批准过的步骤都记进批准账：以后再执行这一步（body 没改）先查账，账上有就直接执行，不再扫描、不再分析；批准的单位是整个 commit 步骤，不逐句批。`presented_data.context` 带 `step_id`、`fingerprint`（指纹）、`analysis`、`body` 原文;`analysis` 是 `{summary, actions, recommendation, model, source}`——`actions` 每条有 `line`（动作所在的 spec 行号）、`category`（动作种类）、`verdict`（`safe` 或 `human`，`human` 是需要人确认的）、`consequence`（这个动作执行后的后果，已经写成不懂代码的人也读得懂的话）;`source` 为 `template` 表示没有分析模型或分析出错，后果说明来自固定模板。`presented_data.response_options` 是三个选项：`once`"只批准这一次"、`task`"这一步以后都通过"、`deny`"不批准"。大部分用户不懂代码，所以**代码不先贴**：先用一句话讲 `analysis.summary`，再逐条列出 verdict 为 `human` 的动作的 `consequence`，最后讲 `analysis.recommendation`;用户要看代码时再贴 `context.body`。然后在同一条或下一条对话消息里列出这三个选项、等用户回复——**这一问就是批准**，**必须真人回答，不代答**。用户选"只批准这一次"或"这一步以后都通过" → `approve_commit(instance_id, step_id, fingerprint, scope)`（`fingerprint` 取 `context.fingerprint`，`scope` 取所选项的 value：`once` 或 `task`）（命令行回退 `<CLI> --json approve_commit <step_id> --fingerprint <fingerprint> --scope once|task --state-dir "<STATE>" --instance "<INSTANCE>"`），再 `resume` 续跑，引擎执行 body，返回的 NextResponse 回本循环；用户选"不批准" → 不调 approve_commit，告诉用户这一步没执行，问是改 spec 重跑还是 `abort`。**禁止**替用户回答，也不许自己判断这一步安全就调 approve_commit——安全分析已经由引擎和分析模型做过，转到人这里只认人的选择。对话里这一问就是批准，载体对 approve_commit 弹不弹窗与批准无关。指纹只覆盖 body 原文，body 改了指纹就变，引擎重新分析、重新问。"只批准这一次"只在本次运行里有效：本次运行里 for-each 的各轮、并行子实例、续跑都不再停，下次运行这份 spec 还会再问;选"这一步以后都通过"之后，这一步的 body 不变就一直直接执行。提交前 HOP 的核验（check final）或确认（confirm）照常把关。被拒返回 COMMIT_NOT_APPROVED 时，报文里写着完整的 approve_commit 参数，照报文做（先按上面的方式讲给用户听并用三个选项问，用户选批准后再调）。
 - `confirm`：展示 `presented_data.question` 与待审内容，等用户给 approve/reject。
 - `ask`：若 `presented_data.present_inputs` 非空，先完整展示这些输入，再询问业务值。
 - `require_human: true`：必须由真人回答。
@@ -127,11 +130,11 @@ Main 必须停下向用户展示问题并等待回复，不得替答。例外：
 <CLI> --json submit_and_fetch_next <step_id> --answer '<answer-json>' --state-dir "<STATE>" --instance "<INSTANCE>"
 ```
 
-大 answer 写入 paused 响应给出的 work zone，再使用 `--answer "@<answer_path>"`。命令返回的 NextResponse 回本循环。
+大 answer 写入 paused 响应给出的 work zone，再使用 `--answer "@<answer_path>"`。命令返回的 NextResponse 回本循环。ask 的 paused 载荷里 `default_values` 按声明名给前序推断的建议值——结构化类型（yaml / 列表 / 类型面）的声明先把建议值完整呈给用户改，没有建议值也没有 `present_inputs` 样板时如实告诉用户要给完整结构并列字段名，不替用户编。多输出 ask（两个以上 `+ →`）的 answer-json 按声明名分键 `{"<声明名1>":"<值1>","<声明名2>":"<值2>"}`（放进 `{"value": {...}}` 信封引擎也按键拆开）;文本型声明给非字符串会被 `ASK_ANSWER_SHAPE` 拒收并带样例,照改重交同一步。
 
 ### `dispatch_ready` / `drain_wait`（渐进派发，main 串行消费）
 
-统一模型（§U8）：引擎逐个吐派发信号。Codex main 无后台 subagent 通知机制，按**串行消费**同一协议（并发度=1，语义等价）：收到 `dispatch_ready` → 立即执行 `launch_command`（`dispatch_kind: call` 时先按 discovery 解析 `<CALLEE_SPEC_PATH:id>` 占位）等其跑完 → `<CLI> --json reap_and_fetch_next <child_instance> --status <s> --instance <id>` 收割并领下一介入点。`drain_wait` 理论上不会出现（串行消费下派发即收割）；出现即协议异常按错误上报。`failed` 带 `kill_list` 时无需动作（串行下无在飞外部会话）。
+统一模型（§U8）：引擎逐个吐派发信号。Codex main 无后台 subagent 通知机制，按**串行消费**同一协议（并发度=1，语义等价）：收到 `dispatch_ready` → 立即执行 `launch_command`（`dispatch_kind: call` 时 callee 路径引擎已填好;命令里仍留 `<CALLEE_SPEC_PATH:id>` 占位说明引擎没找到,先按 discovery 解析后填入）等其跑完 → `<CLI> --json reap_and_fetch_next <child_instance> --status <s> --instance <id>` 收割并领下一介入点。`drain_wait` 理论上不会出现（串行消费下派发即收割）；出现即协议异常按错误上报。`failed` 带 `kill_list` 时无需动作（串行下无在飞外部会话）。
 
 **收割前置铁律（不可跳次序）**：`reap_and_fetch_next <cid> --status completed` 的前提是**你在本会话亲自执行了该 child 的 `launch_command` 且该命令已真实退出**。没执行过 launch 就报 completed = 谎报收割——引擎会按"子实例缺失"判败（该 child 产出丢失、列表短一项），你的报告只是在给自己制造假账。两条硬规则：
 1. **每个 `dispatch_ready` 必须先 launch 后 reap**，一一配对——不许跳过 launch 直接 reap，不许用 `advance` 绕过 launch（`advance` 只用于 dispatch_ready 响应之后续推主线领下一信号，它不代替任何 launch）；

@@ -75,10 +75,10 @@
 
 ## v3 — 生态层（多 HopAnt / 协作）
 
-**定位**：从"执行单个 Spec/单个 HopAnt"升级为"多个有身份的 Agent 组件协作"。依赖上游概念层三块阻塞先解（见 [[HopAnt概念-双态组件模型]] / [[../concepts/HopType体系]]）。
+**定位**：从"执行单个 Spec/单个 HopAnt"升级为"多个有身份的 Agent 组件协作"。依赖上游概念层三块阻塞先解（见 [[HopAnt概念]] / [[../concepts/HopType体系]]）。
 
 ### v3-1 HopAnt 完整实例化
-- **实例化机制**：把四个 Layer（Knowledge/Capability/Data/Identity）绑成可运行 HopAnt 实例——配置驱动（YAML 声明）vs 代码构造，倾向配置驱动（[[HopAnt概念-双态组件模型]] 阻塞项）。
+- **实例化机制**：把四个 Layer（Knowledge/Capability/Data/Identity）绑成可运行 HopAnt 实例——配置驱动（YAML 声明）vs 代码构造，倾向配置驱动（[[HopAnt概念]] 阻塞项）。
 - **call 寻址扩展**：`call` 目标从 Spec Id 扩为 HopAnt 实例的 Spec（`call cyant_id.spec_id` 点号语法，需 SpecParser 扩展）。
 - **Layer 间错误传播**：credential null / retrieve 失败降级 / Layer 初始化失败 fail-fast 的统一语义。
 

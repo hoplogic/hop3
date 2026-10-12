@@ -131,6 +131,22 @@ describe('anchor-audit scan.py 判据回归', () => {
   });
 
   // @v: anc-meta-card-ref-owner
+  it('反例（todo/0133 挂账③,review mut-13 补常驻钉）：卡片行归属声明尾粘全角括号 → invalid_refs 一条点名"归属声明解析失败",不静默回退为卡 id 放绿', () => {
+    const yaml = runScan(python!,
+      [
+        '### anc-step-demo ✅',
+        '',
+        '演示',
+        '',
+        '- ast-types.ts `DemoStep` — @a: anc-step-demo（行注指向本锚）',
+        '',
+      ].join('\n'),
+      { 'src/ast-types.ts': 'export interface DemoStep {} // @a: anc-step-demo\n' },
+    );
+    expect(yaml).toMatch(/归属声明解析失败：'anc-step-demo（行注指向本锚）' 不是合法锚 id/);   // 变异：parse_anchor_ids 不回传 bad → 本行缺席红
+  });
+
+  // @v: anc-meta-card-ref-owner
   it('真缺锚点仍被抓出（防止归属逻辑把断链一起放过）', () => {
     // ast-types.ts 里没有 anc-step-demo 标注 → 必须报无效引用
     const yaml = runScan(python!,

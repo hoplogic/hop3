@@ -39,6 +39,9 @@ export interface RetryRecord {
   // 事件）之后的记录;缺席（旧状态文件）按本轮处理。见 [[exec-engine#^anc-exec-retry-feedback-iter-scope]]
   // @a: anc-exec-retry-feedback-iter-scope
   event_seq?: number;
+  // 步级瞬态免扣轮的记录：attempt 不加一,只供下一轮反馈注入;升级阶梯与预算按 retryCounters 算不数它。
+  // 见 [[exec-engine#^anc-exec-deterministic-no-retry]]「免扣轮必须带反馈」// @a: anc-exec-deterministic-no-retry
+  waived?: boolean;
 }
 
 /** PromptAssembler 组装后的六层执行上下文——任务契约、知识注入、进度摘要、输入、指令与输出约束，随 StepReady 交给 driver。见 [[exec-engine#^anc-exec-prompt-assembly]] */
@@ -62,7 +65,7 @@ export interface AssembledContext { // @a: anc-exec-prompt-assembly
   // L5 打回轮恒供给（2026-08-31 作者抓两缺:"是上轮的什么输出有问题——不一定只有一个 act/reason"
   // /"输出值可否让查"。rejected_by=来源 check 点名+其 ← 核对象清单（AST 机械事实,多产出对号）;
   // prior_outputs=当前步骤输出声明的留存值逐条（重试回滚不清变量——留存缺省半边实装;
-  // 值分档:≤2000 chars inline / 超阈 $file 卸载路径+预览 / 卸载不可用如实全文）。
+  // 值分档:≤500 chars inline（prompt.ts RETRY_BASE_INLINE_CHARS,作者 2026-08-31 由 2000 压到 500）/ 超阈 $file 卸载路径+预览 / 卸载不可用如实全文）。
   // @a: anc-exec-l2c-retry-feedback
   retry_context?: { rejected_by?: { step_id: string; summary?: string; checked_inputs: string[] }; check_failed_origin?: boolean; prior_outputs?: { name: string; type: string; rendered: string; offloaded?: boolean; offload_path?: string; full_chars?: number }[] };   // offload_path/full_chars:卸载档中性事实（指路措辞归渲染层按工具面分叉——^anc-exec-inputs-deflate 普遍规则） // @a: anc-exec-inputs-deflate
   fail_context?: string;          // L3 尾: on fail 兜底步的失败上下文（哪步/第几轮/原因文本,人话渲染——仅激活态 on_fail 子树内步骤供给;措辞对善后者,不落 L6 修正指令语义）// @a: anc-exec-onfail-context
@@ -106,6 +109,7 @@ export interface StateFile {
   loop_counters: Record<string, number>;
   retry_history?: Record<string, RetryRecord[]>;  // 跨进程保留失败历史，供 L2c 带反馈重跑
   escalate_pending?: string | null;  // 升层待答步（^anc-exec-check-escalate——跨进程 resume 走专用消化路的判据）
+  declared_dirs?: { read: string[]; readwrite: string[]; outside: Array<{ path: string; mode: 'read' | 'readwrite' }>; dirs_hash: string };   // Config.dirs 展开结果（起跑定死,^anc-exec-dirs-grant） // @a: anc-exec-dirs-grant
   step_fail_reasons?: Record<string, StepFailRecord>;  // step_id → 失败记录(reason+fail_kind)；getFailureReason 直读，跨进程稳定
   exec_events?: ExecEvent[];  // 执行事件流（执行历史原料），供 PromptAssembler 重建 L3 上下文（loop 迭代时序/子步状态）
   log_dir?: string;

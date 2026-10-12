@@ -26,26 +26,27 @@ Seeing a version number means success. Remember the three-level naming: the **pa
 ## Step 2: install the skill
 
 ```bash
-hopjit install-skill --demo
+hopjit setup
 ```
 
-It outputs `status: ok` (YAML format — the CLI's default output is human-oriented YAML; machines/scripts use `--json`). **Restart Claude Code** (or open a new session); typing `/` should show three skill completions:
+It outputs `status: ok` (YAML format — the CLI's default output is human-oriented YAML; machines/scripts use `--json`). **Restart Claude Code** (or open a new session); typing `/` should show these skill completions:
 
-- `/demo-coffee-week` — the demo skill installed by `--demo` (we'll use it in the next step; drop `--demo` if you don't want the demo. Demo artifacts uniformly carry the `demo-` prefix — easy to recognize and easy to delete as a batch)
 - `/hopspec` — drives the engine to execute any spec (the generic driver, the protagonist of the second half of this tutorial)
 - `/hopbuild` — translates natural-language skills into HopSpec (see [[07-upgrading-your-skill]])
 
+Setup also installs three demo HopAnts by default — `demo-coffee-week` (coffee-shop weekly report), `demo-fact-check` (simplified fact checker) and `demo-rename` (batch rename with confirm and commit). A HopAnt is a ready-made tool installed under hop's own directory `~/.hopjit/ants/`: one directory holds the entry spec and the data it uses. HopAnts do not appear in the `/` menu. The `demo_ants` field in the output lists the ones installed this time; already-installed ones are not overwritten.
+
 > Advanced: `--plus` additionally installs two research skills that do real work — `/hop-fact-check` (fact checking) and `/hop-deep-research` (deep research) — and automatically merges the search/browser tool config they need into `~/.hopjit/config.yaml`. After installing, the only remaining step is `export DASHSCOPE_API_KEY=<your Bailian key>`. Skip it on your first run; come back once the demo works and you want real tasks.
 
-## Step 3: shortest first run — say `/demo-coffee-week` in the conversation
+## Step 3: shortest first run — run the demo HopAnt `demo-coffee-week`
 
-Nothing to prepare (the demo data is bundled in the skill); just type:
+Nothing to prepare (the demo data `coffee-sales.json` sits in the same directory as the entry spec); just type:
 
 ```
-/demo-coffee-week
+/hopspec run ~/.hopjit/ants/demo-coffee-week/demo-coffee-week.md
 ```
 
-It will confirm two parameters with you (both the demo data and the weekly target have ready defaults — just confirm your way through), then hand off to the engine to execute, and finally give you a coffee-shop weekly report. **This is the product form of a hopskill**: what the user gets is a named capability — the spec, the engine, and the driver protocol are all implementation details. You didn't see them just now, and that's intentional.
+It will confirm two parameters with you (both the demo data and the weekly target have ready defaults — just confirm your way through), then hand off to the engine to execute, and finally give you a coffee-shop weekly report. **This is the product form of a HopAnt**: what the user gets is an installed, ready-made tool — the engine and the driver protocol are implementation details.
 
 Now we switch to the technical view: how this capability is defined by a spec and driven by the engine.
 
@@ -78,7 +79,7 @@ hopjit validate examples/coffee-week.md
 
 ## Step 5: run it with the generic driver (`/hopspec run`)
 
-The `/demo-coffee-week` of step 3 internally delegates to this very generic driver — any spec can be run this way, no need to pack it into a named skill first. Open Claude Code in the repo directory and type:
+The demo run in step 3 goes through this very generic driver — any spec can be run this way, no need to pack it into a named skill first. Open Claude Code in the repo directory and type:
 
 ```
 /hopspec run examples/coffee-week.md
@@ -114,7 +115,7 @@ This spec contains `[ask]` steps (confirm the document's positioning, choose a r
 
 | Symptom | Remedy |
 |---|---|
-| `/hopspec` not in the list | Confirm install-skill printed ok; **restart Claude Code** |
+| `/hopspec` not in the list | Confirm setup printed ok; **restart Claude Code** |
 | Skill says it can't find the engine | `npm i -g @hoplogic/hopjit` and retry (the skill locates it with a single `command -v hopjit`; if not found it errors out — no multi-level probing) |
 | validate reports errors | Fix the spec per the messages — errors block execution, warnings don't |
 | Want a clean rerun | Don't `rm -rf .hopstate` — each run creates its own instance directory, old instances don't interfere; if you really want isolation, switch `--state-dir` |

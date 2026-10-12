@@ -58,6 +58,7 @@ const dupViolations = [];
 for (const file of walk(ROOT)) {
   const lines = readFileSync(file, 'utf-8').split('\n');
   const isTs = file.endsWith('.ts');
+  const isTraceability = relative(ROOT, file) === 'TRACEABILITY.md';
   const anchorLines = new Map();   // anchor → [行号]
   lines.forEach((line, i) => {
     if (isTs) {
@@ -78,14 +79,28 @@ for (const file of walk(ROOT)) {
         // 半角逗号（多锚分隔）/反斜杠（测试数据字符串的 \n 转义,真文件内容不会以 \ 收锚）,其它一律尾粘。只检注释段（cIdx 起）——字符串字面量里的
         // @a: 是测试数据不是标注,scan 同样只采注释,两侧同域。// @a: anc-meta-anchor-head
         if (cIdx >= 0) {
-          for (const tm of line.slice(cIdx).matchAll(/@(?:a|v): *(anc-[a-z][a-z0-9-]*)([^\s,\\]?)/g)) {
-            if (tm[2]) headViolations.push({ file: relative(ROOT, file), line: i + 1, text: `锚 ${tm[1]} 尾粘字符 '${tm[2]}'——scan 采集为空,链上断环（锚后只许空白/行尾/半角逗号）` });
+          // 多锚行逐个检（review 面二 G13:原正则只看 @a: 后第一个锚,`anc-x, anc-y（注）` 的第二个尾粘漏网）
+          for (const tm of line.slice(cIdx).matchAll(/@(?:a|v): *((?:anc-[a-z][a-z0-9-]*[^\s,\\]?)(?:, *anc-[a-z][a-z0-9-]*[^\s,\\]?)*)/g)) {
+            for (const am of tm[1].matchAll(/(anc-[a-z][a-z0-9-]*)([^\s,\\]?)/g)) {
+              if (am[2]) headViolations.push({ file: relative(ROOT, file), line: i + 1, text: `锚 ${am[1]} 尾粘字符 '${am[2]}'——scan 采集为空,链上断环（锚后只许空白/行尾/半角逗号）` });
+            }
           }
         }
       }
       return;
     }
     const clean = line.replace(/\r$/, '');
+    // TRACEABILITY 卡片行归属声明尾粘检（todo/0133 挂账③——卡片行末归属声明的锚名尾粘全角括号时 scan 的
+    // parse_anchor_ids 解析为空、归属静默回退为卡 id,审计照绿;判据与 .ts 同:锚 id 后只许空白/行尾/半角逗号）。
+    // 只扫 TRACEABILITY.md,且只看归属声明标记之后的段——卡片正文散文里提到锚名不在此列。// @a: anc-meta-anchor-head
+    if (isTraceability && /@(a|v): *anc-/.test(clean)) {
+      const seg = clean.slice(clean.search(/@(a|v): *anc-/));
+      for (const tm of seg.matchAll(/@(?:a|v): *((?:anc-[a-z][a-z0-9-]*[^\s,]?)(?:, *anc-[a-z][a-z0-9-]*[^\s,]?)*)/g)) {
+        for (const am of tm[1].matchAll(/(anc-[a-z][a-z0-9-]*)([^\s,]?)/g)) {
+          if (am[2]) headViolations.push({ file: relative(ROOT, file), line: i + 1, text: `卡片行归属声明锚 ${am[1]} 尾粘字符 '${am[2]}'——scan 解析为空、归属回退为卡 id,审计假绿（锚后只许空白/行尾/半角逗号）` });
+        }
+      }
+    }
     const m = BAD_ANCHOR_RE.exec(clean);
     if (m) {
       violations.push({

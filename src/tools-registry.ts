@@ -353,24 +353,43 @@ function validateSchemaSyntax(shape: unknown): string | null {
 }
 
 
-/** 项目级 tool_servers 注册表现读（0076 批立于 CLI 侧,2026-09-06 review 抓 load 半边三份同构后
- * 真收敛挪入本模块——组合根工厂 loadRegistry 半边与 tool-call 命令共用单一权威。
- * 读 `<baseDir>/hopjit.yaml` 的 tool_servers 节→enrichParamsComments→parseToolServers;
- * baseDir 由组合根传入（进程状态 process.cwd() 只许组合根读——run 隔离不变量
- * ^anc-run-isolation,本函数纯参数化,check-process-state 守卫首拦后定形）;
- * 无文件/无节/空文件返 undefined〔纯内置直执面〕;坏节抛 TOOLS_FILE_INVALID 任其上抛不吞——
- * 工厂语境经消化路径折步骤 fail,tool-call 语境 CONFIG_ERROR 响亮退出。
- * 现读语义:每引擎实例首次消化时读一次（^anc-exec-tool-request 注册件装配条款②）。 */
-// @a: anc-exec-tool-request
-export function loadProjectToolRegistry(baseDir: string): ToolServerEntry[] | undefined {
-  const projYamlPath = pathResolve(baseDir, 'hopjit.yaml');
-  if (!existsSync(projYamlPath)) return undefined;
-  const projYamlText = readFileSync(projYamlPath, 'utf-8');
-  // 空文件/纯注释文件=无配置返 undefined（js-yaml load 对空文档抛 'expected a document'——
-  // 2026-09-06 review 现读语义钉实撞:该形态非坏节,不该折 fail;先判后解析零依赖错误消息）
-  if (projYamlText.split('\n').every(l => !l.trim() || l.trim().startsWith('#'))) return undefined;
-  const raw = yamlLoad(projYamlText) as { tool_servers?: unknown[] } | null;
-  if (!raw?.tool_servers?.length) return undefined;
-  enrichParamsComments(projYamlText, raw.tool_servers);   // 行尾 # 说明回填 // @a: anc-tool-params-notes
-  return parseToolServers(raw.tool_servers, baseDir);
+// loadProjectToolRegistry（项目级 tool_servers 单读）已退役——两级读取归 config-load 的 loadToolRegistry（todo/0131）。
+
+/** 两级配置（系统级 ~/.hopjit/config.yaml + 项目级 <项目>/hopjit.yaml,任一可 null）的 tool_servers 与 providers
+ * 两节读取合并,供 hopjit ant adapt 取注册面（design/hopant.md 关系节;tools.md 出口表）。与 mcp-server 的
+ * parseConfigFile / mergeConfigs 同律：空文件或纯注释按无配置;顶层不是 YAML 映射抛 TOOLS_FILE_INVALID 响亮拒
+ *（不静默按空——用户写坏了配置该知道是配置坏了,不是"所有工具都缺"）;tool_servers 按 name、providers 按
+ * service_id 大写比,项目级赢;enrichParamsComments 回填。2026-10-06 hopant 批 review 从 cli.ts 挪入——CLI 薄壳
+ * 不写合并规则,且 cli 侧那份对空文件直接崩、对非映射静默。todo/0131 统一两级合并时与 mergeConfigs 收敛。
+ * 路径由组合根算好传入（HOPJIT_CONFIG 在场即 sysPath=它、projPath=null 的单文件语义,判断归组合根）。*/
+// @a: anc-config-tool-registry
+export function loadTwoLevelRegistry(sysPath: string | null, projPath: string | null): {
+  tool_servers: ToolServerEntry[];
+  providers: { service_id?: string; api_key_env?: string }[];
+} {
+  type Prov = { service_id?: string; api_key_env?: string };
+  const readOne = (path: string | null): { tool_servers: ToolServerEntry[]; providers: Prov[] } => {
+    if (!path || !existsSync(path)) return { tool_servers: [], providers: [] };
+    const text = readFileSync(path, 'utf-8');
+    if (text.split('\n').every(l => !l.trim() || l.trim().startsWith('#'))) return { tool_servers: [], providers: [] };
+    const raw = yamlLoad(text);
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error(`TOOLS_FILE_INVALID: ${path} 不是 YAML 映射（顶层须是 key: value 结构）`);
+    }
+    const r = raw as Record<string, unknown>;
+    if (r['providers'] !== undefined && !Array.isArray(r['providers'])) {
+      throw new Error(`TOOLS_FILE_INVALID: ${path} providers 须为列表`);
+    }
+    const servers = Array.isArray(r['tool_servers']) ? (r['tool_servers'] as unknown[]) : [];
+    if (servers.length) enrichParamsComments(text, servers);
+    const providers = Array.isArray(r['providers']) ? (r['providers'] as Prov[]) : [];
+    return { tool_servers: servers.length ? parseToolServers(servers, dirname(path)) : [], providers };
+  };
+  const sys = readOne(sysPath);
+  const proj = readOne(projPath);
+  const byName = new Map(sys.tool_servers.map(t => [t.name, t]));
+  for (const t of proj.tool_servers) byName.set(t.name, t);
+  const byService = new Map(sys.providers.map(p => [String(p.service_id ?? '').toUpperCase(), p]));
+  for (const p of proj.providers) byService.set(String(p.service_id ?? '').toUpperCase(), p);
+  return { tool_servers: [...byName.values()], providers: [...byService.values()] };
 }

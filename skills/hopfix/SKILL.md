@@ -13,7 +13,7 @@ user-invocable: false
 %% @trace
 	id: hopfix-skill
 	type: intent
-	last_sync: 2026-10-01T15:45+0800
+	last_sync: 2026-10-06T20:29+0800
 	note: hopfix 薄包装壳（design docs/design/hopfix.md ^anc-meta-hopfix-contract）——本 skill 是 hopspec skill:流程权威在 scripts/hopfix/hopfix.md,经 /hopspec 驱动引擎强制执行。壳自身零流程知识,只做参数收集与移交。缘起作者抓"你这个用法是想把人都劝退么"——裸驱动命令不是给人用的形态,壳补齐 2026-09-02。
 %%
 
@@ -36,7 +36,7 @@ user-invocable: false
 
 ## 执行
 
-**本 skill 是 hopspec skill**：流程权威是 `hopfix.md`（**安装形态=本 skill 目录内**，随 install-skill 分发；库内开发真源在 `scripts/hopfix/hopfix.md`——装出的是其副本），按 `/hopspec` 驱动协议执行它——
+**本 skill 是 hopspec skill**：流程权威是 `hopfix.md`（**安装形态=本 skill 目录内**，随 setup 分发；库内开发真源在 `scripts/hopfix/hopfix.md`——装出的是其副本），按 `/hopspec` 驱动协议执行它——
 
 ```
 /hopspec run <本 skill 目录>/hopfix.md --params '{"spec_path": "<收集值>", "fix_order": "<收集值>"}'

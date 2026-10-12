@@ -18,7 +18,8 @@
 | `hop-fact-check.md` + `fact-check-sample.md` | 事实核查完整版（sample=示范输入，埋了待抓的推理跳跃） | for-each 并行 + collect 子句 + branch 两路分流 + 行号分析物溯源 + 补搜纪律 + 依据按页面标题重搜核验（查不到对应网页的依据剔除并在报告标出）+ 双自查回路（两类缺失验收） |
 | `hop-fact-check.qwen3.8-27b.md` | 上行的模型变体（目标 profile=qwen3.8-27b,check_judge: closed-questions-only——头部注记含源母本/降档动作;母本改动后须重新生成） | check 步微判定展开范本：开放式验收拆成"机械分组 act → 逐行封闭小题 loop → 机械汇总 check final"（弱模型判官只答原子 yes/no,门槛与汇总归程序——判官摇摆无处发生）；依据核验随母本同步 |
 | `hop-fact-check.qwen-flash.md` | 事实核查的模型变体（目标 profile=qwen-flash——头部注记含源母本/降档动作;母本改动后须重新生成） | 检索与核验机械化范本：模型只拟检索词，程序逐条调 web_search 并给结果编号，模型只按编号挑依据打可信度，程序按编号照抄标题/URL（模型碰不到 URL，编造与"按标题重搜"误剔同时消失，核验步撤掉）+ 核查点字段机械照抄 + 报告机械段照 27b 变体 |
-| `fact-check-demo.md` | 事实核查演示版（--demo 附装为 `demo-fact-check`；随 npm 包） | 完整版的适度简化：只核一级事实（可直接查证的断言），无推演审查/自查回路 |
+| `ants/hop-fact-check/`（`hop-fact-check.md` + `fact-check-sample.md`） | 第一个真实 HopAnt——上行 `hop-fact-check.md` 经 `hopjit ant pack examples/hop-fact-check.md --out examples/ants --assets fact-check-sample.md` 封出的可装目录（2026-10-09 todo/0142 子卡 C）。**副本不是源**：两文件与 `examples/` 同名源逐字节相同,源改动后须重新跑上面的 pack 命令生成（tests/hopant.test.ts 真实 HopAnt 例钉住字节相同,源改了不重 pack 测试即红）;装法 `hopjit ant install examples/ants/hop-fact-check` | 封装产物范本：入口 spec 头对账零增删的形态;`ants/` 子目录=封装产物区,与根目录的业务范本（源）分开 |
+| `fact-check-demo.md` | 事实核查演示版（setup 缺省装为演示 HopAnt `demo-fact-check`；随 npm 包） | 完整版的适度简化：只核一级事实（可直接查证的断言），无推演审查/自查回路 |
 | `hop-deep-research/`（spec + sample） | 主题深度研究（sample=模糊问题，触发 scope gate）。hop- 前缀区隔 Claude Code 内置同名 workflow /deep-research | scope gate 澄清分流 + 子问题外延检查 + 双语 fan-out 检索 + 本地材料对照（local_materials）+ 对抗式验证（独立二源/换语言圈/enum 四态/交叉来源按页面标题重搜核验）+ 机械完备性核对 + 对照评估节 + ask/commit 落盘交付 |
 | `hop-deep-research/hop-deep-research.qwen-flash.md` | 主题深度研究的模型变体（目标 profile=qwen-flash——头部注记含源母本/降档动作;母本改动后须重新生成） | 检索机械化（模型拟词、程序检索编号、模型按编号挑、程序照抄 URL）+ 撤抓取腿（claim 取自检索摘要与本地材料,本地材料程序直读并单独一步提取）+ 交叉核对先判"是否同一口径",口径不同的"被反驳"由程序降为部分成立 + 报告机械段按 verdict 分节 |
 | `contract-review/`（3 spec + 各自 params） | 合同评审：路由 + NDA triage + DPA review | call 编排（标题映射路由）+ 确定性 triage（hop_python 读 playbook 阈值零 LLM）+ 注入隔离（untrusted 正文只进 reason）+ destination/signing gate |
@@ -39,7 +40,7 @@
 | `syntax/parallel-aggregate.md` | parallel 并行 + 聚合 | 三维度打包一个并行活 → 聚合 → check 验证 |
 | `syntax/sibling-parallel.md` | 兄弟并发 | 两个独立 subtask 各标 parallel，父容器边界收齐（教程 05 写法二的可跑样例） |
 | `syntax/loop-branch.md` | loop + branch + break/continue | reason 判级 → branch 分流；fatal→break、clean→continue |
-| `syntax/call-parent-summarize.md` + `call-child-normalize.md` | call 子 spec 调用 | 双向冒号映射，子实例状态隔离 |
+| `syntax/call-parent-summarize.md` + `text-normalize.md` | call 子 spec 调用 | 双向冒号映射，子实例状态隔离 |
 
 ### 工具注册样例（.yaml——不是 HopSpec 规约,是 tool_servers 注册配置）
 
